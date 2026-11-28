@@ -137,7 +137,10 @@ fn decision_credentials_and_connection_names_fail_closed() {
 fn named_decision_binding_is_required_and_other_connections_do_not_change_identity() {
     let root = example();
     let definition = Definition::load(&root).unwrap();
-    let config = RuntimeConfig::load(&root.join("runtime.yaml")).unwrap();
+    let copy = tempfile::tempdir().unwrap();
+    let config = copy.path().join("runtime.yaml");
+    std::fs::copy(root.join("runtime.yaml"), &config).unwrap();
+    let config = RuntimeConfig::load(&config).unwrap();
     config.validate_workflow(&definition.workflow).unwrap();
     let digest = config.binding_digest_for(&definition.workflow).unwrap();
     let mut extra = config.clone();

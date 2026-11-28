@@ -285,12 +285,11 @@ impl Casework {
                 "listener": {"bind": address.to_string(), "tlsTermination": "development-loopback", "networkExposure": "private-address"},
                 "secretProviders": {"file": {"root": root.path()}},
                 "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database", "testOnlyPlaintext": true},
-                "authentication": {"oidc": {
+                "authentication": {"oidc": {"issuers": {"main": {
                     "issuer": issuer.issuer(), "audience": AUDIENCE,
                     "allowedClients": [PRODUCER_CLIENT, STAFF_CLIENT, ADMIN_CLIENT],
-                    "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
-                    "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}
-                }},
+                    "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}
+                }}}},
                 "audit": {"path": root.path().join("audit.ndjson"), "hashKeyRef": "secret:file/audit-key"},
                 "contextProviders": {},
                 "reviewCompletionDestinations": {"coordinator": {

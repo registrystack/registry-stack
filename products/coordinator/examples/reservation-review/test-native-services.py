@@ -601,24 +601,23 @@ class ReservationJourney(native.Journey):
                 },
                 "authentication": {
                     "oidc": {
-                        "issuer": self.urls["issuer"],
-                        "audience": resource,
-                        "allowedClients": [
-                            "review-producer",
-                            "staff",
-                            "administrator",
-                            "task-agent",
-                            "scheduling-status",
-                        ],
-                        "scopeClaim": "scope",
-                        "jwksSource": {
-                            "type": "static",
-                            "documentRef": "secret:file/jwks",
-                        },
-                        "humanIdentity": {
-                            "claim": "registry_actor_kind",
-                            "value": "human",
-                        },
+                        "issuers": {
+                            "main": {
+                                "issuer": self.urls["issuer"],
+                                "audience": resource,
+                                "allowedClients": [
+                                    "review-producer",
+                                    "staff",
+                                    "administrator",
+                                    "task-agent",
+                                    "scheduling-status",
+                                ],
+                                "jwksSource": {
+                                    "type": "static",
+                                    "documentRef": "secret:file/jwks",
+                                },
+                            }
+                        }
                     }
                 },
                 "audit": {

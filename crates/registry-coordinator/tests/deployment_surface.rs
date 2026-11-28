@@ -10,10 +10,26 @@ use registry_coordinator::{
 use registry_platform_audit::FileDestination;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    access_token_typ_set, JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
+    access_token_typ_set, DeclaredKinds, IssuerEntry, JwksFetcher, JwksFetcherConfig,
+    TokenVerifier, TokenVerifierConfig,
 };
 use registry_platform_testing::{TestAuthorizationServerBuilder, TestClient};
 use std::{fs, sync::Arc};
+
+fn authenticator(
+    profile: TokenVerifierConfig,
+    keys: Arc<JwksFetcher>,
+    policies: std::collections::BTreeMap<String, ClientPolicy>,
+    assertion_issuers: bool,
+) -> Authenticator {
+    let scope_claim = profile.scope_claim.clone();
+    let entry = IssuerEntry::new(
+        "main",
+        TokenVerifier::new(profile, keys),
+        DeclaredKinds::None,
+    );
+    Authenticator::new(vec![(entry, scope_claim, assertion_issuers)], policies).unwrap()
+}
 
 #[test]
 fn immutable_package_closure_tamper_and_abi_are_checked() {
@@ -50,7 +66,7 @@ fn runtime_reads_the_explicit_http_issuer_opt_in_only_in_development() {
     let template = include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml")
         .replace(
             "issuer: https://issuer.example.org",
-            "issuer: http://issuer.example.org\n    allowInsecureHttp: true",
+            "issuer: http://issuer.example.org\n        allowInsecureHttp: true",
         );
     assert_ne!(
         template,
@@ -65,7 +81,17 @@ fn runtime_reads_the_explicit_http_issuer_opt_in_only_in_development() {
     let development = registry_platform_config::declared_from(Some("development"), None).unwrap();
     let runtime = RuntimeConfig::load_with_posture(&path, development).unwrap();
     let authentication = runtime.deployment.unwrap().authentication;
-    assert!(authentication.issuer.allow_insecure_http);
+    assert!(
+        authentication
+            .issuers
+            .iter()
+            .next()
+            .unwrap()
+            .1
+            .core
+            .provider
+            .allow_insecure_http
+    );
     assert!(serde_norway::to_string(&authentication)
         .unwrap()
         .contains("allowInsecureHttp: true"));
@@ -86,7 +112,7 @@ fn a_remote_http_issuer_is_refused_without_the_opt_in() {
     assert_eq!(error.code, "coordinator.access.configuration");
     assert_eq!(
         error.field.as_deref(),
-        Some("/deployment/authentication/issuer")
+        Some("/deployment/authentication/issuers/main/issuer")
     );
     assert!(error
         .suggested_action
@@ -160,7 +186,7 @@ async fn verified_subject_owns_runs_and_exact_policy_restricts_flow_action() {
         actions: Vec::from([Action::Start, Action::Status]),
         operator: false,
     };
-    let auth = Authenticator::new(verifier, keys, [("producer".into(), policy)].into(), false);
+    let auth = authenticator(verifier, keys, [("producer".into(), policy)].into(), false);
     let token = issuer.issue_access_token(
         "producer",
         "actual-subject",
@@ -192,7 +218,7 @@ async fn verified_subject_owns_runs_and_exact_policy_restricts_flow_action() {
         let refusal = auth.authenticate(&token).await.err().unwrap();
         // Only a scope refusal declares values, and they come from the
         // configuration, never from the token.
-        match refusal.declared {
+        match refusal.declared_scope() {
             Some(declared) => {
                 assert_eq!(scope, "wrong-scope");
                 assert_eq!(declared.scope_claim(), "scope");
@@ -242,7 +268,7 @@ async fn a_policy_admits_only_the_subjects_it_lists() {
         actions: Vec::from([Action::Status, Action::Inspect]),
         operator: true,
     };
-    let auth = Authenticator::new(
+    let auth = authenticator(
         verifier,
         keys,
         [("producer".into(), producer), ("operator".into(), operator)].into(),
@@ -389,7 +415,7 @@ async fn a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not() {
         actions: Vec::from([Action::Start, Action::Status]),
         operator: false,
     };
-    let auth = Authenticator::new(verifier, keys, [("producer".into(), policy)].into(), true);
+    let auth = authenticator(verifier, keys, [("producer".into(), policy)].into(), true);
 
     let own = client_assertion(&key, "producer", &assertion_audience, "own");
     let service = granted_access_token(
@@ -657,7 +683,6 @@ fn flows_are_keyed_by_workflow_id_with_an_order_independent_set_digest() {
 
 #[tokio::test]
 async fn runtime_authenticator_derives_exact_admission_from_policy_keys() {
-    use registry_platform_config::{JwksSource, OidcIssuerConfig};
     use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
     let issuer = TestAuthorizationServerBuilder::default()
         .with_signing_key(generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap())
@@ -667,22 +692,23 @@ async fn runtime_authenticator_derives_exact_admission_from_policy_keys() {
         .start()
         .await;
     let file = tempfile::NamedTempFile::new().unwrap();
-    fs::write(
-        file.path(),
-        include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml"),
-    )
-    .unwrap();
+    let mut document = registry_platform_yaml::Reader::new("runtime.yaml")
+        .scan(include_bytes!(
+            "../../../products/coordinator/examples/single-flow-runtime.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    document["deployment"]["authentication"]["issuers"]["main"] = serde_json::json!({
+        "issuer": issuer.issuer(),
+        "audience": "urn:coordinator:test",
+        "jwksSource": {"type":"uri", "uri":issuer.jwks_uri()},
+        "allowedClients": "from-policies",
+        "scopeClaim": "scope",
+    });
+    fs::write(file.path(), document.to_string()).unwrap();
     let mut runtime = RuntimeConfig::load(&file.path().canonicalize().unwrap()).unwrap();
     let access = &mut runtime.deployment.as_mut().unwrap().authentication;
-    access.issuer = OidcIssuerConfig {
-        issuer: issuer.issuer().parse().unwrap(),
-        audience: "urn:coordinator:test".into(),
-        jwks_source: JwksSource::Uri {
-            uri: issuer.jwks_uri().parse().unwrap(),
-        },
-        allow_insecure_http: false,
-    };
-    access.scope_claim = "scope".into();
     let mut policy = access.policies.remove("institution-producer").unwrap();
     policy.workflows = vec!["follow-up".into()];
     policy.subjects = vec!["actual-subject".into()];

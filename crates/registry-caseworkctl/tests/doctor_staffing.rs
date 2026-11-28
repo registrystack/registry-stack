@@ -79,8 +79,8 @@ async fn doctor_warns_for_one_distinct_member_and_clears_after_a_second_joins() 
         "listener":{"bind":"127.0.0.1:8100","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
         "secretProviders":{"file":{"root":secrets}},
         "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/database","testOnlyPlaintext":true},
-        "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework",
-            "allowedClients":["staff"],"scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+        "authentication":{"oidc":{"issuers":{"main":{"issuer":"https://identity.example.test","audience":"urn:example:casework",
+            "allowedClients":["staff"]}}}},
         "audit":{"path":root_path.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
     });
     let runtime = root_path.join("runtime.yaml");

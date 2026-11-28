@@ -1270,13 +1270,11 @@ async fn fixture(
             "listener": {"bind": "127.0.0.1:0", "tlsTermination": "loopback-plaintext", "networkExposure": "private-address"},
             "secretProviders": {"file": {"root": secret_root}},
             "database": {"runtimeUrlRef": "secret:file/runtime-url", "migrationUrlRef": "secret:file/migration-url"},
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": issuer.url(),
                 "audience": CASEWORK_RESOURCE,
-                "allowedClients": ["human-client", "task-agent", "evidence-task-agent", "breg-status"],
-                "scopeClaim": "scope",
-                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}
-            }},
+                "allowedClients": ["human-client", "task-agent", "evidence-task-agent", "breg-status"]
+            }}}},
             "audit": {"path": runtime_root.join("audit.jsonl"), "hashKeyRef": "secret:file/audit-key"},
             "taskAuthority": {
                 "issuer": AUTHORITY,
@@ -1320,16 +1318,11 @@ async fn fixture(
         [Arc::new(Source) as Arc<dyn ReviewContextProvider>],
     )
     .unwrap();
-    let (verifier, keys) = runtime
-        .oidc_verifier(&secrets, loaded.development.as_ref())
+    let verifiers = runtime
+        .issuer_verifiers(&secrets, loaded.development.as_ref())
         .await
         .unwrap();
-    let auth = crate::CaseworkAuthenticator::new(
-        &project,
-        verifier,
-        keys,
-        runtime.authentication.oidc.human_identity.clone(),
-    );
+    let auth = crate::CaseworkAuthenticator::new(&project, verifiers).unwrap();
     let auth = Arc::new(auth);
     let router = |posture, service| {
         crate::router(crate::HttpState {

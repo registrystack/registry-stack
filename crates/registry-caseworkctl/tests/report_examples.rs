@@ -15,6 +15,7 @@ use serde_json::Value;
 const STANDALONE: &str = "products/casework/examples/standalone-decision";
 const ADVANCED: &str = "products/casework/examples/multi-stage-routing-clocks";
 const STAGE_OUTCOMES: &str = "products/casework/examples/stage-outcomes";
+const CANONICAL: &str = "products/casework/examples/canonical-review";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -123,6 +124,91 @@ fn current_offline_reports_match_the_typed_contract_and_committed_check_example(
             }
         }
     }
+}
+
+#[test]
+fn check_with_a_runtime_file_lists_each_explicit_production_setting_it_states() {
+    let root = repo_root();
+    let scratch = tempfile::tempdir().expect("temporary directory");
+    stage_project(&root, scratch.path(), CANONICAL);
+    let project = scratch.path().join(CANONICAL);
+    let runtime = project.join("runtime.example.yaml");
+    let source = std::fs::read_to_string(&runtime).expect("runtime example reads");
+    let anchor = "        allowedClients: unrestricted\n";
+    assert!(source.contains(anchor), "{source}");
+    std::fs::write(
+        &runtime,
+        source.replace(
+            anchor,
+            &format!("{anchor}        accessTokenType: JWT\n        scopeClaim: scp\n"),
+        ),
+    )
+    .expect("runtime file is written");
+    let output = Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
+        .args(["--format", "json", "check"])
+        .arg(&project)
+        .arg("--runtime-config")
+        .arg(&runtime)
+        .current_dir(scratch.path())
+        .output()
+        .expect("caseworkctl starts");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("report is JSON");
+    let schema: Value = serde_json::from_slice(
+        &std::fs::read(root.join("products/casework/contracts/cli/report.schema.json"))
+            .expect("generated report schema reads"),
+    )
+    .expect("generated report schema parses");
+    let validator = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&schema)
+        .expect("generated report schema compiles");
+    if let Err(errors) = validator.validate(&report) {
+        panic!(
+            "check report violates schema: {}\n{report}",
+            errors
+                .map(|error| format!("{} at {}", error, error.instance_path))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    // A stated setting is a fact for a reviewer, not a diagnostic.
+    assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(0));
+    let lines = report["explicitProductionSettings"]
+        .as_array()
+        .expect("the check lists the explicit settings");
+    let mut listed = lines
+        .iter()
+        .map(|line| {
+            assert!(line["summary"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()));
+            assert!(line["line"].as_u64().is_some(), "{line}");
+            (
+                line["code"].as_str().expect("a code"),
+                line["pointer"].as_str().expect("a pointer"),
+            )
+        })
+        .collect::<Vec<_>>();
+    listed.sort_unstable();
+    assert_eq!(
+        listed,
+        [
+            (
+                "platform.posture.jwt-access-token",
+                "/authentication/oidc/issuers/main/accessTokenType"
+            ),
+            (
+                "platform.posture.scope-claim",
+                "/authentication/oidc/issuers/main/scopeClaim"
+            ),
+        ]
+    );
 }
 
 #[test]

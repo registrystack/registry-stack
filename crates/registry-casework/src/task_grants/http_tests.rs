@@ -345,10 +345,14 @@ pub(super) fn test_app(
     let jwks=serde_json::from_value(json!({"keys":[{"kty":"oct","kid":"test","alg":"HS256","use":"sig","k":"MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE"}]})).unwrap();
     let authenticator = crate::CaseworkAuthenticator::new(
         project,
-        verifier,
-        Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())),
-        crate::HumanIdentityConfig::default(),
-    );
+        vec![crate::CaseworkIssuerVerifier {
+            id: "main".to_owned(),
+            verifier,
+            keys: Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())),
+            declared: registry_platform_oidc::DeclaredKinds::None,
+        }],
+    )
+    .expect("one issuer entry");
     crate::router(crate::HttpState {
         posture: registry_platform_config::PostureReport::new(
             registry_platform_config::DeclaredPosture {

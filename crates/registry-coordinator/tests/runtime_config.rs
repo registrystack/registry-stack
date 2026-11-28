@@ -145,27 +145,26 @@ fn state_key_versions(active: u32, versions: &[&str]) -> Value {
 #[test]
 fn removed_jwks_tag_names_the_shared_type_replacement_without_values() {
     let mut document = yaml_value(SCHEDULING_RUNTIME).unwrap();
-    let jwks = document["deployment"]["authentication"]["jwksSource"]
-        .as_object_mut()
-        .unwrap();
-    jwks.remove("type");
-    jwks.insert("kind".into(), json!(CANARY));
+    document["deployment"]["authentication"]["jwksSource"] = json!({"kind": CANARY});
     let error = refused(&document.to_string());
     let removed = error
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.code == "config.removed-key")
+        .find(|diagnostic| {
+            diagnostic.code == "config.removed-key"
+                && diagnostic.path == "/deployment/authentication/jwksSource/kind"
+        })
         .expect("the removed member names its replacement beside the missing type");
     assert_eq!(removed.path, "/deployment/authentication/jwksSource/kind");
     assert!(removed
         .suggested_action
-        .contains("deployment.authentication.jwksSource.type"));
+        .contains("deployment.authentication.issuers.ISSUER_ID.jwksSource.type"));
     assert!(!error.to_string().contains(CANARY));
     assert!(removed.source.as_ref().unwrap().line.is_some());
 }
 
 #[test]
-fn policy_keys_are_the_only_closed_client_admission_configuration() {
+fn policies_and_the_issuer_client_rule_are_separate_members() {
     let original = yaml_value(SCHEDULING_RUNTIME).unwrap();
     let config = load(&original.to_string()).unwrap();
     let access = &config.deployment.as_ref().unwrap().authentication;

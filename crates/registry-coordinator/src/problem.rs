@@ -574,6 +574,8 @@ mod tests {
         "deployment.workflow-live-runs",
         "deployment.workflow-unlisted",
         "development-peer",
+        "identity.facts.issuer-required",
+        "identity.facts.unknown-issuer",
         "lease-stale",
         "listener-unavailable",
         "namespace-invalid",

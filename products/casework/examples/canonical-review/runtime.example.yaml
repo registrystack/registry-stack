@@ -17,13 +17,11 @@ database:
   migrationUrlRef: secret:file/migration-database-url
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:casework
-    allowedClients: unrestricted
-    scopeClaim: scope
-    humanIdentity:
-      claim: registry_actor_kind
-      value: human
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:casework
+        allowedClients: unrestricted
 audit:
   path: /var/lib/registry-casework/audit.ndjson
   hashKeyRef: secret:file/casework-audit-key

@@ -1838,7 +1838,8 @@ fn casework_config(
     oidc["maximumTokenLifetimeSeconds"] = json!(super::issuer::TOKEN_LIFETIME_SECONDS);
     config["listener"] = json!({"bind": bind, "tlsTermination": "loopback-plaintext"});
     config["identity"] = json!({"databaseId": identity});
-    config["authentication"] = json!({"oidc": oidc});
+    // Casework reads its issuers as a set, and the run has one.
+    config["authentication"] = json!({"oidc": {"issuers": {"main": oidc}}});
     config
 }
 
@@ -2408,7 +2409,8 @@ fn check_casework_binding(
             "dev-check-casework",
             CHECK_BIND,
         );
-        config["authentication"]["oidc"]["issuer"] = json!(super::bindings::issuer_for_check(plan));
+        config["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            json!(super::bindings::issuer_for_check(plan));
         super::bindings::render_for_check(plan, Product::Casework, &mut config);
         let path = root.join("casework-runtime.yaml");
         write_private(&path, &serde_json::to_vec(&config)?)?;
@@ -3769,18 +3771,21 @@ mod tests {
                 .unwrap();
             let casework: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
             assert_eq!(breg["authentication"]["oidc"]["issuer"], expected);
-            assert_eq!(casework["authentication"]["oidc"]["issuer"], expected);
+            let casework_issuer = &casework["authentication"]["oidc"]["issuers"]["main"];
+            assert_eq!(casework_issuer["issuer"], expected);
+            for oidc in [&breg["authentication"]["oidc"], casework_issuer] {
+                assert_eq!(oidc["jwksSource"]["type"], "test-issuer");
+            }
             for config in [&breg, &casework] {
-                assert_eq!(
-                    config["authentication"]["oidc"]["jwksSource"]["type"],
-                    "test-issuer"
-                );
                 assert_eq!(config["audit"]["hashKeyCustody"], "development-generated");
             }
             assert_eq!(casework["listener"]["tlsTermination"], "loopback-plaintext");
             if !application {
-                for config in [&breg, &casework] {
-                    assert!(!config["authentication"]["oidc"]["allowedClients"]
+                for clients in [
+                    &breg["authentication"]["oidc"]["allowedClients"],
+                    &casework_issuer["allowedClients"],
+                ] {
+                    assert!(!clients
                         .as_array()
                         .unwrap()
                         .iter()
@@ -3876,12 +3881,12 @@ mod tests {
             "127.0.0.1:0",
         );
         assert_eq!(
-            rendered["authentication"]["oidc"]["maximumTokenLifetimeSeconds"],
+            rendered["authentication"]["oidc"]["issuers"]["main"]["maximumTokenLifetimeSeconds"],
             3600
         );
         assert_eq!(written, rendered);
         assert_eq!(
-            written["authentication"]["oidc"]["allowedClients"],
+            written["authentication"]["oidc"]["issuers"]["main"]["allowedClients"],
             json!(["reviewer-client"])
         );
         assert!(!written.to_string().contains("password"), "{written}");

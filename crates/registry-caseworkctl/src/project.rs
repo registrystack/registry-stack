@@ -27,7 +27,7 @@ pub(crate) enum ProjectRefusal {
     DestinationExists,
     OutputExists,
     ScopeClaimUnsupported,
-    HumanIdentityUnsupported,
+    IssuerNotSingle,
     FixtureInputInvalid,
     ProjectInputPathInvalid,
     ProjectInputOutside,
@@ -46,10 +46,10 @@ impl std::fmt::Display for ProjectRefusal {
             }
             Self::OutputExists => "output already exists; generate never overwrites a file",
             Self::ScopeClaimUnsupported => {
-                "authentication.oidc.scopeClaim is not `scope`, which hosted generation does not support yet; set it to `scope`"
+                "the issuer entry's scopeClaim under authentication.oidc.issuers is not `scope`, which hosted generation does not support yet; omit it or set it to `scope`"
             }
-            Self::HumanIdentityUnsupported => {
-                "authentication.oidc.humanIdentity is not claim `registry_actor_kind` with value `human`, which hosted generation does not support yet; set it to those"
+            Self::IssuerNotSingle => {
+                "authentication.oidc.issuers has more than one entry, and hosted generation reads one; keep the hosted issuer's entry only"
             }
             Self::FixtureInputInvalid => "fixture input must be a regular file",
             Self::ProjectInputPathInvalid => "input must be a normalized relative project path",
@@ -229,7 +229,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "listener":{"bind":"127.0.0.1:8100","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
         "secretProviders":{"file":{"root":absolute.join("secrets")}},
         "database":{"runtimeUrlRef":"secret:file/runtime-database-url","migrationUrlRef":"secret:file/migration-database-url"},
-        "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+        "authentication":{"oidc":{"issuers":{"main":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted"}}}},
         "audit":{"path":absolute.join("state/audit.ndjson"),"hashKeyRef":"secret:file/casework-audit-key"},"contextProviders":{}});
     let runtime_path = stage.path().join("runtime.example.yaml");
     write!(
@@ -1114,6 +1114,13 @@ pub(super) fn check_runtime_config(
     let absolute = std::path::absolute(path)?;
     let runtime =
         registry_casework::check_runtime(&absolute, policy.as_ref(), environment, declared);
+    // Every setting listed is in the runtime file `runtimeConfig` names, so
+    // a line does not repeat the path.
+    let explicit_settings = runtime
+        .explicit_settings
+        .iter()
+        .map(|setting| setting.report_line(None))
+        .collect::<Vec<_>>();
     let runtime = Report::new(runtime.diagnostics);
     let (mut combined, mut checked) = match checked {
         Ok(checked) => {
@@ -1140,6 +1147,7 @@ pub(super) fn check_runtime_config(
         .take()
         .expect("an error-free project has a check report");
     checked["runtimeConfig"] = json!(path);
+    checked["explicitProductionSettings"] = serde_json::to_value(explicit_settings)?;
     checked["diagnostics"] = combined.to_json_value();
     if let Some(files) = combined.files_checked() {
         checked["filesChecked"] = json!(files);
@@ -1675,7 +1683,7 @@ mod doctor_tests {
             "listener":{"bind":"127.0.0.1:8100","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
             "secretProviders":{"file":{"root":secrets}},
             "database":{"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/absent-migration-url"},
-            "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":["casework-test"],"scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+            "authentication":{"oidc":{"issuers":{"main":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":["casework-test"]}}}},
             "audit":{"path":root.path().join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"},
             "reviewCompletionDestinations":{"receiver":{"url":"https://completion.example.test/reviews","hmacSha256KeyRef":"secret:file/completion-key"}}
         });

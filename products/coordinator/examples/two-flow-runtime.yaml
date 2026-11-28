@@ -49,10 +49,13 @@ deployment:
     bind: 127.0.0.1:8108
     tlsTermination: operator-controlled-upstream
   authentication:
-    issuer: https://issuer.example.org
-    audience: urn:example:coordinator
-    jwksSource:
-      type: discovery
+    issuers:
+      main:
+        issuer: https://issuer.example.org
+        audience: urn:example:coordinator
+        jwksSource:
+          type: discovery
+        allowedClients: from-policies
     # Run actions reach only the workflows a policy lists. Deployment-wide actions
     # reach every workflow this deployment serves, including workflows added later, so
     # the deployment operator lists no workflows.

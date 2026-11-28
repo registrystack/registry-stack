@@ -627,25 +627,21 @@ pub async fn serve_from_path(
         tracing::info!(role_mode = role_mode.as_str(), "Casework runtime role mode");
     }
 
-    let (verifier, keys) = config
-        .oidc_verifier(&secrets, loaded.development.as_ref())
+    let verifiers = config
+        .issuer_verifiers(&secrets, loaded.development.as_ref())
         .await?;
     let authenticator = Arc::new(
-        CaseworkAuthenticator::new(
-            project,
-            verifier,
-            keys,
-            config.authentication.oidc.human_identity.clone(),
-        )
-        .with_human_source_audiences(config.human_source_audiences(project))
-        .with_delegated_staff_readers(
-            config
-                .authentication
-                .oidc
-                .delegated_staff_readers
-                .clone()
-                .unwrap_or_default(),
-        ),
+        CaseworkAuthenticator::new(project, verifiers)
+            .map_err(RuntimeError::IssuerSet)?
+            .with_human_source_audiences(config.human_source_audiences(project))
+            .with_delegated_staff_readers(
+                config
+                    .authentication
+                    .oidc
+                    .delegated_staff_readers
+                    .clone()
+                    .unwrap_or_default(),
+            ),
     );
     let task_authority = config
         .task_authority
@@ -1588,6 +1584,10 @@ pub enum RuntimeError {
     MetricsListen(#[source] std::io::Error),
     #[error("a Casework background worker stopped")]
     WorkerStopped,
+    /// The configured issuers could not form one issuer set. The runtime file
+    /// check refuses each cause first, so this is not expected after it.
+    #[error("the configured issuers could not form an issuer set: {0}")]
+    IssuerSet(#[source] registry_platform_oidc::IssuerSetError),
 }
 
 /// A value-free refusal of a configured completion signing key.

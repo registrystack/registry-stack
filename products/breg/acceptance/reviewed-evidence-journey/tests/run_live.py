@@ -197,11 +197,14 @@ def activate_casework(h, source_package, source, origin):
         "database": h.db_configs["casework"],
         "authentication": {
             "oidc": {
-                "issuer": h.issuer_url,
-                "audience": "urn:journey:casework",
-                "allowedClients": list(h.tokens),
-                "scopeClaim": "scope",
-                "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"},
+                "issuers": {
+                    "main": {
+                        "issuer": h.issuer_url,
+                        "audience": "urn:journey:casework",
+                        "allowedClients": list(h.tokens),
+                        "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"},
+                    }
+                }
             }
         },
         "audit": {"path": str(h.output / "review-audit/audit.ndjson"), "hashKeyRef": "secret:file/audit-key"},

@@ -122,6 +122,10 @@ ROWS: tuple[Row, ...] = (
         loader_sources=("crates/registry-coordinator/src",),
         runtime_schema="products/coordinator/generated/runtime/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
+            "DeclaredActorKind",
+            "IssuerActorKind",
+            "ScopeClaimName",
             "DatabaseConfig",
             "EnvironmentSecretProviderConfig",
             "FileSecretProviderConfig",
@@ -142,11 +146,7 @@ ROWS: tuple[Row, ...] = (
             RustBlock("crates/registry-coordinator/src/runtime.rs", "RuntimeConfig", "database", "DatabaseConfig"),
             RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "packages", "PackageConfig", repeated=True),
             RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "listener", "PrivateListenerConfig"),
-            RustBlock("crates/registry-coordinator/src/access.rs", "AccessConfig", "issuer", "OidcIssuerConfig"),
-            # Coordinator derives the shared OidcClientsConfig from its policy keys,
-            # instead of carrying a second client-admission list. The owning
-            # policy_keys_are_the_only_closed_client_admission_configuration test
-            # verifies this authoring contract; AccessConfig still runs the shared check.
+            # The issuer entry either reads the policy keys or lists its clients.
         ),
     ),
     Row(
@@ -359,13 +359,17 @@ ROWS: tuple[Row, ...] = (
         loader_sources=("crates/registry-casework/src",),
         runtime_schema="products/casework/generated/runtime/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
             "DatabaseConfig",
+            "DeclaredActorKind",
             "EnvironmentSecretProviderConfig",
             "FileSecretProviderConfig",
+            "IssuerActorKind",
             "JwksSource",
             "ListenerBind",
             "ListenerNetworkExposure",
             "PrivateListenerConfig",
+            "ScopeClaimName",
             "SecretProvidersConfig",
             "SecretReference",
             "TlsTermination",
@@ -383,18 +387,6 @@ ROWS: tuple[Row, ...] = (
             "a_package_digest_mismatch_is_refused_in_the_shared_shape",
         ),
         rust_blocks=(
-            RustBlock(
-                "crates/registry-casework/src/config.rs",
-                "OidcConfig",
-                "provider",
-                "OidcIssuerConfig",
-            ),
-            RustBlock(
-                "crates/registry-casework/src/config.rs",
-                "OidcConfig",
-                "clients",
-                "OidcClientsConfig",
-            ),
             RustBlock(
                 "crates/registry-casework/src/config.rs",
                 "AuditConfig",

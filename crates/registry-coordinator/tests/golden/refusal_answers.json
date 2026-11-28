@@ -1,0 +1,343 @@
+{
+  "action-without-policy": {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "The caller's policy does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "283",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 403
+  },
+  "bad-signature": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "client-without-policy": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "delegated-token": {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "The caller's policy does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "283",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 403
+  },
+  "expired": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "malformed-compact-token": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "missing-scope": {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "The caller's policy does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "283",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 403
+  },
+  "no-credential": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "non-bearer-credential": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "subject-without-policy": {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "The caller's policy does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "283",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 403
+  },
+  "undeclared-assertion-issuer": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "unknown-key": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "wrong-audience": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "wrong-issuer": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  },
+  "wrong-type": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The caller credential or completion signature is missing, invalid, or expired.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-coordinator/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-length": "305",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      "content-type": "application/problem+json",
+      "cross-origin-opener-policy": "same-origin",
+      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+      "referrer-policy": "no-referrer",
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY"
+    },
+    "status": 401
+  }
+}

@@ -46,14 +46,50 @@ pub(crate) fn check_runtime(
     definition: Option<&Definition>,
     environment: bool,
     declared: registry_platform_config::DeclaredPosture,
-) -> (Report, u8) {
-    let checked =
-        runtime::RuntimeConfig::check_file_with(path, environment, declared, |checked, config| {
-            workflow_binding_diagnostics(checked, config, definition)
-        });
+) -> (
+    Report,
+    u8,
+    Option<Vec<registry_cli_report::ExplicitSettingLine>>,
+) {
+    let (checked, diagnostics) = runtime::RuntimeConfig::collect_file_diagnostics(
+        path,
+        environment,
+        declared,
+        |checked, config| workflow_binding_diagnostics(checked, config, definition),
+    );
+    let settings = (!checked.unavailable).then(|| {
+        checked
+            .loaded
+            .as_ref()
+            .into_iter()
+            .flat_map(|loaded| loaded.posture.explicit_settings())
+            .filter(|found| {
+                !found.pointer.as_ref().is_some_and(|pointer| {
+                    checked
+                        .diagnostics
+                        .iter()
+                        .chain(&diagnostics)
+                        .any(|diagnostic| {
+                            diagnostic.severity == Severity::Error
+                                && (&diagnostic.path == pointer
+                                    || diagnostic
+                                        .path
+                                        .strip_prefix(pointer)
+                                        .is_some_and(|suffix| suffix.starts_with('/')))
+                        })
+                })
+            })
+            .map(|found| found.report_line(path.to_str()))
+            .collect()
+    });
     (
-        Report::new(checked.diagnostics),
+        Report::new(
+            checked
+                .report_with(runtime::KIND, diagnostics)
+                .into_diagnostics(),
+        ),
         if checked.unavailable { 3 } else { 1 },
+        settings,
     )
 }
 
@@ -280,7 +316,8 @@ pub(crate) fn check_directory(
             continue;
         }
         if expected == "runtime.yaml" {
-            let (findings, runtime_exit) = check_runtime(&path, definition, environment, declared);
+            let (findings, runtime_exit, _) =
+                check_runtime(&path, definition, environment, declared);
             report.extend(findings);
             exit = exit.max(runtime_exit);
         } else {

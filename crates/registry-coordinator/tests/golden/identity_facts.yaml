@@ -1,0 +1,15 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: coordinator
+issuer: https://main.example.test
+audience: urn:main
+allowedClients:
+  - institution-operator
+  - institution-producer
+accessProfiles:
+  - id: institution-operator
+    scopes: [coordinator:operate]
+    requesterClients: [institution-operator]
+  - id: institution-producer
+    scopes: [coordinator:start]
+    requesterClients: [institution-producer]

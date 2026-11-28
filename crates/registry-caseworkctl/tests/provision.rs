@@ -108,9 +108,9 @@ fn deployment(urls: &DatabaseUrls<'_>) -> Deployment {
         "listener":{"bind":urls.bind,"tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
         "secretProviders":{"file":{"root":secrets}},
         "database":database,
-        "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework",
+        "authentication":{"oidc":{"issuers":{"main":{"issuer":"https://identity.example.test","audience":"urn:example:casework",
             "jwksSource":{"type":"static","documentRef":"secret:file/jwks"},
-            "allowedClients":["provision-test"],"scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+            "allowedClients":["provision-test"]}}}},
         "audit":{"path":root.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
     });
     let runtime = root.join("runtime.yaml");

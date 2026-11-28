@@ -1,7 +1,7 @@
 use registry_casework_core::DirectoryTeamUpdateRequest;
 use std::sync::Arc;
 
-use crate::auth::DECLARED_SCOPE;
+use crate::auth::{CALLER_REMEDY, DECLARED_SCOPE};
 use axum::body::Bytes;
 use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::header::{
@@ -17,6 +17,8 @@ use registry_platform_authcommon::{
     parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
     RefusalRecorder,
 };
+use registry_platform_config::Posture;
+use registry_platform_httpsec::refusal_detail::name_failed_check;
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
     FrameworkRejection, ProblemBody, TraceContext,
@@ -91,6 +93,17 @@ pub fn router(state: HttpState) -> Router {
 /// passes its own recorder to read what a request counted. A service uses
 /// [`router`], whose recorder feeds the metrics scrape.
 pub fn router_with_recorder(state: HttpState, recorder: Arc<RefusalRecorder>) -> Router {
+    router_in_posture(state, recorder, Posture::Production)
+}
+
+/// [`router_with_recorder`] for a process that declared `posture`. Under
+/// development a refusal body also names the check that failed, as
+/// `failedCheck`. Under production the body is unchanged.
+pub fn router_in_posture(
+    state: HttpState,
+    recorder: Arc<RefusalRecorder>,
+    posture: Posture,
+) -> Router {
     let review = Router::new()
         .route("/v1/review-requests", post(create_review_request))
         .route("/v1/review-results", get(review_result_feed))
@@ -217,12 +230,13 @@ pub fn router_with_recorder(state: HttpState, recorder: Arc<RefusalRecorder>) ->
             post(preview_caseload_move),
         )
         .route("/v1/directory/caseload/apply", post(apply_caseload_move));
-    http_edge_recording(app, Some(state.clone()), Arc::clone(&recorder))
+    http_edge_recording(app, Some(state.clone()), Arc::clone(&recorder), posture)
         .merge(contract_edge(
             review,
             HttpContract::Review,
             Some(state.clone()),
             recorder,
+            posture,
         ))
         .with_state(state)
 }
@@ -232,13 +246,19 @@ fn http_edge<S>(router: Router<S>, source_state: Option<HttpState>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    http_edge_recording(router, source_state, crate::metrics::refusal_recorder())
+    http_edge_recording(
+        router,
+        source_state,
+        crate::metrics::refusal_recorder(),
+        Posture::Production,
+    )
 }
 
 fn http_edge_recording<S>(
     router: Router<S>,
     source_state: Option<HttpState>,
     recorder: Arc<RefusalRecorder>,
+    posture: Posture,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -248,6 +268,7 @@ where
         HttpContract::Casework,
         source_state,
         recorder,
+        posture,
     )
 }
 
@@ -256,6 +277,7 @@ fn contract_edge<S>(
     contract: HttpContract,
     source_state: Option<HttpState>,
     recorder: Arc<RefusalRecorder>,
+    posture: Posture,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -278,8 +300,11 @@ where
     };
     // The one recording point: it sits outside the admission layer, so a
     // refusal from either is counted once, inside the request's trace scope.
+    // The development refusal detail sits just outside it and reads the same
+    // note.
     router
         .layer(middleware::from_fn_with_state(recorder, record_refusals))
+        .layer(name_failed_check(posture))
         .layer(request_body_limit_default())
         .layer(middleware::from_fn(move |request, next| {
             http_boundary(contract, request, next)
@@ -319,10 +344,14 @@ async fn http_boundary(
                 .scope(contract, async move {
                     DECLARED_SCOPE
                         .scope(std::cell::RefCell::new(None), async move {
-                            normalize_framework_rejection(
-                                next.run(request).await,
-                                framework_rejection_problem,
-                            )
+                            CALLER_REMEDY
+                                .scope(std::cell::Cell::new(None), async move {
+                                    normalize_framework_rejection(
+                                        next.run(request).await,
+                                        framework_rejection_problem,
+                                    )
+                                })
+                                .await
                         })
                         .await
                 })
@@ -1842,10 +1871,10 @@ impl From<AuthenticationError> for HttpError {
 }
 
 /// Operator hint on a scope refusal.
-const SCOPE_REMEDY: &str = "check authentication.oidc.scopeClaim and accessProfiles requiredScopes";
+const SCOPE_REMEDY: &str =
+    "check the scopeClaim of the issuer entry under authentication.oidc.issuers and accessProfiles requiredScopes";
 /// Operator hint on a refusal of the selected profile or of a person's session.
-const PROFILE_REMEDY: &str =
-    "check selected accessProfiles and authentication.oidc.humanIdentity profile category";
+const PROFILE_REMEDY: &str = "check selected accessProfiles profile category and the caller's actor kind, declared in actorKind or clientActorKinds under authentication.oidc.issuers or carried as registry_actor_kind";
 /// Operator hint on a delegated staff read refused by its configured bindings.
 const DELEGATED_STAFF_REMEDY: &str = "check delegatedStaffReaders and authentication.oidc client, assertion, actor, scope and lifetime bindings";
 
@@ -1968,9 +1997,12 @@ impl IntoResponse for HttpError {
             Self::Validation(v) => Some(v),
             _ => None,
         };
+        // The issuer set names the setting a token refusal involves. It
+        // outranks the route's general hint.
+        let caller_remedy = CALLER_REMEDY.try_with(std::cell::Cell::get).ok().flatten();
         let note = self.failed_check().map(|check| {
             let note = RefusalNote::new(check);
-            match self.remedy() {
+            match caller_remedy.or_else(|| self.remedy()) {
                 Some(remedy) => note.with_remedy(remedy),
                 None => note,
             }
@@ -2180,6 +2212,7 @@ mod tests {
                 HttpContract::Review,
                 None,
                 crate::metrics::refusal_recorder(),
+                Posture::Production,
             ),
         );
         for (path, selected, other, base) in [
@@ -2284,6 +2317,7 @@ mod tests {
             HttpContract::Review,
             None,
             crate::metrics::refusal_recorder(),
+            Posture::Production,
         );
         for (method, path, media, body, expected) in [
             (
@@ -2922,6 +2956,7 @@ mod tests {
                 .route("/outage", answer(|| HttpError::ServiceUnavailable)),
             None,
             recorder,
+            Posture::Production,
         )
     }
 

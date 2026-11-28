@@ -3984,9 +3984,19 @@ formats:
         whenOmitted: closed
       - pointer: /deployment/authentication/policies
         whenOmitted: refused
-      - pointer: /deployment/authentication/assertionIssuers
+      - pointer: /deployment/authentication/issuers
+        whenOmitted: refused
+      - pointer: /deployment/authentication/issuers/*/allowedClients
+        whenOmitted: refused
+      - pointer: /deployment/authentication/issuers/*/assertionIssuers
         whenOmitted: closed
-      - pointer: /deployment/authentication/allowInsecureHttp
+      - pointer: /deployment/authentication/issuers/*/allowInsecureHttp
+        whenOmitted: closed
+      - pointer: /deployment/authentication/issuers/*/accessTokenType
+        whenOmitted: closed
+      - pointer: /deployment/authentication/issuers/*/actorKind
+        whenOmitted: closed
+      - pointer: /deployment/authentication/issuers/*/clientActorKinds
         whenOmitted: closed
       - pointer: /deployment/authentication/policies/*/actions
         whenOmitted: refused
@@ -3994,7 +4004,7 @@ formats:
         whenOmitted: refused
       - pointer: /deployment/packages/*/expectedDigest
         whenOmitted: refused
-    restrictingMembers: [/deployment/authentication/assertionIssuers, /deployment/authentication/policies/*/subjects]
+    restrictingMembers: [/deployment/authentication/issuers/*/allowedClients, /deployment/authentication/issuers/*/assertionIssuers, /deployment/authentication/policies/*/subjects]
   - id: coordinator/scenarios
     product: coordinator
     title: Coordinator offline scenarios

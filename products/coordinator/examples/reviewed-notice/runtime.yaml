@@ -60,10 +60,13 @@ deployment:
     bind: 127.0.0.1:8108
     tlsTermination: operator-controlled-upstream
   authentication:
-    issuer: https://issuer.example.org
-    audience: urn:example:coordinator
-    jwksSource:
-      type: discovery
+    issuers:
+      main:
+        issuer: https://issuer.example.org
+        audience: urn:example:coordinator
+        jwksSource:
+          type: discovery
+        allowedClients: from-policies
     # Each policy lists the exact token `sub` values it admits, written as the
     # issuer writes them: a backend client's own service-account subject, or
     # the named people an operator policy serves. A token from a listed client

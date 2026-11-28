@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+
+import yaml
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -50,6 +52,17 @@ class NativeFixtureContracts(unittest.TestCase):
             ]):
                 self.assertEqual(journey.ctl("caseworkctl", "check", "project"), casework)
                 self.assertEqual(journey.ctl("coordinatorctl", "check"), coordinator)
+
+    def test_coordinator_producer_grants_the_policy_scopes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = native.write_breg(Path(directory), {"jwks": "http://127.0.0.1:1", "casework": "http://127.0.0.1:2"})
+            facts = yaml.safe_load((root / "dev-clients.yaml").read_text())
+        producer = next(client for client in facts["clients"] if client["id"] == "coordinator-producer")
+        audience = facts["issuer"]["clientResources"][producer["id"]]
+        resource = next(resource for resource in facts["issuer"]["resources"] if resource["audience"] == audience)
+        self.assertEqual(audience, native.COORDINATOR_RESOURCE)
+        self.assertEqual(set(producer["scopes"]), {"coordinator:start", "coordinator:operate"})
+        self.assertEqual(set(producer["scopes"]), set(resource["scopes"]))
 
     def test_start_discovers_exact_revision_and_replays_same_command(self):
         journey = native.Journey.__new__(native.Journey)

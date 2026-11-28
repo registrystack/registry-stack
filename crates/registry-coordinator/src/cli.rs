@@ -109,6 +109,21 @@ enum ExplainTopic {
     /// List the helpers a pure Function may call, with the interpreter ABI and limits.
     Functions,
 }
+mod identity_facts;
+
+#[derive(Subcommand)]
+enum GenerateTopic {
+    /// Describe the clients and policies of one configured issuer.
+    IdentityFacts {
+        /// Output file to create.
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+        /// Issuer entry to describe. Required when several entries are configured.
+        #[arg(long, value_name = "ID")]
+        issuer: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 enum Command {
     #[command(name = registry_rstack_dev::COMMAND, hide = true)]
@@ -134,6 +149,11 @@ enum Command {
         #[arg(long)]
         /// Project id written into workflow.yaml; defaults to the directory name.
         id: Option<String>,
+    },
+    /// Generate an artifact from the runtime configuration.
+    Generate {
+        #[command(subcommand)]
+        topic: GenerateTopic,
     },
     /// Validate the workflow, functions and root YAML companions offline.
     Check {
@@ -392,6 +412,7 @@ impl Command {
             Self::Serve { .. } => "serve",
             Self::Init { .. } => "init",
             Self::Check { .. } => "check",
+            Self::Generate { .. } => "generate identity-facts",
             Self::Explain { .. } => "explain",
             Self::Types { .. } => "types",
             Self::Workflow { .. } => "workflow",
@@ -427,6 +448,7 @@ fn check(
     deny_warnings: bool,
     environment: bool,
     declared: DeclaredPosture,
+    explicit_settings: &mut Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 ) -> Result<Value> {
     use registry_platform_yaml::{Report, Severity};
     if project.is_none() && runtime.is_none() {
@@ -451,12 +473,13 @@ fn check(
         }
     });
     if let Some(path) = runtime {
-        let (findings, runtime_exit) = crate::project_check::check_runtime(
+        let (findings, runtime_exit, settings) = crate::project_check::check_runtime(
             path,
             loaded.as_ref().map(|(definition, _)| definition),
             environment,
             declared,
         );
+        *explicit_settings = settings;
         report.extend(findings);
         exit_code = exit_code.max(runtime_exit);
     }
@@ -912,7 +935,11 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
         | ProblemCode::RuntimeFailure => return None,
     })
 }
-async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
+async fn execute(
+    cli: &Cli,
+    declared: DeclaredPosture,
+    explicit_settings: &mut Option<Vec<registry_cli_report::ExplicitSettingLine>>,
+) -> Result<Value> {
     // Every typed command reads the service through the declared posture.
     let peer = match declared.posture {
         Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
@@ -933,9 +960,18 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
             let created = project::init(directory, id.as_deref())?;
             Ok(json!({"status":"initialized","project":directory,"created":created}))
         }
-        Command::Check { project, explain, deny_warnings, environment, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), *explain, *deny_warnings, *environment, declared),
+        Command::Generate { topic: GenerateTopic::IdentityFacts { output, issuer } } => {
+            let path = cli.runtime_config.as_ref().filter(|path| path.is_absolute())
+                .ok_or_else(|| CoordinatorError::new(
+                    "coordinator.command.usage", "an absolute --runtime-config path is required",
+                ).suggest("Supply --runtime-config ABS.").with_exit(2))?;
+            let runtime = RuntimeConfig::load_with_posture(path, declared)?;
+            identity_facts::write(&deployment::config(&runtime)?.authentication, issuer.as_deref(), path, output)?;
+            Ok(json!({"status":"generated","output":output}))
+        }
+        Command::Check { project, explain, deny_warnings, environment, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), *explain, *deny_warnings, *environment, declared, explicit_settings),
         Command::Explain { topic: Some(ExplainTopic::Functions), .. } => Ok(crate::functions::explain()),
-        Command::Explain { project, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), true, false, false, declared),
+        Command::Explain { project, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), true, false, false, declared, explicit_settings),
         Command::Test { project, scenarios } => test(project, scenarios.as_deref()),
         Command::Package { project, output } => {
             Ok(json!({"packageDigest":deployment::package(project,output)?,"root":output}))
@@ -1286,10 +1322,9 @@ pub async fn run() -> std::process::ExitCode {
                 .any(|pair| pair == ["--format", "json"])
                 || arguments.iter().any(|argument| argument == "--format=json");
             if json {
-                write_report(false, "usage", failure_value(&error, 2));
-            } else {
-                eprint!("{}", error.report().render_human());
+                return report_exit(write_report(false, "usage", failure_value(&error, 2)), 2);
             }
+            eprint!("{}", error.report().render_human());
             return std::process::ExitCode::from(2);
         }
     };
@@ -1317,7 +1352,12 @@ pub async fn run() -> std::process::ExitCode {
             .with_exit(2);
         match cli.format {
             Format::Human => eprint!("{}", error.report().render_human()),
-            Format::Json => write_report(false, cli.command.name(), failure_value(&error, 2)),
+            Format::Json => {
+                return report_exit(
+                    write_report(false, cli.command.name(), failure_value(&error, 2)),
+                    2,
+                )
+            }
         }
         std::process::ExitCode::from(2)
     };
@@ -1425,13 +1465,23 @@ pub async fn run() -> std::process::ExitCode {
         }
         cli => cli,
     };
-    match execute(&cli, declared).await {
+    let mut explicit_settings = None;
+    match execute(&cli, declared, &mut explicit_settings).await {
         Ok(value) => {
             let tested = matches!(cli.command, Command::Test { .. });
             let ok = !(tested && value["status"] == "failed");
-            match cli.format {
-                Format::Json if matches!(cli.command, Command::Openapi) => println!("{value}"),
-                Format::Json => write_report(ok, cli.command.name(), with_posture(value, declared)),
+            let written = match cli.format {
+                Format::Json if matches!(cli.command, Command::Openapi) => {
+                    use std::io::Write as _;
+                    writeln!(std::io::stdout().lock(), "{value}")
+                }
+                Format::Json => write_report_with_settings(
+                    ok,
+                    cli.command.name(),
+                    value,
+                    declared,
+                    explicit_settings,
+                ),
                 Format::Human => {
                     if let Some(diagnostics) = value["diagnostics"].as_array() {
                         if !diagnostics.is_empty() {
@@ -1446,26 +1496,38 @@ pub async fn run() -> std::process::ExitCode {
                         }
                     }
                     print!("{}", render_human(&cli, &value));
+                    print_explicit_settings(explicit_settings.as_deref().unwrap_or_default());
+                    Ok(())
                 }
-            }
-            if ok {
-                std::process::ExitCode::SUCCESS
-            } else {
-                std::process::ExitCode::from(1)
-            }
+            };
+            report_exit(written, u8::from(!ok))
         }
         Err(e) => {
-            match cli.format {
-                Format::Human => eprint!("{}", e.report().render_human()),
-                Format::Json => write_report(
+            let written = match cli.format {
+                Format::Human => {
+                    eprint!("{}", e.report().render_human());
+                    print_explicit_settings(explicit_settings.as_deref().unwrap_or_default());
+                    Ok(())
+                }
+                Format::Json => write_report_with_settings(
                     false,
                     cli.command.name(),
-                    with_posture(failure_value(&e, e.exit_code), declared),
+                    failure_value(&e, e.exit_code),
+                    declared,
+                    explicit_settings,
                 ),
-            }
-            std::process::ExitCode::from(e.exit_code)
+            };
+            report_exit(written, e.exit_code)
         }
     }
+}
+
+fn report_exit(written: std::io::Result<()>, exit: u8) -> std::process::ExitCode {
+    if written.is_err() {
+        eprintln!("error: the CLI report could not be written");
+        return std::process::ExitCode::from(3);
+    }
+    std::process::ExitCode::from(exit)
 }
 
 fn api_result(
@@ -1493,7 +1555,9 @@ fn serve(
         )
         .suggest("Remove --format and retry.");
         match cli.format {
-            Format::Json => write_report(false, "usage", failure_value(&error, 2)),
+            Format::Json => {
+                return report_exit(write_report(false, "usage", failure_value(&error, 2)), 2)
+            }
             Format::Human => eprint!("{}", error.report().render_human()),
         }
         return std::process::ExitCode::from(2);
@@ -1821,11 +1885,56 @@ fn with_posture(mut value: Value, declared: DeclaredPosture) -> Value {
     value
 }
 
+fn print_explicit_settings(settings: &[registry_cli_report::ExplicitSettingLine]) {
+    for setting in settings {
+        println!(
+            "Explicit production setting {} at {}. {}.",
+            setting.code,
+            setting.pointer.as_deref().unwrap_or_default(),
+            setting.summary
+        );
+    }
+}
+
+fn write_report_with_settings(
+    ok: bool,
+    command: &str,
+    mut value: Value,
+    declared: DeclaredPosture,
+    settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
+) -> std::io::Result<()> {
+    let Some(settings) = settings else {
+        return write_report(ok, command, with_posture(value, declared));
+    };
+    report_envelope(ok, command, &mut value);
+    let report = registry_cli_report::Report::new(&value, env!("CARGO_PKG_VERSION"))
+        .map_err(std::io::Error::other)?
+        .with_posture(declared)
+        .explicit_settings(settings);
+    let explicit = serde_json::to_value(report)?;
+    value["explicitProductionSettings"] = explicit["explicitProductionSettings"].clone();
+    write_report(ok, command, with_posture(value, declared))
+}
+
 /// One report envelope for local commands and authenticated operation results.
-pub fn write_report(ok: bool, command: &str, mut value: Value) {
+pub fn write_report(ok: bool, command: &str, mut value: Value) -> std::io::Result<()> {
+    use std::io::Write as _;
+
     if !value.is_object() {
         value = json!({"result":value});
     }
+    report_envelope(ok, command, &mut value);
+    let mut stdout = std::io::stdout().lock();
+    if let (Some(posture), Some(value)) = (value.get("posture"), value.as_object()) {
+        serde_json::to_writer(&mut stdout, &PostureReport { value, posture })?;
+    } else {
+        serde_json::to_writer(&mut stdout, &value)?;
+    }
+    writeln!(stdout)?;
+    stdout.flush()
+}
+
+fn report_envelope(ok: bool, command: &str, value: &mut Value) {
     if value.get("diagnostics").is_none() {
         value["diagnostics"] = json!([]);
     }
@@ -1835,18 +1944,6 @@ pub fn write_report(ok: bool, command: &str, mut value: Value) {
     value["kind"] = json!(CTL_REPORT_KIND);
     if value.get("status").is_none() {
         value["status"] = json!("completed");
-    }
-    if let Some(posture) = value.get("posture") {
-        let ordered = PostureReport {
-            value: value.as_object().expect("a report is an object"),
-            posture,
-        };
-        println!(
-            "{}",
-            serde_json::to_string(&ordered).expect("a report of JSON values serializes")
-        );
-    } else {
-        println!("{value}");
     }
 }
 
@@ -1868,7 +1965,10 @@ impl serde::Serialize for PostureReport<'_> {
         }
         let mut map = serializer.serialize_map(Some(self.value.len()))?;
         for (key, value) in self.value {
-            if !matches!(key.as_str(), "posture" | "outcome" | "diagnostics") {
+            if !matches!(
+                key.as_str(),
+                "posture" | "explicitProductionSettings" | "outcome" | "diagnostics"
+            ) {
                 map.serialize_entry(key, value)?;
             }
         }
@@ -1879,7 +1979,7 @@ impl serde::Serialize for PostureReport<'_> {
                 source: &self.posture["source"],
             },
         )?;
-        for key in ["outcome", "diagnostics"] {
+        for key in ["explicitProductionSettings", "outcome", "diagnostics"] {
             if let Some(value) = self.value.get(key) {
                 map.serialize_entry(key, value)?;
             }

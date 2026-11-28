@@ -771,7 +771,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
     d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
     d["admissionKeyRef"] = json!("secret:file/admission-key");
     d["auditKeyRef"] = json!("secret:file/audit-key");
-    d["authentication"] = json!({"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"policies":{"producer":{"subjects":["owner-a","owner-b","audit-owner"],"requiredScopes":["coordinator:start"],"workflows":["delayed-follow-up"],"actions":["start","status"]},"operator":{"subjects":["operator-1"],"requiredScopes":["coordinator:operate"],"workflows":["delayed-follow-up"],"actions":["status","inspect","retry-same","cancel","reconcile","doctor","restore-hold","release-restore-hold","release-admission-hold","complete-execution-recovery","retain"],"operator":true}}});
+    d["authentication"] = json!({"issuers":{"main":{"issuer":issuer.issuer(),"audience":"urn:coordinator:test","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"allowedClients":"from-policies"}},"policies":{"producer":{"subjects":["owner-a","owner-b","audit-owner"],"requiredScopes":["coordinator:start"],"workflows":["delayed-follow-up"],"actions":["start","status"]},"operator":{"subjects":["operator-1"],"requiredScopes":["coordinator:operate"],"workflows":["delayed-follow-up"],"actions":["status","inspect","retry-same","cancel","reconcile","doctor","restore-hold","release-restore-hold","release-admission-hold","complete-execution-recovery","retain"],"operator":true}}});
     fs::write(&path, serde_norway::to_string(&doc).unwrap()).unwrap();
     let runtime = Arc::new(RuntimeConfig::load(&path).unwrap());
     let workflows =
@@ -2855,10 +2855,13 @@ impl TwoFlowFixture {
         let producer = |subjects: Value, workflows: Value| json!({"subjects":subjects,"requiredScopes":["coordinator:start"],"workflows":workflows,"actions":["start","status"]});
         let operator = |subjects: Value, workflows: Value| json!({"subjects":subjects,"requiredScopes":["coordinator:operate"],"workflows":workflows,"actions":OPERATOR_ACTIONS,"operator":true});
         d["authentication"] = json!({
-            "issuer": issuer.issuer(),
-            "audience": "urn:coordinator:test",
-            "scopeClaim": "scope",
-            "jwksSource": {"type": "uri", "uri": issuer.jwks_uri()},
+            "issuers": {"main": {
+                "issuer": issuer.issuer(),
+                "audience": "urn:coordinator:test",
+                "scopeClaim": "scope",
+                "jwksSource": {"type": "uri", "uri": issuer.jwks_uri()},
+                "allowedClients": "from-policies",
+            }},
             "policies": {
                 "producer-a": producer(json!(["owner-a", "shared-subject", "check-producer"]), json!([DELAYED])),
                 "producer-b": producer(json!(["owner-b"]), json!([GOVERNED])),

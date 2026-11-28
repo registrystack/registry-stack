@@ -175,13 +175,8 @@ impl CaseworkAuthenticator {
         policy_id: &str,
         source_profile: Option<&str>,
     ) -> Result<DelegatedStaffReader, AuthenticationError> {
-        validate_compact_access_token(token)
-            .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
-        let verified = self
-            .verifier
-            .verify(token)
-            .await
-            .map_err(|error| AuthenticationError::Refused(error.failed_check()))?;
+        let (caller, facts) = self.verify_caller(token).await?;
+        let verified = &caller.token;
         let binding = self
             .delegated_staff_readers
             .get(policy_id)
@@ -225,9 +220,9 @@ impl CaseworkAuthenticator {
             return Err(AuthenticationError::Refused(FailedCheck::TaskGrantClaims));
         }
         let audience = match verified.claims.aud.as_ref() {
-            Some(Audience::One(audience)) if audience == &self.audience => audience.clone(),
+            Some(Audience::One(audience)) if audience == &facts.audience => audience.clone(),
             Some(Audience::Many(audiences))
-                if audiences.len() == 1 && audiences[0] == self.audience =>
+                if audiences.len() == 1 && audiences[0] == facts.audience =>
             {
                 audiences[0].clone()
             }
@@ -271,7 +266,8 @@ impl CaseworkAuthenticator {
         if !expected_scopes.is_subset(&actual_scopes)
             || actual_scopes.len() != verified.scopes.len()
         {
-            self.declare_scope_refusal(
+            declare_scope_refusal(
+                &facts.scope_claim,
                 expected_scopes
                     .difference(&actual_scopes)
                     .next()
@@ -280,12 +276,14 @@ impl CaseworkAuthenticator {
             );
             return Err(AuthenticationError::Profile(FailedCheck::Scope));
         }
+        // The token's own actor kind is the gateway's. The binding names the
+        // claim that says the represented person is human.
         if verified
             .claims
             .extra
-            .get(&self.human_identity.claim)
+            .get(&binding.represented_human.claim)
             .and_then(Value::as_str)
-            != Some(self.human_identity.value.as_str())
+            != Some(binding.represented_human.value.as_str())
         {
             return Err(AuthenticationError::NotHuman(FailedCheck::ActorKind));
         }

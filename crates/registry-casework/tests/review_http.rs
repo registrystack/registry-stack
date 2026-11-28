@@ -16,9 +16,9 @@ use axum::{
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
 use registry_casework::{
-    operational_log_level, router, CaseworkAudit, CaseworkAuthenticator, CaseworkService,
-    DatabaseConfig, DelegatedStaffReaderConfig, HttpState, HumanIdentityConfig, PostgresStore,
-    ReviewTaskDecisionRequest,
+    operational_log_level, router, CaseworkAudit, CaseworkAuthenticator, CaseworkIssuerVerifier,
+    CaseworkService, DatabaseConfig, DelegatedStaffReaderConfig, HttpState, PostgresStore,
+    RepresentedHumanConfig, ReviewTaskDecisionRequest,
 };
 use registry_casework_client::{
     BearerToken, CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError,
@@ -31,7 +31,7 @@ use registry_platform_httputil::{
     probe::{HEALTH_PATH, READY_PATH},
     FetchUrlPolicy,
 };
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_oidc::{DeclaredKinds, JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use serde_json::{json, Value};
 use tokio_postgres::NoTls;
@@ -433,7 +433,7 @@ async fn app_with_project(
     Arc<Mutex<SourceReviewability>>,
     tokio_postgres::Client,
 ) {
-    app_with_project_options(idp, project, None, false, None).await
+    app_with_project_options(idp, project, None, false, None, None).await
 }
 
 async fn app_with_project_and_delegated_barrier(
@@ -449,7 +449,52 @@ async fn app_with_project_and_delegated_barrier(
     Arc<Mutex<SourceReviewability>>,
     tokio_postgres::Client,
 ) {
-    app_with_project_options(idp, project, delegated_barrier, true, None).await
+    app_with_project_options(idp, project, delegated_barrier, true, None, None).await
+}
+
+/// A router that also admits tokens from `other`, a second issuer whose
+/// subjects share the names of the first issuer's subjects.
+async fn app_with_two_issuers(
+    idp: &MockIdp,
+    other: &MockIdp,
+) -> (
+    axum::Router,
+    CaseworkService,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    Arc<AtomicU8>,
+    Arc<Mutex<SourceReviewability>>,
+    tokio_postgres::Client,
+) {
+    app_with_project_options(idp, project(&idp.issuer()), None, false, None, Some(other)).await
+}
+
+fn issuer_verifier(
+    id: &str,
+    idp: &MockIdp,
+    strict_delegation_client: bool,
+) -> CaseworkIssuerVerifier {
+    let verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]);
+    let verifier = if strict_delegation_client {
+        verifier
+            .with_allowed_clients(vec!["registry-mcp".to_owned()])
+            .with_assertion_issuers(BTreeMap::from([(
+                "registry-mcp".to_owned(),
+                vec![idp.issuer().to_owned()],
+            )]))
+    } else {
+        verifier
+    };
+    CaseworkIssuerVerifier {
+        id: id.to_owned(),
+        verifier,
+        keys: Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::https_or_loopback(),
+        )),
+        declared: DeclaredKinds::None,
+    }
 }
 
 async fn app_with_project_options(
@@ -458,6 +503,7 @@ async fn app_with_project_options(
     delegated_barrier: Option<Arc<DelegatedSourceBarrier>>,
     strict_delegation_client: bool,
     runtime_audit: Option<CaseworkAudit>,
+    other_issuer: Option<&MockIdp>,
 ) -> (
     axum::Router,
     CaseworkService,
@@ -557,40 +603,27 @@ async fn app_with_posture(
         .expect("runtime store")
         .with_audit(runtime_audit.unwrap_or_else(|| CaseworkAudit::capture().0));
     project.check().expect("review HTTP project");
-    let verifier = oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]);
-    let verifier = if strict_delegation_client {
-        verifier
-            .with_allowed_clients(vec!["registry-mcp".to_owned()])
-            .with_assertion_issuers(BTreeMap::from([(
-                "registry-mcp".to_owned(),
-                vec![idp.issuer().to_owned()],
-            )]))
-    } else {
-        verifier
-    };
+    let mut verifiers = vec![issuer_verifier("main", idp, strict_delegation_client)];
+    verifiers.extend(other_issuer.map(|other| issuer_verifier("other", other, false)));
     let delegated_reader = DelegatedStaffReaderConfig {
         profile: "staff".to_owned(),
         client: "registry-mcp".to_owned(),
         actor_subject: "registry-mcp".to_owned(),
+        represented_human: RepresentedHumanConfig {
+            claim: "registry_subject_actor_kind".to_owned(),
+            value: "human".to_owned(),
+        },
         assertion_issuer: idp.issuer().to_owned(),
         required_scope: "casework:staff:delegated-read".to_owned(),
         maximum_token_lifetime_seconds: 300,
         source_profiles: vec!["reviewer-source".to_owned()],
     };
-    let authenticator = CaseworkAuthenticator::new(
-        &project,
-        verifier,
-        Arc::new(JwksFetcher::new_with_fetch_url_policy(
-            idp.jwks_uri(),
-            JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::https_or_loopback(),
-        )),
-        HumanIdentityConfig::default(),
-    )
-    .with_delegated_staff_readers(BTreeMap::from([
-        ("assistant-reader".to_owned(), delegated_reader.clone()),
-        ("assistant-reader-rotation".to_owned(), delegated_reader),
-    ]));
+    let authenticator = CaseworkAuthenticator::new(&project, verifiers)
+        .expect("the review HTTP issuer set")
+        .with_delegated_staff_readers(BTreeMap::from([
+            ("assistant-reader".to_owned(), delegated_reader.clone()),
+            ("assistant-reader-rotation".to_owned(), delegated_reader),
+        ]));
     let revoked = Arc::new(AtomicBool::new(false));
     let changed = Arc::new(AtomicBool::new(false));
     let failure = Arc::new(AtomicU8::new(0));
@@ -716,6 +749,7 @@ fn delegated_staff_read_token_value_with_scopes(
         "registry_principal": principal,
         "scope": scopes,
         "registry_actor_kind": "human",
+        "registry_subject_actor_kind": "human",
         "registry_assertion_issuer": idp.issuer(),
         "act": {"iss": idp.issuer(), "sub": "registry-mcp"}
     }))
@@ -1116,7 +1150,8 @@ async fn assert_delegated_route_audit_failures(path: impl Fn() -> String, event:
         let (audit, capture) = CaseworkAudit::capture();
         capture.refuse_after(accepted_lines);
         let (app, ..) =
-            app_with_project_options(&idp, project(&idp.issuer()), None, true, Some(audit)).await;
+            app_with_project_options(&idp, project(&idp.issuer()), None, true, Some(audit), None)
+                .await;
         let response = app
             .oneshot(delegated_read_request(&idp, &path()))
             .await
@@ -1166,7 +1201,7 @@ async fn delegated_submitted_context_ignores_admitted_source_profile_and_audits_
     let idp = MockIdp::start().await;
     let (audit, capture) = CaseworkAudit::capture();
     let (app, _, _, _, _, _, database) =
-        app_with_project_options(&idp, project(&idp.issuer()), None, true, Some(audit)).await;
+        app_with_project_options(&idp, project(&idp.issuer()), None, true, Some(audit), None).await;
     let (client, server) = native_review_client(app.clone()).await;
     let (_, task_id) = create_answer_task(&app, &database, &idp, "delegated-submitted").await;
     let reviewer = human_token(&idp, "reviewer", "staff");
@@ -1218,7 +1253,7 @@ async fn delegated_submitted_context_ignores_admitted_source_profile_and_audits_
 async fn delegated_cursor_is_partitioned_by_reader_policy_during_client_rotation() {
     let idp = MockIdp::start().await;
     let (app, _, _, _, _, _, database) =
-        app_with_project_options(&idp, project(&idp.issuer()), None, true, None).await;
+        app_with_project_options(&idp, project(&idp.issuer()), None, true, None, None).await;
     let (client, server) = native_review_client(app.clone()).await;
     let reviewer = human_token(&idp, "reviewer", "staff");
     for reference in ["rotation-page-one", "rotation-page-two"] {
@@ -5961,11 +5996,15 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
     ));
     let authenticator = CaseworkAuthenticator::new(
         &project,
-        oidc_verifier_config(idp.issuer(), vec![AUDIENCE.into()])
-            .with_allowed_clients(vec!["casework-client".into()]),
-        keys.clone(),
-        HumanIdentityConfig::default(),
+        vec![CaseworkIssuerVerifier {
+            id: "main".to_owned(),
+            verifier: oidc_verifier_config(idp.issuer(), vec![AUDIENCE.into()])
+                .with_allowed_clients(vec!["casework-client".into()]),
+            keys: keys.clone(),
+            declared: DeclaredKinds::None,
+        }],
     )
+    .expect("one issuer entry")
     .with_human_source_audiences(BTreeMap::from([(
         "registry".into(),
         SOURCE_AUDIENCE.into(),
@@ -6860,4 +6899,103 @@ async fn well_formed_source_pair_is_ignored_on_every_admitted_submitted_context_
         );
     }
     idp.stop().await;
+}
+
+/// Casework keys a person by issuer and subject. A token from a second
+/// configured issuer that carries the same principal value is another person:
+/// it neither lists nor claims the first person's work.
+#[tokio::test]
+async fn a_subject_from_one_issuer_does_not_reach_records_of_the_same_subject_from_another() {
+    let idp = MockIdp::start().await;
+    let other = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) = app_with_two_issuers(&idp, &other).await;
+    let (_, task_id) = create_answer_task(&app, &database, &idp, "issuer-keyed").await;
+    let list = |token: String| {
+        let app = app.clone();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/review-tasks")
+                        .header("authorization", format!("Bearer {token}"))
+                        .header(CASEWORK_PROFILE_HEADER, "staff")
+                        .body(Body::empty())
+                        .expect("task list request"),
+                )
+                .await
+                .expect("task list response");
+            let status = response.status();
+            let body = to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("bounded task list");
+            (
+                status,
+                String::from_utf8(body.to_vec()).expect("a UTF-8 body"),
+            )
+        }
+    };
+
+    let claim = |token: String, idempotency_key: &'static str| {
+        let app = app.clone();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/v1/review-tasks/{task_id}/claim"))
+                        .header("authorization", format!("Bearer {token}"))
+                        .header(CASEWORK_PROFILE_HEADER, "staff")
+                        .header("if-match", "\"1\"")
+                        .header("idempotency-key", idempotency_key)
+                        .body(Body::empty())
+                        .expect("claim request"),
+                )
+                .await
+                .expect("claim response");
+            let status = response.status();
+            let body = to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .expect("bounded claim response");
+            (
+                status,
+                serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+            )
+        }
+    };
+
+    // The other issuer's token authenticates, and its subject is not the
+    // first issuer's member of the same name: it lists nothing and may not
+    // claim.
+    let (status, body) = list(reviewer_token(&other)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).expect("a JSON task list"),
+        json!({"items": [], "status": "complete"}),
+        "the other issuer's subject listed the task"
+    );
+    let (status, problem) = claim(reviewer_token(&other), "claim-other-issuer").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized", "{problem}");
+
+    let (status, body) = list(reviewer_token(&idp)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains(&task_id.to_string()), "{body}");
+    claim_task_over_http(&app, task_id, &reviewer_token(&idp), "claim-own-issuer").await;
+
+    // An idempotency key is scoped to its issuer too. Once the other
+    // issuer's subject is a member, the first person's request with the same
+    // key is not replayed for it: it runs, and meets the claimed revision.
+    database
+        .execute(
+            "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind)
+             VALUES('review-team',$1,'reviewer','staff')",
+            &[&other.issuer()],
+        )
+        .await
+        .expect("make the other issuer's subject a member");
+    let (status, problem) = claim(reviewer_token(&other), "claim-own-issuer").await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{problem}");
+    assert_eq!(problem["code"], "precondition.failed", "{problem}");
+    idp.stop().await;
+    other.stop().await;
 }

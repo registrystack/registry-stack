@@ -20,9 +20,14 @@ pub struct CoordinatorError {
     /// authentication, authorization and event-delivery refusals and read
     /// where the refusal is answered. A fixed member, never a caller value.
     pub check: Option<FailedCheck>,
-    /// What the deployment declared about a scope refusal, for the operator's
-    /// log line only: never a caller value, never written to an answer.
-    pub declared: Option<Box<DeclaredScope>>,
+    /// Operator log detail for a refusal.
+    pub(crate) refusal_detail: Option<Box<RefusalDetail>>,
+}
+
+#[derive(Debug)]
+pub(crate) enum RefusalDetail {
+    Scope(DeclaredScope),
+    Remedy(&'static str),
 }
 
 impl CoordinatorError {
@@ -39,7 +44,7 @@ impl CoordinatorError {
                 _ => 1,
             },
             check: None,
-            declared: None,
+            refusal_detail: None,
         }
     }
     /// Preserve all shared-reader findings and their authored positions.
@@ -73,7 +78,7 @@ impl CoordinatorError {
                 1
             },
             check: None,
-            declared: None,
+            refusal_detail: None,
         }
     }
     /// Name the check that refused the caller.
@@ -85,9 +90,21 @@ impl CoordinatorError {
     /// Attach the declared values of a scope refusal.
     #[must_use]
     pub(crate) fn declaring(mut self, declared: DeclaredScope) -> Self {
-        self.declared = Some(Box::new(declared));
+        self.refusal_detail = Some(Box::new(RefusalDetail::Scope(declared)));
         self
     }
+    pub fn declared_scope(&self) -> Option<&DeclaredScope> {
+        match self.refusal_detail.as_deref() {
+            Some(RefusalDetail::Scope(scope)) => Some(scope),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn with_remedy(mut self, remedy: Option<&'static str>) -> Self {
+        self.refusal_detail = remedy.map(|remedy| Box::new(RefusalDetail::Remedy(remedy)));
+        self
+    }
+
     pub(crate) fn with_exit(mut self, exit_code: u8) -> Self {
         self.exit_code = exit_code;
         self

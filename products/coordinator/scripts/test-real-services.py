@@ -594,11 +594,10 @@ class Journey:
             "secretProviders": {"file": {"root": str(keys)}},
             "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database",
                          "caBundleRef": "secret:file/database-root.pem"},
-            "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": resource,
+            "authentication": {"oidc": {"issuers": {"main": {"issuer": self.urls["issuer"], "audience": resource,
                 "allowedClients": ["staff", "supervisor", "administrator", "producer", "task-agent",
                                    "status-client", "scheduling-status"],
-                "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
-                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}}},
+                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}}}}},
             "audit": {"path": str(self.root / "audit/casework.ndjson"), "hashKeyRef": "secret:file/audit-key"},
             "contextProviders": {"applications": {
                 "baseUrl": self.urls["breg"], "statusProfile": "reader",
@@ -999,8 +998,10 @@ class Journey:
             "runtimeRole": role,
             "packages": packages,
             "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "loopback-plaintext"},
-            "authentication": {"issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE,
-                "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
+            "authentication": {"issuers": {"main": {
+                "issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE, "scopeClaim": "scope",
+                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
+                "allowedClients": "from-policies"}},
                 # Admission accepts only the producer client's own service subject.
                 "policies": {"coordinator-producer": {
                     "subjects": [subject(self.token("bregctl", owner, "coordinator-producer"))],
@@ -1307,10 +1308,9 @@ class Journey:
             "secretProviders": {"file": {"root": str(keys)}},
             "database": {"runtimeUrlRef": "secret:file/casework-database", "migrationUrlRef": "secret:file/casework-database",
                          "caBundleRef": "secret:file/casework-database-root.pem"},
-            "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": resource,
-                "allowedClients": ["review-producer", "staff", "administrator"], "scopeClaim": "scope",
-                "jwksSource": {"type": "static", "documentRef": "secret:file/casework-jwks"},
-                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}}},
+            "authentication": {"oidc": {"issuers": {"main": {"issuer": self.urls["issuer"], "audience": resource,
+                "allowedClients": ["review-producer", "staff", "administrator"],
+                "jwksSource": {"type": "static", "documentRef": "secret:file/casework-jwks"}}}}},
             "audit": {"path": str(self.root / "audit/review-casework.ndjson"), "hashKeyRef": "secret:file/casework-audit-key"},
             "contextProviders": {},
             "reviewCompletionDestinations": {"coordinator": {

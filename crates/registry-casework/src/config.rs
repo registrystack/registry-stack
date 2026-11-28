@@ -10,12 +10,12 @@ use registry_platform_audit::{
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    sha256_uri, ConfigBlockError, ConfigBlockErrorKind, DatabaseTransportError, DeclaredPosture,
-    DevelopmentOnlyRefused, DevelopmentSetting, DevelopmentWitness, FoundSetting,
-    LoadedRuntimeConfig, MetricsBindError, PackageConfig, PackageDigestMismatch, PackageError,
-    PackageErrorKind, PackageLimits, PostureReport, RemovedKey, RuntimeConfigLoader,
+    sha256_uri, CallerIssuers, ConfigBlockError, ConfigBlockErrorKind, DatabaseTransportError,
+    DeclaredPosture, DevelopmentOnlyRefused, DevelopmentWitness, FoundExplicitSetting,
+    FoundSetting, LoadedRuntimeConfig, MetricsBindError, PackageConfig, PackageDigestMismatch,
+    PackageError, PackageErrorKind, PackageLimits, PostureReport, RemovedKey, RuntimeConfigLoader,
     RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver, SettingOrigin,
-    VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    VerifiedPackage, DEFAULT_STAND_IN,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -25,7 +25,7 @@ pub use registry_platform_config::{
 };
 use registry_platform_httputil::loopback;
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
+    fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm, ClaimNames, DeclaredKinds,
     IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
     TokenVerifierConfig,
 };
@@ -34,6 +34,10 @@ use registry_platform_yaml::{
 };
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
+
+mod issuers;
+
+pub use issuers::{CaseworkAllowedClients, CaseworkIssuer, ISSUERS_POINTER, UNRESTRICTED_CLIENTS};
 
 /// The command that builds a Casework package, named in every package refusal.
 pub const PACKAGE_COMMAND: &str = "caseworkctl package";
@@ -62,15 +66,61 @@ pub const CASEWORK_RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] =
 /// Keys an earlier Casework runtime configuration accepted, each refused with
 /// the key that replaced it.
 pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
-    REMOVED_OIDC_JWKS_URI,
-    REMOVED_OIDC_JWKS_SOURCE_KIND,
+    RemovedKey {
+        path: "authentication.oidc.issuer",
+        replacement: "Declare issuer under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.audience",
+        replacement: "Declare audience under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksSource",
+        replacement: "Declare jwksSource under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksUri",
+        replacement: "Declare jwksSource under authentication.oidc.issuers.ISSUER_ID with type: uri and uri set to the https URL",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksSource.kind",
+        replacement: "Write jwksSource.type with the same value",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowInsecureHttp",
+        replacement: "Declare allowInsecureHttp under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowedClients",
+        replacement: "Declare allowedClients under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.assertionIssuers",
+        replacement: "Declare assertionIssuers under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.scopeClaim",
+        replacement: "Declare scopeClaim under authentication.oidc.issuers.ISSUER_ID, or omit it to read scopes from scope",
+    },
+    RemovedKey {
+        path: "authentication.oidc.revokedKeyIds",
+        replacement: "Declare revokedKeyIds under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.maximumTokenLifetimeSeconds",
+        replacement: "Declare maximumTokenLifetimeSeconds under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.humanIdentity",
+        replacement: "A person is a caller whose actor kind is human: declare actorKind or clientActorKinds under authentication.oidc.issuers.ISSUER_ID, or have the issuer write registry_actor_kind. For a delegated staff reader, name the represented person's claim and value in delegatedStaffReaders.POLICY_ID.representedHuman",
+    },
     RemovedKey {
         path: "authentication.oidc.principalClaim",
         replacement: "declare accessProfiles.PROFILE_ID.principalClaim in casework.yaml",
     },
     RemovedKey {
         path: "authentication.oidc.deniedKids",
-        replacement: "Rename deniedKids to revokedKeyIds",
+        replacement: "Declare revokedKeyIds under authentication.oidc.issuers.ISSUER_ID",
     },
     RemovedKey {
         path: "audit.retainDays",
@@ -97,10 +147,6 @@ pub const CASEWORK_REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "Write package.expectedDigest, the digest `caseworkctl package` reports.",
     },
 ];
-/// The RFC 9068 access-token media type this runtime verifies. The pair of
-/// spellings it admits is derived from this one value, never authored, so no
-/// deployment can widen it to an ordinary JWT.
-const CASEWORK_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 const MAXIMUM_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
 /// The largest `audit.rotateBytes` the shared audit writer accepts.
 const MAXIMUM_AUDIT_ROTATE_BYTES: u64 = u32::MAX as u64;
@@ -502,41 +548,18 @@ pub struct AuthenticationConfig {
     pub oidc: OidcConfig,
 }
 
-/// The access tokens this runtime accepts: the issuer and its keys, the
-/// clients admitted, the scope claim, and the claim that marks a human actor.
+/// The access tokens this runtime accepts: the issuers it trusts, each with
+/// its own keys, rules and clients, and the delegated staff readers.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
-    /// The exact issuer, the one audience every token carries, and where the
-    /// issuer's signing keys come from.
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    /// The issuers this runtime accepts access tokens from, keyed by an
+    /// issuer id the operator chooses. A token is verified only by the entry
+    /// whose issuer it names.
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuers"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub provider: OidcIssuerConfig,
-    /// The clients admitted and the assertion authorities each may exchange
-    /// a subject token from, keyed by client identifier. An empty
-    /// `assertionIssuers` map applies no rule; see
-    /// [`registry_platform_oidc::TokenVerifierConfig::assertion_issuers`].
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-clients"))]
-    #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub clients: OidcClientsConfig,
-    #[serde(default = "default_scope_claim")]
-    pub scope_claim: String,
-    #[serde(default)]
-    pub human_identity: HumanIdentityConfig,
-    /// Signing-key identifiers Casework refuses locally, even while the issuer
-    /// still publishes them; listing a key does not revoke it at the issuer.
-    /// Omitted, no key is refused; written, the list is non-empty.
-    #[serde(default, deserialize_with = "present_revoked_key_ids")]
-    pub revoked_key_ids: Option<RevokedKeyIds>,
-    /// Optional deployment bound on the lifetime declared by an incoming
-    /// access token, independently of the issuer's own policy.
-    #[serde(
-        default,
-        deserialize_with = "registry_casework_core::typed::optional_bounded_u64::<_, 1, 7_200>"
-    )]
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 7_200)))]
-    pub maximum_token_lifetime_seconds: Option<u64>,
+    pub issuers: CallerIssuers<CaseworkIssuer>,
     /// Explicitly opted-in delegated staff readers, keyed by the policy id a
     /// dedicated read client sends. Absence disables delegated staff reads.
     #[serde(
@@ -553,35 +576,42 @@ pub struct OidcConfig {
     pub delegated_staff_readers: Option<BTreeMap<String, DelegatedStaffReaderConfig>>,
 }
 
-static UNRESTRICTED_CLIENTS: DevelopmentSetting = DevelopmentSetting {
-    code: "casework.posture.unrestricted-clients",
-    key: "allowedClients",
-    summary: "every client the issuer admits is accepted",
-    production: "List the clients the deployment admits.",
-};
-
-const ALLOWED_CLIENTS_POINTER: &str = "/authentication/oidc/allowedClients";
-
-fn unrestricted_clients_setting(check: &RuntimeFileCheck<RuntimeConfig>) -> Option<FoundSetting> {
-    let clients = &check.loaded.as_ref()?.config.authentication.oidc.clients;
-    if !clients.allowed_clients.is_empty() {
-        return None;
-    }
-    let source = check
-        .error_at(RUNTIME_CONFIG_KIND, "", ALLOWED_CLIENTS_POINTER, "", "")
-        .source;
-    let position = source.and_then(|source| {
-        Some(registry_platform_yaml::Position {
-            line: source.line?,
-            column: source.column?,
+/// `casework.posture.unrestricted-clients` for each issuer entry that admits
+/// every client, positioned at that entry's `allowedClients`. Decoding records
+/// no posture setting for the value, so the runtime records it here.
+fn unrestricted_clients_settings(check: &RuntimeFileCheck<RuntimeConfig>) -> Vec<FoundSetting> {
+    let Some(loaded) = check.loaded.as_ref() else {
+        return Vec::new();
+    };
+    loaded
+        .config
+        .authentication
+        .oidc
+        .issuers
+        .iter()
+        .filter(|(_, entry)| entry.listed_clients().is_none())
+        .map(|(id, _)| {
+            let pointer = format!(
+                "{ISSUERS_POINTER}/{}/allowedClients",
+                escape_pointer_segment(id.as_str())
+            );
+            let source = check
+                .error_at(RUNTIME_CONFIG_KIND, "", &pointer, "", "")
+                .source;
+            let position = source.and_then(|source| {
+                Some(registry_platform_yaml::Position {
+                    line: source.line?,
+                    column: source.column?,
+                })
+            });
+            FoundSetting {
+                setting: &UNRESTRICTED_CLIENTS,
+                pointer: Some(pointer),
+                position,
+                origin: SettingOrigin::RuntimeFile,
+            }
         })
-    });
-    Some(FoundSetting {
-        setting: &UNRESTRICTED_CLIENTS,
-        pointer: Some(ALLOWED_CLIENTS_POINTER.to_owned()),
-        position,
-        origin: SettingOrigin::RuntimeFile,
-    })
+        .collect()
 }
 
 fn optional_delegated_staff_readers<'de, D>(
@@ -604,6 +634,10 @@ pub struct DelegatedStaffReaderConfig {
     pub profile: String,
     pub client: String,
     pub actor_subject: String,
+    /// The claim, and the value it holds, that says the person this
+    /// delegated token represents is human. The token's own actor kind is
+    /// the gateway's and does not stand for the represented person.
+    pub represented_human: RepresentedHumanConfig,
     #[serde(deserialize_with = "registry_casework_core::typed::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub assertion_issuer: String,
@@ -626,6 +660,20 @@ pub struct DelegatedStaffReaderConfig {
     pub source_profiles: Vec<String>,
 }
 
+/// A claim of a delegated token, and the exact value it holds, that says the
+/// represented person is human.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RepresentedHumanConfig {
+    /// The claim name.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
+    pub claim: String,
+    /// The exact string value the claim holds for a human.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
+    pub value: String,
+}
+
 fn optional_delegated_source_profiles<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -646,7 +694,7 @@ where
 
 /// An empty list is not how the file says "refuse no key" (CFG-EMPTY-2):
 /// omitting the member says it.
-fn present_revoked_key_ids<'de, D: Deserializer<'de>>(
+pub(crate) fn present_revoked_key_ids<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<RevokedKeyIds>, D::Error> {
     RevokedKeyIds::deserialize(deserializer).map(Some)
@@ -700,35 +748,6 @@ impl schemars::JsonSchema for RevokedKeyIds {
         schema.insert("maxItems".to_owned(), 128.into());
         schema
     }
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HumanIdentityConfig {
-    #[serde(default = "default_human_identity_claim")]
-    pub claim: String,
-    #[serde(default = "default_human_identity_value")]
-    pub value: String,
-}
-
-impl Default for HumanIdentityConfig {
-    fn default() -> Self {
-        Self {
-            claim: default_human_identity_claim(),
-            value: default_human_identity_value(),
-        }
-    }
-}
-
-fn default_scope_claim() -> String {
-    "registry_scopes".to_owned()
-}
-fn default_human_identity_claim() -> String {
-    "registry_actor_kind".to_owned()
-}
-fn default_human_identity_value() -> String {
-    "human".to_owned()
 }
 
 /// The audit journal: where it is written and the key its hashes use.
@@ -805,13 +824,13 @@ impl RuntimeConfig {
         // The offline reader with substitutions enabled decodes once under the
         // same file rules and leaves the decision to the combined report.
         let mut check = Self::loader(declared).check_offline::<Self>(path, true, stand_in_for);
-        let setting = unrestricted_clients_setting(&check);
+        let settings = unrestricted_clients_settings(&check);
         let Some(mut loaded) = check.loaded.take() else {
             return Err(RuntimeConfigError::ReadReport(Report::new(
                 check.diagnostics,
             )));
         };
-        if let Some(setting) = setting {
+        for setting in settings {
             loaded.posture.record(setting);
         }
         loaded.posture.decide(path)?;
@@ -1007,11 +1026,13 @@ impl RuntimeConfig {
             "audit.hashKeyRef".to_owned(),
             self.audit.key.hash_key_ref.as_str(),
         ));
-        if let Some(document_ref) = self.authentication.oidc.provider.jwks_source.document_ref() {
-            references.push((
-                "authentication.oidc.jwksSource.documentRef".to_owned(),
-                document_ref,
-            ));
+        for (id, entry) in self.authentication.oidc.issuers.iter() {
+            if let Some(document_ref) = entry.core.provider.jwks_source.document_ref() {
+                references.push((
+                    format!("authentication.oidc.issuers.{id}.jwksSource.documentRef"),
+                    document_ref,
+                ));
+            }
         }
         if let Some(authority) = &self.task_authority {
             references.push((
@@ -1193,35 +1214,24 @@ impl RuntimeConfig {
 
     fn check_oidc(&self, findings: &mut Vec<RuntimeConfigError>) {
         let oidc = &self.authentication.oidc;
-        if let Err(error) = oidc.provider.check("authentication.oidc") {
-            findings.push(error.into());
-        }
-        if let Err(error) = oidc.clients.check("authentication.oidc") {
-            findings.push(error.into());
-        }
-        for (path, value) in [
-            ("authentication.oidc.scopeClaim", &oidc.scope_claim),
-            (
-                "authentication.oidc.humanIdentity.claim",
-                &oidc.human_identity.claim,
-            ),
-            (
-                "authentication.oidc.humanIdentity.value",
-                &oidc.human_identity.value,
-            ),
-        ] {
-            if value.is_empty() {
-                findings.push(RuntimeConfigError::InvalidOidcClaim {
-                    path,
-                    reason: "must not be empty",
-                });
+        findings.extend(
+            oidc.issuers
+                .check(ISSUERS_POINTER)
+                .into_iter()
+                .map(|diagnostic| RuntimeConfigError::IssuerSet(Box::new(diagnostic))),
+        );
+        for (id, entry) in oidc.issuers.iter() {
+            let field = format!("authentication.oidc.issuers.{id}");
+            if let Err(error) = entry.core.provider.check(&field) {
+                findings.push(error.into());
             }
-        }
-        if !oidc.scope_claim.is_empty() && oidc.human_identity.claim == oidc.scope_claim {
-            findings.push(RuntimeConfigError::InvalidOidcClaim {
-                path: "authentication.oidc.humanIdentity.claim",
-                reason: "must differ from authentication.oidc.scopeClaim",
-            });
+            let assertion_issuers = OidcClientsConfig {
+                allowed_clients: Vec::new(),
+                assertion_issuers: entry.assertion_issuers.clone(),
+            };
+            if let Err(error) = assertion_issuers.check(&field) {
+                findings.push(error.into());
+            }
         }
         if let Some(readers) = &oidc.delegated_staff_readers {
             if readers.is_empty() {
@@ -1238,27 +1248,32 @@ impl RuntimeConfig {
                     "delegatedStaffReaders",
                     policy.as_str(),
                 ];
-                if !oidc.clients.allowed_clients.contains(&reader.client) {
+                // The entry that lists the client issues the reader's tokens,
+                // so it holds the reader's assertion issuer and lifetime bound.
+                let entry = oidc
+                    .issuers
+                    .iter()
+                    .map(|(_, entry)| entry)
+                    .find(|entry| entry.lists_client(&reader.client));
+                if entry.is_none() {
                     let mut path = base.to_vec();
                     path.push("client");
                     findings.push(delegated_staff_reader_finding(
                         &path,
-                        "must be named by authentication.oidc.allowedClients",
-                        "Add this exact client to allowedClients; unrestricted client admission cannot enable delegated staff reads.",
+                        "must be named by the allowedClients of an entry in authentication.oidc.issuers",
+                        "Add this exact client to the allowedClients of the issuer entry that issues its tokens; unrestricted client admission cannot enable delegated staff reads.",
                     ));
                 }
-                if oidc
-                    .clients
-                    .assertion_issuers
-                    .get(&reader.client)
+                if entry
+                    .and_then(|entry| entry.assertion_issuers.get(&reader.client))
                     .is_none_or(|issuers| !issuers.contains(&reader.assertion_issuer))
                 {
                     let mut path = base.to_vec();
                     path.push("assertionIssuer");
                     findings.push(delegated_staff_reader_finding(
                         &path,
-                        "must be listed for this client by authentication.oidc.assertionIssuers",
-                        "Bind the client to this exact subject-token issuer in assertionIssuers.",
+                        "must be listed for this client by the assertionIssuers of the issuer entry that lists the client",
+                        "Bind the client to this exact subject-token issuer in that entry's assertionIssuers.",
                     ));
                 }
                 for (member, value) in [
@@ -1275,6 +1290,31 @@ impl RuntimeConfig {
                         ));
                     }
                 }
+                for (member, value) in [
+                    ("claim", reader.represented_human.claim.as_str()),
+                    ("value", reader.represented_human.value.as_str()),
+                ] {
+                    if value.is_empty() {
+                        let mut path = base.to_vec();
+                        path.extend(["representedHuman", member]);
+                        findings.push(delegated_staff_reader_finding(
+                            &path,
+                            "must not be empty",
+                            "Name the claim the issuer carries through the exchange about the represented person, and the value it holds for a human.",
+                        ));
+                    }
+                }
+                if entry.is_some_and(|entry| {
+                    entry.core.scope_claim.get().as_str() == reader.represented_human.claim
+                }) {
+                    let mut path = base.to_vec();
+                    path.extend(["representedHuman", "claim"]);
+                    findings.push(delegated_staff_reader_finding(
+                        &path,
+                        "must differ from the scopeClaim of the issuer entry that lists the client",
+                        "Name a claim about the represented person that does not carry scopes.",
+                    ));
+                }
                 if !valid_delegated_scope(&reader.required_scope) {
                     let mut path = base.to_vec();
                     path.push("requiredScope");
@@ -1284,16 +1324,16 @@ impl RuntimeConfig {
                         "Name one distinct scope issued only for delegated staff reads.",
                     ));
                 }
-                if oidc
-                    .maximum_token_lifetime_seconds
+                if entry
+                    .and_then(|entry| entry.maximum_token_lifetime_seconds)
                     .is_some_and(|maximum| reader.maximum_token_lifetime_seconds > maximum)
                 {
                     let mut path = base.to_vec();
                     path.push("maximumTokenLifetimeSeconds");
                     findings.push(delegated_staff_reader_finding(
                         &path,
-                        "must not exceed authentication.oidc.maximumTokenLifetimeSeconds",
-                        "Lower this delegated-reader lifetime or raise the deployment-wide bound without exceeding 300 seconds.",
+                        "must not exceed the maximumTokenLifetimeSeconds of the issuer entry that lists the client",
+                        "Lower this delegated-reader lifetime or raise that entry's bound without exceeding 300 seconds.",
                     ));
                 }
             }
@@ -1336,7 +1376,13 @@ impl RuntimeConfig {
             if binding
                 .human_source_authentication
                 .as_ref()
-                .is_some_and(|auth| auth.audience == self.authentication.oidc.provider.audience)
+                .is_some_and(|auth| {
+                    self.authentication
+                        .oidc
+                        .issuers
+                        .iter()
+                        .any(|(_, entry)| auth.audience == entry.core.provider.audience)
+                })
             {
                 findings.push(RuntimeConfigError::InvalidContextProvider {
                     path: format!(
@@ -1348,7 +1394,8 @@ impl RuntimeConfig {
                         "humanSourceAuthentication",
                         "audience",
                     ]),
-                    reason: "must differ from the Casework audience".to_owned(),
+                    reason: "must differ from the audience of every Casework issuer entry"
+                        .to_owned(),
                 });
             }
             let Err(refusal) = binding.check_offline() else {
@@ -1369,10 +1416,13 @@ impl RuntimeConfig {
         project: &CaseworkProject,
         findings: &mut Vec<RuntimeConfigError>,
     ) {
+        // The kind claim says what a caller is, never who: a principal read
+        // from it would make every person of one kind the same principal.
+        let kind_claim = ClaimNames::default().actor_kind;
         if project
             .access_profiles
             .iter()
-            .any(|profile| profile.principal_claim == self.authentication.oidc.human_identity.claim)
+            .any(|profile| profile.principal_claim == kind_claim)
         {
             findings.push(RuntimeConfigError::PrincipalClaimConflict);
         }
@@ -1393,6 +1443,19 @@ impl RuntimeConfig {
                 "delegatedStaffReaders",
                 policy.as_str(),
             ];
+            if project
+                .access_profiles
+                .iter()
+                .any(|candidate| candidate.principal_claim == reader.represented_human.claim)
+            {
+                let mut path = base.to_vec();
+                path.extend(["representedHuman", "claim"]);
+                findings.push(delegated_staff_reader_finding(
+                    &path,
+                    "must differ from every accessProfiles.PROFILE_ID.principalClaim in casework.yaml",
+                    "Name a claim that says what the represented person is, not one that names who they are.",
+                ));
+            }
             let Some(profile) = project
                 .access_profiles
                 .iter()
@@ -1494,7 +1557,11 @@ impl RuntimeConfig {
         findings: &mut Vec<RuntimeConfigError>,
     ) {
         use registry_platform_httputil::valid_resource_uri;
-        let allowed_clients = &self.authentication.oidc.clients.allowed_clients;
+        let issuers = &self.authentication.oidc.issuers;
+        let lists_clients = issuers
+            .iter()
+            .any(|(_, entry)| entry.listed_clients().is_some());
+        let admitted = |client: &str| issuers.iter().any(|(_, entry)| entry.lists_client(client));
         let Some(authority) = &self.task_authority else {
             if !project.task_templates.is_empty() {
                 findings.push(task_authority_finding(
@@ -1517,11 +1584,11 @@ impl RuntimeConfig {
                 ));
             }
         }
-        if allowed_clients.is_empty() {
+        if !lists_clients {
             findings.push(task_authority_finding(
-                &["authentication", "oidc", "allowedClients"],
-                "must name every client taskAuthority admits",
-                "List in authentication.oidc.allowedClients every client taskAuthority.statusClients and casework.yaml taskTemplates.TEMPLATE_ID.client name.",
+                &["authentication", "oidc", "issuers"],
+                "must list, in the allowedClients of an entry, every client taskAuthority admits",
+                "List every client taskAuthority.statusClients and casework.yaml taskTemplates.TEMPLATE_ID.client name in the allowedClients of the issuer entry that issues its tokens.",
             ));
         }
         if authority.status_clients.len() > MAXIMUM_STATUS_CLIENTS {
@@ -1532,11 +1599,11 @@ impl RuntimeConfig {
             ));
         }
         for (client, resource) in &authority.status_clients {
-            if !allowed_clients.is_empty() && !allowed_clients.contains(client) {
+            if lists_clients && !admitted(client) {
                 findings.push(task_authority_finding(
                     &["taskAuthority", "statusClients", client],
-                    "must be a client authentication.oidc.allowedClients admits",
-                    "Add the client to authentication.oidc.allowedClients, or remove it from taskAuthority.statusClients.",
+                    "must be a client the allowedClients of an issuer entry lists",
+                    "Add the client to the allowedClients of the issuer entry that issues its tokens, or remove it from taskAuthority.statusClients.",
                 ));
             }
             if !valid_resource_uri(resource) {
@@ -1548,24 +1615,35 @@ impl RuntimeConfig {
             }
         }
         let templates = &project.task_templates;
-        if templates.iter().any(|template| {
-            template.agent.issuer != self.authentication.oidc.provider.issuer.as_str()
-        }) {
+        let mut unnamed_issuer = false;
+        let mut missing_client = BTreeSet::new();
+        for template in templates {
+            // A task agent's token is verified by the entry that names its
+            // issuer, so that entry must also list the agent's client.
+            match issuers
+                .iter()
+                .find(|(_, entry)| entry.core.provider.issuer.as_str() == template.agent.issuer)
+            {
+                None => unnamed_issuer = true,
+                Some((id, entry)) => {
+                    if lists_clients && !entry.lists_client(&template.client) {
+                        missing_client.insert(id.as_str());
+                    }
+                }
+            }
+        }
+        if unnamed_issuer {
             findings.push(task_authority_finding(
-                &["authentication", "oidc", "issuer"],
-                "must be the issuer every casework.yaml taskTemplates.TEMPLATE_ID.agent.issuer names",
-                "Name the same issuer in authentication.oidc.issuer and in each taskTemplates.TEMPLATE_ID.agent.issuer.",
+                &["authentication", "oidc", "issuers"],
+                "must name, in an entry, the issuer every casework.yaml taskTemplates.TEMPLATE_ID.agent.issuer names",
+                "Add an issuer entry whose issuer is each taskTemplates.TEMPLATE_ID.agent.issuer, or name a configured issuer in the template.",
             ));
         }
-        if !allowed_clients.is_empty()
-            && templates
-                .iter()
-                .any(|template| !allowed_clients.contains(&template.client))
-        {
+        for id in missing_client {
             findings.push(task_authority_finding(
-                &["authentication", "oidc", "allowedClients"],
-                "must admit every client casework.yaml taskTemplates.TEMPLATE_ID.client names",
-                "Add each taskTemplates.TEMPLATE_ID.client to authentication.oidc.allowedClients.",
+                &["authentication", "oidc", "issuers", id, "allowedClients"],
+                "must admit every casework.yaml taskTemplates.TEMPLATE_ID.client whose agent.issuer this entry names",
+                "Add each such taskTemplates.TEMPLATE_ID.client to this entry's allowedClients.",
             ));
         }
         if templates
@@ -1621,73 +1699,33 @@ impl RuntimeConfig {
         }
     }
 
-    pub async fn oidc_verifier(
+    /// One verifier per issuer entry, each with the key source, rules and
+    /// declared actor kinds of its own entry. A static key set is read from
+    /// its secret now. A discovered one is located now and fetched when a
+    /// token first needs it.
+    pub async fn issuer_verifiers(
         &self,
         secrets: &SecretResolver,
         witness: Option<&DevelopmentWitness>,
-    ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
-        let profile = self.verifier_profile(witness)?;
-        let provider = &self.authentication.oidc.provider;
-        let network =
-            IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
-                .map_err(|_| RuntimeConfigError::Oidc)?;
-        let fetcher = match &provider.jwks_source {
-            JwksSource::Uri { uri } => {
-                let policy = network.declared_jwks_fetch_policy();
-                JwksFetcher::new_with_fetch_url_policy(
-                    uri.to_string(),
-                    JwksFetcherConfig::defaults(),
-                    policy,
-                )
+    ) -> Result<Vec<CaseworkIssuerVerifier>, RuntimeConfigError> {
+        let mut verifiers = Vec::new();
+        for (id, entry) in self.authentication.oidc.issuers.iter() {
+            admit_clients(entry, witness)?;
+            if let Some(diagnostic) = insecure_http_startup_diagnostic(id.as_str(), entry) {
+                tracing::warn!("{diagnostic}");
             }
-            JwksSource::Discovery {} => {
-                let discovery_config = OidcDiscoveryConfig {
-                    issuer: self.authentication.oidc.provider.issuer.to_string(),
-                    jwks_uri_override: None,
-                    discovery_timeout: Duration::from_secs(5),
-                    max_doc_bytes: 1024 * 1024,
-                };
-                let (discovery, policy) =
-                    fetch_discovery_for_issuer(&discovery_config, provider.allow_insecure_http)
-                        .await
-                        .map_err(|_| RuntimeConfigError::Oidc)?;
-                JwksFetcher::new_with_fetch_url_policy(
-                    discovery.jwks_uri,
-                    JwksFetcherConfig::defaults(),
-                    policy,
-                )
-            }
-            JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
-                let document = secrets.resolve(document_ref).map_err(|error| {
-                    RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
-                        "authentication.oidc.jwksSource.documentRef",
-                        document_ref,
-                        &error,
-                    ))
-                })?;
-                let jwks =
-                    parse_static_jwks(document.expose_secret()).map_err(|error| match error {
-                        OidcError::StaticKeySet(refusal) => {
-                            RuntimeConfigError::OidcJwksSecret(refusal.to_string())
-                        }
-                        _ => RuntimeConfigError::Oidc,
-                    })?;
-                JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
-            }
-        };
-        Ok((profile, std::sync::Arc::new(fetcher)))
+            let keys = issuer_keys(id.as_str(), entry, secrets).await?;
+            verifiers.push(CaseworkIssuerVerifier {
+                id: id.as_str().to_owned(),
+                verifier: self.verifier_profile(entry)?,
+                keys: std::sync::Arc::new(keys),
+                declared: DeclaredKinds::from_core(&entry.core)
+                    .map_err(|_| RuntimeConfigError::Invalid)?,
+            });
+        }
+        Ok(verifiers)
     }
 
-    /// The access-token verifier profile this deployment's OIDC settings
-    /// describe.
-    ///
-    /// RFC 9068 gives the access token one media type spelled two ways,
-    /// `at+jwt` and `application/at+jwt`, and requires a resource server to
-    /// accept that pair and refuse every other `typ`. The list comes from
-    /// [`access_token_typ_set`] so a plain `JWT` stays out: an ID token, a
-    /// UserInfo JWT, or any other JWT minted for this audience is not an
-    /// access token, and admitting one would let a credential issued for
-    /// another purpose claim, draft, and act on casework.
     pub(crate) fn human_source_audiences(
         &self,
         project: &CaseworkProject,
@@ -1704,44 +1742,131 @@ impl RuntimeConfig {
             .collect()
     }
 
+    /// The access-token verifier profile one issuer entry describes.
+    ///
+    /// RFC 9068 gives the access token one media type spelled two ways,
+    /// `at+jwt` and `application/at+jwt`, and an entry admits that pair unless
+    /// it states `accessTokenType: JWT`. Either way the verifier refuses a
+    /// token that carries an ID token claim, so an ID token or any other JWT
+    /// minted for this audience cannot claim, draft, and act on casework.
     pub(crate) fn verifier_profile(
         &self,
-        witness: Option<&DevelopmentWitness>,
-    ) -> Result<TokenVerifierConfig, DevelopmentOnlyRefused> {
-        let clients = &self.authentication.oidc.clients;
-        if clients.allowed_clients.is_empty() && witness.is_none() {
-            return Err(DevelopmentOnlyRefused {
-                setting: &UNRESTRICTED_CLIENTS,
-            });
-        }
-        Ok(TokenVerifierConfig::access_token_profile(
-            self.authentication.oidc.provider.issuer.to_string(),
-            vec![self.authentication.oidc.provider.audience.clone()],
+        entry: &CaseworkIssuer,
+    ) -> Result<TokenVerifierConfig, RuntimeConfigError> {
+        let profile = TokenVerifierConfig::for_caller_issuer(
+            &entry.core,
             vec![
                 AccessTokenAlgorithm::RS256.to_jsonwebtoken(),
                 AccessTokenAlgorithm::ES256.to_jsonwebtoken(),
             ],
-            access_token_typ_set(CASEWORK_ACCESS_TOKEN_TYPE),
+            None,
         )
-        .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(clients.allowed_clients.clone())
-        .with_assertion_issuers(clients.assertion_issuers.clone())
-        .with_denied_kids(
-            self.authentication
-                .oidc
-                .revoked_key_ids
-                .iter()
-                .flat_map(|kids| kids.0.iter())
-                .map(|kid| kid.as_str().to_owned())
-                .collect(),
-        )
-        .with_max_token_lifetime(
-            self.authentication
-                .oidc
-                .maximum_token_lifetime_seconds
-                .map(Duration::from_secs),
-        ))
+        .map_err(|_| RuntimeConfigError::Invalid)?;
+        Ok(profile
+            .with_assertion_issuers(entry.assertion_issuers.clone())
+            .with_denied_kids(
+                entry
+                    .revoked_key_ids
+                    .iter()
+                    .flat_map(|kids| kids.0.iter())
+                    .map(|kid| kid.as_str().to_owned())
+                    .collect(),
+            )
+            .with_max_token_lifetime(
+                entry
+                    .maximum_token_lifetime_seconds
+                    .map(Duration::from_secs),
+            ))
     }
+}
+
+/// The verifier of one issuer entry, as the authenticator builds its issuer
+/// set from it.
+#[derive(Clone, Debug)]
+pub struct CaseworkIssuerVerifier {
+    /// The issuer id the operator gave the entry.
+    pub id: String,
+    pub verifier: TokenVerifierConfig,
+    pub keys: std::sync::Arc<JwksFetcher>,
+    /// The actor kinds the entry declares for its issuer or its clients.
+    pub declared: DeclaredKinds,
+}
+
+/// An entry that admits every client selects the development-only
+/// `casework.posture.unrestricted-clients`, so its verifier is built only
+/// with the development witness.
+fn admit_clients(
+    entry: &CaseworkIssuer,
+    witness: Option<&DevelopmentWitness>,
+) -> Result<(), DevelopmentOnlyRefused> {
+    if entry.listed_clients().is_none() && witness.is_none() {
+        return Err(DevelopmentOnlyRefused {
+            setting: &UNRESTRICTED_CLIENTS,
+        });
+    }
+    Ok(())
+}
+
+fn insecure_http_startup_diagnostic(id: &str, entry: &CaseworkIssuer) -> Option<String> {
+    entry.core.provider.allow_insecure_http.then(|| {
+        format!(
+            "authentication.oidc.issuers.{id}.allowInsecureHttp permits plain HTTP to the entry's issuer and to a JWKS URI declared in configuration"
+        )
+    })
+}
+
+/// Where one entry's signing keys come from.
+async fn issuer_keys(
+    id: &str,
+    entry: &CaseworkIssuer,
+    secrets: &SecretResolver,
+) -> Result<JwksFetcher, RuntimeConfigError> {
+    let provider = &entry.core.provider;
+    let network = IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
+        .map_err(|_| RuntimeConfigError::Oidc)?;
+    Ok(match &provider.jwks_source {
+        JwksSource::Uri { uri } => JwksFetcher::new_with_fetch_url_policy(
+            uri.to_string(),
+            JwksFetcherConfig::defaults(),
+            network.declared_jwks_fetch_policy(),
+        ),
+        JwksSource::Discovery {} => {
+            let discovery_config = OidcDiscoveryConfig {
+                issuer: provider.issuer.to_string(),
+                jwks_uri_override: None,
+                discovery_timeout: Duration::from_secs(5),
+                max_doc_bytes: 1024 * 1024,
+            };
+            let (discovery, policy) =
+                fetch_discovery_for_issuer(&discovery_config, provider.allow_insecure_http)
+                    .await
+                    .map_err(|_| RuntimeConfigError::Oidc)?;
+            JwksFetcher::new_with_fetch_url_policy(
+                discovery.jwks_uri,
+                JwksFetcherConfig::defaults(),
+                policy,
+            )
+        }
+        JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
+            let jwks_secret = |reason| RuntimeConfigError::OidcJwksSecret {
+                issuer: id.to_owned(),
+                reason,
+            };
+            let document = secrets.resolve(document_ref).map_err(|error| {
+                jwks_secret(describe_secret_failure(
+                    &format!("authentication.oidc.issuers.{id}.jwksSource.documentRef"),
+                    document_ref,
+                    &error,
+                ))
+            })?;
+            let jwks =
+                parse_static_jwks(document.expose_secret()).map_err(|error| match error {
+                    OidcError::StaticKeySet(refusal) => jwks_secret(refusal.to_string()),
+                    _ => RuntimeConfigError::Oidc,
+                })?;
+            JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
+        }
+    })
 }
 
 /// A rule a runtime file must satisfy on its own; it records every finding.
@@ -1852,6 +1977,9 @@ pub struct RuntimeCheck {
     pub diagnostics: Vec<Diagnostic>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
+    /// The explicit production settings the file states, each with its
+    /// pointer and position.
+    pub explicit_settings: Vec<FoundExplicitSetting>,
 }
 
 fn runtime_identifier_collision_diagnostics(
@@ -1917,9 +2045,12 @@ pub fn check_runtime(
     );
     let mut diagnostics = Vec::new();
     if let Some(loaded) = &check.loaded {
-        if let Some(setting) = unrestricted_clients_setting(&check) {
+        let settings = unrestricted_clients_settings(&check);
+        if !settings.is_empty() {
             let mut posture = PostureReport::new(declared);
-            posture.record(setting);
+            for setting in settings {
+                posture.record(setting);
+            }
             diagnostics.extend(posture.diagnostics(path));
         }
         diagnostics.extend(
@@ -1927,20 +2058,47 @@ pub fn check_runtime(
                 .config
                 .findings(project)
                 .iter()
-                .filter(|finding| !finding.is_identifier_collision())
+                .filter(|finding| positioned_here(finding))
                 .filter(|finding| !reads_deferred_value(&check, finding))
                 .map(|finding| positioned(&check, finding)),
         );
+        diagnostics.extend(issuer_set_diagnostics(&check, &loaded.config));
         diagnostics.extend(runtime_identifier_collision_diagnostics(
             &check,
             &loaded.config,
         ));
     }
+    let explicit_settings = check
+        .loaded
+        .as_ref()
+        .map(|loaded| loaded.posture.explicit_settings().to_vec())
+        .unwrap_or_default();
     let report = check.report_with(RUNTIME_CONFIG_KIND, diagnostics);
     RuntimeCheck {
         diagnostics: report.into_diagnostics(),
         unavailable: check.unavailable,
+        explicit_settings,
     }
+}
+
+/// Whether [`positioned`] places `finding`. An identifier collision and a
+/// problem of the issuer set are each placed by their own check, which also
+/// names the other location involved.
+fn positioned_here(finding: &RuntimeConfigError) -> bool {
+    !finding.is_identifier_collision() && !matches!(finding, RuntimeConfigError::IssuerSet(_))
+}
+
+/// The issuer set's own findings, each at its position, with any other entry
+/// it involves listed as related.
+fn issuer_set_diagnostics(
+    check: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
+) -> Vec<Diagnostic> {
+    config
+        .authentication
+        .oidc
+        .issuers
+        .check_file(ISSUERS_POINTER, check, RUNTIME_CONFIG_KIND)
 }
 
 /// The report `casework serve` prints when it refuses the runtime file at
@@ -1967,9 +2125,10 @@ pub fn startup_report(
     let mut diagnostics: Vec<Diagnostic> = config
         .findings(package.as_ref().map(LoadedCaseworkPackage::project))
         .iter()
-        .filter(|finding| !finding.is_identifier_collision())
+        .filter(|finding| positioned_here(finding))
         .map(|finding| positioned(&check, finding))
         .collect();
+    diagnostics.extend(issuer_set_diagnostics(&check, config));
     diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
     let report = check.report_with(RUNTIME_CONFIG_KIND, diagnostics);
     (!report.is_empty()).then_some(report)
@@ -2014,13 +2173,12 @@ fn reads_deferred_value(
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
         }
-        RuntimeConfigError::InvalidOidcClaim { .. } => &["/authentication/oidc/scopeClaim"],
         RuntimeConfigError::RelativeOperatedPath(_)
         | RuntimeConfigError::InvalidAuditDestination(_) => &["/audit"],
         RuntimeConfigError::InvalidTaskAuthority { pointer, .. }
             if pointer.starts_with("/taskAuthority/statusClients/") =>
         {
-            &["/authentication/oidc/allowedClients"]
+            &[ISSUERS_POINTER]
         }
         _ => &[],
     };
@@ -2045,8 +2203,8 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["package", "expectedDigest"] => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         }
-        ["authentication", "oidc", "issuer"]
-        | ["authentication", "oidc", "jwksSource", "uri"]
+        ["authentication", "oidc", "issuers", _, "issuer"]
+        | ["authentication", "oidc", "issuers", _, "jwksSource", "uri"]
         | ["taskAuthority", "issuer" | "exchangeAudience"]
         | ["taskAuthority", "statusClients", _]
         | ["contextProviders", _, "baseUrl" | "tokenEndpoint" | "clientAssertionAudience" | "resource"]
@@ -2081,7 +2239,7 @@ mod tests {
             setting: &UNRESTRICTED_CLIENTS,
         });
         assert_eq!(error.code(), UNRESTRICTED_CLIENTS.code);
-        assert_eq!(error.pointer(), ALLOWED_CLIENTS_POINTER);
+        assert_eq!(error.pointer(), ISSUERS_POINTER);
         let remedy = error.suggested_action();
         assert!(remedy.starts_with(UNRESTRICTED_CLIENTS.production));
         assert!(remedy.contains("--posture development"));
@@ -2205,7 +2363,7 @@ mod tests {
             "listener":{"bind":"127.0.0.1:8100","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
             "secretProviders":{"file":{"root":directory.join("secrets")}},
             "database":{"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url"},
-            "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+            "authentication":{"oidc":{"issuers":{"main":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted"}}}},
             "audit":{"path":directory.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
         })
     }
@@ -2219,8 +2377,14 @@ mod tests {
             false,
             stand_in_for,
         );
-        let setting = unrestricted_clients_setting(&checked).unwrap();
-        assert_eq!(setting.origin, SettingOrigin::RuntimeFile);
+        let settings = unrestricted_clients_settings(&checked);
+        assert_eq!(settings.len(), 1);
+        assert_eq!(settings[0].setting.code, UNRESTRICTED_CLIENTS.code);
+        assert_eq!(
+            settings[0].pointer.as_deref(),
+            Some("/authentication/oidc/issuers/main/allowedClients")
+        );
+        assert_eq!(settings[0].origin, SettingOrigin::RuntimeFile);
     }
 
     #[test]
@@ -2246,17 +2410,15 @@ mod tests {
                 loaded.posture.ready_member()["developmentSettings"],
                 json!([{
                     "code": "casework.posture.unrestricted-clients",
-                    "pointer": ALLOWED_CLIENTS_POINTER,
+                    "pointer": "/authentication/oidc/issuers/main/allowedClients",
                 }])
             );
+            let entry = main_entry(&loaded.config);
             assert!(matches!(
-                loaded.config.verifier_profile(None),
+                admit_clients(entry, None),
                 Err(refused) if refused.setting.code == UNRESTRICTED_CLIENTS.code
             ));
-            assert!(loaded
-                .config
-                .verifier_profile(loaded.development.as_ref())
-                .is_ok());
+            assert!(admit_clients(entry, loaded.development.as_ref()).is_ok());
 
             let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
             tracing::dispatcher::with_default(&logs.subscriber(), || loaded.posture.log_startup());
@@ -2278,8 +2440,10 @@ mod tests {
             source: PostureSource::Flag,
         };
         let mut value = operator_value(root.path(), root.path());
-        value["authentication"]["oidc"]["issuer"] = json!("http://127.0.0.1:8091");
-        value["authentication"]["oidc"]["allowedClients"] = json!(["test-client"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            json!("http://127.0.0.1:8091");
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["test-client"]);
         for listener in [
             "loopback-plaintext",
             "development-loopback",
@@ -2318,14 +2482,28 @@ mod tests {
         std::fs::write(&file, document.to_string()).unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
         let mut value = operator_value(root.path(), root.path());
-        value["authentication"]["oidc"]["jwksSource"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["jwksSource"] =
             json!({"type":"static", "documentRef":"secret:file/jwks"});
-        value["authentication"]["oidc"]["allowedClients"] = json!(["test-client"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["test-client"]);
         let config = read_operator(&value, root.path());
         let resolver =
             SecretResolver::new([registry_platform_config::SecretProvider::File], &secrets)
                 .unwrap();
-        config.oidc_verifier(&resolver, None).await.map(|_| ())
+        config.issuer_verifiers(&resolver, None).await.map(|_| ())
+    }
+
+    /// The one issuer entry of a file written from [`operator_value`].
+    fn main_entry(config: &RuntimeConfig) -> &CaseworkIssuer {
+        let (id, entry) = config
+            .authentication
+            .oidc
+            .issuers
+            .iter()
+            .next()
+            .expect("one issuer entry");
+        assert_eq!(id.as_str(), "main");
+        entry
     }
 
     fn public_rsa_key(kid: &str) -> serde_json::Value {
@@ -2446,11 +2624,30 @@ mod tests {
     }
 
     #[test]
+    fn runtime_reads_the_explicit_http_issuer_opt_in() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            json!("http://identity.example.test");
+        value["authentication"]["oidc"]["issuers"]["main"]["allowInsecureHttp"] = json!(true);
+        let config = read_operator(&value, directory.path());
+        let entry = main_entry(&config);
+        assert!(entry.core.provider.allow_insecure_http);
+        assert_eq!(
+            insecure_http_startup_diagnostic("main", entry).as_deref(),
+            Some(
+                "authentication.oidc.issuers.main.allowInsecureHttp permits plain HTTP to the entry's issuer and to a JWKS URI declared in configuration"
+            )
+        );
+    }
+
+    #[test]
     fn delegated_staff_reader_requires_an_exact_client_actor_scope_and_staff_profile() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["allowedClients"] = json!(["registry-mcp"]);
-        value["authentication"]["oidc"]["assertionIssuers"] = json!({
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["registry-mcp"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = json!({
             "registry-mcp": ["https://people.example.test"]
         });
         value["authentication"]["oidc"]["delegatedStaffReaders"] = json!({
@@ -2458,6 +2655,7 @@ mod tests {
                 "profile": "staff",
                 "client": "registry-mcp",
                 "actorSubject": "registry-mcp",
+                "representedHuman": {"claim": "registry_subject_actor_kind", "value": "human"},
                 "assertionIssuer": "https://people.example.test",
                 "requiredScope": "casework:staff:delegated-read",
                 "maximumTokenLifetimeSeconds": 300,
@@ -2502,9 +2700,9 @@ mod tests {
     fn delegated_staff_reader_allows_client_rotation_for_one_staff_profile() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["allowedClients"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
             json!(["registry-mcp-blue", "registry-mcp-green"]);
-        value["authentication"]["oidc"]["assertionIssuers"] = json!({
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = json!({
             "registry-mcp-blue": ["https://people.example.test"],
             "registry-mcp-green": ["https://people.example.test"]
         });
@@ -2513,6 +2711,7 @@ mod tests {
                 "profile": "staff",
                 "client": "registry-mcp-blue",
                 "actorSubject": "registry-mcp-blue",
+                "representedHuman": {"claim": "registry_subject_actor_kind", "value": "human"},
                 "assertionIssuer": "https://people.example.test",
                 "requiredScope": "casework:staff:delegated-read",
                 "maximumTokenLifetimeSeconds": 300,
@@ -2522,6 +2721,7 @@ mod tests {
                 "profile": "staff",
                 "client": "registry-mcp-green",
                 "actorSubject": "registry-mcp-green",
+                "representedHuman": {"claim": "registry_subject_actor_kind", "value": "human"},
                 "assertionIssuer": "https://people.example.test",
                 "requiredScope": "casework:staff:delegated-read",
                 "maximumTokenLifetimeSeconds": 300,
@@ -2538,8 +2738,9 @@ mod tests {
     fn delegated_reader_source_profiles_require_exchange_on_reachable_configured_provider() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["allowedClients"] = json!(["registry-mcp"]);
-        value["authentication"]["oidc"]["assertionIssuers"] = json!({
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["registry-mcp"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = json!({
             "registry-mcp": ["https://people.example.test"]
         });
         value["authentication"]["oidc"]["delegatedStaffReaders"] = json!({
@@ -2547,6 +2748,7 @@ mod tests {
                 "profile": "staff",
                 "client": "registry-mcp",
                 "actorSubject": "registry-mcp",
+                "representedHuman": {"claim": "registry_subject_actor_kind", "value": "human"},
                 "assertionIssuer": "https://people.example.test",
                 "requiredScope": "casework:staff:delegated-read",
                 "maximumTokenLifetimeSeconds": 300,
@@ -2629,8 +2831,9 @@ mod tests {
     fn submitted_only_delegated_reader_may_omit_source_profiles() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["allowedClients"] = json!(["registry-mcp"]);
-        value["authentication"]["oidc"]["assertionIssuers"] = json!({
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["registry-mcp"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = json!({
             "registry-mcp": ["https://people.example.test"]
         });
         value["authentication"]["oidc"]["delegatedStaffReaders"] = json!({
@@ -2638,6 +2841,7 @@ mod tests {
                 "profile": "staff",
                 "client": "registry-mcp",
                 "actorSubject": "registry-mcp",
+                "representedHuman": {"claim": "registry_subject_actor_kind", "value": "human"},
                 "assertionIssuer": "https://people.example.test",
                 "requiredScope": "casework:staff:delegated-read",
                 "maximumTokenLifetimeSeconds": 300
@@ -2677,12 +2881,10 @@ mod tests {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
         const SECRET: &[u8] = b"canary-casework-oidc-test-secret";
         let directory = tempfile::tempdir().unwrap();
-        let path = write_operator(value, directory.path());
-        let loaded = RuntimeConfig::load_file(&path, TEST_POSTURE).unwrap();
-        let config = loaded.config;
+        let config = read_operator(value, directory.path());
         let mut profile = config
-            .verifier_profile(loaded.development.as_ref())
-            .unwrap();
+            .verifier_profile(main_entry(&config))
+            .expect("a verifier profile");
         profile.allowed_algorithms = vec![Algorithm::HS256];
         let keys = std::sync::Arc::new(JwksFetcher::new_static(
             serde_json::from_value(json!({"keys": [{
@@ -2697,10 +2899,14 @@ mod tests {
         let scopes = project.access_profiles[0].required_scopes.join(" ");
         let authenticator = crate::CaseworkAuthenticator::new(
             &project,
-            profile,
-            keys,
-            config.authentication.oidc.human_identity.clone(),
-        );
+            vec![CaseworkIssuerVerifier {
+                id: "main".to_owned(),
+                verifier: profile,
+                keys,
+                declared: DeclaredKinds::None,
+            }],
+        )
+        .expect("one issuer entry");
         let now = chrono::Utc::now().timestamp();
         let mut header = jsonwebtoken::Header::new(Algorithm::HS256);
         header.kid = Some(kid.to_owned());
@@ -2733,7 +2939,7 @@ mod tests {
     async fn a_token_signed_by_a_revoked_key_id_is_refused_like_any_other_verification_failure() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["revokedKeyIds"] = json!(["signing-1"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["revokedKeyIds"] = json!(["signing-1"]);
         let refused = verify_under_operator_profile(&value, "signing-1", 300).await;
         assert_eq!(
             refused.unwrap_err(),
@@ -2748,7 +2954,8 @@ mod tests {
     async fn a_token_outliving_the_maximum_token_lifetime_is_refused() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["maximumTokenLifetimeSeconds"] = json!(300);
+        value["authentication"]["oidc"]["issuers"]["main"]["maximumTokenLifetimeSeconds"] =
+            json!(300);
         verify_under_operator_profile(&value, "signing-1", 300)
             .await
             .expect("a token within the bound verifies");
@@ -2763,7 +2970,7 @@ mod tests {
     fn an_empty_revoked_key_ids_list_or_an_out_of_range_lifetime_is_refused_with_its_fix() {
         let directory = tempfile::tempdir().unwrap();
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["revokedKeyIds"] = json!([]);
+        value["authentication"]["oidc"]["issuers"]["main"]["revokedKeyIds"] = json!([]);
         let path = write_operator(&value, directory.path());
         let error = RuntimeConfig::loader(TEST_POSTURE)
             .load::<RuntimeConfig>(&path)
@@ -2776,7 +2983,7 @@ mod tests {
             "{error}"
         );
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["revokedKeyIds"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["revokedKeyIds"] =
             json!((0..129).map(|n| format!("signing-{n}")).collect::<Vec<_>>());
         let path = write_operator(&value, directory.path());
         let error = RuntimeConfig::loader(TEST_POSTURE)
@@ -2788,7 +2995,8 @@ mod tests {
             "{error}"
         );
         let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["maximumTokenLifetimeSeconds"] = json!(0);
+        value["authentication"]["oidc"]["issuers"]["main"]["maximumTokenLifetimeSeconds"] =
+            json!(0);
         let path = write_operator(&value, directory.path());
         let error = RuntimeConfig::loader(TEST_POSTURE)
             .load::<RuntimeConfig>(&path)
@@ -2812,9 +3020,10 @@ mod tests {
         let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let mut value = operator_value(root.path(), root.path());
         value["database"]["caBundleRef"] = json!("secret:file/db-ca");
-        value["authentication"]["oidc"]["jwksSource"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["jwksSource"] =
             json!({"type":"static", "documentRef":"secret:file/jwks"});
-        value["authentication"]["oidc"]["allowedClients"] = json!(["test-client"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["test-client"]);
         value["taskAuthority"] = json!({"issuer":"https://casework.example.test","exchangeAudience":"urn:example:exchange","signingKeyRef":"secret:file/signer","statusClients":{}});
         value["contextProviders"] = json!({"facility":{
             "baseUrl":"https://registry.example.test", "statusProfile":"review-status",
@@ -2851,7 +3060,7 @@ mod tests {
                 "/database/runtimeUrlRef",
                 "/database/caBundleRef",
                 "/audit/hashKeyRef",
-                "/authentication/oidc/jwksSource/documentRef",
+                "/authentication/oidc/issuers/main/jwksSource/documentRef",
                 "/taskAuthority/signingKeyRef",
                 "/contextProviders/facility/clientIdRef",
                 "/contextProviders/facility/clientAssertionKeyRef",
@@ -2956,7 +3165,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let check = |bind: &str| {
             let mut value = operator_value(directory.path(), directory.path());
-            value["authentication"]["oidc"]["allowedClients"] = json!(["test-client"]);
+            value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+                json!(["test-client"]);
             value["listener"]["bind"] = json!("${CASEWORK_OFFLINE_CHECK_UNSET_BIND}");
             value["metricsListener"] = json!({"bind": bind});
             let path = write_operator(&value, directory.path());
@@ -3139,7 +3349,7 @@ mod tests {
             tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
         let package = temp.path().join("package");
         let mut document = operator_value(&package, temp.path());
-        document["authentication"]["oidc"]["audience"] =
+        document["authentication"]["oidc"]["issuers"]["main"]["audience"] =
             json!("${CASEWORK_CONFIG_SUBSTITUTION_AUDIENCE}");
         let path = write_operator(&document, temp.path());
         let config = RuntimeConfig::loader(TEST_POSTURE)
@@ -3150,7 +3360,7 @@ mod tests {
             .unwrap()
             .config;
         assert_eq!(
-            config.authentication.oidc.provider.audience,
+            main_entry(&config).core.provider.audience,
             "urn:example:substituted"
         );
 
@@ -3274,6 +3484,486 @@ mod tests {
             [RuntimeConfigError::InvalidContextProviders]
         ));
     }
+
+    /// A second issuer entry, `partners`, with only its required members.
+    fn partners_entry() -> serde_json::Value {
+        json!({
+            "issuer": "https://login.partner.example.test/v2.0",
+            "audience": "api://casework",
+            "allowedClients": ["partner-batch"],
+        })
+    }
+
+    fn issuer_set_codes(config: &RuntimeConfig) -> Vec<(String, String)> {
+        config
+            .findings(None)
+            .iter()
+            .map(|finding| (finding.code().to_owned(), finding.pointer()))
+            .filter(|(code, _)| code.starts_with("platform.oidc."))
+            .collect()
+    }
+
+    #[test]
+    fn an_issuer_entry_with_no_optional_member_takes_the_strict_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["casework-portal"]);
+        let config = read_operator(&value, directory.path());
+        let (id, entry) = config
+            .authentication
+            .oidc
+            .issuers
+            .iter()
+            .next()
+            .expect("one entry");
+        assert_eq!(id.as_str(), "main");
+        assert_eq!(entry.core.scope_claim.get().as_str(), "scope");
+        assert_eq!(
+            entry.core.access_token_type.get(),
+            &registry_platform_config::AccessTokenType::AtJwt
+        );
+        assert!(entry.core.actor_kind.is_none());
+        assert!(entry.core.client_actor_kinds.is_none());
+        let profile = config.verifier_profile(entry).expect("a verifier profile");
+        assert_eq!(profile.scope_claim, "scope");
+        assert_eq!(profile.allowed_typ, ["at+jwt", "application/at+jwt"]);
+        assert_eq!(profile.allowed_clients, ["casework-portal"]);
+        assert_eq!(
+            profile.allowed_algorithms,
+            [Algorithm::RS256, Algorithm::ES256]
+        );
+        assert!(
+            config.findings(None).is_empty(),
+            "{:?}",
+            config.findings(None)
+        );
+    }
+
+    #[test]
+    fn each_moved_oidc_key_is_refused_with_its_issuer_entry_named() {
+        let directory = tempfile::tempdir().unwrap();
+        for (key, moved) in [
+            ("issuer", json!("https://identity.example.test")),
+            ("audience", json!("urn:example:casework")),
+            ("jwksSource", json!({"type": "discovery"})),
+            ("jwksUri", json!("https://identity.example.test/keys")),
+            ("allowInsecureHttp", json!(true)),
+            ("allowedClients", json!(["casework-portal"])),
+            (
+                "assertionIssuers",
+                json!({"casework-portal": ["https://people.example.test"]}),
+            ),
+            ("scopeClaim", json!("scope")),
+            ("revokedKeyIds", json!(["signing-1"])),
+            ("deniedKids", json!(["signing-1"])),
+            ("maximumTokenLifetimeSeconds", json!(300)),
+        ] {
+            let mut value = operator_value(directory.path(), directory.path());
+            value["authentication"]["oidc"][key] = moved;
+            let path = write_operator(&value, directory.path());
+            let error = RuntimeConfig::loader(TEST_POSTURE)
+                .load::<RuntimeConfig>(&path)
+                .expect_err(key);
+            let pointer = format!("/authentication/oidc/{key}");
+            let diagnostic = error
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.path == pointer)
+                .unwrap_or_else(|| panic!("{key}: {:?}", error.diagnostics()));
+            assert_eq!(diagnostic.code, "config.removed-key", "{key}");
+            assert!(
+                diagnostic
+                    .suggested_action
+                    .contains("authentication.oidc.issuers.ISSUER_ID"),
+                "{key}: {}",
+                diagnostic.suggested_action
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_source_kind_inside_an_issuer_entry_is_refused_with_its_type_named() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["issuers"]["main"]["jwksSource"] =
+            json!({"kind": "static", "documentRef": "secret:file/jwks"});
+        let path = write_operator(&value, directory.path());
+        let error = RuntimeConfig::loader()
+            .load::<RuntimeConfig>(&path)
+            .expect_err("jwksSource.kind is removed");
+        let diagnostic = error
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.path == "/authentication/oidc/issuers/main/jwksSource/kind"
+            })
+            .unwrap_or_else(|| panic!("{:?}", error.diagnostics()));
+        assert_eq!(diagnostic.code, "config.removed-key");
+        assert!(
+            diagnostic.suggested_action.contains("jwksSource.type"),
+            "{}",
+            diagnostic.suggested_action
+        );
+    }
+
+    #[test]
+    fn human_identity_is_refused_with_the_declared_actor_kind_named() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["humanIdentity"] =
+            json!({"claim": "registry_actor_kind", "value": "human"});
+        let path = write_operator(&value, directory.path());
+        let error = RuntimeConfig::loader(TEST_POSTURE)
+            .load::<RuntimeConfig>(&path)
+            .expect_err("humanIdentity is removed");
+        let diagnostic = error
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.path == "/authentication/oidc/humanIdentity")
+            .unwrap_or_else(|| panic!("{:?}", error.diagnostics()));
+        assert_eq!(diagnostic.code, "config.removed-key");
+        // The direct path reads the caller's actor kind, and a delegated
+        // reader names the represented person's claim on its binding.
+        for named in [
+            "actorKind",
+            "clientActorKinds",
+            "registry_actor_kind",
+            "delegatedStaffReaders.POLICY_ID.representedHuman",
+        ] {
+            assert!(
+                diagnostic.suggested_action.contains(named),
+                "{named}: {}",
+                diagnostic.suggested_action
+            );
+        }
+    }
+
+    /// A runtime value with one delegated staff reader, `assistant-reader`.
+    fn delegated_reader_value(directory: &Path) -> serde_json::Value {
+        let mut value = operator_value(directory, directory);
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["registry-mcp"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = json!({
+            "registry-mcp": ["https://people.example.test"]
+        });
+        value["authentication"]["oidc"]["delegatedStaffReaders"] = json!({
+            "assistant-reader": {
+                "profile": "staff",
+                "client": "registry-mcp",
+                "actorSubject": "registry-mcp",
+                "representedHuman": {"claim": "registry_subject_actor_kind", "value": "human"},
+                "assertionIssuer": "https://people.example.test",
+                "requiredScope": "casework:staff:delegated-read",
+                "maximumTokenLifetimeSeconds": 300,
+                "sourceProfiles": ["review-agent"]
+            }
+        });
+        value
+    }
+
+    #[test]
+    fn a_delegated_staff_reader_without_represented_human_is_refused_at_load() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = delegated_reader_value(directory.path());
+        value["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
+            .as_object_mut()
+            .unwrap()
+            .remove("representedHuman");
+        let path = write_operator(&value, directory.path());
+        let error = RuntimeConfig::loader()
+            .load::<RuntimeConfig>(&path)
+            .expect_err("a delegated reader names the represented person's claim");
+        assert!(
+            error.diagnostics().iter().any(|diagnostic| diagnostic
+                .message
+                .contains("representedHuman")
+                && diagnostic
+                    .path
+                    .starts_with("/authentication/oidc/delegatedStaffReaders/assistant-reader")),
+            "{:?}",
+            error.diagnostics()
+        );
+        for partial in [
+            json!({"claim": "registry_subject_actor_kind"}),
+            json!({"value": "human"}),
+        ] {
+            value["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
+                ["representedHuman"] = partial.clone();
+            let path = write_operator(&value, directory.path());
+            RuntimeConfig::loader()
+                .load::<RuntimeConfig>(&path)
+                .expect_err(&format!("{partial} names no claim or no value"));
+        }
+    }
+
+    #[test]
+    fn represented_human_is_a_named_claim_apart_from_the_scope_and_principal_claims() {
+        let directory = tempfile::tempdir().unwrap();
+        let value = delegated_reader_value(directory.path());
+        let config = read_operator(&value, directory.path());
+        let (_, _, project) = referenced_policy();
+        assert!(
+            config.findings(Some(&project)).is_empty(),
+            "{:?}",
+            config.findings(Some(&project))
+        );
+        let pointer =
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/representedHuman";
+        for (claim, value, member) in [
+            ("", "human", "claim"),
+            ("registry_subject_actor_kind", "", "value"),
+            // The entry that lists the client reads its scopes from `scope`.
+            ("scope", "human", "claim"),
+            // Every access profile of the project reads its principal from `sub`.
+            ("sub", "human", "claim"),
+        ] {
+            let mut changed = config.clone();
+            changed
+                .authentication
+                .oidc
+                .delegated_staff_readers
+                .as_mut()
+                .unwrap()
+                .get_mut("assistant-reader")
+                .unwrap()
+                .represented_human = RepresentedHumanConfig {
+                claim: claim.to_owned(),
+                value: value.to_owned(),
+            };
+            let findings = changed.findings(Some(&project));
+            assert!(
+                findings.iter().any(|finding| finding.code()
+                    == "casework.runtime.invalid-delegated-staff-reader"
+                    && finding.pointer() == format!("{pointer}/{member}")),
+                "{claim:?} {value:?}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_issuers_with_the_same_iss_refuse_at_startup() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        let mut partners = partners_entry();
+        partners["issuer"] = value["authentication"]["oidc"]["issuers"]["main"]["issuer"].clone();
+        value["authentication"]["oidc"]["issuers"]["partners"] = partners;
+        let config = read_operator(&value, directory.path());
+        assert_eq!(
+            issuer_set_codes(&config),
+            [(
+                "platform.oidc.duplicate-issuer".to_owned(),
+                "/authentication/oidc/issuers/partners/issuer".to_owned()
+            )]
+        );
+        assert!(matches!(
+            config.check(),
+            Err(RuntimeConfigError::IssuerSet(diagnostic))
+                if diagnostic.code == "platform.oidc.duplicate-issuer"
+        ));
+
+        let path = write_operator(&value, directory.path());
+        let check = check_runtime(&path, None, true, TEST_POSTURE);
+        let duplicate = check
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "platform.oidc.duplicate-issuer")
+            .unwrap_or_else(|| panic!("{:?}", check.diagnostics));
+        assert_eq!(
+            duplicate.path,
+            "/authentication/oidc/issuers/partners/issuer"
+        );
+        assert!(
+            duplicate
+                .source
+                .as_ref()
+                .is_some_and(|source| source.line.is_some()),
+            "{duplicate:?}"
+        );
+        assert_eq!(duplicate.related.len(), 1, "{duplicate:?}");
+    }
+
+    #[test]
+    fn a_client_admitted_by_two_issuer_entries_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["partner-batch"]);
+        value["authentication"]["oidc"]["issuers"]["partners"] = partners_entry();
+        let config = read_operator(&value, directory.path());
+        assert_eq!(
+            issuer_set_codes(&config),
+            [(
+                "platform.oidc.client-in-two-issuers".to_owned(),
+                "/authentication/oidc/issuers/partners/allowedClients/0".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn unrestricted_clients_are_refused_under_operator_controlled_upstream_in_every_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        value["listener"] = json!({
+            "bind": "127.0.0.1:8100",
+            "tlsTermination": "operator-controlled-upstream",
+            "networkExposure": "private-address",
+        });
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["casework-portal"]);
+        let mut partners = partners_entry();
+        partners["allowedClients"] = json!("unrestricted");
+        value["authentication"]["oidc"]["issuers"]["partners"] = partners;
+        let config = read_operator(&value, directory.path());
+        let refused: Vec<_> = config
+            .findings(None)
+            .iter()
+            .filter(|finding| finding.code() == "casework.runtime.allowed-clients-required")
+            .map(RuntimeConfigError::pointer)
+            .collect();
+        assert_eq!(
+            refused,
+            ["/authentication/oidc/issuers/partners/allowedClients"]
+        );
+
+        value["listener"]["tlsTermination"] = json!("development-loopback");
+        let config = read_operator(&value, directory.path());
+        assert!(
+            config.findings(None).is_empty(),
+            "{:?}",
+            config.findings(None)
+        );
+    }
+
+    #[test]
+    fn unrestricted_clients_select_the_development_only_casework_setting() {
+        use registry_platform_config::{Admitted, ClientRule, DevelopmentClass};
+        assert_eq!(
+            CaseworkAllowedClients::SETTINGS
+                .iter()
+                .map(|setting| setting.code)
+                .collect::<Vec<_>>(),
+            ["casework.posture.unrestricted-clients"]
+        );
+        assert!(
+            CaseworkAllowedClients::Listed(vec!["casework-portal".to_owned()])
+                .development_setting()
+                .is_none()
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let config = read_operator(
+            &operator_value(directory.path(), directory.path()),
+            directory.path(),
+        );
+        let (_, entry) = config.authentication.oidc.issuers.iter().next().unwrap();
+        // The value is held plainly and stays readable in every posture.
+        assert_eq!(
+            entry.core.allowed_clients,
+            CaseworkAllowedClients::Unrestricted
+        );
+        assert_eq!(
+            entry.core.allowed_clients.admitted(),
+            Admitted::Unrestricted
+        );
+        assert_eq!(
+            entry
+                .core
+                .allowed_clients
+                .development_setting()
+                .map(|setting| setting.code),
+            Some("casework.posture.unrestricted-clients")
+        );
+        // Decoding records no posture setting for it: neither the shared
+        // block's code nor Casework's own. The runtime records Casework's
+        // when it loads or checks the file.
+        let path = write_operator(
+            &operator_value(directory.path(), directory.path()),
+            directory.path(),
+        );
+        let loaded = RuntimeConfig::loader(TEST_POSTURE)
+            .load::<RuntimeConfig>(&path)
+            .unwrap();
+        assert!(
+            loaded
+                .posture
+                .explicit_settings()
+                .iter()
+                .all(|setting| !setting.setting.code.ends_with("unrestricted-clients")),
+            "{:?}",
+            loaded.posture.explicit_settings()
+        );
+        assert!(
+            loaded
+                .posture
+                .settings()
+                .iter()
+                .all(|setting| !setting.setting.code.ends_with("unrestricted-clients")),
+            "{:?}",
+            loaded.posture.settings()
+        );
+    }
+
+    #[test]
+    fn caseworkctl_check_lists_each_explicit_issuer_setting_with_its_pointer() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = operator_value(directory.path(), directory.path());
+        let entry = &mut value["authentication"]["oidc"]["issuers"]["main"];
+        entry["allowedClients"] = json!(["casework-portal"]);
+        entry["accessTokenType"] = json!("JWT");
+        entry["scopeClaim"] = json!("scp");
+        entry["clientActorKinds"] = json!({"casework-portal": "human"});
+        let path = write_operator(&value, directory.path());
+        let check = check_runtime(&path, None, true, TEST_POSTURE);
+        assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
+        let mut listed: Vec<(&str, Option<&str>)> = check
+            .explicit_settings
+            .iter()
+            .map(|found| (found.setting.code, found.pointer.as_deref()))
+            .collect();
+        listed.sort_unstable();
+        assert_eq!(
+            listed,
+            [
+                (
+                    "platform.posture.client-actor-kinds",
+                    Some("/authentication/oidc/issuers/main/clientActorKinds")
+                ),
+                (
+                    "platform.posture.jwt-access-token",
+                    Some("/authentication/oidc/issuers/main/accessTokenType")
+                ),
+                (
+                    "platform.posture.scope-claim",
+                    Some("/authentication/oidc/issuers/main/scopeClaim")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_profile_whose_principal_is_the_actor_kind_claim_is_refused_as_a_package_rule() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = read_operator(
+            &operator_value(directory.path(), directory.path()),
+            directory.path(),
+        );
+        let (_, _, mut project) = referenced_policy();
+        let conflicts = |project: &CaseworkProject| {
+            config
+                .findings(Some(project))
+                .into_iter()
+                .filter(|finding| matches!(finding, RuntimeConfigError::PrincipalClaimConflict))
+                .count()
+        };
+        assert_eq!(conflicts(&project), 0);
+        project.access_profiles[0].principal_claim = "registry_actor_kind".to_owned();
+        assert_eq!(conflicts(&project), 1);
+        let conflict = RuntimeConfigError::PrincipalClaimConflict;
+        assert_eq!(conflict.code(), "casework.runtime.principal-claim-conflict");
+        assert_eq!(conflict.pointer(), "/package/root");
+        assert!(!conflict.in_file());
+        assert!(conflict.to_string().contains("registry_actor_kind"));
+    }
 }
 
 #[derive(Debug, Error)]
@@ -3345,13 +4035,12 @@ pub enum RuntimeConfigError {
     /// an expression.
     #[error("metricsListener.bind is refused: {0}")]
     MetricsListenerSharesSocket(MetricsBindError),
-    #[error("{path} {reason}")]
-    InvalidOidcClaim {
-        path: &'static str,
-        reason: &'static str,
-    },
+    /// A problem of the issuer set as a whole or of one entry's shared core,
+    /// as the shared check reports it.
+    #[error("{}", .0.message)]
+    IssuerSet(Box<Diagnostic>),
     #[error(
-        "authentication.oidc.humanIdentity.claim must differ from every accessProfiles.PROFILE_ID.principalClaim in casework.yaml"
+        "every accessProfiles.PROFILE_ID.principalClaim in casework.yaml must differ from registry_actor_kind, the claim that carries the caller's actor kind"
     )]
     PrincipalClaimConflict,
     #[error("{path} {reason}")]
@@ -3398,8 +4087,8 @@ pub enum RuntimeConfigError {
     DevelopmentOnly(#[from] DevelopmentOnlyRefused),
     #[error("the OIDC issuer could not be initialized")]
     Oidc,
-    #[error("the static OIDC signing keys could not be loaded: {0}")]
-    OidcJwksSecret(String),
+    #[error("the static OIDC signing keys could not be loaded: {reason}")]
+    OidcJwksSecret { issuer: String, reason: String },
 }
 
 /// The fix for a rebuilt package, named by every package refusal.
@@ -3429,10 +4118,7 @@ impl RuntimeConfigError {
             Self::InvalidDatabaseId => "identity.databaseId",
             Self::ContextProviderIdCollision => "contextProviders",
             Self::RelativeOperatedPath(path) => path,
-            Self::InvalidOidcClaim { path, .. } => path,
-            Self::PrincipalClaimConflict => "authentication.oidc.humanIdentity.claim",
             Self::Oidc => "authentication.oidc",
-            Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener.bind",
             Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "metricsListener.bind"
@@ -3442,7 +4128,7 @@ impl RuntimeConfigError {
                 "database.testOnlyPlaintext"
             }
             Self::DatabaseTransport(_) => "database.transport",
-            Self::DevelopmentOnly(_) => "authentication.oidc.allowedClients",
+            Self::DevelopmentOnly(_) => "authentication.oidc.issuers",
             Self::InvalidAuditDestination(error) => audit_field(error),
             Self::InvalidContextProviders => "contextProviders",
             Self::UnconfiguredReviewCompletionDestination => "reviewCompletionDestinations",
@@ -3450,6 +4136,9 @@ impl RuntimeConfigError {
             // Located by `pointer` itself.
             Self::Load(_)
             | Self::ReadReport(_)
+            | Self::IssuerSet(_)
+            | Self::PrincipalClaimConflict
+            | Self::OidcJwksSecret { .. }
             | Self::BindingSecret { .. }
             | Self::InvalidReviewCompletionDestination { .. }
             | Self::InvalidContextProvider { .. }
@@ -3480,7 +4169,17 @@ impl RuntimeConfigError {
             | Self::InvalidTaskAuthority { pointer, .. }
             | Self::InvalidDelegatedStaffReader { pointer, .. } => pointer.clone(),
             Self::MissingIdentity => "/identity".to_owned(),
+            Self::IssuerSet(diagnostic) => diagnostic.path.clone(),
+            Self::OidcJwksSecret { issuer, .. } => pointer_to(&[
+                "authentication",
+                "oidc",
+                "issuers",
+                issuer,
+                "jwksSource",
+                "documentRef",
+            ]),
             Self::Project(_)
+            | Self::PrincipalClaimConflict
             | Self::PolicyUnreadable
             | Self::Package(_)
             | Self::PackageContents { .. }
@@ -3497,6 +4196,7 @@ impl RuntimeConfigError {
         match self {
             Self::Load(error) => &error.deciding_diagnostic().code,
             Self::ReadReport(report) => &first_read_error(report).code,
+            Self::IssuerSet(diagnostic) => &diagnostic.code,
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).0,
             Self::InvalidApiVersion => "casework.runtime.unsupported-api-version",
             Self::InvalidKind => "casework.runtime.wrong-kind",
@@ -3516,7 +4216,6 @@ impl RuntimeConfigError {
             Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "casework.runtime.invalid-metrics-listener"
             }
-            Self::InvalidOidcClaim { .. } => "casework.runtime.invalid-oidc-claim",
             Self::PrincipalClaimConflict => "casework.runtime.principal-claim-conflict",
             Self::InvalidTaskAuthority { .. } => "casework.runtime.invalid-task-authority",
             Self::InvalidDelegatedStaffReader { .. } => {
@@ -3535,7 +4234,7 @@ impl RuntimeConfigError {
             Self::DatabaseTransport(error) => error.code(),
             Self::DevelopmentOnly(error) => error.setting.code,
             Self::Oidc => "casework.runtime-dependency.unavailable",
-            Self::OidcJwksSecret(_) => "casework.runtime.unreadable-jwks-secret",
+            Self::OidcJwksSecret { .. } => "casework.runtime.unreadable-jwks-secret",
         }
     }
 
@@ -3545,6 +4244,7 @@ impl RuntimeConfigError {
         let action = match self {
             Self::Load(error) => return error.deciding_diagnostic().suggested_action.clone(),
             Self::ReadReport(report) => return first_read_error(report).suggested_action.clone(),
+            Self::IssuerSet(diagnostic) => return diagnostic.suggested_action.clone(),
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).1,
             Self::InvalidApiVersion => {
                 "Write apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1."
@@ -3582,11 +4282,8 @@ impl RuntimeConfigError {
             Self::InvalidMetricsListener(cause) | Self::MetricsListenerSharesSocket(cause) => {
                 return cause.remedy("metricsListener.networkExposure");
             }
-            Self::InvalidOidcClaim { .. } => {
-                "Name a non-empty claim distinct from authentication.oidc.scopeClaim, or remove the member to use its default."
-            }
             Self::PrincipalClaimConflict => {
-                "Name a humanIdentity.claim that no accessProfiles.PROFILE_ID.principalClaim in casework.yaml uses."
+                "Name a principalClaim other than registry_actor_kind in casework.yaml, then rebuild the package with `caseworkctl package`."
             }
             Self::InvalidTaskAuthority { action, .. }
             | Self::InvalidDelegatedStaffReader { action, .. } => action,
@@ -3618,8 +4315,10 @@ impl RuntimeConfigError {
             Self::Oidc => {
                 "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
             }
-            Self::OidcJwksSecret(_) => {
-                "Make the secret authentication.oidc.jwksSource.documentRef names readable and hold a JWKS document."
+            Self::OidcJwksSecret { issuer, .. } => {
+                return format!(
+                    "Make the secret authentication.oidc.issuers.{issuer}.jwksSource.documentRef names readable and hold a JWKS document."
+                );
             }
         };
         action.to_owned()
@@ -3653,7 +4352,8 @@ impl RuntimeConfigError {
                 | Self::ContextExport
                 | Self::Invalid
                 | Self::Oidc
-                | Self::OidcJwksSecret(_)
+                | Self::OidcJwksSecret { .. }
+                | Self::PrincipalClaimConflict
         )
     }
 }

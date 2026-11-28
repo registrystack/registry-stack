@@ -29,7 +29,31 @@ const EVENT_KEY_REPLACEMENT: &str = "Move the key under eventSources.<alias>.tri
 const REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
         path: "deployment.authentication.jwksSource.kind",
-        replacement: "Write `deployment.authentication.jwksSource.type` with the same value.",
+        replacement: "Write `deployment.authentication.issuers.ISSUER_ID.jwksSource.type` with the same value.",
+    },
+    RemovedKey {
+        path: "deployment.authentication.issuer",
+        replacement: "Declare it under deployment.authentication.issuers.ISSUER_ID.issuer.",
+    },
+    RemovedKey {
+        path: "deployment.authentication.audience",
+        replacement: "Declare it under deployment.authentication.issuers.ISSUER_ID.audience.",
+    },
+    RemovedKey {
+        path: "deployment.authentication.jwksSource",
+        replacement: "Declare it under deployment.authentication.issuers.ISSUER_ID.jwksSource.",
+    },
+    RemovedKey {
+        path: "deployment.authentication.allowInsecureHttp",
+        replacement: "Declare it under deployment.authentication.issuers.ISSUER_ID.allowInsecureHttp.",
+    },
+    RemovedKey {
+        path: "deployment.authentication.assertionIssuers",
+        replacement: "Declare it under deployment.authentication.issuers.ISSUER_ID.assertionIssuers.",
+    },
+    RemovedKey {
+        path: "deployment.authentication.scopeClaim",
+        replacement: "Declare it under deployment.authentication.issuers.ISSUER_ID.scopeClaim.",
     },
     RemovedKey {
         path: "eventSources.*.signingKeyRef",
@@ -619,7 +643,7 @@ impl RuntimeConfig {
     }
 
     pub fn load_with_posture(path: &Path, declared: DeclaredPosture) -> Result<Self> {
-        let checked = Self::check_file_with(path, true, declared, |_, _| Vec::new());
+        let checked = Self::check_file_in_posture(path, true, declared);
         if checked
             .diagnostics
             .iter()
@@ -642,13 +666,23 @@ impl RuntimeConfig {
 
     /// Check syntax, references and offline values without reading secret material.
     pub fn check_file(path: &Path, substitute: bool) -> RuntimeFileCheck<Self> {
-        Self::check_file_with(path, substitute, DEFAULT_POSTURE, |_, _| Vec::new())
+        Self::check_file_in_posture(path, substitute, DEFAULT_POSTURE)
     }
 
-    /// Check one runtime file and include product diagnostics that depend on
-    /// an already decoded companion before applying the file's single report
-    /// budget. The callback is never invoked after a decode refusal.
-    pub(crate) fn check_file_with(
+    fn check_file_in_posture(
+        path: &Path,
+        substitute: bool,
+        declared: DeclaredPosture,
+    ) -> RuntimeFileCheck<Self> {
+        let (mut checked, diagnostics) =
+            Self::collect_file_diagnostics(path, substitute, declared, |_, _| Vec::new());
+        checked.diagnostics = checked.report_with(KIND, diagnostics).into_diagnostics();
+        checked
+    }
+
+    /// Collect product diagnostics before applying the file's report budget.
+    /// The callback adds companion-dependent checks after a successful decode.
+    pub(crate) fn collect_file_diagnostics(
         path: &Path,
         substitute: bool,
         declared: DeclaredPosture,
@@ -656,8 +690,11 @@ impl RuntimeConfig {
             &RuntimeFileCheck<Self>,
             &Self,
         ) -> Vec<registry_platform_yaml::Diagnostic>,
-    ) -> RuntimeFileCheck<Self> {
-        let mut checked =
+    ) -> (
+        RuntimeFileCheck<Self>,
+        Vec<registry_platform_yaml::Diagnostic>,
+    ) {
+        let checked =
             Self::loader_with_posture(declared).check_offline::<Self>(path, substitute, stand_in);
         let mut diagnostics = checked.loaded.as_ref().map_or_else(Vec::new, |loaded| {
             runtime_id_collision_diagnostics(&checked, &loaded.config)
@@ -683,10 +720,16 @@ impl RuntimeConfig {
                     );
                 }
             }
+            if let Some(deployment) = &loaded.config.deployment {
+                diagnostics.extend(
+                    deployment
+                        .authentication
+                        .issuer_diagnostics(&loaded.config.secret_providers, Some(&checked)),
+                );
+            }
             diagnostics.extend(additional(&checked, &loaded.config));
         }
-        checked.diagnostics = checked.report_with(KIND, diagnostics).into_diagnostics();
-        checked
+        (checked, diagnostics)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -709,6 +752,9 @@ impl RuntimeConfig {
                 "eventSources",
                 "rename separator-lookalike event source identifiers",
             ));
+        }
+        if let Some(deployment) = &self.deployment {
+            deployment.authentication.validate(&self.secret_providers)?;
         }
         match self.findings().into_iter().next() {
             Some(error) => Err(error),
@@ -1333,13 +1379,12 @@ pub fn runtime_schema() -> Result<String> {
         "$ref":"#/$defs/ExternalId", "maxLength":64, "pattern":"^[A-Za-z0-9_-]+$"
     });
     schema["$defs"]["AuthorizationConfig"]["properties"]["clientId"]["maxLength"] = json!(256);
-    schema["$defs"]["AccessConfig"]["properties"]["scopeClaim"]["maxLength"] = json!(128);
     schema["$defs"]["AccessConfig"]["properties"]["policies"] = json!({
         "type":"object", "minProperties":1, "maxProperties":64,
         "propertyNames":{"$ref":"#/$defs/ExternalId", "maxLength":128},
         "additionalProperties":{"$ref":"#/$defs/ClientPolicy"}
     });
-    schema["$defs"]["AccessConfig"]["properties"]["assertionIssuers"] =
+    schema["$defs"]["IssuerConfig"]["properties"]["assertionIssuers"] =
         shared["$defs"]["OidcClientsConfig"]["properties"]["assertionIssuers"].clone();
     schema["$defs"]["ClientPolicy"]["allOf"] = json!([{
         "if":{"properties":{"actions":{"items":{"enum":["doctor", "restore-hold", "release-restore-hold", "release-admission-hold", "complete-execution-recovery", "retain"]}}}},
@@ -1559,8 +1604,8 @@ mod loopback_tests {
                 "tlsTermination: development-loopback",
             )
             .replace(
-                "    issuer: https://issuer.example.org",
-                "    issuer: http://10.0.0.5",
+                "        issuer: https://issuer.example.org",
+                "        issuer: http://10.0.0.5",
             );
         for posture in [Posture::Production, Posture::Development] {
             let declared = DeclaredPosture {
@@ -1574,7 +1619,7 @@ mod loopback_tests {
             let error = config.validate().unwrap_err();
             assert_eq!(
                 error.field.as_deref(),
-                Some("/deployment/authentication/issuer")
+                Some("/deployment/authentication/issuers/main/issuer")
             );
         }
     }
@@ -1608,8 +1653,8 @@ mod loopback_tests {
                 "tlsTermination: development-loopback",
             )
             .replace(
-                "    issuer: https://issuer.example.org",
-                "    issuer: http://127.0.0.1:8080",
+                "        issuer: https://issuer.example.org",
+                "        issuer: http://127.0.0.1:8080",
             );
         let config = RuntimeConfig::loader()
             .parse_str::<RuntimeConfig>(&document, |_| None)

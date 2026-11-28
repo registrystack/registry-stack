@@ -25,8 +25,8 @@ use registry_breg_client::{
     BaseRegistryClientConfig, BearerToken,
 };
 use registry_casework::{
-    router as casework_router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState,
-    HumanIdentityConfig, PostgresStore,
+    router as casework_router, CaseworkAuthenticator, CaseworkIssuerVerifier, CaseworkService,
+    DatabaseConfig, HttpState, PostgresStore,
 };
 use registry_casework_breg::{
     BregContextExport, BregContextProvider, DESCRIPTION_API_VERSION, DESCRIPTION_KIND,
@@ -38,7 +38,7 @@ use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::{
     BearerToken as HttpBearerToken, StaticToken, TokenError, TokenProvider,
 };
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_oidc::{DeclaredKinds, JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use registry_review_client::{ReviewAuth, ReviewClient, ReviewResultResponse, ReviewResultStatus};
 use reqwest::{StatusCode, Url};
@@ -809,14 +809,18 @@ async fn native_current_source_approval_pattern(pattern: ApprovalPattern, index:
     verifier.allowed_clients = vec!["facility-registry".into(), "casework-human".into()];
     let casework_auth = CaseworkAuthenticator::new(
         &project,
-        verifier,
-        Arc::new(JwksFetcher::new_with_fetch_url_policy(
-            idp.jwks_uri(),
-            JwksFetcherConfig::defaults(),
-            registry_platform_httputil::FetchUrlPolicy::https_or_loopback(),
-        )),
-        HumanIdentityConfig::default(),
-    );
+        vec![CaseworkIssuerVerifier {
+            id: "main".to_owned(),
+            verifier,
+            keys: Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                idp.jwks_uri(),
+                JwksFetcherConfig::defaults(),
+                registry_platform_httputil::FetchUrlPolicy::https_or_loopback(),
+            )),
+            declared: DeclaredKinds::None,
+        }],
+    )
+    .expect("one issuer entry");
     let (casework_url, casework_server) = serve(casework_router(HttpState {
         posture: registry_platform_config::PostureReport::new(
             registry_platform_config::DeclaredPosture {
@@ -1297,14 +1301,18 @@ async fn native_proposal_journey(producer_id: &'static str) {
     ];
     let casework_auth = CaseworkAuthenticator::new(
         &project,
-        verifier,
-        Arc::new(JwksFetcher::new_with_fetch_url_policy(
-            idp.jwks_uri(),
-            JwksFetcherConfig::defaults(),
-            registry_platform_httputil::FetchUrlPolicy::https_or_loopback(),
-        )),
-        HumanIdentityConfig::default(),
-    );
+        vec![CaseworkIssuerVerifier {
+            id: "main".to_owned(),
+            verifier,
+            keys: Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                idp.jwks_uri(),
+                JwksFetcherConfig::defaults(),
+                registry_platform_httputil::FetchUrlPolicy::https_or_loopback(),
+            )),
+            declared: DeclaredKinds::None,
+        }],
+    )
+    .expect("one issuer entry");
     let progress_reads = Arc::new(AtomicUsize::new(0));
     let progress_unavailable = Arc::new(AtomicBool::new(false));
     let progress_counter = Arc::clone(&progress_reads);

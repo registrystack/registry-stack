@@ -95,6 +95,24 @@
   Migration: Pass the witness returned by the runtime loader and handle the refusal. For production callers, pass `None`.
 - Registry MCP's Casework and BReg bindings refuse development-marked peers in production and accept them in development.
   Migration: Use production peers with a production gateway, or declare development for the gateway in a test deployment.
+- Coordinator uses the shared OIDC issuer set and caller-kind checks. Each
+  issuer entry declares its own audience, key source and client rule.
+
+- Coordinator checks report explicit production settings per issuer.
+  Development refusal bodies include the shared `failedCheck` member.
+
+- BREAKING: in Coordinator, a token that grants only OpenID Connect scopes
+  and lacks a declared caller kind fails authentication with 401
+  (`IdentityOnly`). A request that failed the policy scope check with 403
+  now receives 401 at authentication. The check also applies when the
+  caller's policy requires only OpenID Connect scopes. Declare an actor kind
+  for the issuer or client, or have the issuer grant a scope beyond the
+  OpenID Connect scopes.
+
+- BREAKING: in Coordinator, a token whose actor-kind claim contradicts the
+  configured kind fails authentication with 401 (`ActorKindConflict`).
+  Development responses name `actor-kind` in `failedCheck` for both
+  refusals. The operator log gives the corresponding remedy.
 
 - Every URL hook delivery is signed with Standard Webhooks. The signature is
   `v1,<base64>` over `webhook-id`, `webhook-timestamp` and the exact body

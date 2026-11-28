@@ -11,7 +11,7 @@
 //! reference in it is resolved.
 use crate::project::ProjectRefusal;
 use anyhow::{bail, Context, Result};
-use registry_casework::RuntimeConfig;
+use registry_casework::{CaseworkIssuer, RuntimeConfig};
 use registry_casework_core::{AccessProfile as ProjectProfile, CaseworkActsAs, CaseworkProject};
 use registry_platform_config::DeclaredPosture;
 use registry_thunderid_tooling::identity_facts::{
@@ -30,9 +30,8 @@ use std::{
 pub(crate) const PRODUCT: &str = "casework";
 /// The claim hosted tokens carry their scopes in.
 const HOSTED_SCOPE_CLAIM: &str = "scope";
-/// The claim and value a hosted issuer gives every person's token.
+/// The claim a hosted issuer writes each caller's actor kind in.
 const HOSTED_HUMAN_CLAIM: &str = "registry_actor_kind";
-const HOSTED_HUMAN_VALUE: &str = "human";
 /// The assertion issuer id for `issuer`: its host and path as a local
 /// identifier. Every product that names this authority derives the same id,
 /// so the products' facts state it identically when they are merged.
@@ -204,16 +203,17 @@ fn unique(admission: Admission) -> Admission {
     }
 }
 
-/// The inputs a deployment's runtime file and project state. Reads
-/// `authentication.oidc` and `taskAuthority`; opens no secret.
-fn deployed(runtime: &RuntimeConfig, project: &CaseworkProject) -> IdentityFacts {
-    let oidc = &runtime.authentication.oidc;
-    let clients = &oidc.clients;
-    let allowed = &clients.allowed_clients;
-    let allowed_clients = if allowed.is_empty() {
-        Admission::Unrestricted
-    } else {
-        Admission::Clients(allowed.clone())
+/// The inputs a deployment's runtime file and project state. Reads the
+/// hosted issuer's entry of `authentication.oidc.issuers` and
+/// `taskAuthority`, and opens no secret.
+fn deployed(
+    runtime: &RuntimeConfig,
+    entry: &CaseworkIssuer,
+    project: &CaseworkProject,
+) -> IdentityFacts {
+    let allowed_clients = match entry.listed_clients() {
+        Some(clients) => Admission::Clients(clients.to_vec()),
+        None => Admission::Unrestricted,
     };
     let authority = runtime.task_authority.as_ref().map(|authority| {
         let issuer = authority.issuer.clone();
@@ -223,7 +223,7 @@ fn deployed(runtime: &RuntimeConfig, project: &CaseworkProject) -> IdentityFacts
             .map(|template| template.client.clone())
             .collect();
         exchange_clients.extend(
-            clients
+            entry
                 .assertion_issuers
                 .iter()
                 .filter(|(_, issuers)| issuers.contains(&issuer))
@@ -237,10 +237,10 @@ fn deployed(runtime: &RuntimeConfig, project: &CaseworkProject) -> IdentityFacts
         }
     });
     let inputs = Inputs {
-        issuer: oidc.provider.issuer.as_str(),
-        audience: &oidc.provider.audience,
+        issuer: entry.core.provider.issuer.as_str(),
+        audience: &entry.core.provider.audience,
         allowed_clients,
-        human_claim: &oidc.human_identity.claim,
+        human_claim: HOSTED_HUMAN_CLAIM,
         profiles: &project.access_profiles,
         initiator_profiles: initiator_profiles(project),
         authority,
@@ -263,14 +263,14 @@ pub(crate) fn generate(
     if let Some(finding) = runtime.findings(Some(&policy)).into_iter().next() {
         return Err(finding.into());
     }
-    if runtime.authentication.oidc.scope_claim != HOSTED_SCOPE_CLAIM {
+    let mut entries = runtime.authentication.oidc.issuers.iter();
+    let (Some((_, entry)), None) = (entries.next(), entries.next()) else {
+        bail!(ProjectRefusal::IssuerNotSingle);
+    };
+    if entry.core.scope_claim.get().as_str() != HOSTED_SCOPE_CLAIM {
         bail!(ProjectRefusal::ScopeClaimUnsupported);
     }
-    let human = &runtime.authentication.oidc.human_identity;
-    if human.claim != HOSTED_HUMAN_CLAIM || human.value != HOSTED_HUMAN_VALUE {
-        bail!(ProjectRefusal::HumanIdentityUnsupported);
-    }
-    let facts = deployed(&runtime, &policy);
+    let facts = deployed(&runtime, entry, &policy);
     let yaml = facts.to_yaml()?;
     // The facts must read back, so a document the generator would refuse is
     // never written.
@@ -514,12 +514,11 @@ mod tests {
             "tests/fixtures/identity/runtime-task-authority.yaml",
         ))
         .unwrap();
-        let listed =
-            "    allowedClients:\n      - casework-staff\n      - task-agent\n      - task-status";
+        let listed = "        allowedClients:\n          - casework-staff\n          - task-agent\n          - task-status";
         assert!(source.contains(listed));
         fs::write(
             &runtime,
-            source.replace(listed, "    allowedClients: unrestricted"),
+            source.replace(listed, "        allowedClients: unrestricted"),
         )
         .unwrap();
         #[cfg(unix)]
@@ -546,43 +545,36 @@ mod tests {
     }
 
     #[test]
-    fn a_customized_human_identity_is_refused_because_hosted_users_carry_the_actor_kind() {
+    fn a_runtime_file_with_two_issuer_entries_is_refused_and_writes_nothing() {
         let directory = crate::canonical_tempdir();
         let runtime = directory.path().join("runtime.yaml");
         let source = fs::read_to_string(manifest(
             "tests/fixtures/identity/runtime-task-authority.yaml",
         ))
         .unwrap();
-        let original = "      claim: registry_actor_kind\n      value: human\n";
-        assert!(source.contains(original));
-        for (index, replacement) in [
-            "      claim: person_kind\n      value: human\n",
-            "      claim: registry_actor_kind\n      value: person\n",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            fs::write(&runtime, source.replace(original, replacement)).unwrap();
-            let output = directory.path().join(format!("{index}.yaml"));
-            let error = generate(
-                &manifest(EXAMPLE),
-                &runtime,
-                &output,
-                DeclaredPosture {
-                    posture: registry_platform_config::Posture::Development,
-                    source: registry_platform_config::PostureSource::Flag,
-                },
-            )
-            .unwrap_err();
-            assert!(
-                error.to_string().contains("humanIdentity")
-                    && error
-                        .to_string()
-                        .contains("hosted generation does not support"),
-                "{error}"
-            );
-            assert!(!output.exists());
-        }
+        let anchor = "    issuers:\n";
+        assert!(source.contains(anchor));
+        fs::write(
+            &runtime,
+            source.replace(
+                anchor,
+                "    issuers:\n      partners:\n        issuer: https://partners.example.test\n        audience: urn:example:casework\n        allowedClients: [partner-batch]\n",
+            ),
+        )
+        .unwrap();
+        let output = directory.path().join("facts.yaml");
+        let error = generate(
+            &manifest(EXAMPLE),
+            &runtime,
+            &output,
+            DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("more than one entry"), "{error}");
+        assert!(!output.exists());
     }
 
     #[test]
@@ -593,11 +585,12 @@ mod tests {
             "tests/fixtures/identity/runtime-task-authority.yaml",
         ))
         .unwrap();
-        assert!(source.contains("scopeClaim: scope\n"));
+        let anchor = "        audience: urn:example:casework\n";
+        assert!(source.contains(anchor));
         for claim in ["custom_scopes", "registry_scopes"] {
             fs::write(
                 &runtime,
-                source.replace("scopeClaim: scope\n", &format!("scopeClaim: {claim}\n")),
+                source.replace(anchor, &format!("{anchor}        scopeClaim: {claim}\n")),
             )
             .unwrap();
             let output = directory.path().join(format!("{claim}.yaml"));

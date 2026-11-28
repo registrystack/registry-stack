@@ -3,13 +3,16 @@
 use crate::{store::Actor, CoordinatorError, Result};
 use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_config::{
-    JwksSource, OidcClientsConfig, OidcIssuerConfig, SecretProvidersConfig,
+    AccessTokenType, Admitted, AdmittedClients, CallerIssuerCore, CallerIssuerEntry, CallerIssuers,
+    ClientRule, JwksSource, OidcClientsConfig, PolicyClients, RuntimeFileCheck,
+    SecretProvidersConfig,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
-    TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
+    fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm, CallerKind, ClaimNames,
+    DeclaredKinds, IssuerEntry, IssuerNetworkPolicy, IssuerSet, JwksFetcher, JwksFetcherConfig,
+    OidcDiscoveryConfig, OidcError, TokenVerifier, TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
+use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Related};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -108,24 +111,10 @@ pub struct ClientPolicy {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccessConfig {
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuers"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub issuer: OidcIssuerConfig,
-    /// Optional exchanged-token authority rules retain the shared OIDC checks.
-    #[serde(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        deserialize_with = "assertion_issuers"
-    )]
-    pub assertion_issuers: BTreeMap<String, Vec<String>>,
-    #[serde(default = "scope_claim")]
-    #[serde(deserialize_with = "crate::runtime::external")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "registry_platform_yaml::ExternalId")
-    )]
-    pub scope_claim: String,
-    /// Exact verifier-established client IDs, within the trusted issuer.
+    pub issuers: CallerIssuers<IssuerConfig>,
+    /// Exact verifier-established client IDs.
     #[serde(deserialize_with = "client_policies")]
     #[cfg_attr(feature = "schema", schemars(with = "BTreeMap<registry_platform_yaml::ExternalId, ClientPolicy>", extend("minProperties" = 1, "maxProperties" = 64)))]
     pub policies: BTreeMap<String, ClientPolicy>,
@@ -140,80 +129,52 @@ fn client_policies<'de, D: Deserializer<'de>>(
     })
 }
 
-fn assertion_issuers<'de, D: Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<BTreeMap<String, Vec<String>>, D::Error> {
-    let map = BTreeMap::<
-        registry_platform_yaml::ExternalId,
-        registry_platform_yaml::UniqueList<registry_platform_yaml::ExternalId>,
-    >::deserialize(d)?;
-    if map.is_empty() || map.values().any(|issuers| issuers.is_empty()) {
-        return Err(serde::de::Error::custom(
-            registry_platform_yaml::Invalid::expected(
-                "a non-empty map of client identities to non-empty issuer lists",
-                "Omit assertionIssuers when no exchanged-token authority rules apply.",
-            ),
-        ));
-    }
-    Ok(map
-        .into_iter()
-        .map(|(client, issuers)| {
-            (
-                client.into_string(),
-                issuers
-                    .into_vec()
-                    .into_iter()
-                    .map(registry_platform_yaml::ExternalId::into_string)
-                    .collect(),
-            )
-        })
-        .collect())
+const ISSUERS: &str = "/deployment/authentication/issuers";
+const CLIENT_CONFLICT: &str = "platform.oidc.client-in-two-issuers";
+const CLIENT_CONFLICT_ACTION: &str =
+    "Admit each client through one issuer entry, so a client rule binds to one issuer.";
+
+#[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssuerConfig {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer-core"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    pub core: CallerIssuerCore<PolicyClients>,
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_config::non_empty_assertion_issuers"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_config::assertion_issuers_schema")
+    )]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
 }
 
-fn scope_claim() -> String {
-    "registry_scopes".into()
+impl CallerIssuerEntry for IssuerConfig {
+    type Clients = PolicyClients;
+
+    fn core(&self) -> &CallerIssuerCore<Self::Clients> {
+        &self.core
+    }
 }
+
 impl AccessConfig {
     pub fn validate(&self, secrets: &SecretProvidersConfig) -> Result<()> {
-        self.findings(secrets)
-            .into_iter()
-            .next()
-            .map_or(Ok(()), Err)
+        let diagnostics = self.issuer_diagnostics(secrets, None);
+        if !diagnostics.is_empty() {
+            return Err(CoordinatorError::from_diagnostics(&diagnostics));
+        }
+        self.findings().into_iter().next().map_or(Ok(()), Err)
     }
-    pub(crate) fn findings(&self, secrets: &SecretProvidersConfig) -> Vec<CoordinatorError> {
+
+    pub(crate) fn findings(&self) -> Vec<CoordinatorError> {
         let mut errors = Vec::new();
-        for result in [
-            self.issuer.check("deployment.authentication"),
-            self.clients().check("deployment.authentication"),
-        ] {
-            if let Err(error) = result {
-                errors.push(access_error(error.field(), &error.to_string()));
-            }
-        }
-        if let Some(reference) = self.issuer.jwks_source.document_ref() {
-            if let Err(error) = secrets.check_reference(
-                "deployment.authentication.jwksSource.documentRef",
-                reference,
-            ) {
-                errors.push(access_error(
-                    error.field(),
-                    "enable the provider named by the static JWKS document reference",
-                ));
-            }
-        }
         if self.policies.is_empty() || self.policies.len() > 64 {
             errors.push(access_error(
                 "deployment.authentication.policies",
                 "declare one to sixty-four exact client policies",
-            ));
-        }
-        if self.scope_claim.is_empty()
-            || self.scope_claim.len() > 128
-            || self.scope_claim.chars().any(char::is_control)
-        {
-            errors.push(access_error(
-                "deployment.authentication.scopeClaim",
-                "name one bounded scope claim without control characters",
             ));
         }
         for (client, p) in &self.policies {
@@ -279,19 +240,252 @@ impl AccessConfig {
         }
         errors
     }
-    /// The same policy keys supply closed verifier admission and policy lookup.
-    fn clients(&self) -> OidcClientsConfig {
-        OidcClientsConfig {
-            allowed_clients: self.policies.keys().cloned().collect(),
-            assertion_issuers: self.assertion_issuers.clone(),
+    pub(crate) fn issuer_diagnostics(
+        &self,
+        secrets: &SecretProvidersConfig,
+        file: Option<&RuntimeFileCheck<crate::runtime::RuntimeConfig>>,
+    ) -> Vec<Diagnostic> {
+        let mut diagnostics = file.map_or_else(
+            || self.issuers.check(ISSUERS),
+            |file| self.issuers.check_file(ISSUERS, file, crate::runtime::KIND),
+        );
+        let deferred = |path: &str| file.is_some_and(|file| file.defers_within(path));
+        let entries: Vec<_> = self.issuers.iter().collect();
+        let any_clients_deferred = entries
+            .iter()
+            .any(|(id, _)| deferred(&format!("{ISSUERS}/{id}/allowedClients")));
+        let reading = entries
+            .iter()
+            .find(|(_, entry)| matches!(entry.core.allowed_clients, PolicyClients::FromPolicies));
+        let mut product = Vec::new();
+        for (id, entry) in &entries {
+            let base = format!("{ISSUERS}/{id}");
+            let clients_field = format!("{base}/allowedClients");
+            let assertion_field = format!("{base}/assertionIssuers");
+            let (clients, from_policies) = match entry.core.allowed_clients.admitted() {
+                Admitted::FromPolicies => (self.policies.keys().cloned().collect(), true),
+                Admitted::Listed(clients) => (clients.to_vec(), false),
+                _ => continue,
+            };
+            let provider = &entry.core.provider;
+            if let Err(error) = provider.check("issuerEntry") {
+                let suffix = error
+                    .field()
+                    .strip_prefix("issuerEntry.")
+                    .unwrap_or("issuer");
+                let path = format!("{base}/{}", suffix.replace('.', "/"));
+                if !deferred(&path) {
+                    product.push(Diagnostic::error(
+                        "coordinator.access.configuration",
+                        path,
+                        "the issuer configuration was refused",
+                        error.to_string(),
+                    ));
+                }
+            }
+            let key_field = format!("{base}/jwksSource/documentRef");
+            if let Some(reference) = provider.jwks_source.document_ref() {
+                if !deferred(&key_field) && secrets.check_reference(&key_field, reference).is_err()
+                {
+                    product.push(Diagnostic::error(
+                        "coordinator.access.configuration",
+                        key_field,
+                        "the static JWKS reference has no enabled provider",
+                        "Enable the provider named by the static JWKS document reference.",
+                    ));
+                }
+            }
+            if !deferred(&clients_field) && !deferred(&assertion_field) {
+                let config = OidcClientsConfig {
+                    allowed_clients: clients.clone(),
+                    assertion_issuers: entry.assertion_issuers.clone(),
+                };
+                if let Err(error) = config.check("issuerEntry") {
+                    product.push(Diagnostic::error(
+                        "coordinator.access.configuration",
+                        assertion_field,
+                        "the assertion issuer configuration was refused",
+                        error.to_string(),
+                    ));
+                } else if config
+                    .assertion_issuers
+                    .keys()
+                    .any(|client| !clients.contains(client))
+                {
+                    product.push(Diagnostic::error(
+                        "coordinator.access.configuration",
+                        assertion_field,
+                        "assertionIssuers names a client this entry does not admit",
+                        "Name only clients this entry admits through allowedClients.",
+                    ));
+                }
+            }
+            if from_policies {
+                let audience = format!("{base}/audience");
+                if !deferred(&clients_field)
+                    && !deferred(&audience)
+                    && !deferred(&format!("{base}/accessTokenType"))
+                    && entry.core.access_token_type.get() == &AccessTokenType::Jwt
+                    && clients.contains(&provider.audience)
+                {
+                    product.push(Diagnostic::error(
+                        "platform.oidc.audience-is-a-client", audience,
+                        "with accessTokenType JWT the audience is also one of the entry's clients",
+                        "Use an audience that names this service and no client, so an ID token issued to a client is not read as an access token.",
+                    ));
+                }
+                if let Some(kinds) = &entry.core.client_actor_kinds {
+                    for client in kinds
+                        .get()
+                        .0
+                        .keys()
+                        .filter(|client| !self.policies.contains_key(client.as_str()))
+                    {
+                        let path = format!(
+                            "{base}/clientActorKinds/{}",
+                            escape_pointer_segment(client.as_str())
+                        );
+                        if !deferred(&clients_field) && !deferred(&path) {
+                            product.push(Diagnostic::error(
+                                "platform.oidc.actor-kind-for-unadmitted-client", path,
+                                "clientActorKinds names a client this entry does not admit",
+                                "Name only clients listed in allowedClients, or add the client to allowedClients.",
+                            ));
+                        }
+                    }
+                }
+            } else if let Some((reading, _)) = reading.filter(|(reading, _)| {
+                !deferred(&clients_field)
+                    && !deferred(&format!("{ISSUERS}/{reading}/allowedClients"))
+            }) {
+                let mut diagnostic = Diagnostic::error(
+                    "coordinator.access.listed-clients-without-policy",
+                    &clients_field,
+                    format!("the entry {reading} already admits every client with a policy"),
+                    "Use from-policies on its own, or list clients explicitly in every issuer entry.",
+                );
+                diagnostic.related.push(related(
+                    format!("{ISSUERS}/{reading}/allowedClients"),
+                    format!("the entry {reading} reads its clients from the policies"),
+                ));
+                product.push(diagnostic);
+                for (index, _) in clients
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, client)| self.policies.contains_key(*client))
+                {
+                    let mut diagnostic = Diagnostic::error(
+                        CLIENT_CONFLICT,
+                        format!("{clients_field}/{index}"),
+                        format!("the client is already admitted by the entry {reading}"),
+                        CLIENT_CONFLICT_ACTION,
+                    );
+                    diagnostic.related.push(related(
+                        format!("{ISSUERS}/{reading}/allowedClients"),
+                        format!("the entry {reading} reads its clients from the policies"),
+                    ));
+                    product.push(diagnostic);
+                }
+            }
+        }
+        if reading.is_none() && !any_clients_deferred {
+            for client in self.policies.keys().filter(|client| {
+                !entries.iter().any(|(_, entry)| {
+                    matches!(entry.core.allowed_clients.admitted(), Admitted::Listed(list) if list.contains(client))
+                })
+            }) {
+                let mut diagnostic = Diagnostic::error(
+                    "coordinator.access.policy-client-not-allowed",
+                    format!("/deployment/authentication/policies/{}", escape_pointer_segment(client)),
+                    "the policy's client is not admitted by any issuer entry",
+                    "List the policy's client in one issuer entry's allowedClients.",
+                );
+                diagnostic.related.extend(entries.iter().map(|(id, _)| related(
+                    format!("{ISSUERS}/{id}/allowedClients"),
+                    format!("the entry {id} lists the clients it admits"),
+                )));
+                product.push(diagnostic);
+            }
+        }
+        for diagnostic in product {
+            if let Some(file) = file {
+                let mut positioned = file.error_at(
+                    crate::runtime::KIND,
+                    &diagnostic.code,
+                    &diagnostic.path,
+                    diagnostic.message,
+                    diagnostic.suggested_action,
+                );
+                for related in diagnostic.related {
+                    file.add_related_at(&mut positioned, &related.path, related.message);
+                }
+                diagnostics.push(positioned);
+            } else {
+                diagnostics.push(diagnostic);
+            }
+        }
+        diagnostics
+    }
+
+    pub(crate) fn clients_for(&self, issuer: &IssuerConfig) -> Vec<String> {
+        match &issuer.core.allowed_clients {
+            PolicyClients::FromPolicies => self.policies.keys().cloned().collect(),
+            PolicyClients::Listed(clients) => clients.clone(),
         }
     }
+
     pub async fn authenticator(&self, secrets: &SecretProvidersConfig) -> Result<Authenticator> {
         self.validate(secrets)?;
-        let network =
-            IssuerNetworkPolicy::new(self.issuer.issuer.as_str(), self.issuer.allow_insecure_http)
-                .map_err(|_| refused())?;
-        let keys = match &self.issuer.jwks_source {
+        let mut entries = Vec::new();
+        for (id, entry) in self.issuers.iter() {
+            let resolved = if matches!(entry.core.allowed_clients, PolicyClients::FromPolicies) {
+                Some(AdmittedClients::new(self.clients_for(entry)).ok_or_else(refused)?)
+            } else {
+                None
+            };
+            let profile = TokenVerifierConfig::for_caller_issuer(
+                &entry.core,
+                vec![
+                    AccessTokenAlgorithm::RS256.to_jsonwebtoken(),
+                    AccessTokenAlgorithm::ES256.to_jsonwebtoken(),
+                ],
+                resolved.as_ref(),
+            )
+            .map_err(|error| CoordinatorError::new("access.configuration", error.to_string()))?
+            .with_assertion_issuers(entry.assertion_issuers.clone())
+            .with_max_token_lifetime(Some(Duration::from_secs(3600)));
+            let scope_claim = profile.scope_claim.clone();
+            let keys = entry.keys(secrets).await?;
+            keys.ensure_key_set().await.map_err(|_| refused())?;
+            let declared = DeclaredKinds::from_core(&entry.core).map_err(|error| {
+                CoordinatorError::new("access.configuration", error.to_string())
+            })?;
+            entries.push((
+                IssuerEntry::new(id.as_str(), TokenVerifier::new(profile, keys), declared),
+                scope_claim,
+                !entry.assertion_issuers.is_empty(),
+            ));
+        }
+        Authenticator::new(entries, self.policies.clone())
+    }
+}
+
+fn related(path: String, message: String) -> Related {
+    Related {
+        file: String::new(),
+        line: None,
+        column: None,
+        path,
+        message,
+    }
+}
+
+impl IssuerConfig {
+    async fn keys(&self, secrets: &SecretProvidersConfig) -> Result<Arc<JwksFetcher>> {
+        let issuer = &self.core.provider;
+        let network = IssuerNetworkPolicy::new(issuer.issuer.as_str(), issuer.allow_insecure_http)
+            .map_err(|_| refused())?;
+        let keys = match &issuer.jwks_source {
             JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
                 let value = secrets
                     .resolver()
@@ -307,7 +501,7 @@ impl AccessConfig {
                             error.to_string(),
                         )
                         .suggest(
-                            "Correct the document that deployment.authentication.jwksSource.documentRef names.",
+                            "Correct the document that deployment.authentication.issuers.ISSUER_ID.jwksSource.documentRef names.",
                         ),
                         _ => refused(),
                     })?,
@@ -320,24 +514,20 @@ impl AccessConfig {
                     _ => {
                         let (document, policy) = fetch_discovery_for_issuer(
                             &OidcDiscoveryConfig {
-                                issuer: self.issuer.issuer.to_string(),
+                                issuer: issuer.issuer.to_string(),
                                 jwks_uri_override: None,
                                 discovery_timeout: Duration::from_secs(5),
                                 max_doc_bytes: 1_048_576,
                             },
-                            self.issuer.allow_insecure_http,
+                            issuer.allow_insecure_http,
                         )
                         .await
                         .map_err(|_| refused())?;
-                        return self
-                            .authenticator_with_keys(Arc::new(
-                                JwksFetcher::new_with_fetch_url_policy(
-                                    document.jwks_uri,
-                                    JwksFetcherConfig::defaults(),
-                                    policy,
-                                ),
-                            ))
-                            .await;
+                        return Ok(Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                            document.jwks_uri,
+                            JwksFetcherConfig::defaults(),
+                            policy,
+                        )));
                     }
                 };
                 let policy = network.declared_jwks_fetch_policy();
@@ -348,41 +538,23 @@ impl AccessConfig {
                 ))
             }
         };
-        self.authenticator_with_keys(keys).await
-    }
-
-    async fn authenticator_with_keys(&self, keys: Arc<JwksFetcher>) -> Result<Authenticator> {
-        keys.ensure_key_set().await.map_err(|_| refused())?;
-        let profile = TokenVerifierConfig::access_token_profile(
-            self.issuer.issuer.clone(),
-            vec![self.issuer.audience.clone()],
-            vec![
-                AccessTokenAlgorithm::RS256.to_jsonwebtoken(),
-                AccessTokenAlgorithm::ES256.to_jsonwebtoken(),
-            ],
-            access_token_typ_set("at+jwt"),
-        )
-        .with_scope_claim(&self.scope_claim)
-        .with_allowed_clients(self.policies.keys().cloned().collect())
-        .with_assertion_issuers(self.assertion_issuers.clone())
-        .with_max_token_lifetime(Some(Duration::from_secs(3600)));
-        Ok(Authenticator::new(
-            profile,
-            keys,
-            self.policies.clone(),
-            !self.assertion_issuers.is_empty(),
-        ))
+        Ok(keys)
     }
 }
+
 pub struct Authenticator {
-    verifier: TokenVerifier,
+    issuers: IssuerSet,
     policies: BTreeMap<String, ClientPolicy>,
-    assertion_issuers: bool,
-    /// The claim the deployment reads scopes from, as configured.
+    settings: BTreeMap<Arc<str>, IssuerSettings>,
+}
+
+struct IssuerSettings {
     scope_claim: String,
+    assertion_issuers: bool,
 }
 pub struct Caller {
     pub actor: Actor,
+    pub kind: CallerKind,
     policy: ClientPolicy,
 }
 impl Caller {
@@ -419,6 +591,7 @@ impl Caller {
 #[cfg(test)]
 pub(crate) fn synthetic_caller(actions: Vec<Action>, workflows: &[&str], operator: bool) -> Caller {
     Caller {
+        kind: CallerKind::Unspecified,
         actor: Actor {
             issuer: "https://issuer.example".into(),
             subject: "subject".into(),
@@ -446,45 +619,80 @@ fn denied(check: FailedCheck) -> CoordinatorError {
 fn admitted_subject(subject: &str) -> bool {
     !subject.is_empty() && subject.len() <= 512 && !subject.chars().any(char::is_control)
 }
+fn is_key_source_unavailable(error: &OidcError) -> bool {
+    // Preserve Coordinator's service-unavailable boundary for verification errors.
+    matches!(
+        error,
+        OidcError::Transport(_)
+            | OidcError::BoundedRead(_)
+            | OidcError::FetchUrl(_)
+            | OidcError::HttpStatus(_)
+            | OidcError::InvalidUrl
+            | OidcError::Parse
+            | OidcError::InvalidJwk
+            | OidcError::EmptyKeySet
+            | OidcError::MissingIssuer
+            | OidcError::ConflictingEndpointConfiguration
+    )
+}
+
+fn verification_error(refusal: registry_platform_oidc::CallerRefusal) -> CoordinatorError {
+    if is_key_source_unavailable(&refusal.error) {
+        CoordinatorError::new(
+            "access.unavailable",
+            "the configured verifier cannot answer",
+        )
+        .failing(FailedCheck::KeySourceUnavailable)
+    } else {
+        unauthenticated(refusal.failed_check()).with_remedy(refusal.remedy)
+    }
+}
+
 impl Authenticator {
     pub fn new(
-        profile: TokenVerifierConfig,
-        keys: Arc<JwksFetcher>,
+        entries: Vec<(IssuerEntry, String, bool)>,
         policies: BTreeMap<String, ClientPolicy>,
-        assertion_issuers: bool,
-    ) -> Self {
-        Self {
-            scope_claim: profile.scope_claim.clone(),
-            verifier: TokenVerifier::new(profile, keys),
-            policies,
-            assertion_issuers,
+    ) -> Result<Self> {
+        let mut settings = BTreeMap::new();
+        let mut verifiers = Vec::with_capacity(entries.len());
+        for (entry, scope_claim, assertion_issuers) in entries {
+            if settings
+                .insert(
+                    Arc::clone(&entry.id),
+                    IssuerSettings {
+                        scope_claim,
+                        assertion_issuers,
+                    },
+                )
+                .is_some()
+            {
+                return Err(CoordinatorError::new(
+                    "access.configuration",
+                    format!("two issuer entries share the id {}", entry.id),
+                ));
+            }
+            verifiers.push(entry);
         }
+        let issuers = IssuerSet::new(verifiers, ClaimNames::default())
+            .map_err(|error| CoordinatorError::new("access.configuration", error.to_string()))?;
+        Ok(Self {
+            issuers,
+            policies,
+            settings,
+        })
     }
     pub async fn authenticate(&self, token: &str) -> Result<Caller> {
         registry_platform_authcommon::validate_compact_access_token(token)
             .map_err(|_| unauthenticated(FailedCheck::CredentialMalformed))?;
-        let verified = self
-            .verifier
+        let caller = self
+            .issuers
             .verify(token)
             .await
-            .map_err(|error| match error {
-                OidcError::Transport(_)
-                | OidcError::BoundedRead(_)
-                | OidcError::FetchUrl(_)
-                | OidcError::HttpStatus(_)
-                | OidcError::InvalidUrl
-                | OidcError::Parse
-                | OidcError::InvalidJwk
-                | OidcError::EmptyKeySet
-                | OidcError::MissingIssuer
-                | OidcError::ConflictingEndpointConfiguration => CoordinatorError::new(
-                    "access.unavailable",
-                    "the configured verifier cannot answer",
-                )
-                .failing(FailedCheck::KeySourceUnavailable),
-                _ => unauthenticated(error.failed_check()),
-            })?;
-        if !self.assertion_issuers && verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM) {
+            .map_err(verification_error)?;
+        let settings = self.settings.get(&caller.issuer_id).ok_or_else(refused)?;
+        let verified = caller.token;
+        if !settings.assertion_issuers && verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM)
+        {
             return Err(unauthenticated(FailedCheck::TokenAssertionIssuer));
         }
         let client = verified
@@ -519,10 +727,12 @@ impl Authenticator {
             .iter()
             .find(|s| !verified.scopes.contains(s))
         {
-            return Err(denied(FailedCheck::Scope)
-                .declaring(DeclaredScope::new(&self.scope_claim).with_required_scope(missing)));
+            return Err(denied(FailedCheck::Scope).declaring(
+                DeclaredScope::new(&settings.scope_claim).with_required_scope(missing),
+            ));
         }
         Ok(Caller {
+            kind: caller.kind,
             actor: Actor {
                 issuer: issuer.into(),
                 subject: subject.into(),
@@ -567,17 +777,47 @@ impl Serialize for AccessConfig {
     ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("issuer", &self.issuer.issuer)?;
-        map.serialize_entry("audience", &self.issuer.audience)?;
-        map.serialize_entry("jwksSource", &self.issuer.jwks_source)?;
-        if self.issuer.allow_insecure_http {
+        let issuers: BTreeMap<_, _> = self
+            .issuers
+            .iter()
+            .map(|(id, entry)| (id.as_str(), entry))
+            .collect();
+        map.serialize_entry("issuers", &issuers)?;
+        map.serialize_entry("policies", &self.policies)?;
+        map.end()
+    }
+}
+
+impl Serialize for IssuerConfig {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let core = &self.core;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("issuer", &core.provider.issuer)?;
+        map.serialize_entry("audience", &core.provider.audience)?;
+        map.serialize_entry("jwksSource", &core.provider.jwks_source)?;
+        if core.provider.allow_insecure_http {
             map.serialize_entry("allowInsecureHttp", &true)?;
+        }
+        if core.access_token_type.get() != &AccessTokenType::AtJwt {
+            map.serialize_entry("accessTokenType", &core.access_token_type)?;
+        }
+        if core.scope_claim.get().as_str() != "scope" {
+            map.serialize_entry("scopeClaim", &core.scope_claim)?;
+        }
+        map.serialize_entry("allowedClients", &core.allowed_clients)?;
+        if let Some(kind) = &core.actor_kind {
+            map.serialize_entry("actorKind", kind)?;
+        }
+        if let Some(kinds) = &core.client_actor_kinds {
+            map.serialize_entry("clientActorKinds", kinds)?;
         }
         if !self.assertion_issuers.is_empty() {
             map.serialize_entry("assertionIssuers", &self.assertion_issuers)?;
         }
-        map.serialize_entry("scopeClaim", &self.scope_claim)?;
-        map.serialize_entry("policies", &self.policies)?;
         map.end()
     }
 }

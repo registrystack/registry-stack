@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The static key set behind `deployment.authentication.jwksSource` loads
+//! The static key set behind `deployment.authentication.issuers.main.jwksSource` loads
 //! through the authenticator the server builds, and a refused set names the
 //! key file's own problem at startup.
-use registry_coordinator::access::{AccessConfig, Action, ClientPolicy};
+use registry_coordinator::access::AccessConfig;
 use registry_platform_config::{
-    FileSecretProviderConfig, JwksSource, OidcIssuerConfig, SecretProvidersConfig,
+    FileSecretProviderConfig, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
 };
 use registry_platform_testing::TokenSigner;
-use registry_platform_yaml::Url;
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt};
+use std::{fs, os::unix::fs::PermissionsExt};
 
 const KEY_FILE: &str = "issuer-keys.json";
 
@@ -34,28 +33,26 @@ async fn build(document: &Value) -> Result<(), registry_coordinator::Coordinator
         file: Some(FileSecretProviderConfig { root: root_path }),
         environment: None,
     };
-    let access = AccessConfig {
-        issuer: OidcIssuerConfig {
-            issuer: Url::new("https://issuer.example.test".to_owned()).unwrap(),
-            audience: "urn:coordinator:test".to_owned(),
-            jwks_source: JwksSource::Static {
-                document_ref: format!("secret:file/{KEY_FILE}"),
-            },
-            allow_insecure_http: false,
-        },
-        assertion_issuers: BTreeMap::new(),
-        scope_claim: "scope".to_owned(),
-        policies: BTreeMap::from([(
-            "journey-app".to_owned(),
-            ClientPolicy {
-                subjects: vec!["subject".to_owned()],
-                required_scopes: vec!["coordinator:start".to_owned()],
-                workflows: vec!["follow-up".to_owned()],
-                actions: vec![Action::Start],
-                operator: false,
-            },
-        )]),
+    let envelope = RuntimeEnvelope {
+        api_version: registry_coordinator::runtime::API_VERSION,
+        kind: registry_coordinator::runtime::KIND,
     };
+    let document = json!({
+        "apiVersion": envelope.api_version, "kind": envelope.kind,
+        "issuers": {"main": {
+            "issuer": "https://issuer.example.test", "audience": "urn:coordinator:test",
+            "jwksSource": {"type":"static", "documentRef": format!("secret:file/{KEY_FILE}")},
+            "allowedClients": "from-policies",
+        }},
+        "policies": {"journey-app": {
+            "subjects": ["subject"], "requiredScopes": ["coordinator:start"],
+            "workflows": ["follow-up"], "actions": ["start"],
+        }},
+    });
+    let access = RuntimeConfigLoader::new_without_posture(envelope)
+        .parse_str::<AccessConfig>(&document.to_string(), |_| None)
+        .unwrap()
+        .config;
     access.authenticator(&secrets).await.map(|_| ())
 }
 

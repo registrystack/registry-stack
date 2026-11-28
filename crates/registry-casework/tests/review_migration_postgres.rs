@@ -1880,11 +1880,11 @@ async fn serve_refuses_an_unapplied_database_before_listening_or_writing() {
                 "migrationUrlRef": fixture.database.migration_url_ref,
                 "testOnlyPlaintext": true
             },
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:casework",
                 "allowedClients": ["test-client"]
-            }},
+            }}}},
             "audit": {"path": root.path().join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
             "contextProviders": {}
         }))

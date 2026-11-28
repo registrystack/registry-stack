@@ -22,8 +22,8 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, Response};
 use registry_casework::{
-    router_with_recorder, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState,
-    HumanIdentityConfig, PostgresStore,
+    router_with_recorder, CaseworkAuthenticator, CaseworkIssuerVerifier, CaseworkService,
+    DatabaseConfig, HttpState, PostgresStore,
 };
 use registry_casework_core::{
     AccessProfile, CaseworkActsAs, CaseworkProject, InboxPolicy, ProjectIdentity, QueuePolicy,
@@ -32,7 +32,7 @@ use registry_casework_core::{
 use registry_platform_authcommon::{FailedCheck, RefusalRecorder};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_oidc::{DeclaredKinds, JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, CapturedDiagnosticLogs, MockIdp};
 use serde_json::{json, Map, Value};
 use tower::ServiceExt as _;
@@ -436,10 +436,14 @@ fn app(idp: &MockIdp, root: &std::path::Path, recorder: Arc<RefusalRecorder>) ->
     ));
     let authenticator = CaseworkAuthenticator::new(
         &project,
-        oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
-        keys,
-        HumanIdentityConfig::default(),
-    );
+        vec![CaseworkIssuerVerifier {
+            id: "main".to_owned(),
+            verifier: oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
+            keys,
+            declared: DeclaredKinds::None,
+        }],
+    )
+    .expect("one issuer entry");
     let service = CaseworkService::new(unconnected_store(root), project.clone(), [])
         .expect("a service with no providers");
     router_with_recorder(

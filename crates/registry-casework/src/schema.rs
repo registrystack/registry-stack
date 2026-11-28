@@ -172,8 +172,14 @@ fn absent_secret_provider_requirement(provider: &str, reference_pattern: &str) -
                     "properties": {
                         "oidc": {
                             "properties": {
-                                "jwksSource": {
-                                    "properties": {"documentRef": forbidden}
+                                "issuers": {
+                                    "additionalProperties": {
+                                        "properties": {
+                                            "jwksSource": {
+                                                "properties": {"documentRef": forbidden}
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -299,12 +305,12 @@ mod tests {
                 "runtimeUrlRef": supporting_reference,
                 "migrationUrlRef": supporting_reference
             },
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:casework",
                 "allowedClients": "unrestricted",
                 "jwksSource": {"type": "static", "documentRef": document_ref}
-            }},
+            }}}},
             "audit": {"path": "/var/log/casework/audit.jsonl", "hashKeyRef": supporting_reference}
         })
     }
@@ -329,8 +335,9 @@ mod tests {
     fn delegated_staff_reader_schema_matches_the_closed_runtime_shape() {
         let schema = runtime_schema();
         let mut instance = runtime_instance("secret:env/CASEWORK_JWKS", "environment");
-        instance["authentication"]["oidc"]["allowedClients"] = serde_json::json!(["registry-mcp"]);
-        instance["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+        instance["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            serde_json::json!(["registry-mcp"]);
+        instance["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = serde_json::json!({
             "registry-mcp": ["https://people.example.test"]
         });
         instance["authentication"]["oidc"]["delegatedStaffReaders"] = serde_json::json!({
@@ -338,6 +345,7 @@ mod tests {
                 "profile": "staff",
                 "client": "registry-mcp",
                 "actorSubject": "registry-mcp",
+                "representedHuman": {"claim": "registry_subject_actor_kind", "value": "human"},
                 "assertionIssuer": "https://people.example.test",
                 "requiredScope": "casework:staff:delegated-read",
                 "maximumTokenLifetimeSeconds": 300,
@@ -366,6 +374,9 @@ mod tests {
             "/authentication/oidc/delegatedStaffReaders/assistant-reader/client",
             "/authentication/oidc/delegatedStaffReaders/assistant-reader/requiredScope",
             "/authentication/oidc/delegatedStaffReaders/assistant-reader/maximumTokenLifetimeSeconds",
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/representedHuman",
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/representedHuman/claim",
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/representedHuman/value",
         ] {
             let mut missing = instance.clone();
             missing
@@ -382,11 +393,50 @@ mod tests {
             assert!(!schema.is_valid(&missing), "schema accepted missing {pointer}");
             assert!(read(&missing).is_err(), "runtime read missing {pointer}");
         }
+        // An empty claim or value is refused by the runtime's own checks
+        // after decoding, and an unknown member by the decoder.
+        for (member, written) in [("claim", ""), ("value", ""), ("other", "x")] {
+            let mut changed = instance.clone();
+            changed["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
+                ["representedHuman"][member] = serde_json::json!(written);
+            assert!(
+                !schema.is_valid(&changed),
+                "schema accepted representedHuman.{member} = {written:?}"
+            );
+        }
+        let mut unknown = instance.clone();
+        unknown["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
+            ["representedHuman"]["other"] = serde_json::json!("x");
+        assert!(read(&unknown).is_err());
         let mut too_long = instance;
         too_long["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
             ["maximumTokenLifetimeSeconds"] = serde_json::json!(301);
         assert!(!schema.is_valid(&too_long));
         assert!(read(&too_long).is_err());
+    }
+
+    #[test]
+    fn unrestricted_allowed_clients_are_marked_development_only_in_the_schema() {
+        let document: Value =
+            serde_json::from_str(&runtime_documents().unwrap()[RUNTIME_CONFIG_SCHEMA_FILE])
+                .unwrap();
+        assert_eq!(
+            document["$defs"]["CaseworkIssuer"]["properties"]["allowedClients"]
+                ["x-registry-development-only"],
+            serde_json::json!(["casework.posture.unrestricted-clients"])
+        );
+    }
+
+    #[test]
+    fn omitted_assertion_issuers_declare_no_default_the_schema_refuses() {
+        // Omitting the member says no assertion-issuer rule applies. An empty
+        // mapping is not a value the schema accepts, so it is no default.
+        let document: Value =
+            serde_json::from_str(&runtime_documents().unwrap()[RUNTIME_CONFIG_SCHEMA_FILE])
+                .unwrap();
+        let member = &document["$defs"]["CaseworkIssuer"]["properties"]["assertionIssuers"];
+        assert_eq!(member["minProperties"], 1, "{member}");
+        assert!(member.get("default").is_none(), "{member}");
     }
 
     #[test]
@@ -454,7 +504,7 @@ mod tests {
             "#/$defs/SecretReference"
         );
         assert_eq!(
-            document["$defs"]["OidcConfig"]["properties"]["issuer"]["$ref"],
+            document["$defs"]["CaseworkIssuer"]["properties"]["issuer"]["$ref"],
             "#/$defs/Url"
         );
     }
@@ -468,7 +518,7 @@ mod tests {
         let schema = runtime_schema();
         let with = |issuers: Value| {
             let mut instance = runtime_instance("secret:file/jwks.json", "file");
-            instance["authentication"]["oidc"]["assertionIssuers"] = issuers;
+            instance["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = issuers;
             instance
         };
         let many_clients = (0..=MAX_ASSERTION_ISSUER_CLIENTS)
@@ -531,7 +581,7 @@ mod tests {
         let with = |kids: Option<Value>| {
             let mut instance = runtime_instance("secret:file/jwks.json", "file");
             if let Some(kids) = kids {
-                instance["authentication"]["oidc"]["revokedKeyIds"] = kids;
+                instance["authentication"]["oidc"]["issuers"]["main"]["revokedKeyIds"] = kids;
             }
             instance
         };
@@ -565,7 +615,7 @@ mod tests {
         let document: Value =
             serde_json::from_str(&runtime_documents().unwrap()[RUNTIME_CONFIG_SCHEMA_FILE])
                 .unwrap();
-        let revoked = &document["$defs"]["OidcConfig"]["properties"]["revokedKeyIds"];
+        let revoked = &document["$defs"]["CaseworkIssuer"]["properties"]["revokedKeyIds"];
         assert!(revoked.get("default").is_none());
         assert_eq!(revoked["uniqueItems"], true);
         assert_eq!(revoked["minItems"], 1);
@@ -706,7 +756,7 @@ mod tests {
                 config.check(),
                 Err(RuntimeConfigError::Block(error))
                     if error.kind() == ConfigBlockErrorKind::InvalidSecretReference
-                        && error.field() == "authentication.oidc.jwksSource.documentRef"
+                        && error.field() == "authentication.oidc.issuers.main.jwksSource.documentRef"
             ));
             assert!(
                 !schema.is_valid(&instance),
@@ -724,7 +774,7 @@ mod tests {
                 config.check(),
                 Err(RuntimeConfigError::Block(error))
                     if error.kind() == ConfigBlockErrorKind::SecretProviderDisabled
-                        && error.field() == "authentication.oidc.jwksSource.documentRef"
+                        && error.field() == "authentication.oidc.issuers.main.jwksSource.documentRef"
             ));
             assert!(
                 !schema.is_valid(&instance),
@@ -818,7 +868,7 @@ mod tests {
             "/database/runtimeUrlRef",
             "/database/migrationUrlRef",
             "/database/caBundleRef",
-            "/authentication/oidc/jwksSource/documentRef",
+            "/authentication/oidc/issuers/main/jwksSource/documentRef",
             "/audit/hashKeyRef",
             "/contextProviders/facility-registry/clientIdRef",
             "/contextProviders/facility-registry/clientAssertionKeyRef",

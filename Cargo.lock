@@ -6737,6 +6737,7 @@ dependencies = [
  "registry-breg-client",
  "registry-casework-client",
  "registry-cli-api",
+ "registry-cli-report",
  "registry-messaging-client",
  "registry-messaging-core",
  "registry-payment-client",
