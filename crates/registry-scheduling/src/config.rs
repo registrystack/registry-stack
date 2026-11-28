@@ -1160,7 +1160,7 @@ impl RuntimeConfig {
                     policy,
                 )
             }
-            JwksSource::Static { document_ref } => {
+            JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
                     RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
                         "authentication.oidc.jwksSource.documentRef",
@@ -4426,6 +4426,43 @@ holdPolicy:
                 "/listener/bind".to_owned()
             )
         );
+    }
+
+    /// `loopback-plaintext` places the listener on loopback in every posture
+    /// and relaxes nothing: a plain http issuer on loopback is admitted under
+    /// `development-loopback` and refused under `loopback-plaintext`.
+    #[test]
+    fn loopback_plaintext_places_the_listener_and_relaxes_nothing() {
+        let root = canonical_tempdir();
+        let (_, base) = development(root.path());
+        let load = |tls: &str, bind: &str, issuer: Option<&str>| {
+            let mut document = base.clone();
+            document["listener"]["tlsTermination"] = serde_json::json!(tls);
+            document["listener"]["bind"] = serde_json::json!(bind);
+            if let Some(issuer) = issuer {
+                document["authentication"]["oidc"]["issuer"] = serde_json::json!(issuer);
+            }
+            RuntimeConfig::load(write_operator(root.path(), document))
+        };
+
+        load("loopback-plaintext", "127.0.0.1:8105", None).expect("a loopback bind is admitted");
+        for tls in ["development-loopback", "loopback-plaintext"] {
+            let error = load(tls, "10.20.30.40:8105", None).unwrap_err();
+            assert_eq!(
+                refusal(&error),
+                (
+                    "scheduling.runtime.invalid-listener".to_owned(),
+                    "/listener/bind".to_owned()
+                ),
+                "{tls}"
+            );
+        }
+
+        let issuer = "http://127.0.0.1:8082";
+        load("development-loopback", "127.0.0.1:8105", Some(issuer))
+            .expect("development-loopback admits a loopback http issuer");
+        let error = load("loopback-plaintext", "127.0.0.1:8105", Some(issuer)).unwrap_err();
+        assert_eq!(error.pointer(), "/authentication/oidc/issuer");
     }
 
     /// The runtime's static JWKS arm hands the resolved document to the

@@ -367,7 +367,9 @@ It does not supply fields shown to a human reviewer.
 ### Current-source reads
 
 For a current-source review, the human request selects a BReg source profile with the `Registry-Source-Profile` header.
-Casework forwards that human's bearer to BReg for the current display read.
+Today, unless the provider declares `humanSourceAuthentication`, Casework forwards that human's Casework bearer to BReg for the current display read.
+BReg must therefore accept that token's audience.
+A provider that declares `humanSourceAuthentication` uses a [separate source credential](#separate-source-credential) instead.
 BReg authorises the profile, subject and disclosure.
 
 The compiled Casework policy pins the producer's context contract and vendored schema; the verified package also includes the provider's exported description.
@@ -376,7 +378,9 @@ Rotate transport credentials by updating their secret references without changin
 A changed BReg context contract needs a new export, schema pin and Casework package.
 
 {/* Evidence: crates/registry-caseworkctl/src/lib.rs against_breg_package;
-    crates/registry-casework-core/src/http.rs registry-source-profile */}
+    crates/registry-casework-core/src/http.rs registry-source-profile;
+    crates/registry-casework/src/http/source_credentials.rs boundary;
+    crates/registry-casework-breg/src/lib.rs human_display */}
 
 ### Separate source credential
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `adapterctl provision --runtime-config FILE` creates the migration and
+  runtime roles and the database from the runtime file's two database URLs, as
+  a non-superuser administrator over verified TLS, or prints the script with
+  `--print-sql`. Running it again creates only what is missing and refuses a
+  role whose password differs from its URL. The runtime role gets only
+  `CONNECT`, and `adapter serve` grants its table privileges at startup as
+  before.
 - A scope refusal on the facade and the payment routes now writes the scope
   claim name, the scope the operation requires and the access profile or
   payment connection it applies to on its `request refused` line. The values

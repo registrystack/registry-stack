@@ -58,8 +58,8 @@ use registry_platform_authcommon::{FailedCheck, RefusalNote};
 use registry_platform_config::describe_secret_failure;
 use registry_platform_crypto::PublicJwk;
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit, security_headers, CspBuilder,
-    FrameworkRejection,
+    normalize_framework_rejection, request_body_limit, security_headers_without_posture,
+    CspBuilder, FrameworkRejection,
 };
 use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
@@ -617,7 +617,9 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
             refuse_a_stalled_request,
         ))
         .layer(from_fn(normalize_rejections))
-        .layer(security_headers(CspBuilder::deny_by_default()))
+        .layer(security_headers_without_posture(
+            CspBuilder::deny_by_default(),
+        ))
         .layer(from_fn_with_state(metrics, observability::observe))
         .layer(from_fn(add_no_store))
 }

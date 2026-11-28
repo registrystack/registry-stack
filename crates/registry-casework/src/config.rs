@@ -1732,7 +1732,7 @@ impl RuntimeConfig {
                     policy,
                 )
             }
-            JwksSource::Static { document_ref } => {
+            JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
                     RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
                         "authentication.oidc.jwksSource.documentRef",

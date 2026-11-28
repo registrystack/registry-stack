@@ -371,6 +371,97 @@ fn private_listener_follows_the_declared_boundary() {
 }
 
 #[test]
+fn loopback_plaintext_is_placement_only_and_follows_the_loopback_rule() {
+    use ListenerNetworkExposure::{ContainerPrivate, PrivateAddress};
+    use TlsTermination::{DevelopmentLoopback, LoopbackPlaintext};
+    let listener: PrivateListenerConfig =
+        read_block("bind: 127.0.0.1:8080\ntlsTermination: loopback-plaintext")
+            .expect("loopback-plaintext decodes");
+    assert_eq!(listener.tls_termination, LoopbackPlaintext);
+    assert!(listener.is_valid());
+    let unknown = read_block::<PrivateListenerConfig>(
+        "bind: 127.0.0.1:8080\ntlsTermination: loopback-plaintxt",
+    );
+    assert!(unknown.is_err(), "a misspelt value is refused");
+
+    let valid = |bind: &str, tls, exposure| {
+        PrivateListenerConfig {
+            bind: bind.parse().unwrap(),
+            tls_termination: tls,
+            network_exposure: exposure,
+        }
+        .is_valid()
+    };
+    for bind in ["127.0.0.1:1", "[::1]:1", "127.0.0.2:1"] {
+        assert!(valid(bind, LoopbackPlaintext, PrivateAddress), "{bind}");
+    }
+    // The refusals match `development-loopback` for every bind and exposure.
+    for bind in [
+        "127.0.0.1:1",
+        "[::1]:1",
+        "127.0.0.2:1",
+        "10.0.0.1:1",
+        "[fd00::1]:1",
+        "0.0.0.0:1",
+        "[::]:1",
+        "8.8.8.8:1",
+        "224.0.0.1:1",
+    ] {
+        for exposure in [PrivateAddress, ContainerPrivate] {
+            assert_eq!(
+                valid(bind, LoopbackPlaintext, exposure),
+                valid(bind, DevelopmentLoopback, exposure),
+                "{bind} {exposure:?}"
+            );
+        }
+    }
+    assert!(!valid("10.0.0.1:1", LoopbackPlaintext, PrivateAddress));
+    assert!(!valid("127.0.0.1:1", LoopbackPlaintext, ContainerPrivate));
+    assert_eq!(
+        serde_json::to_value(LoopbackPlaintext).unwrap(),
+        "loopback-plaintext"
+    );
+}
+
+#[test]
+fn test_issuer_reads_a_secret_reference_like_static_and_nothing_else() {
+    let source: JwksSource =
+        read_block("type: test-issuer\ndocumentRef: secret:env/TEST_JWKS").expect("decodes");
+    assert_eq!(
+        source,
+        JwksSource::TestIssuer {
+            document_ref: "secret:env/TEST_JWKS".to_owned()
+        }
+    );
+    assert_eq!(source.document_ref(), Some("secret:env/TEST_JWKS"));
+    source
+        .check("authentication.oidc", false)
+        .expect("a reference passes");
+    let empty = JwksSource::TestIssuer {
+        document_ref: String::new(),
+    };
+    assert_eq!(
+        empty
+            .check("authentication.oidc", false)
+            .expect_err("empty reference")
+            .field(),
+        "authentication.oidc.documentRef"
+    );
+    assert_eq!(
+        serde_json::to_value(&source).unwrap(),
+        serde_json::json!({"type": "test-issuer", "documentRef": "secret:env/TEST_JWKS"})
+    );
+    for text in [
+        "type: test-issuer",
+        "type: test-issuer\ndocumentRef: secret:env/X\nuri: https://x.example.test",
+        "type: test-issuer\ndocumentRef: secret:env/X\nunknown: 1",
+        "type: test-issuer\ndocumentRf: secret:env/X",
+    ] {
+        assert!(read_block::<JwksSource>(text).is_err(), "{text}");
+    }
+}
+
+#[test]
 fn sha256_label_shape() {
     assert!(is_sha256_label(&crate::sha256_uri(b"x")));
     assert!(!is_sha256_label("sha256:"));

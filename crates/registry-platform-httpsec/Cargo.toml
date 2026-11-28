@@ -35,6 +35,7 @@ axum = { workspace = true, optional = true }
 http.workspace = true
 registry-platform-authcommon = { workspace = true, optional = true }
 registry-platform-loopback.workspace = true
+registry-platform-posture.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

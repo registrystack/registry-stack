@@ -532,9 +532,35 @@ pub enum JwksSource {
         #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
         document_ref: String,
     },
+    /// Read the key set from a secret, as `static` does, for a test issuer a
+    /// development run supervises. Development only: production refuses it.
+    TestIssuer {
+        #[serde(rename = "documentRef")]
+        #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+        document_ref: String,
+    },
 }
 
 registry_platform_yaml::tagged_union!(JwksSource);
+
+static TEST_ISSUER: DevelopmentSetting = DevelopmentSetting {
+    code: "platform.posture.test-issuer",
+    key: "type",
+    summary: "The issuer's signing keys come from a test issuer",
+    production:
+        "Write jwksSource: {type: discovery}, or a static or uri source for the real issuer.",
+};
+
+impl DevelopmentClass for JwksSource {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&TEST_ISSUER];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::Discovery {} | Self::Uri { .. } | Self::Static { .. } => None,
+            Self::TestIssuer { .. } => Some(&TEST_ISSUER),
+        }
+    }
+}
 
 impl Serialize for JwksSource {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -544,6 +570,9 @@ impl Serialize for JwksSource {
             Self::Uri { uri } => ("uri", Some(("uri", uri.as_str()))),
             Self::Static { document_ref } => {
                 ("static", Some(("documentRef", document_ref.as_str())))
+            }
+            Self::TestIssuer { document_ref } => {
+                ("test-issuer", Some(("documentRef", document_ref.as_str())))
             }
         };
         let mut map = serializer.serialize_map(Some(1 + usize::from(member.is_some())))?;
@@ -593,7 +622,7 @@ impl JwksSource {
                     ))
                 }
             }
-            Self::Static { document_ref } => {
+            Self::Static { document_ref } | Self::TestIssuer { document_ref } => {
                 if document_ref.is_empty() {
                     let field = format!("{field}.documentRef");
                     Err(ConfigBlockError::new(
@@ -617,11 +646,11 @@ impl JwksSource {
         }
     }
 
-    /// The secret reference a `static` source reads.
+    /// The secret reference a `static` or `test-issuer` source reads.
     #[must_use]
     pub fn document_ref(&self) -> Option<&str> {
         match self {
-            Self::Static { document_ref } => Some(document_ref),
+            Self::Static { document_ref } | Self::TestIssuer { document_ref } => Some(document_ref),
             _ => None,
         }
     }
@@ -738,7 +767,11 @@ pub struct OidcIssuerConfig {
     pub audience: String,
     /// Where the issuer's signing keys come from. Absent reads the issuer's
     /// OpenID Connect discovery document.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_jwks_source")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-development-only" = ["platform.posture.test-issuer"]))
+    )]
     pub jwks_source: JwksSource,
     /// Permit plain HTTP beyond loopback to the configured issuer and to a
     /// JWKS URI declared in configuration. Loopback needs no setting. The
@@ -778,6 +811,14 @@ impl DevelopmentClass for InsecureHttp {
 fn deserialize_insecure_http<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     Gated::<InsecureHttp>::deserialize(deserializer)
         .map(|value| value.development_setting().is_some())
+}
+
+/// Read `jwksSource` through [`Gated`], so a loader that collects
+/// development-only settings records a test issuer with its pointer.
+fn deserialize_jwks_source<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<JwksSource, D::Error> {
+    Gated::<JwksSource>::deserialize(deserializer).map(Gated::into_inner)
 }
 
 impl OidcIssuerConfig {
@@ -1486,6 +1527,10 @@ pub struct MetricsListenerConfig {
 pub enum TlsTermination {
     OperatorControlledUpstream,
     DevelopmentLoopback,
+    /// Plaintext on a loopback bind, behind a proxy on the same host. Valid
+    /// in every posture. It is placement only: it relaxes nothing a product
+    /// relaxes under `development-loopback`.
+    LoopbackPlaintext,
 }
 
 /// The operator-declared private network placement of an HTTP listener.
@@ -1521,9 +1566,16 @@ impl PrivateListenerConfig {
         if address.is_multicast() {
             return false;
         }
-        if self.tls_termination == TlsTermination::DevelopmentLoopback {
-            return self.network_exposure == ListenerNetworkExposure::PrivateAddress
-                && address.is_loopback();
+        match self.tls_termination {
+            TlsTermination::DevelopmentLoopback => {
+                return self.network_exposure == ListenerNetworkExposure::PrivateAddress
+                    && address.is_loopback();
+            }
+            TlsTermination::LoopbackPlaintext => {
+                return self.network_exposure == ListenerNetworkExposure::PrivateAddress
+                    && registry_platform_loopback::loopback_address(address);
+            }
+            TlsTermination::OperatorControlledUpstream => {}
         }
         match (address, self.network_exposure) {
             (IpAddr::V4(address), ListenerNetworkExposure::PrivateAddress) => {

@@ -154,7 +154,7 @@ async fn assemble(config: &RuntimeConfig) -> Result<Parts, StartupError> {
                 policy,
             )
         }
-        JwksSource::Static { document_ref } => {
+        JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
             let document = resolve(
                 &secrets,
                 "resourceServer.jwksSource.documentRef",

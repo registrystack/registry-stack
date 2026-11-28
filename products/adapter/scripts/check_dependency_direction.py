@@ -325,7 +325,9 @@ def authoring_refused(start, names, every, linked) -> set[str]:
                 or name.startswith("registry-platform-")
             )
         else:
-            permits = lambda name: engine_may_reach("registry-adapterctl", name)
+            permits = lambda name: (
+                engine_may_reach("registry-adapterctl", name) or name == "registry-cli-report"
+            )
         for reached in {dependency, *linked_closure(dependency, linked)}:
             # The host is the declared authoring edge itself.
             if names[reached] != PAYMENT_HOST and not permits(names[reached]):

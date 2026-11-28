@@ -19,6 +19,10 @@ workspace = true
 # Enables only the platform's pinned-loopback HTTPS profile for the real TLS
 # verify tests. Default and release builds retain production address policy.
 tls-test = ["registry-platform-httputil/test-support"]
+# Gates the suite that needs a disposable PostgreSQL server offering verified
+# TLS (tests/provision_postgres.rs), so a plain cargo test run never fails
+# for want of one and never silently skips it either.
+postgres-test = []
 
 [dependencies]
 base64.workspace = true
@@ -37,6 +41,7 @@ registry-payment-mifos-connector.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config = { workspace = true, features = ["schema"] }
 registry-platform-httputil.workspace = true
+registry-platform-provision = { workspace = true, features = ["cli"] }
 registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
 schemars.workspace = true
@@ -48,6 +53,13 @@ zeroize.workspace = true
 [dev-dependencies]
 jsonschema.workspace = true
 rcgen.workspace = true
+registry-platform-provision = { workspace = true, features = ["test-support"] }
 registry-record.workspace = true
 tempfile.workspace = true
+tokio-postgres.workspace = true
 tokio-rustls.workspace = true
+uuid.workspace = true
+
+[[test]]
+name = "provision_postgres"
+required-features = ["postgres-test"]

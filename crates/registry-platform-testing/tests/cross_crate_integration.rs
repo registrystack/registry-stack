@@ -10,8 +10,8 @@ use registry_platform_audit::{
     AuditDestination, AuditEntry, AuditPhase, AuditWriter, FileDestination,
 };
 use registry_platform_httpsec::{
-    body_limit_problem_response, corp_conditional, request_body_limit, security_headers,
-    CorsPolicy, CspBuilder, Problem,
+    body_limit_problem_response, corp_conditional, request_body_limit,
+    security_headers_without_posture, CorsPolicy, CspBuilder, Problem,
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
@@ -68,16 +68,16 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
         Some(&HeaderValue::from_static("cross-origin"))
     );
 
-    let security_service = security_headers(CspBuilder::restrictive()).layer(service_fn(
-        |_request: Request<Body>| async {
+    let security_service = security_headers_without_posture(CspBuilder::restrictive()).layer(
+        service_fn(|_request: Request<Body>| async {
             Ok::<_, std::convert::Infallible>(
                 axum::response::Response::builder()
                     .status(StatusCode::OK)
                     .body(Body::empty())
                     .expect("response builds"),
             )
-        },
-    ));
+        }),
+    );
     let secured = security_service
         .oneshot(Request::new(Body::empty()))
         .await

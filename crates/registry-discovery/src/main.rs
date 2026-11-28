@@ -1,24 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Discovery process entry point.
 
-use std::path::PathBuf;
-
 use clap::Parser;
+use registry_discovery::cli::Arguments;
 use registry_discovery::{load_runtime, serve, LogLevel};
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::prelude::*;
-
-#[derive(Debug, Parser)]
-#[command(
-    name = "discovery",
-    about = "Serve one immutable Registry Discovery index",
-    version = registry_discovery::build_info::DISPLAY_VERSION
-)]
-struct Arguments {
-    /// Runtime configuration file.
-    #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
-    runtime_config: PathBuf,
-}
 
 #[tokio::main]
 async fn main() {

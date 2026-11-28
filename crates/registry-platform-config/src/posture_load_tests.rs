@@ -10,10 +10,11 @@ use serde::Deserialize;
 
 use crate::blocks::{
     plaintext_permitted_with, AuditKeyConfig, AuditKeyCustody, DatabaseConfig, DatabaseHost,
-    DatabaseTransport, DatabaseTransportError, OidcIssuerConfig,
+    DatabaseTransport, DatabaseTransportError, JwksSource, OidcIssuerConfig,
 };
 use crate::{
-    DeclaredPosture, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_STAND_IN,
+    DeclaredPosture, Gated, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+    DEFAULT_STAND_IN,
 };
 
 const ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
@@ -525,4 +526,100 @@ fn test_only_plaintext_is_refused_outside_test_builds() {
         "Remove it, and set database.transport for a plaintext connection on the same host."
     );
     assert_eq!(database(None, false).check(false), Ok(()));
+}
+
+/// A file whose issuer reads its keys from a test issuer.
+fn test_issuer_file() -> String {
+    format!(
+        "{HEAD}database:\n  runtimeUrlRef: secret:env/DB_RUNTIME\n  migrationUrlRef: secret:env/DB_MIGRATION\nauthentication:\n  oidc:\n    issuer: https://issuer.example.test\n    audience: api\n    jwksSource:\n      type: test-issuer\n      documentRef: secret:env/TEST_JWKS\naudit:\n  path: /var/lib/audit\n  hashKeyRef: secret:env/AUDIT_KEY\n"
+    )
+}
+
+#[test]
+fn production_refuses_a_test_issuer_with_its_code_and_pointer() {
+    let loader = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Production));
+    let error = parse(&loader, &test_issuer_file()).expect_err("production refuses");
+    let diagnostics = error.diagnostics();
+    let found = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "platform.posture.test-issuer")
+        .unwrap_or_else(|| panic!("the test issuer is listed: {diagnostics:?}"));
+    assert_eq!(found.path, "/authentication/oidc/jwksSource");
+    assert_eq!(found.severity, Severity::Error);
+    assert!(found.source.as_ref().unwrap().line.is_some());
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+}
+
+#[test]
+fn development_admits_a_test_issuer_lists_it_and_the_witness_reads_it() {
+    let loader = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Development));
+    let loaded = parse(&loader, &test_issuer_file()).expect("development admits");
+    let listed: Vec<(&str, Option<&str>)> = loaded
+        .posture
+        .settings()
+        .iter()
+        .map(|found| (found.setting.code, found.pointer.as_deref()))
+        .collect();
+    assert_eq!(
+        listed,
+        [(
+            "platform.posture.test-issuer",
+            Some("/authentication/oidc/jwksSource")
+        )]
+    );
+    let witness = loaded.development.as_ref().expect("a witness");
+    let source = &loaded.config.authentication.oidc.provider.jwks_source;
+    assert_eq!(source.document_ref(), Some("secret:env/TEST_JWKS"));
+    let gated = Gated::everywhere(JwksSource::default()).expect("discovery is valid everywhere");
+    assert!(gated.get(None).is_ok());
+    let gated = Gated::for_tests(source.clone());
+    assert_eq!(
+        gated.get(None).unwrap_err().setting.code,
+        "platform.posture.test-issuer"
+    );
+    assert_eq!(gated.get(Some(witness)).unwrap(), source);
+}
+
+#[test]
+fn the_transitional_loader_reads_a_test_issuer_like_static() {
+    let loader = RuntimeConfigLoader::new_without_posture(ENVELOPE);
+    let loaded = parse(&loader, &test_issuer_file()).expect("the transitional loader admits");
+    assert_eq!(loaded.posture.posture(), Posture::Production);
+    assert!(loaded.posture.settings().is_empty());
+    let from_static = test_issuer_file().replace("type: test-issuer", "type: static");
+    let loaded_static = parse(&loader, &from_static).expect("static loads");
+    assert_eq!(
+        loaded
+            .config
+            .authentication
+            .oidc
+            .provider
+            .jwks_source
+            .document_ref(),
+        loaded_static
+            .config
+            .authentication
+            .oidc
+            .provider
+            .jwks_source
+            .document_ref()
+    );
+}
+
+#[test]
+fn an_unknown_member_beside_a_test_issuer_is_refused() {
+    let loader = RuntimeConfigLoader::new(ENVELOPE, declared(Posture::Development));
+    let text = test_issuer_file().replace(
+        "      documentRef: secret:env/TEST_JWKS\n",
+        "      documentRef: secret:env/TEST_JWKS\n      uri: https://issuer.example.test/jwks\n",
+    );
+    let error = parse(&loader, &text).expect_err("an unknown member");
+    assert!(
+        error
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "config.unknown-key"),
+        "{:?}",
+        error.diagnostics()
+    );
 }
