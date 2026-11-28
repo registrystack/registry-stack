@@ -48,8 +48,11 @@ compatibility promise.
 
 ## Install the binary
 
-Releases from v0.38.0 attach a Linux amd64 binary, `registry-render-<tag>-linux-amd64`. Choose
-`<tag>` from the [latest release](https://github.com/registrystack/registry-stack/releases/latest),
+Releases from v0.44.0 attach `registry-render` for Linux amd64, Linux arm64, and macOS arm64.
+Linux assets are named `registry-render-<tag>-linux-<arch>`. macOS assets are `.tar.gz` bundles.
+Releases from v0.38.0 to v0.43.0 attach the Linux amd64 binary only. This section installs the
+Linux amd64 binary. Choose `<tag>` from the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest),
 verify the asset with that release's `release/VERIFY.md`, then install it. This replaces any
 existing `~/.local/bin/registry-render`, so keep a copy first when you need a rollback:
 

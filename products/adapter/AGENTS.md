@@ -82,6 +82,10 @@ bad-authoring corpus. `test-postgres.sh` runs the adapter crates'
 `postgres-test` suites: without `ADAPTER_TEST_DATABASE_URL` it starts and
 removes its own loopback PostgreSQL 17 container; with the variable set it
 uses that server as given.
+The `provision_postgres` target of `registry-adapterctl` (feature `postgres-test`)
+needs `PROVISION_TEST_DATABASE_URL`, a disposable superuser URL
+(`sslmode=verify-full` on a server that offers verified TLS), and
+`PROVISION_TEST_DATABASE_CA`, the path of the CA PEM. It fails without them.
 
 ## Verify commands
 

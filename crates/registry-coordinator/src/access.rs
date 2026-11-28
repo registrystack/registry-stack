@@ -309,7 +309,7 @@ impl AccessConfig {
             IssuerNetworkPolicy::new(self.issuer.issuer.as_str(), self.issuer.allow_insecure_http)
                 .map_err(|_| refused())?;
         let keys = match &self.issuer.jwks_source {
-            JwksSource::Static { document_ref } => {
+            JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
                 let value = secrets
                     .resolver()
                     .map_err(|_| refused())?

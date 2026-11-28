@@ -55,8 +55,8 @@ use registry_platform_authcommon::{
 };
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
-    FrameworkRejection, ProblemBody, TraceContext,
+    normalize_framework_rejection, request_body_limit_default, security_headers_without_posture,
+    CspBuilder, FrameworkRejection, ProblemBody, TraceContext,
 };
 use serde::Serialize;
 
@@ -421,7 +421,7 @@ fn http_edge(router: Router) -> Router {
         .method_not_allowed_fallback(method_not_allowed)
         .layer(request_body_limit_default())
         .layer(middleware::from_fn(http_boundary))
-        .layer(security_headers(CspBuilder::restrictive()).without_hsts())
+        .layer(security_headers_without_posture(CspBuilder::restrictive()).without_hsts())
 }
 
 async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {

@@ -44,6 +44,7 @@ NAMES = {
     "coordinator-client": "registry-coordinator-client",
     "stack-client": "registry-stack-client",
     "cli-docs": "registry-cli-docs",
+    "cli-report": "registry-cli-report",
     "evidence": "registry-evidence",
     "casework": "registry-casework",
     "caseworkctl": "registry-caseworkctl",
@@ -89,6 +90,7 @@ INTENDED = {
     "coordinator-client": ["platform"],
     "stack-client": ["breg-client", "coordinator-client"],
     "cli-docs": ["engine", "ctl", "job"],
+    "cli-report": ["serde"],
     "evidence": ["shared-engine", "core", "platform"],
     "casework": ["platform", "breg"],
     "caseworkctl": ["casework"],
@@ -176,6 +178,22 @@ class EngineTests(unittest.TestCase):
             NAMES["breg-client"],
             failures(ctl=[*INTENDED["ctl"], "breg-client"]),
         )
+
+    def test_authoring_reports_through_the_shared_cli_report_crate_only(self):
+        graph = metadata(ctl=[*INTENDED["ctl"], "cli-report"])
+        self.assertEqual(MODULE.violations(graph), [])
+        for reached in ("bregctl", "breg-client", "coordinator"):
+            with self.subTest(reached=reached):
+                self.assertIn(
+                    NAMES[reached],
+                    failures(ctl=[*INTENDED["ctl"], "cli-report", reached]),
+                )
+        for owner in ("shared-engine", "engine", "job"):
+            with self.subTest(owner=owner):
+                self.assertIn(
+                    NAMES["cli-report"],
+                    failures(**{owner: [*INTENDED[owner], "cli-report"]}),
+                )
 
     def test_only_the_payment_host_reaches_the_payment_contract_and_breg_client(self):
         graph = metadata(engine=[*INTENDED["engine"], "payment-protocol", "payment-provider", "breg-client"])

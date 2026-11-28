@@ -1745,6 +1745,102 @@
           ]
         },
         {
+          "name": "provision",
+          "invocation": "adapterctl provision",
+          "about": "Create the roles and the database the runtime file names, or print the SQL",
+          "long_about": null,
+          "usage": "adapterctl provision [OPTIONS] --runtime-config <FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, the one the service runs with",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-file <ADMIN_URL_FILE>",
+              "description": "File holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--admin-url-env <ADMIN_URL_ENV>",
+              "description": "Name of the environment variable holding the administrator PostgreSQL URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--print-sql",
+              "description": "Print the SQL script and connect to nothing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--admin-url-file <ADMIN_URL_FILE>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-env <ADMIN_URL_ENV>",
+                "--print-sql"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--admin-url-file <ADMIN_URL_FILE>",
+                "--print-sql"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "name": "schemas",
           "invocation": "adapterctl schemas",
           "about": "Write the generated JSON Schemas of every Adapter format, or check the committed ones for drift",
@@ -5551,7 +5647,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration file, the one `apply` reads. A symbolic link at any component of this path is refused.",
+              "description": "Runtime configuration file, the one the service runs with. A symbolic link at any component of this path is refused.",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -10313,7 +10409,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration file, the one `apply` reads",
+              "description": "Runtime configuration file, the one the service runs with",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -12548,7 +12644,7 @@
             },
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration file, the one `apply` reads",
+              "description": "Runtime configuration file, the one the service runs with",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -13918,6 +14014,909 @@
       ]
     },
     {
+      "name": "discovery",
+      "invocation": "discovery",
+      "about": "Serve one immutable Registry Discovery index",
+      "long_about": null,
+      "usage": "discovery --runtime-config <ABSOLUTE_FILE>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--runtime-config <ABSOLUTE_FILE>",
+          "description": "Runtime configuration file",
+          "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": []
+    },
+    {
+      "name": "discoveryctl",
+      "invocation": "discoveryctl",
+      "about": "Check and package one immutable Registry Discovery index",
+      "long_about": null,
+      "usage": "discoveryctl <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "api",
+          "invocation": "discoveryctl api",
+          "about": "Send one raw HTTP request to a Discovery endpoint",
+          "long_about": null,
+          "usage": "discoveryctl api [OPTIONS] <PATH>",
+          "arguments": [
+            {
+              "display": "<PATH>",
+              "description": "Relative API path. A leading slash is accepted without discarding a deployment prefix",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Project directory, or a descendant from which the exact product root is found",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--connection <CONNECTION>",
+              "description": "Named saved remote connection",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Explicit service base URL for an advanced one-off request",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <TOKEN_FILE>",
+              "description": "Bearer credential file used only with `--url`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--ca-file <CA_FILE>",
+              "description": "PEM certificate authority bundle for an explicit private-institution endpoint",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--method <METHOD>",
+              "description": "HTTP method. Defaults to GET, or POST when `--input` is present",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--input <INPUT>",
+              "description": "Request body file, or `-` for standard input",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--header <HEADER>",
+              "description": "Request header as `NAME: VALUE`; use `NAME: @FILE` for a value or `@FILE` for complete lines",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--accept <ACCEPT>",
+              "description": "Value of the HTTP Accept header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "Write response bytes to this file instead of standard output",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--include",
+              "description": "Include the HTTP status and response headers before the response body",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--idempotency-key <IDEMPOTENCY_KEY>",
+              "description": "Value of the Idempotency-Key header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--if-match <IF_MATCH>",
+              "description": "Literal HTTP If-Match value, including quotes when the endpoint requires them",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--token-file <TOKEN_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--ca-file <CA_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--connection <CONNECTION>",
+                "--url <URL>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "connection",
+          "invocation": "discoveryctl connection",
+          "about": "Manage named Discovery API connections",
+          "long_about": null,
+          "usage": "discoveryctl connection [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Write human-readable diagnostics or one JSON report for connection check",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "add",
+              "invocation": "discoveryctl connection add",
+              "about": "Save one product-scoped remote connection",
+              "long_about": null,
+              "usage": "discoveryctl connection add [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local connection name used by `--connection` and project selections",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--url <URL>",
+                  "description": "API service base URL. Prompted when omitted in an interactive terminal",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--ca-file <CA_FILE>",
+                  "description": "PEM certificate authority bundle for a private-institution endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-profile <ACCESS_PROFILE>",
+                  "description": "Casework only: stable caller access profile applied to its profile headers",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--anonymous",
+                  "description": "Save a connection that sends no Authorization header",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-file <TOKEN_FILE>",
+                  "description": "File holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-env <TOKEN_ENV>",
+                  "description": "Environment variable holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-jwt",
+                  "description": "Acquire renewable bearer tokens with OAuth private_key_jwt",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "description": "OAuth token endpoint used for private_key_jwt authentication",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--client-id <CLIENT_ID>",
+                  "description": "OAuth client identifier registered at the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "description": "Owner-only file containing the private client JWK",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--scope <SCOPE>",
+                  "description": "OAuth scope to request; repeat the option for multiple scopes",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resource <RESOURCE>",
+                  "description": "Optional RFC 8707 resource indicator for the requested token",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "description": "Client assertion audience: the authorization server's issuer identifier",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human-readable diagnostics or one JSON report for connection check",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--client-id <CLIENT_ID>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--scope <SCOPE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--resource <RESOURCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--token-env <TOKEN_ENV>",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "discoveryctl connection list",
+              "about": "List saved connections for this product",
+              "long_about": null,
+              "usage": "discoveryctl connection list [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human-readable diagnostics or one JSON report for connection check",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "show",
+              "invocation": "discoveryctl connection show",
+              "about": "Show one saved connection without resolving its credential",
+              "long_about": null,
+              "usage": "discoveryctl connection show [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to show",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human-readable diagnostics or one JSON report for connection check",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "use",
+              "invocation": "discoveryctl connection use",
+              "about": "Select a saved connection for one exact product project",
+              "long_about": null,
+              "usage": "discoveryctl connection use [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to select for the project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Project directory, or a descendant from which the exact product root is found",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human-readable diagnostics or one JSON report for connection check",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "check",
+              "invocation": "discoveryctl connection check",
+              "about": "Check one saved-connections file without resolving credentials or contacting endpoints",
+              "long_about": null,
+              "usage": "discoveryctl connection check [OPTIONS] --file <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--file <FILE>",
+                  "description": "Saved-connections YAML file to validate offline",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when the check reports a warning",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human-readable diagnostics or one JSON report for connection check",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "serve",
+          "invocation": "discoveryctl serve",
+          "about": "Run the production Discovery service with the selected runtime",
+          "long_about": null,
+          "usage": "discoveryctl serve --runtime-config <ABSOLUTE_FILE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime-config <ABSOLUTE_FILE>",
+              "description": "Runtime configuration file passed unchanged to the Discovery runtime",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "check",
+          "invocation": "discoveryctl check",
+          "about": "Check an authoring project, a runtime file, or an index without network I/O",
+          "long_about": null,
+          "usage": "discoveryctl check [OPTIONS] <--project <DIRECTORY>|--runtime-config <FILE>|--index <FILE>>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <DIRECTORY>",
+              "description": "The authoring project directory: origins.yaml, the mappings directory, and every runtime file beside them",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file, checked on its own",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--index <FILE>",
+              "description": "One index file, as `discoveryctl package` wrote it, checked on its own exactly as `discovery --runtime-config` parses it at startup",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--allow-loopback",
+              "description": "Accept an http loopback catalog URL, for development",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--environment",
+              "description": "Fill the runtime file's ${NAME} expressions from this process's environment and check the values they produce",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Write human-readable diagnostics or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--deny-warnings",
+              "description": "Exit 1 when the check reports a warning",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "required-one-or-more",
+              "when": null,
+              "arguments": [
+                "--project <DIRECTORY>",
+                "--runtime-config <FILE>",
+                "--index <FILE>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "package",
+          "invocation": "discoveryctl package",
+          "about": "Fetch every enabled approved origin once and write one immutable package",
+          "long_about": null,
+          "usage": "discoveryctl package [OPTIONS] --project <DIRECTORY> --output <DIRECTORY>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <DIRECTORY>",
+              "description": "The authoring project directory: origins.yaml, the mappings directory, and every runtime file beside them",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <DIRECTORY>",
+              "description": "The new directory the package is written to",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--allow-loopback",
+              "description": "Accept an http loopback catalog URL, for development",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--revision <REVISION>",
+              "description": "Optional operator revision recorded in the package envelope",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "name": "documents",
       "invocation": "documents",
       "about": "Run the Registry Stack Document Store",
@@ -14279,7 +15278,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration file, the one `apply` reads",
+              "description": "Runtime configuration file, the one the service runs with",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -21283,7 +22282,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration file, the one `apply` reads",
+              "description": "Runtime configuration file, the one the service runs with",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -26314,7 +27313,7 @@
           "options": [
             {
               "display": "--runtime-config <FILE>",
-              "description": "Runtime configuration file, the one `apply` reads",
+              "description": "Runtime configuration file, the one the service runs with",
               "always_required": true,
               "repeatable": false,
               "default_values": [],

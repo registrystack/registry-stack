@@ -176,6 +176,15 @@ impl<T> Gated<T> {
     }
 }
 
+impl<T> Gated<T> {
+    /// The value, whatever it selects, for a shared block that decodes a
+    /// member through the gate so the loader records it, and keeps the member
+    /// readable by products that have not adopted the posture.
+    pub(crate) fn into_inner(self) -> T {
+        self.0
+    }
+}
+
 impl<T: DevelopmentClass> Gated<T> {
     /// The value, when it is valid in every posture or the caller holds the
     /// witness.

@@ -778,6 +778,24 @@
             "documentRef"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, as `static` does, for a test issuer a\ndevelopment run supervises. Development only: production refuses it.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "test-issuer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1604,7 +1622,10 @@
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
-          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
         },
         "leewayMilliseconds": {
           "format": "uint64",

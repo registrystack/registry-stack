@@ -6,7 +6,7 @@ use std::io;
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitCode};
 
-use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
 
@@ -49,6 +49,12 @@ struct Arguments {
     command: Command,
 }
 
+/// The clap command tree, for the generated CLI reference.
+#[must_use]
+pub fn command() -> clap::Command {
+    Arguments::command()
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 enum OutputFormat {
     /// Diagnostics with their position first, then a summary line.
@@ -85,7 +91,7 @@ enum Command {
         /// directory, and every runtime file beside them.
         #[arg(long, value_name = "DIRECTORY")]
         project: Option<PathBuf>,
-        /// One runtime file, checked on its own.
+        /// Runtime configuration file, checked on its own.
         #[arg(long, value_name = "FILE")]
         runtime_config: Option<PathBuf>,
         /// One index file, as `discoveryctl package` wrote it, checked on
@@ -108,10 +114,14 @@ enum Command {
     },
     /// Fetch every enabled approved origin once and write one immutable package.
     Package {
-        #[arg(long)]
+        /// The authoring project directory: origins.yaml, the mappings
+        /// directory, and every runtime file beside them.
+        #[arg(long, value_name = "DIRECTORY")]
         project: PathBuf,
-        #[arg(long)]
+        /// The new directory the package is written to.
+        #[arg(long, value_name = "DIRECTORY")]
         output: PathBuf,
+        /// Accept an http loopback catalog URL, for development.
         #[arg(long)]
         allow_loopback: bool,
         /// Optional operator revision recorded in the package envelope.

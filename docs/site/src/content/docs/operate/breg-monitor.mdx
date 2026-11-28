@@ -341,7 +341,7 @@ with one of the `breg.external-refresh.*` codes in [Troubleshooting](#troublesho
 
 ## Watch refused requests
 
-`breg_request_refusals_total{check}` counts the requests BReg refused, by the check that refused
+`breg_request_refusals_total{check}` counts the requests Base Registry Engine (BReg) refused, by the check that refused
 it, since the process started. Every `check` value is published from the first scrape at zero, so a
 rate needs no `absent()` guard. A missing or refused credential, a refused token, an unreachable
 key source and a refused review completion callback all count. So does a request answered

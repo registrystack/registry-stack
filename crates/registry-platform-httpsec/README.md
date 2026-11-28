@@ -8,8 +8,14 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
 - Restrictive CSP header generation through `CspBuilder`, including a
   `deny_by_default` policy (`default-src 'none'`) and an optional
   `form-action` directive for server-rendered forms.
-- `security_headers` middleware for CSP, content sniffing, referrer, and frame
-  protections.
+- `security_headers(csp, posture)` middleware for CSP, content sniffing,
+  referrer, and frame protections. A development process also marks every
+  response with `Registry-Posture: development`, overwriting a value a handler
+  set. A production process sends no mark. `security_headers_without_posture`
+  is the transitional entry point for a caller that holds no posture yet, and
+  behaves as production.
+- `posture_mark(posture)`, a layer that only sets the development mark, for
+  routers that do not use `security_headers`.
 - Conditional Cross-Origin-Resource-Policy handling.
 - Request body limit layer construction.
 - RFC 9457 Problem Details responses with `application/problem+json`.
@@ -50,6 +56,7 @@ use axum::{http::Method, Router};
 use registry_platform_httpsec::{
     corp_conditional, request_body_limit, security_headers, CorsPolicy, CspBuilder,
 };
+use registry_platform_posture::Posture;
 
 let cors = CorsPolicy {
     allowed_origins: vec!["https://app.example.test".to_string()],
@@ -60,7 +67,7 @@ let cors = CorsPolicy {
 
 let app = Router::new()
     .layer(corp_conditional())
-    .layer(security_headers(CspBuilder::restrictive()))
+    .layer(security_headers(CspBuilder::restrictive(), Posture::Production))
     .layer(cors.layer())
     .layer(request_body_limit(1024 * 1024));
 let _ = app;
@@ -73,6 +80,7 @@ let _ = app;
 - HTTPS origins are accepted. HTTP origins are accepted only for loopback
   development origins.
 - Existing security headers are preserved when `security_headers` is applied.
+  The development posture mark is the exception: it overwrites.
 - Invalid, duplicate, or absent inbound `traceparent` values receive a fresh
   server trace. One valid lower-case W3C version 0 `traceparent` is retained.
   Caller `tracestate` is never echoed.

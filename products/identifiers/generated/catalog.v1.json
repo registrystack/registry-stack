@@ -4716,7 +4716,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/job-runtime.v1alpha1.schema.json",
-        "sha256": "948d893e3e3613e2577ad131ac07eac7440a66fcfd9368f7219636891245bda6",
+        "sha256": "039e8186453aaa3fc9b1fa0cb230172dfe58f05c7b240bfd03f3e5404ef0338c",
         "mediaType": "application/schema+json"
       }
     },
@@ -4896,7 +4896,7 @@
       },
       "artifact": {
         "path": "products/adapter/schemas/runtime.v1alpha1.schema.json",
-        "sha256": "de83cc5d1e6fd93c2a3f624ba02a44e7f8eaf08d2a48ec8ca8ad25aa1baae5f6",
+        "sha256": "51585af5aeff6da47672cfb2defc6a82b0da0a0fe748b09863e184c588c0f1c5",
         "mediaType": "application/schema+json"
       }
     },
@@ -5112,7 +5112,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "4a9161e749da012552829c6c6e1f58a365d457fd30db7bca4a4f6342e4af9318",
+        "sha256": "ee35b984ef1bf88adcd1e34d7940dae7f9d79c1da3dfdd77ee36433569b69e13",
         "mediaType": "application/schema+json"
       }
     },
@@ -5256,7 +5256,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/review-runtime/review-runtime.schema.json",
-        "sha256": "4b912d75812d2ae988192dd50ca4ce54e9c72da2ba9e62b614aeff188b1cae92",
+        "sha256": "abdb67296c19d687187ce2fea55bef59a47d5212ec5bb3925dcbef35778d5fc8",
         "mediaType": "application/schema+json"
       }
     },
@@ -5292,7 +5292,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "2e1a00a54542705141801fef4112443d715fdbde6842e2684fa801a3f5388392",
+        "sha256": "50c12375f8e3410c00d9dbfc9d7460370e0c69a757992975fa5fa96189e06fe7",
         "mediaType": "application/schema+json"
       }
     },
@@ -5400,7 +5400,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "035b9d0040bf61f7bfff4f8827547e711b05bdafe2b5da4561f73db46dbf85c1",
+        "sha256": "0c6aef414ad9becb38794ad1eb0b00b3c8220b507670e27de6b79da710f9b787",
         "mediaType": "application/schema+json"
       }
     },
@@ -5436,7 +5436,7 @@
       },
       "artifact": {
         "path": "products/coordinator/generated/runtime/runtime.schema.json",
-        "sha256": "a6da5b7691382e9e412b9e67233228d6c18bf76a44cad0fd75c3b1dbbdae7429",
+        "sha256": "e2c774bceda48bfd6814629e779fee5a9613ac82b3c72ccd4a915d0c4e4dd1ee",
         "mediaType": "application/schema+json"
       }
     },
@@ -5616,7 +5616,7 @@
       },
       "artifact": {
         "path": "products/documents/generated/runtime/runtime.schema.json",
-        "sha256": "1207d9ae54688fbc9b2cf69a75baed8008b0eedb0bfd8c7722629726e43016bc",
+        "sha256": "4d22626676c3d535dcca2c86c2d0f675b52b8dce81e3040ddee0462e7ed90420",
         "mediaType": "application/schema+json"
       }
     },
@@ -5796,7 +5796,7 @@
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vp-runtime/oid4vp-runtime.schema.json",
-        "sha256": "6efae3b628362ddeb7c9e470cb7ee9c0dcd9b61431580836cf873d45c21b75dd",
+        "sha256": "b6ecde469f66120d97fbfb2840fecd42c564642510bda26b98b26ee7ab13cdfa",
         "mediaType": "application/schema+json"
       }
     },
@@ -6012,7 +6012,7 @@
       },
       "artifact": {
         "path": "products/messaging/generated/runtime/runtime.schema.json",
-        "sha256": "6d75d4e0abeeae4b5b6dfbec8d6fdc6576199654ff5f8b4720dea634230ee241",
+        "sha256": "a91a90441db07340c50710d3bf2aa1a4d3eaf034af0ff1bda7eaa5ea299e09db",
         "mediaType": "application/schema+json"
       }
     },
@@ -6098,7 +6098,7 @@
       "description": "Report of the shared `provision` command that creates a product's PostgreSQL roles, database, schemas and extensions.",
       "source": {
         "path": "crates/registry-platform-provision/src/cli.rs",
-        "sha256": "43ad277b6695e1ceff8bdf6b917f19e19531a2fa954d4a8283367615bf3f17b7"
+        "sha256": "152dfe5949fc2c35a374b18409a8d19b0da0f967ebff3758ab0d17982af8ace7"
       },
       "artifact": {
         "path": "crates/registry-platform-provision/schema/provision-report.schema.json",
@@ -6156,7 +6156,7 @@
       },
       "artifact": {
         "path": "products/platform/generated/mcp-runtime/mcp-runtime.schema.json",
-        "sha256": "2a4c006f8666d8ec3f9d1a9a511041525753ffa97526f4275ce22a64ca0c4531",
+        "sha256": "9c10f7ac0154005eca148084abf7a0e1980642fbea9e8f2fa30da1c8d5fffa49",
         "mediaType": "application/schema+json"
       }
     },
@@ -6264,7 +6264,7 @@
       },
       "artifact": {
         "path": "products/render/schemas/runtime.schema.json",
-        "sha256": "dbf6eb70c49c15e54ad435adc77446eebbe2a1dbd16f2eb707465c6bc89effd6",
+        "sha256": "dfcd05130394e2dec5b8c9d739b2c8c60b680cb399a94c406125f80a707ae5f1",
         "mediaType": "application/schema+json"
       }
     },
@@ -6372,7 +6372,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "319d14d8c66ea2eee3d77577d0b8924478b4b5e86893dce390533298cd9910d1",
+        "sha256": "27a6be5ada98978ac33e80e9054540b65c091748e9548744922d08e917ebd739",
         "mediaType": "application/schema+json"
       }
     },

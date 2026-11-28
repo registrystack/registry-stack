@@ -152,7 +152,9 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   mode is observable to an authenticated staff caller.
   This is accepted: the caller is authenticated staff, ids are random UUIDs, and the response
   reveals the context mode only.
-  Only the source bearer is forwarded, never the Casework or unattended status credential.
+  On this separate-credential path, only the source bearer is forwarded, never the Casework or
+  unattended status credential.
+  Without the pair, Casework forwards the human's Casework bearer to BReg for the current display read.
   Credentials are redacted, zeroised and dropped with the request, with no cross-call cache or
   durable recovery capture.
   This is two independently authorised credentials for one existing human, not delegation,

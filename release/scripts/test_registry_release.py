@@ -3489,7 +3489,7 @@ class RegistryReleaseTest(TestCase):
             )
         self.assertNotIn("THIRD_PARTY_NOTICES", release_dockerfiles["discovery"])
         self.assertIn(
-            "discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging|coordinator)",
+            "discovery|evidence|evidence-oid4vci|registry-render|breg|breg-mcp|breg-review|casework|scheduling|messaging|coordinator|adapter)",
             image_recipe,
         )
         self.assertNotIn("registry-relay)", image_recipe)

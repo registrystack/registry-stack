@@ -59,6 +59,52 @@ You build it from a reviewed source checkout (see [Build the job host](#build-th
 
 {/* Evidence: docs/site/src/data/cli-reference.yaml source_build_only_binaries. */}
 
+## Provision PostgreSQL
+
+Your runtime file already names the roles, their passwords and the database. They are the URLs in
+`database.migrationUrlRef` and `database.runtimeUrlRef`.
+Put both URLs in their secret files, then run `adapterctl provision` once as a PostgreSQL role that
+can create roles and databases:
+
+```sh
+adapterctl provision --runtime-config runtime.yaml --admin-url-file admin-url
+```
+
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`.
+The administrator needs `CREATEROLE` and `CREATEDB` and does not need to be a superuser.
+To pass the URL in an environment variable instead, use `--admin-url-env NAME`.
+The connection requires TLS and verifies the server certificate.
+Set `database.caBundleRef` in the runtime file to trust a private CA.
+The command never prints the administrator URL or a password.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Gives the migration role `USAGE` and `CREATE` on the `public` schema, and takes `CREATE` on it
+  from `PUBLIC`.
+
+Run it again at any time.
+It creates only what is missing.
+It refuses a role that exists with a different password than its URL holds, and tells you which role.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags.
+The command connects to nothing and prints the script, with a `\password` prompt after each
+`CREATE ROLE` so the script holds no password.
+Add `--format json` for a report of each statement and its outcome.
+
+`provision` grants the runtime role nothing beyond `CONNECT`.
+`adapter serve` grants the table privileges when it starts, as the next section describes.
+An administrator that is not a superuser becomes a member of the roles it creates, holding
+`ADMIN OPTION`, and that membership does not stop the grant.
+
+{/* Evidence: crates/registry-adapterctl/src/provision.rs;
+    crates/registry-adapterctl/tests/provision_cli.rs;
+    crates/registry-adapterctl/tests/provision_postgres.rs provision_then_serve_with_split_roles. */}
+
 ## Grant the runtime database role
 
 The facade journals every request and, when it serves a write, keeps idempotency state in

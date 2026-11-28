@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-23"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -738,8 +738,12 @@ identifiers using an undocumented spelling.
 `verifyHookDelivery` in Node and `verify_hook_delivery` in Python authenticate one exact BReg
 Version 1 hook request with the shared Rust verifier. Pass the received method, request target,
 headers, body bytes, and key without normalising them. The result carries the authenticated
-CloudEvents attributes, delivery metadata, and body. It does not decide whether the delivery is
-fresh, expected by this receiver, or already applied; the receiver checks those, in this order.
+CloudEvents attributes, delivery metadata, and body. It refuses a delivery time more than 300
+seconds from the receiver clock, either way, with the code `stale-delivery`. `maxSkewSeconds`
+(Python `max_skew_seconds`, 1 to 3600) sets another window, and `callerEnforcedFreshness: true`
+(Python `caller_enforced_freshness=True`) leaves the check to the receiver. It does not decide
+whether the delivery is expected by this receiver or already applied; the receiver checks those, in
+this order.
 
 In both examples, `event_store.apply_once()` (`eventStore.applyOnce()` in Node) is an
 application-owned transaction that claims the event identity and commits the effect once, and
@@ -749,7 +753,6 @@ application-owned transaction that claims the event identity and commits the eff
 const { breg } = require('@registrystack/client');
 
 const MAX_BODY_BYTES = 1_048_576;
-const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 const EXPECTED_SOURCE = 'urn:registrystack:registry:example:instance:primary';
 const EXPECTED_TYPE = 'case-created-v1';
 const EXPECTED_DATASCHEMA =
@@ -790,10 +793,6 @@ async function receiveWebhook(request, response, key, eventStore) {
     key,
   });
 
-  const skew = Math.abs(Date.now() - Date.parse(delivery.deliveryTime));
-  if (!Number.isFinite(skew) || skew > MAX_CLOCK_SKEW_MS) {
-    throw new Error('hook delivery is outside the accepted clock skew');
-  }
   if (delivery.source !== EXPECTED_SOURCE
       || delivery.type !== EXPECTED_TYPE
       || delivery.dataschema !== EXPECTED_DATASCHEMA) {
@@ -810,11 +809,9 @@ async function receiveWebhook(request, response, key, eventStore) {
 
 ```python
 import json
-from datetime import datetime, timezone
 
 from registry_client import breg
 
-MAX_CLOCK_SKEW_SECONDS = 5 * 60
 EXPECTED_SOURCE = "urn:registrystack:registry:example:instance:primary"
 EXPECTED_TYPE = "case-created-v1"
 EXPECTED_DATASCHEMA = (
@@ -827,10 +824,6 @@ def receive_webhook(method, path, headers, body, key, event_store):
         method=method, path=path, headers=headers, body=body, key=key,
     )
 
-    sent = datetime.fromisoformat(delivery["delivery_time"])
-    skew = abs((datetime.now(timezone.utc) - sent).total_seconds())
-    if skew > MAX_CLOCK_SKEW_SECONDS:
-        raise ValueError("hook delivery is outside the accepted clock skew")
     if (delivery["source"], delivery["type"], delivery["dataschema"]) != (
         EXPECTED_SOURCE, EXPECTED_TYPE, EXPECTED_DATASCHEMA,
     ):
@@ -851,7 +844,7 @@ Keep the key in server-side secret storage and never log the input or a failed d
 raises `BaseRegistryClientError` with kind `hook-verification`; its `code` and message name the
 input to check without rendering its value. Generation and attempt are decimal strings, so a 64-bit
 generation never rounds in JavaScript. A delivery outside the skew bound can still carry a valid
-signature, so reject it before deduplication. The idempotency key identifies one delivery generation
+signature, so the verifier refuses it before deduplication. The idempotency key identifies one delivery generation
 and survives automatic retries, but an operator replay creates a new generation and key. Deduplicate
 an effect that must happen once on `source` plus `id`, or on a business key.
 [Webhooks](../../operate/breg-webhooks/) covers provisioning the key and building a receiver.

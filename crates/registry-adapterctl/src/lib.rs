@@ -5,7 +5,7 @@
 //! This crate owns the `adapterctl` binary. Its commands: `check`, the
 //! offline check over authored artifacts (project, profile, pack, fixtures,
 //! and with `--runtime` the runtime config); `job check`, the offline
-//! compile of one ingestion job; `job lock`, the job's pin rewriter; `mapping check`, `mapping generate`, and
+//! compile of one ingestion job; `provision`, the creation of the roles and the database the runtime file names; `job lock`, the job's pin rewriter; `mapping check`, `mapping generate`, and
 //! `mapping preview`, the checks, script generator, and offline preview of
 //! an `AdapterMapping` model; `project lock`, the pin rewriter; `schemas`, the generator and drift gate of the Adapter format
 //! JSON Schemas; `compile`, the per-deployment contract compiler;
@@ -25,6 +25,7 @@ mod mapping;
 mod payment_fixtures;
 mod payments;
 mod project;
+mod provision;
 mod report;
 mod schemas;
 mod verify;
@@ -70,6 +71,8 @@ enum Command {
     Project(project::ProjectArgs),
     /// Check typed payment connections or export their fixed operation contract.
     Payments(payments::PaymentsArgs),
+    /// Create the roles and the database the runtime file names, or print the SQL.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Write the generated JSON Schemas of every Adapter format, or
     /// check the committed ones for drift.
     Schemas(schemas::SchemasArgs),
@@ -144,6 +147,9 @@ where
         }
     };
     let Cli { format, command } = cli;
+    if let Command::Provision(args) = &command {
+        return provision(args, format);
+    }
     let command_name = match &command {
         Command::Check(_) => "check",
         Command::Job(job) => match job.command {
@@ -154,6 +160,7 @@ where
         Command::Project(project) => match project.command {
             project::ProjectCommand::Lock(_) => "project lock",
         },
+        Command::Provision(_) => "provision",
         Command::Schemas(_) => "schemas",
         Command::Payments(args) => payments::command_name(&args.command),
         Command::Compile(_) => "compile",
@@ -172,6 +179,7 @@ where
         },
         Command::Mapping(args) => mapping_command(args, format, command_name, stdout, stderr),
         Command::Project(args) => project_command(args, format, command_name, stdout, stderr),
+        Command::Provision(_) => unreachable!("provision writes its own report above"),
         Command::Schemas(args) => schemas_command(args, format, command_name, stdout, stderr),
         Command::Payments(args) => payments_command(args, format, command_name, stdout, stderr),
         Command::Compile(args) => compile_command(args, format, command_name, stdout, stderr),
@@ -182,6 +190,23 @@ where
         Ok(exit) => exit,
         Err(()) => output_failed(stderr),
     }
+}
+
+/// Runs the shared `provision` command, which writes its own report and sets
+/// its own exit code. The global `--format` selects its report as it selects
+/// every other command's.
+fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFormat) -> ExitCode {
+    let shared = match format {
+        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+    };
+    registry_platform_provision::run_provision(
+        "adapterctl",
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        args,
+        shared,
+        provision::load,
+    )
 }
 
 fn usage_failure(message: String) -> Value {

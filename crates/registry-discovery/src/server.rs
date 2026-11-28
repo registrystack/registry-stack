@@ -12,7 +12,7 @@ use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use registry_platform_canonical_json::parse_json_strict;
-use registry_platform_httpsec::{security_headers, CspBuilder};
+use registry_platform_httpsec::{security_headers_without_posture, CspBuilder};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use thiserror::Error;
@@ -179,7 +179,7 @@ pub fn router(
                     },
                 ),
         )
-        .layer(security_headers(CspBuilder::restrictive())))
+        .layer(security_headers_without_posture(CspBuilder::restrictive())))
 }
 
 async fn enforce_http_limits(

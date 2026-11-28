@@ -14,6 +14,7 @@ use axum::body::Body;
 use axum::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use axum::http::{HeaderMap, Method, Request, Response, StatusCode};
 use axum::response::IntoResponse;
+use registry_platform_posture::{Posture, POSTURE_HEADER};
 use serde::Serialize;
 use serde_json::Value;
 use tower::{Layer, Service};
@@ -344,10 +345,87 @@ fn checked_sources(sources: &[&'static str]) -> Vec<&'static str> {
 /// HSTS for deployments that terminate TLS upstream or serve plain HTTP.
 pub const DEFAULT_HSTS_VALUE: &str = "max-age=63072000; includeSubDomains";
 
-pub fn security_headers(csp: CspBuilder) -> SecurityHeadersLayer {
+/// The shared response-header baseline for a service of the given posture.
+///
+/// A development process also marks every response with `Registry-Posture:
+/// development`, overwriting a value a handler set. A production process sends
+/// no mark, so an absent field makes no claim.
+pub fn security_headers(csp: CspBuilder, posture: Posture) -> SecurityHeadersLayer {
     SecurityHeadersLayer {
         csp: csp.header_value(),
         hsts: Some(HeaderValue::from_static(DEFAULT_HSTS_VALUE)),
+        posture,
+    }
+}
+
+/// [`security_headers`] for a caller that does not yet hold a posture. It
+/// behaves as production: no mark is sent.
+pub fn security_headers_without_posture(csp: CspBuilder) -> SecurityHeadersLayer {
+    security_headers(csp, Posture::Production)
+}
+
+/// A layer that only sets the posture mark, for routers that do not use
+/// [`security_headers`]. A development process sets `Registry-Posture:
+/// development` on every response, overwriting a handler value. A production
+/// process sets nothing.
+pub fn posture_mark(posture: Posture) -> PostureMarkLayer {
+    PostureMarkLayer { posture }
+}
+
+fn mark_development<B>(response: &mut Response<B>, posture: Posture) {
+    if posture == Posture::Development {
+        response.headers_mut().insert(
+            HeaderName::from_static(POSTURE_HEADER),
+            HeaderValue::from_static(Posture::Development.as_str()),
+        );
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PostureMarkLayer {
+    posture: Posture,
+}
+
+impl<S> Layer<S> for PostureMarkLayer {
+    type Service = PostureMarkService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        PostureMarkService {
+            inner,
+            posture: self.posture,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PostureMarkService<S> {
+    inner: S,
+    posture: Posture,
+}
+
+impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for PostureMarkService<S>
+where
+    S: Service<Request<ReqBody>, Response = Response<ResBody>> + Send + 'static,
+    S::Future: Send + 'static,
+    S::Error: Send + 'static,
+    ResBody: Send + 'static,
+{
+    type Response = Response<ResBody>;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
+        let future = self.inner.call(request);
+        let posture = self.posture;
+        Box::pin(async move {
+            let mut response = future.await?;
+            mark_development(&mut response, posture);
+            Ok(response)
+        })
     }
 }
 
@@ -359,6 +437,7 @@ pub struct SecurityHeadersLayer {
     /// [`SecurityHeadersLayer::without_hsts`] for deployments that terminate
     /// TLS upstream or serve plain HTTP.
     hsts: Option<HeaderValue>,
+    posture: Posture,
 }
 
 impl SecurityHeadersLayer {
@@ -390,6 +469,7 @@ impl<S> Layer<S> for SecurityHeadersLayer {
             inner,
             csp: self.csp.clone(),
             hsts: self.hsts.clone(),
+            posture: self.posture,
         }
     }
 }
@@ -399,6 +479,7 @@ pub struct SecurityHeadersService<S> {
     inner: S,
     csp: HeaderValue,
     hsts: Option<HeaderValue>,
+    posture: Posture,
 }
 
 impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for SecurityHeadersService<S>
@@ -420,6 +501,7 @@ where
         let future = self.inner.call(request);
         let csp = self.csp.clone();
         let hsts = self.hsts.clone();
+        let posture = self.posture;
         Box::pin(async move {
             let mut response = future.await?;
             insert_if_missing(
@@ -461,6 +543,7 @@ where
                     hsts_value,
                 );
             }
+            mark_development(&mut response, posture);
             Ok(response)
         })
     }
@@ -1036,16 +1119,16 @@ mod tests {
         use tower::service_fn;
         use tower::ServiceExt;
 
-        let service = security_headers(CspBuilder::restrictive()).layer(service_fn(
-            |_request: Request<Body>| async {
+        let service = security_headers_without_posture(CspBuilder::restrictive()).layer(
+            service_fn(|_request: Request<Body>| async {
                 let mut response = Response::new(Body::empty());
                 response.headers_mut().insert(
                     HeaderName::from_static("content-security-policy"),
                     HeaderValue::from_static("default-src 'none'"),
                 );
                 Ok::<_, std::convert::Infallible>(response)
-            },
-        ));
+            }),
+        );
 
         let response = service
             .oneshot(Request::new(Body::empty()))
@@ -1091,11 +1174,11 @@ mod tests {
         use tower::service_fn;
         use tower::ServiceExt;
 
-        let service = security_headers(CspBuilder::restrictive()).layer(service_fn(
-            |_request: Request<Body>| async {
+        let service = security_headers_without_posture(CspBuilder::restrictive()).layer(
+            service_fn(|_request: Request<Body>| async {
                 Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
-            },
-        ));
+            }),
+        );
         let response = service
             .oneshot(Request::new(Body::empty()))
             .await
@@ -1113,7 +1196,7 @@ mod tests {
         use tower::service_fn;
         use tower::ServiceExt;
 
-        let service = security_headers(CspBuilder::restrictive())
+        let service = security_headers_without_posture(CspBuilder::restrictive())
             .without_hsts()
             .layer(service_fn(|_request: Request<Body>| async {
                 Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
@@ -1128,6 +1211,105 @@ mod tests {
                 .get("strict-transport-security")
                 .is_none(),
             "HSTS must be absent after without_hsts()"
+        );
+    }
+
+    async fn mark_of<L>(layer: L, handler_mark: Option<&'static str>) -> Option<HeaderValue>
+    where
+        L: Layer<
+            tower::util::BoxCloneService<Request<Body>, Response<Body>, std::convert::Infallible>,
+        >,
+        L::Service: Service<Request<Body>, Response = Response<Body>> + Send + 'static,
+        <L::Service as Service<Request<Body>>>::Error: std::fmt::Debug,
+        <L::Service as Service<Request<Body>>>::Future: Send + 'static,
+    {
+        use tower::ServiceExt;
+
+        let inner = tower::service_fn(move |_request: Request<Body>| async move {
+            let mut response = Response::new(Body::empty());
+            if let Some(value) = handler_mark {
+                response.headers_mut().insert(
+                    HeaderName::from_static(registry_platform_posture::POSTURE_HEADER),
+                    HeaderValue::from_static(value),
+                );
+            }
+            Ok::<_, std::convert::Infallible>(response)
+        });
+        let response = layer
+            .layer(tower::util::BoxCloneService::new(inner))
+            .oneshot(Request::new(Body::empty()))
+            .await
+            .expect("service responds");
+        response
+            .headers()
+            .get(registry_platform_posture::POSTURE_HEADER)
+            .cloned()
+    }
+
+    #[tokio::test]
+    async fn development_security_headers_set_the_mark_over_a_handler_value() {
+        let layer = security_headers(CspBuilder::restrictive(), Posture::Development);
+        assert_eq!(
+            mark_of(layer.clone(), None).await,
+            Some(HeaderValue::from_static("development"))
+        );
+        assert_eq!(
+            mark_of(layer, Some("production")).await,
+            Some(HeaderValue::from_static("development")),
+            "the layer overwrites a value a handler set"
+        );
+    }
+
+    #[tokio::test]
+    async fn production_security_headers_set_no_mark_and_leave_handler_values() {
+        let layer = security_headers(CspBuilder::restrictive(), Posture::Production);
+        assert_eq!(mark_of(layer.clone(), None).await, None);
+        assert_eq!(
+            mark_of(layer, Some("handler")).await,
+            Some(HeaderValue::from_static("handler")),
+            "production neither adds nor strips the field"
+        );
+    }
+
+    #[tokio::test]
+    async fn transitional_security_headers_behave_as_production() {
+        let layer = security_headers_without_posture(CspBuilder::restrictive());
+        assert_eq!(mark_of(layer, None).await, None);
+    }
+
+    #[tokio::test]
+    async fn development_posture_mark_sets_the_field_on_a_bare_service() {
+        let layer = posture_mark(Posture::Development);
+        assert_eq!(
+            mark_of(layer.clone(), None).await,
+            Some(HeaderValue::from_static("development"))
+        );
+        assert_eq!(
+            mark_of(layer, Some("production")).await,
+            Some(HeaderValue::from_static("development"))
+        );
+    }
+
+    #[tokio::test]
+    async fn production_posture_mark_sets_nothing() {
+        let layer = posture_mark(Posture::Production);
+        assert_eq!(mark_of(layer, None).await, None);
+    }
+
+    #[tokio::test]
+    async fn development_posture_mark_applies_to_an_axum_router() {
+        use tower::ServiceExt;
+
+        let router = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(posture_mark(Posture::Development));
+        let response = router
+            .oneshot(Request::new(Body::empty()))
+            .await
+            .expect("router responds");
+        assert_eq!(
+            response.headers().get("registry-posture"),
+            Some(&HeaderValue::from_static("development"))
         );
     }
 
