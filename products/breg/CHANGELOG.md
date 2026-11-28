@@ -90,9 +90,9 @@
   alongside turns. Update BReg clients to accept the additional Proposal member
   and availability reason. Proposal link checks propagate unexpected failures.
 
-- Proposal hooks without a `transitions` filter also receive `added`
-  (`proposal.added`). Existing receivers must accept that event or configure
-  an explicit transition filter.
+- Proposal hooks without a `transitions` filter also receive `added`, `asked`
+  and `answered` (`proposal.added`, `proposal.asked` and `proposal.answered`).
+  Existing receivers must accept those events or configure an explicit transition filter.
 - Declaring or changing an `additions` slot changes the Action revision.
   Previously submitted Proposals must Rebase and Submit again for fresh review.
   Additions require required review. Each accepted file consumes a count place

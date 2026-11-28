@@ -787,12 +787,15 @@ Each download link uses the reviewer's own authority and carries the exact revie
 Additions follow Proposal detail retention and share attachment byte verification and cleanup.
 Revise starts a submission version with no additions.
 Use the `added` hook transition to observe the value-free `proposal.added` event.
+Proposal hooks without a `transitions` filter also receive `added`, `asked` and `answered`.
+Configure an explicit transition filter if your receiver cannot accept those events.
 
 {/* Evidence: crates/registry-breg/src/contract.rs AdditionSlotSource;
     crates/registry-breg/src/immediate_actions.rs breg.addition.review-required, definition_revision;
     crates/registry-breg/src/api/attachments.rs;
     crates/registry-breg/src/mutation/proposal/additions.rs append_additions;
     crates/registry-breg/src/mutation/proposal/context_projection.rs;
+    crates/registry-breg/src/proposal_hooks.rs matching_transitions;
     crates/registry-breg/tests/support/proposal_additions.rs;
     crates/registry-breg/src/proposal_retention.rs. */}
 
