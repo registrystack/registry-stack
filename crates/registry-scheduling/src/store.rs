@@ -3217,8 +3217,9 @@ async fn lock_commitment(
 /// The active hold a commitment acts on, locked, once the caller is known to
 /// manage it. The caller is checked against the stored hold before its state
 /// is read, so a caller that does not manage a hold learns nothing of its
-/// state, whatever that state is. A hold that is gone, closed, or of another
-/// kind is answered as released to the caller that manages it.
+/// state, whatever that state is. A hold that is closed or of another kind is
+/// answered as released to the caller that manages it. A row that is gone has
+/// no manager to check, so it is answered as released to every caller.
 async fn managed_hold(
     transaction: &deadpool_postgres::Transaction<'_>,
     hold_id: Uuid,

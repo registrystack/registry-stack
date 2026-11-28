@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "AccessTokenType": {
+      "description": "The access-token type an issuer entry admits.",
+      "oneOf": [
+        {
+          "const": "at+jwt",
+          "description": "RFC 9068 access tokens, typed `at+jwt` or `application/at+jwt`.",
+          "type": "string"
+        },
+        {
+          "const": "JWT",
+          "description": "Access tokens typed `JWT`, from a provider that does not type them\n`at+jwt`. An ID token stays refused.",
+          "type": "string"
+        }
+      ]
+    },
     "AuditConfig": {
       "additionalProperties": false,
       "description": "Where the audit journal is written and the key its hashes are made with.",
@@ -213,6 +228,15 @@
         }
       ]
     },
+    "DeclaredActorKind": {
+      "description": "An actor kind an operator declares for a caller.",
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
     "DestinationsConfig": {
       "additionalProperties": false,
       "description": "Where the project's hooks deliver, by destination id.",
@@ -269,6 +293,126 @@
       },
       "required": [
         "root"
+      ],
+      "type": "object"
+    },
+    "IssuerActorKind": {
+      "$ref": "#/$defs/DeclaredActorKind",
+      "description": "The kind every token from one issuer is treated as."
+    },
+    "IssuerConfig": {
+      "additionalProperties": false,
+      "description": "One issuer the Document Store accepts access tokens from: the shared\ncaller-issuer members and the assertion authorities each client may\nexchange from.\n\n`allowedClients` is `from-package` for the requester clients of the\nproject's access profiles, or a list. Every access profile resolves its\ncaller from the matched client, so the admitted set is never empty and\n`unrestricted` is refused. A client belongs to one issuer, and the lists of\nall entries together cover every client a profile names.",
+      "properties": {
+        "accessTokenType": {
+          "$ref": "#/$defs/AccessTokenType",
+          "default": "at+jwt",
+          "description": "The access-token type the entry admits. Absent reads `at+jwt`.",
+          "x-registry-explicit-production": [
+            "platform.posture.jwt-access-token"
+          ]
+        },
+        "actorKind": {
+          "$ref": "#/$defs/IssuerActorKind",
+          "description": "The kind every token from this issuer is treated as. Absent declares\nnone.",
+          "x-registry-explicit-production": [
+            "platform.posture.issuer-actor-kind"
+          ]
+        },
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
+        },
+        "allowedClients": {
+          "description": "The clients whose access tokens this issuer admits. Required in every\nentry: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client admits those clients.\nA client belongs to one issuer, and the lists of all entries together must\ncover every client a profile names. An omitted or empty list, an empty or\nrepeated client, and `unrestricted` are refused.",
+          "oneOf": [
+            {
+              "const": "from-package",
+              "type": "string"
+            },
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          ]
+        },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies\nand a token that arrived through an exchange is refused. Written, it\nlists at least one client, each with at least one authority.",
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
+          },
+          "type": "object"
+        },
+        "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "clientActorKinds": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DeclaredActorKind"
+          },
+          "description": "The kind tokens from each named client are treated as. Absent declares\nnone. Not combined with `actorKind`.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-explicit-production": [
+            "platform.posture.client-actor-kinds"
+          ]
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "type": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
+        },
+        "scopeClaim": {
+          "$ref": "#/$defs/ScopeClaimName",
+          "default": "scope",
+          "description": "The claim that carries scopes. Absent reads `scope`.",
+          "x-registry-explicit-production": [
+            "platform.posture.scope-claim"
+          ]
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "allowedClients"
       ],
       "type": "object"
     },
@@ -383,84 +527,22 @@
     },
     "OidcConfig": {
       "additionalProperties": false,
-      "description": "The OIDC issuer whose access tokens this runtime accepts, the clients it\nadmits, and the claim carrying their scopes.",
+      "description": "The OIDC issuers whose access tokens this runtime accepts, each with the\nclients it admits and the claim carrying their scopes.",
       "properties": {
-        "allowInsecureHttp": {
-          "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
-          "type": "boolean",
-          "x-registry-development-only": [
-            "platform.posture.insecure-issuer-http"
-          ]
-        },
-        "allowedClients": {
-          "description": "The clients whose access tokens are admitted. Required in every\nfile: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client must cover them. An\nomitted or empty list, an empty or repeated client, and `unrestricted` are\nrefused.",
-          "oneOf": [
-            {
-              "const": "from-package",
-              "type": "string"
-            },
-            {
-              "items": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array",
-              "uniqueItems": true
-            }
-          ]
-        },
-        "assertionIssuers": {
+        "issuers": {
           "additionalProperties": {
-            "items": {
-              "maxLength": 512,
-              "minLength": 1,
-              "type": "string"
-            },
-            "maxItems": 16,
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "$ref": "#/$defs/IssuerConfig"
           },
-          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.",
-          "maxProperties": 64,
+          "description": "The issuers a token may come from, by issuer id.",
           "minProperties": 1,
           "propertyNames": {
-            "$ref": "#/$defs/ExternalId",
-            "maxLength": 128
+            "$ref": "#/$defs/LocalId"
           },
           "type": "object"
-        },
-        "audience": {
-          "description": "The audience every accepted access token must carry in `aud`.",
-          "maxLength": 512,
-          "minLength": 1,
-          "type": "string"
-        },
-        "issuer": {
-          "$ref": "#/$defs/Url",
-          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
-        },
-        "jwksSource": {
-          "$ref": "#/$defs/JwksSource",
-          "default": {
-            "type": "discovery"
-          },
-          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
-          "x-registry-development-only": [
-            "platform.posture.test-issuer"
-          ]
-        },
-        "scopeClaim": {
-          "$ref": "#/$defs/ExternalId",
-          "default": "scope"
         }
       },
       "required": [
-        "issuer",
-        "audience",
-        "allowedClients"
+        "issuers"
       ],
       "type": "object"
     },
@@ -524,6 +606,10 @@
         }
       },
       "type": "object"
+    },
+    "ScopeClaimName": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The name of the claim that carries scopes."
     },
     "SecretProvidersConfig": {
       "additionalProperties": false,
@@ -760,19 +846,32 @@
             "properties": {
               "oidc": {
                 "properties": {
-                  "jwksSource": {
-                    "properties": {
-                      "documentRef": {
-                        "pattern": "^secret:env/"
+                  "issuers": {
+                    "not": {
+                      "additionalProperties": {
+                        "not": {
+                          "properties": {
+                            "jwksSource": {
+                              "properties": {
+                                "documentRef": {
+                                  "pattern": "^secret:env/"
+                                }
+                              },
+                              "required": [
+                                "documentRef"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "jwksSource"
+                          ]
+                        }
                       }
-                    },
-                    "required": [
-                      "documentRef"
-                    ]
+                    }
                   }
                 },
                 "required": [
-                  "jwksSource"
+                  "issuers"
                 ]
               }
             },
@@ -797,7 +896,10 @@
               "environment"
             ]
           }
-        }
+        },
+        "required": [
+          "secretProviders"
+        ]
       }
     },
     {
@@ -807,19 +909,32 @@
             "properties": {
               "oidc": {
                 "properties": {
-                  "jwksSource": {
-                    "properties": {
-                      "documentRef": {
-                        "pattern": "^secret:file/"
+                  "issuers": {
+                    "not": {
+                      "additionalProperties": {
+                        "not": {
+                          "properties": {
+                            "jwksSource": {
+                              "properties": {
+                                "documentRef": {
+                                  "pattern": "^secret:file/"
+                                }
+                              },
+                              "required": [
+                                "documentRef"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "jwksSource"
+                          ]
+                        }
                       }
-                    },
-                    "required": [
-                      "documentRef"
-                    ]
+                    }
                   }
                 },
                 "required": [
-                  "jwksSource"
+                  "issuers"
                 ]
               }
             },
@@ -844,7 +959,10 @@
               "file"
             ]
           }
-        }
+        },
+        "required": [
+          "secretProviders"
+        ]
       }
     }
   ],

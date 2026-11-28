@@ -34,8 +34,8 @@ pub use registry_platform_config::{
 };
 use registry_platform_oidc::{
     fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm, DeclaredKinds,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
-    TokenVerifierConfig,
+    IssuerNetworkPolicy, IssuerSetError, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    OidcError, TokenVerifierConfig,
 };
 use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
 use serde::{Deserialize, Deserializer};
@@ -945,6 +945,9 @@ impl RuntimeConfig {
                     }
                 }
             }
+            Err(RuntimeConfigError::Resolved(_)) => {
+                findings.extend(self.package_client_conflicts(&profiles.requester_clients()));
+            }
             Err(error) => findings.push(error),
         }
     }
@@ -1016,31 +1019,13 @@ impl RuntimeConfig {
             })?;
             admitted.insert(id.as_str().to_owned(), list);
         }
-        if let Some(reading) = from_package {
-            for (id, entry) in issuers.iter() {
-                let PackageClients::Listed(listed) = &entry.core().allowed_clients else {
-                    continue;
-                };
-                if let Some(index) = listed
-                    .iter()
-                    .position(|client| package_clients.contains(client))
-                {
-                    return Err(RuntimeConfigError::Resolved(Box::new(Diagnostic::error(
-                        "platform.oidc.client-in-two-issuers",
-                        pointer_to(&[
-                            "authentication",
-                            "oidc",
-                            "issuers",
-                            id.as_str(),
-                            "allowedClients",
-                            &index.to_string(),
-                        ]),
-                        format!(
-                            "the client is also admitted by the entry {reading}, which reads its clients from the package"
-                        ),
-                        "Admit each client through one issuer entry, so a client rule binds to one issuer.",
-                    ))));
-                }
+        if from_package.is_some() {
+            if let Some(conflict) = self
+                .package_client_conflicts(&package_clients)
+                .into_iter()
+                .next()
+            {
+                return Err(conflict);
             }
         } else {
             let covered = self.listed_clients();
@@ -1057,6 +1042,60 @@ impl RuntimeConfig {
             }
         }
         Ok(admitted)
+    }
+
+    /// Every client a listing entry names that the package also names, while
+    /// another entry reads its clients from the package. Each one points at
+    /// the listing and relates to the entry that reads the package.
+    fn package_client_conflicts(&self, package_clients: &[String]) -> Vec<RuntimeConfigError> {
+        let issuers = &self.authentication.oidc.issuers;
+        let Some((reading, _)) = issuers
+            .iter()
+            .find(|(_, entry)| entry.core().allowed_clients == PackageClients::FromPackage)
+        else {
+            return Vec::new();
+        };
+        let reading_pointer = pointer_to(&[
+            "authentication",
+            "oidc",
+            "issuers",
+            reading.as_str(),
+            "allowedClients",
+        ]);
+        let mut conflicts = Vec::new();
+        for (id, entry) in issuers.iter() {
+            let PackageClients::Listed(listed) = &entry.core().allowed_clients else {
+                continue;
+            };
+            for (index, _) in listed
+                .iter()
+                .enumerate()
+                .filter(|(_, client)| package_clients.contains(client))
+            {
+                let mut diagnostic = Diagnostic::error(
+                    "platform.oidc.client-in-two-issuers",
+                    pointer_to(&[
+                        "authentication",
+                        "oidc",
+                        "issuers",
+                        id.as_str(),
+                        "allowedClients",
+                        &index.to_string(),
+                    ]),
+                    format!("the client is already admitted by the entry {reading}"),
+                    "Admit each client through one issuer entry, so a client rule binds to one issuer.",
+                );
+                diagnostic.related.push(registry_platform_yaml::Related {
+                    file: String::new(),
+                    line: None,
+                    column: None,
+                    path: reading_pointer.clone(),
+                    message: format!("the entry {reading} reads its clients from the package"),
+                });
+                conflicts.push(RuntimeConfigError::Resolved(Box::new(diagnostic)));
+            }
+        }
+        conflicts
     }
 
     /// Run the rules about an entry's audience and client kinds again over
@@ -1157,14 +1196,14 @@ impl RuntimeConfig {
         }
     }
 
-    /// The entry `id` names.
+    /// The entry `id` names. An id no entry carries reads as an empty set.
     fn issuer(&self, id: &str) -> Result<&IssuerConfig, RuntimeConfigError> {
         self.authentication
             .oidc
             .issuers
             .iter()
             .find_map(|(entry_id, entry)| (entry_id.as_str() == id).then_some(entry))
-            .ok_or(RuntimeConfigError::Oidc)
+            .ok_or_else(|| RuntimeConfigError::from_issuer_set(&IssuerSetError::Empty))
     }
 
     /// Build the key source of the issuer entry `id` from its configured JWKS
@@ -1254,7 +1293,9 @@ impl RuntimeConfig {
             Some(admitted),
         )
         .map(|profile| profile.with_assertion_issuers(entry.assertion_issuers.clone()))
-        .map_err(|_| RuntimeConfigError::Oidc)
+        .map_err(|_| RuntimeConfigError::AllowedClientsRequired {
+            issuer: id.to_owned(),
+        })
     }
 
     /// Every issuer entry as the authenticator takes it: its verifier
@@ -1273,7 +1314,14 @@ impl RuntimeConfig {
                 id,
                 self.verifier_profile(id, &admitted[id])?,
                 self.jwks_fetcher(id, secrets).await?,
-                DeclaredKinds::from_core(entry.core()).map_err(|_| RuntimeConfigError::Oidc)?,
+                DeclaredKinds::from_core(entry.core()).map_err(|_| {
+                    RuntimeConfigError::Issuer(Box::new(Diagnostic::error(
+                        "platform.oidc.actor-kind-twice",
+                        pointer_to(&["authentication", "oidc", "issuers", id, "clientActorKinds"]),
+                        "actorKind and clientActorKinds are both written",
+                        "Declare one kind for the whole issuer with actorKind, or one per client with clientActorKinds.",
+                    )))
+                })?,
             ));
         }
         Ok(sources)
@@ -1516,7 +1564,7 @@ pub fn check_runtime_file(
                 .iter()
                 .filter(|finding| !finding.is_identifier_collision())
                 .filter(|finding| !finding.is_shared_issuer_rule())
-                .filter(|finding| !reads_deferred_value(&check, finding))
+                .filter(|finding| !reads_deferred_value(&check, config, finding))
                 .map(|finding| positioned(&check, finding)),
         );
         diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
@@ -1600,6 +1648,11 @@ fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &RuntimeConfigEr
         finding.to_string(),
         finding.suggested_action(),
     );
+    if let RuntimeConfigError::Resolved(resolved) = finding {
+        for related in &resolved.related {
+            check.add_related_at(&mut diagnostic, &related.path, related.message.clone());
+        }
+    }
     let mut located = pointer.as_str();
     while diagnostic
         .source
@@ -1619,9 +1672,14 @@ fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &RuntimeConfigEr
 /// expression, so the stand-in, not the operator's value, decided it.
 fn reads_deferred_value(
     check: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
     finding: &RuntimeConfigError,
 ) -> bool {
     let pointer = finding.pointer();
+    // The coverage of the profiles points at the set of entries, which the
+    // lists of clients decide, not the members beside them.
+    let at_pointer = !matches!(finding, RuntimeConfigError::ProfileClientNotAllowed { .. })
+        && check.defers_within(&pointer);
     let reads: Vec<String> = match finding {
         RuntimeConfigError::InvalidListener => vec!["/listener".to_owned()],
         RuntimeConfigError::InvalidMetricsListener(_) => {
@@ -1633,10 +1691,26 @@ fn reads_deferred_value(
         }
         RuntimeConfigError::RelativeOperatedPath(_)
         | RuntimeConfigError::InvalidAuditDestination(_) => vec!["/audit".to_owned()],
-        RuntimeConfigError::AssertionIssuerClientNotAllowed { .. }
-        | RuntimeConfigError::ProfileClientNotAllowed { .. }
-        | RuntimeConfigError::AllowedClientsRequired { .. }
-        | RuntimeConfigError::Resolved(_) => vec![ISSUERS_POINTER.to_owned()],
+        // A rule about the clients reads the lists of clients, not the other
+        // members of the entries.
+        RuntimeConfigError::AllowedClientsRequired { issuer } => {
+            vec![allowed_clients_pointer(issuer)]
+        }
+        RuntimeConfigError::AssertionIssuerClientNotAllowed { .. } => pointer
+            .split('/')
+            .nth(5)
+            .map(allowed_clients_pointer)
+            .into_iter()
+            .collect(),
+        RuntimeConfigError::ProfileClientNotAllowed { .. } | RuntimeConfigError::Resolved(_) => {
+            config
+                .authentication
+                .oidc
+                .issuers
+                .iter()
+                .map(|(id, _)| allowed_clients_pointer(id.as_str()))
+                .collect()
+        }
         // A connection rule reads several members of its provider, and the
         // listener's termination decides whether development transport is
         // accepted.
@@ -1647,7 +1721,18 @@ fn reads_deferred_value(
         }
         _ => Vec::new(),
     };
-    check.defers_within(&pointer) || reads.iter().any(|pointer| check.defers_within(pointer))
+    at_pointer || reads.iter().any(|pointer| check.defers_within(pointer))
+}
+
+/// The member holding the clients an issuer entry admits.
+fn allowed_clients_pointer(issuer: &str) -> String {
+    pointer_to(&[
+        "authentication",
+        "oidc",
+        "issuers",
+        issuer,
+        "allowedClients",
+    ])
 }
 
 /// A value for an expression the offline check does not substitute, chosen
@@ -1994,6 +2079,34 @@ impl RuntimeConfigError {
             }
         };
         action.to_owned()
+    }
+
+    /// The refusal for an issuer set the authenticator could not build. The
+    /// shared check refuses these documents at load, so the code is the one
+    /// that check gives.
+    #[must_use]
+    pub fn from_issuer_set(error: &IssuerSetError) -> Self {
+        let (code, pointer, action) = match error {
+            IssuerSetError::DuplicateIss { second, .. } => (
+                "platform.oidc.duplicate-issuer",
+                pointer_to(&["authentication", "oidc", "issuers", second, "issuer"]),
+                "Give each entry its own issuer. A token is matched to one entry by its exact issuer.",
+            ),
+            // The runtime reads the platform's own claim names, so these are
+            // never invalid.
+            IssuerSetError::InvalidClaimNames => return Self::Oidc,
+            IssuerSetError::Empty => (
+                "platform.oidc.no-issuer",
+                ISSUERS_POINTER.to_owned(),
+                "Write at least one entry under authentication.oidc.issuers.",
+            ),
+        };
+        Self::Issuer(Box::new(Diagnostic::error(
+            code,
+            pointer,
+            error.to_string(),
+            action,
+        )))
     }
 
     /// Whether this refusal is a rule the runtime document itself breaks,
@@ -2551,12 +2664,25 @@ pub(crate) mod tests {
         let mut value = base();
         value["authentication"]["oidc"]["issuers"] = json!({});
         let error = load(value).unwrap_err();
-        assert!(
-            codes_of(&error)
-                .iter()
-                .any(|code| code == "platform.oidc.no-issuer" || code == "config.invalid-value"),
-            "{error}"
+        assert_eq!(codes_of(&error), ["platform.oidc.no-issuer"], "{error}");
+    }
+
+    #[test]
+    fn an_issuer_set_error_is_a_refusal_with_the_shared_code() {
+        let duplicate = RuntimeConfigError::from_issuer_set(&IssuerSetError::DuplicateIss {
+            first: "main".to_owned(),
+            second: "partner".to_owned(),
+        });
+        assert_eq!(duplicate.code(), "platform.oidc.duplicate-issuer");
+        assert_eq!(
+            duplicate.pointer(),
+            "/authentication/oidc/issuers/partner/issuer"
         );
+        assert!(duplicate.in_file());
+        let empty = RuntimeConfigError::from_issuer_set(&IssuerSetError::Empty);
+        assert_eq!(empty.code(), "platform.oidc.no-issuer");
+        assert_eq!(empty.pointer(), "/authentication/oidc/issuers");
+        assert!(empty.in_file());
     }
 
     #[test]
@@ -2657,6 +2783,77 @@ pub(crate) mod tests {
             .as_ref()
             .is_some_and(|source| source.line.is_some()));
         assert!(!found.related.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn an_unfilled_issuer_expression_does_not_hide_an_uncovered_package_client() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = runtime_value(root.path());
+        runtime["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            json!("${MESSAGING_CHECK_UNSET_ISSUER}");
+        runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["case-system"]);
+        let path = write_project(root.path(), &runtime, &package_value());
+        let checked =
+            check_runtime_file(&path, CheckedAgainst::NamedPackage, false, DEFAULT_POSTURE);
+        assert!(
+            codes_and_pointers(&checked.diagnostics).contains(&(
+                "messaging.runtime.profile-client-not-allowed",
+                "/authentication/oidc/issuers/main/allowedClients"
+            )),
+            "{:?}",
+            checked.diagnostics
+        );
+
+        // An unfilled list of clients is left to the deployment.
+        let mut runtime = runtime_value(root.path());
+        runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!("${MESSAGING_CHECK_UNSET_CLIENTS}");
+        let path = write_project(root.path(), &runtime, &package_value());
+        let checked =
+            check_runtime_file(&path, CheckedAgainst::NamedPackage, false, DEFAULT_POSTURE);
+        assert!(
+            checked
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "messaging.runtime.profile-client-not-allowed"),
+            "{:?}",
+            checked.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_package_client_listed_beside_a_from_package_entry_is_reported_for_each_client() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = with_partner(json!(["case-system", "operations-console"]));
+        runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!("from-package");
+        rebase(&mut runtime, root.path());
+        let path = write_project(root.path(), &runtime, &package_value());
+        let checked =
+            check_runtime_file(&path, CheckedAgainst::NamedPackage, true, DEFAULT_POSTURE);
+        let found: Vec<&Diagnostic> = checked
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "platform.oidc.client-in-two-issuers")
+            .collect();
+        assert_eq!(found.len(), 2, "{:?}", checked.diagnostics);
+        for (index, diagnostic) in found.iter().enumerate() {
+            assert_eq!(
+                diagnostic.path,
+                format!("/authentication/oidc/issuers/partner/allowedClients/{index}")
+            );
+            assert_eq!(
+                diagnostic.message,
+                "the client is already admitted by the entry main"
+            );
+            assert_eq!(diagnostic.related.len(), 1, "{diagnostic:?}");
+            assert_eq!(
+                diagnostic.related[0].path,
+                "/authentication/oidc/issuers/main/allowedClients"
+            );
+            assert!(diagnostic.related[0].line.is_some());
+        }
     }
 
     #[test]

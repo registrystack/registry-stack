@@ -51,6 +51,7 @@ use uuid::Uuid;
 
 use crate::attendance::AttendanceObservation;
 use crate::audit::{request_record, unfinished_record, with_event_id, SchedulingAudit};
+use crate::auth::SchedulingAuthenticator;
 use crate::cursors::{
     bind_stored, cursor_expiry, decode_cursor, encode_cursor, CursorError, ListingPosition,
     StoredCursor,
@@ -122,7 +123,8 @@ pub enum DetailAdmission {
 
 /// One verified caller, as the authenticator resolved them.
 pub struct Caller {
-    /// The verified actor kind: `human`, `agent`, or `service`.
+    /// The verified actor kind: `human`, `agent`, `service`, or `unspecified`
+    /// when neither the token nor the deployment gave one.
     pub actor_kind: String,
     /// The verified token issuer and subject. A hold or appointment stores
     /// this pair as its owner, and every ownership decision compares it. An
@@ -245,6 +247,10 @@ pub struct SchedulingService {
     attempt_receipt_days: i64,
     hooks: Option<ActivatedHooks>,
     task_grant_status: Option<Arc<TaskGrantStatusRegistry>>,
+    /// Whether the issuers the service is built with number more than one,
+    /// so every grant principal the audit records is qualified by its token
+    /// issuer.
+    issuer_qualified_principals: bool,
 }
 
 impl SchedulingService {
@@ -258,6 +264,7 @@ impl SchedulingService {
         hasher: AuditKeyHasher,
         audit: SchedulingAudit,
         attempt_receipt_days: u32,
+        issuers: &SchedulingAuthenticator,
     ) -> Self {
         Self {
             store,
@@ -270,6 +277,7 @@ impl SchedulingService {
             attempt_receipt_days: i64::from(attempt_receipt_days),
             hooks: None,
             task_grant_status: None,
+            issuer_qualified_principals: issuers.qualifies_audit_principals(),
         }
     }
 
@@ -1132,6 +1140,8 @@ impl SchedulingService {
             .hold(hold_id)
             .await?
             .ok_or_else(ServiceError::not_visible)?;
+        self.require_owner_of_unmanaged_hold(&hold, caller, HOLD_RELEASE_ACTION)
+            .await?;
         let offering = self.claim_offering(&hold, now).await?;
         let grant = self
             .require_permission(caller, &offering, HOLD_RELEASE_ACTION)
@@ -1143,6 +1153,7 @@ impl SchedulingService {
             ),
             None => None,
         };
+        require_manager_of_hold(&hold, caller, source_manager.as_ref())?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let request_hash = canonical_hash(&json!({"hold": hold_id}))?;
         // The release carries no caller-chosen key, so the hold's own id is
@@ -1222,6 +1233,8 @@ impl SchedulingService {
             .hold(hold_id)
             .await?
             .ok_or_else(ServiceError::not_visible)?;
+        self.require_owner_of_unmanaged_hold(&hold, caller, APPOINTMENT_CREATE_ACTION)
+            .await?;
         let offering = self.policy.offering(&hold.offering).ok_or_else(|| {
             ServiceError::internal("a committed hold names no offering in the policy")
         })?;
@@ -1239,6 +1252,7 @@ impl SchedulingService {
             ),
             None => None,
         };
+        require_manager_of_hold(&hold, caller, source_manager.as_ref())?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let confirmation_request = self.confirmation_request(&hold)?;
         // Every exact-time hold this runtime writes carries allocation rows,
@@ -1252,11 +1266,7 @@ impl SchedulingService {
         // The state of a hold is read only for a caller that manages it: the
         // store refuses any other caller first.
         if confirmation_request.is_none()
-            && hold.is_managed_by_caller(
-                &caller.issuer,
-                &caller.subject,
-                source_manager.as_ref(),
-            )
+            && hold.is_managed_by_caller(&caller.issuer, &caller.subject, source_manager.as_ref())
             && offering.mode == SchedulingMode::ExactTime
             && hold.state == ClaimState::Active
             && hold.hold_expires_at.is_some_and(|expiry| expiry > now)
@@ -2380,6 +2390,7 @@ impl SchedulingService {
                 audit_record(
                     &self.hasher,
                     &self.scheduling_id,
+                    self.issuer_qualified_principals,
                     caller,
                     grant,
                     action,
@@ -2422,6 +2433,42 @@ impl SchedulingService {
             audit_record(
                 &self.hasher,
                 &self.scheduling_id,
+                self.issuer_qualified_principals,
+                caller,
+                grant,
+                operation,
+                AuthorizationOutcome::Denied,
+                "authorization.refused",
+            ),
+        )
+        .await?;
+        Err(ServiceError::operation_refused(FailedCheck::Ownership))
+    }
+
+    /// A hold no source authority manages belongs to the caller that created
+    /// it. A caller holding a task grant who is not that owner is refused as
+    /// not authorized, and the attempt is recorded, before the hold's
+    /// offering, supply or window is read, so no answer tells them anything
+    /// about the hold. A caller with no grant is refused and recorded by the
+    /// permission check that follows.
+    async fn require_owner_of_unmanaged_hold(
+        &self,
+        hold: &ClaimRow,
+        caller: &Caller,
+        operation: &str,
+    ) -> Result<(), ServiceError> {
+        let Some(grant) = &caller.grant else {
+            return Ok(());
+        };
+        if hold.source_manager.is_some() || hold.is_owned_by(&caller.issuer, &caller.subject) {
+            return Ok(());
+        }
+        self.record_refusal(
+            Uuid::new_v4(),
+            audit_record(
+                &self.hasher,
+                &self.scheduling_id,
+                self.issuer_qualified_principals,
                 caller,
                 grant,
                 operation,
@@ -2490,6 +2537,7 @@ impl SchedulingService {
                     audit_record(
                         &self.hasher,
                         &self.scheduling_id,
+                        self.issuer_qualified_principals,
                         caller,
                         grant,
                         operation,
@@ -2574,6 +2622,7 @@ impl SchedulingService {
         let record = audit_record(
             &self.hasher,
             &self.scheduling_id,
+            self.issuer_qualified_principals,
             caller,
             grant,
             operation,
@@ -2613,6 +2662,7 @@ impl SchedulingService {
         let record = audit_record(
             &self.hasher,
             &self.scheduling_id,
+            self.issuer_qualified_principals,
             caller,
             grant,
             operation,
@@ -3006,6 +3056,7 @@ impl SchedulingService {
                     Unanswered::Denied(reason) => audit_record(
                         &self.hasher,
                         &self.scheduling_id,
+                        self.issuer_qualified_principals,
                         caller,
                         grant,
                         operation,
@@ -3015,6 +3066,7 @@ impl SchedulingService {
                     Unanswered::Unfinished(reason) => audit_record(
                         &self.hasher,
                         &self.scheduling_id,
+                        self.issuer_qualified_principals,
                         caller,
                         grant,
                         operation,
@@ -3999,6 +4051,20 @@ fn hex(bytes: &[u8]) -> String {
     rendered
 }
 
+/// The caller manages `hold`: it owns it, or presented the source authority
+/// that does.
+fn require_manager_of_hold(
+    hold: &ClaimRow,
+    caller: &Caller,
+    source_manager: Option<&SourceBoundManager>,
+) -> Result<(), ServiceError> {
+    if hold.is_managed_by_caller(&caller.issuer, &caller.subject, source_manager) {
+        Ok(())
+    } else {
+        Err(ServiceError::not_visible())
+    }
+}
+
 /// The attributable record of a refusal decided before any grant was
 /// resolved. The caller authenticated, so there is a principal to attribute
 /// the attempt to, but no grant, approver, or purpose exists to record and
@@ -4031,6 +4097,32 @@ fn grantless_refusal_record(
         .map_err(|_| ServiceError::internal("the authorization audit event is not publishable"))
 }
 
+/// The audit pseudonym of the principal a grant names. One issuer entry
+/// references the principal alone, as it always has. Where several entries
+/// are configured the reference covers the token's issuer too, in a class of
+/// its own, so one `sub` from two issuers is two pseudonyms. The issuer is
+/// the verified `iss`, never an entry id, so renaming the entries changes
+/// nothing.
+fn grant_principal_pseudonym(
+    hasher: &AuditKeyHasher,
+    scope: &str,
+    issuer: &str,
+    principal: &str,
+    qualified: bool,
+) -> Result<String, ServiceError> {
+    let reference = if qualified {
+        let canonical = serde_json::to_string(&json!({
+            "issuer": issuer,
+            "subject": principal,
+        }))
+        .map_err(|_| ServiceError::internal("the principal could not be canonicalized"))?;
+        hasher.audit_reference_hash("scheduling-issuer-principal-v1", scope, &canonical)
+    } else {
+        hasher.audit_reference_hash(PRINCIPAL_CLASS, scope, principal)
+    };
+    reference.map_err(|_| ServiceError::internal("an audit reference could not be pseudonymized"))
+}
+
 /// The attributable authorization record of one commitment, with the
 /// principal, client, grant, and approver pseudonymized and the purpose
 /// recorded as presence only, the way the stack's other runtimes publish it.
@@ -4038,6 +4130,7 @@ fn grantless_refusal_record(
 fn audit_record(
     hasher: &AuditKeyHasher,
     scope: &str,
+    qualified_principals: bool,
     caller: &Caller,
     grant: &GrantClaims,
     operation: &str,
@@ -4051,7 +4144,13 @@ fn audit_record(
     };
     let event = AuthorizationAuditEvent::new(
         caller.actor_kind.clone(),
-        pseudonym("scheduling-principal-v1", grant.principal())?,
+        grant_principal_pseudonym(
+            hasher,
+            scope,
+            &caller.issuer,
+            grant.principal(),
+            qualified_principals,
+        )?,
         pseudonym("scheduling-client-v1", grant.client())?,
         Some(pseudonym("scheduling-grant-v1", grant.id())?),
         Some(pseudonym("scheduling-approver-v1", grant.approver())?),
@@ -4079,6 +4178,64 @@ fn audit_record(
 mod tests {
     use super::*;
     use chrono::TimeZone as _;
+    use registry_platform_audit::AuditHashSecret;
+
+    fn caller_of_kind(actor_kind: &str) -> Caller {
+        Caller {
+            actor_kind: actor_kind.to_owned(),
+            issuer: "https://issuer.example.test".to_owned(),
+            subject: "principal-1".to_owned(),
+            credential_exp_unix: 0,
+            grant: None,
+            task_grant_subjects: None,
+        }
+    }
+
+    #[test]
+    fn the_audit_row_of_a_caller_without_a_kind_says_unspecified() {
+        let hasher = AuditKeyHasher::unkeyed_dev_only();
+        let unspecified = grantless_refusal_record(
+            &hasher,
+            "deployment-a",
+            &caller_of_kind(crate::auth::UNSPECIFIED_ACTOR_KIND),
+            "hold.create",
+        )
+        .expect("a caller with no kind is attributable");
+        assert_eq!(unspecified["actorKind"], "unspecified");
+        let agent = grantless_refusal_record(
+            &hasher,
+            "deployment-a",
+            &caller_of_kind("agent"),
+            "hold.create",
+        )
+        .expect("a caller with a kind is attributable");
+        assert_eq!(agent["actorKind"], "agent");
+    }
+
+    fn principal_of(issuer: &str, qualified: bool) -> String {
+        let hasher = AuditKeyHasher::Keyed(AuditHashSecret::new(vec![0x42; 32]).expect("a key"));
+        grant_principal_pseudonym(&hasher, "deployment-a", issuer, "alice", qualified)
+            .expect("a pseudonym")
+    }
+
+    #[test]
+    fn one_issuer_entry_keeps_the_principal_pseudonym_over_the_subject_alone() {
+        let hasher = AuditKeyHasher::Keyed(AuditHashSecret::new(vec![0x42; 32]).expect("a key"));
+        let expected = hasher
+            .audit_reference_hash(PRINCIPAL_CLASS, "deployment-a", "alice")
+            .expect("a pseudonym");
+        assert_eq!(principal_of("https://first.example.test", false), expected);
+    }
+
+    #[test]
+    fn with_several_entries_one_subject_from_two_issuers_is_two_principals() {
+        let first = principal_of("https://first.example.test", true);
+        assert_ne!(first, principal_of("https://second.example.test", true));
+        // The pseudonym covers the verified issuer and nothing the entries are
+        // named, and differs from the one-entry pseudonym.
+        assert_eq!(first, principal_of("https://first.example.test", true));
+        assert_ne!(first, principal_of("https://first.example.test", false));
+    }
 
     #[test]
     fn bundle_width_is_bounded_before_service_allocation() {

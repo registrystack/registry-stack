@@ -450,7 +450,7 @@ pub async fn assemble(
         .await?;
     let authenticator = Arc::new(
         MessagingAuthenticator::new(sources, loaded.package.access_profiles().clone())
-            .map_err(|_| RuntimeConfigError::Oidc)?,
+            .map_err(|error| RuntimeConfigError::from_issuer_set(&error))?,
     );
 
     let audit_secret = resolve_audit_secret(&secrets, config.audit.key.hash_key_ref.as_str())?;

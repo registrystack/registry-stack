@@ -39,6 +39,7 @@ pub(super) fn source_router(
             AuditKeyHasher::Keyed(keying),
             fx.audit.clone(),
             7,
+            &authenticator(),
         )
         .with_hooks(fx.hooks.clone()),
     );

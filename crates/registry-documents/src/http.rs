@@ -44,6 +44,7 @@ use crate::metrics::{serve_metrics, MetricsState, METRICS_PATH};
 use crate::service::{DocumentService, PageRequest, ServiceError};
 use crate::store::PostgresStore;
 use registry_platform_config::{Posture, PostureReport};
+use registry_platform_httpsec::refusal_detail::name_failed_check;
 
 tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
@@ -60,6 +61,8 @@ pub use registry_documents_core::{
 
 /// Apply the shared fallbacks and boundary layers. `limited` routes take
 /// the default request body limit; `unlimited` routes bound their own body.
+/// The layer naming the failed check in a development body is placed by the
+/// caller, outside whatever records refusals.
 fn finish(limited: Router, unlimited: Router, posture: Posture) -> Router {
     limited
         .layer(request_body_limit_default())
@@ -81,6 +84,7 @@ pub fn metrics_router(state: MetricsState, posture: Posture) -> Router {
         Router::new(),
         posture,
     )
+    .layer(name_failed_check(posture))
 }
 
 async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {
@@ -267,6 +271,7 @@ impl DocumentRoutes {
             .map_err(|refusal| Refusal {
                 error: authentication_refusal(refusal.error),
                 declared: refusal.declared,
+                remedy: refusal.remedy,
             })?;
         self.service.admit().await?;
         Ok(caller)
@@ -339,6 +344,9 @@ fn identifier(text: &str) -> Result<Uuid, ServiceError> {
 pub(crate) struct Refusal {
     error: ServiceError,
     declared: Option<DeclaredScope>,
+    /// The sentence that names the setting a verifier refusal involves, for
+    /// the log line only.
+    remedy: Option<&'static str>,
 }
 
 impl From<ServiceError> for Refusal {
@@ -346,6 +354,7 @@ impl From<ServiceError> for Refusal {
         Self {
             error,
             declared: None,
+            remedy: None,
         }
     }
 }
@@ -362,12 +371,18 @@ fn answer(result: Result<Response, Refusal>) -> Response {
         if let Some(declared) = refusal.declared {
             response.extensions_mut().insert(declared);
         }
+        if let Some(remedy) = refusal.remedy {
+            let note = response.extensions().get::<RefusalNote>().copied();
+            if let Some(note) = note {
+                response.extensions_mut().insert(note.with_remedy(remedy));
+            }
+        }
         response
     })
 }
 
 /// The remedy the log line of a scope refusal carries.
-const SCOPE_REMEDY: &str = "issue the access profile's required scope to the client, or set authentication.oidc.scopeClaim to the claim the issuer emits";
+const SCOPE_REMEDY: &str = "issue the access profile's required scope to the client, or set scopeClaim on the issuer entry to the claim the issuer emits";
 
 /// Render the answer to a failed operation. A refusal of authority puts its
 /// check in the response's extensions, which are never serialized, for the
@@ -1003,5 +1018,151 @@ mod tests {
     fn service_unavailable_tells_the_caller_when_to_retry() {
         let response = problem_response(ProblemCode::ServiceUnavailable);
         assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "5");
+    }
+
+    /// A route that authenticates the bearer token as every document route
+    /// does and answers the profile it resolved, under `posture`'s boundary.
+    fn authenticating_shell(posture: Posture) -> Router {
+        async fn who(headers: HeaderMap) -> Response {
+            answer(
+                async {
+                    let header = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or_else(|| {
+                            ServiceError::unauthenticated(FailedCheck::CredentialMissing)
+                        })?;
+                    let token = parse_bearer_token(header).map_err(|_| {
+                        ServiceError::unauthenticated(FailedCheck::CredentialMalformed)
+                    })?;
+                    let caller = crate::auth::tests::authenticator()
+                        .authenticate_declaring(token)
+                        .await
+                        .map_err(|refusal| Refusal {
+                            error: authentication_refusal(refusal.error),
+                            declared: refusal.declared,
+                            remedy: refusal.remedy,
+                        })?;
+                    Ok(
+                        Json(serde_json::json!({"profile": caller.profile_id.as_str()}))
+                            .into_response(),
+                    )
+                }
+                .await,
+            )
+        }
+        finish(
+            Router::new().route("/who", get(who)),
+            Router::new(),
+            posture,
+        )
+        .layer(name_failed_check(posture))
+    }
+
+    async fn who(posture: Posture, claims: serde_json::Value) -> (StatusCode, serde_json::Value) {
+        let response = authenticating_shell(posture)
+            .oneshot(
+                Request::builder()
+                    .uri("/who")
+                    .header(
+                        "authorization",
+                        format!("Bearer {}", crate::auth::tests::token(claims)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let mut body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        // The trace names one request, so no two answers share it.
+        if let Some(members) = body.as_object_mut() {
+            members.remove("traceId");
+        }
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn the_development_body_names_the_failed_check_and_production_does_not() {
+        let mut forged = crate::auth::tests::citizen_claims();
+        forged["iss"] = serde_json::json!("https://other.example.test");
+        let mut answers = Vec::new();
+        for posture in [Posture::Production, Posture::Development] {
+            let (status, body) = who(posture, forged.clone()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{posture:?}");
+            answers.push(body);
+        }
+        let [production, mut development] = <[_; 2]>::try_from(answers).unwrap();
+        assert!(production.get("failedCheck").is_none(), "{production:?}");
+        assert_eq!(
+            development.as_object_mut().unwrap().remove("failedCheck"),
+            Some(serde_json::json!(FailedCheck::TokenIssuer.as_str()))
+        );
+        assert_eq!(
+            development, production,
+            "the development body adds failedCheck and nothing else"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_token_reaches_the_same_profile_in_both_postures() {
+        let claims = crate::auth::tests::citizen_claims();
+        let production = who(Posture::Production, claims.clone()).await;
+        let development = who(Posture::Development, claims).await;
+        assert_eq!(production, development);
+        assert_eq!(production.0, StatusCode::OK);
+        assert_eq!(production.1["profile"], "citizen");
+
+        // A token no profile lists is refused the same way in both postures,
+        // and development alone says which check refused it.
+        let mut unprofiled = crate::auth::tests::citizen_claims();
+        unprofiled["azp"] = serde_json::json!("unprofiled-client");
+        let (production_status, production_body) =
+            who(Posture::Production, unprofiled.clone()).await;
+        let (development_status, mut development_body) =
+            who(Posture::Development, unprofiled).await;
+        assert_eq!(production_status, StatusCode::FORBIDDEN);
+        assert_eq!(production_status, development_status);
+        assert_eq!(
+            development_body
+                .as_object_mut()
+                .unwrap()
+                .remove("failedCheck"),
+            Some(serde_json::json!(FailedCheck::AccessProfile.as_str()))
+        );
+        assert_eq!(development_body, production_body);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_the_verifier_explains_reaches_the_log_note_with_its_remedy() {
+        let response = authenticating_shell(Posture::Production)
+            .oneshot(
+                Request::builder()
+                    .uri("/who")
+                    .header(
+                        "authorization",
+                        format!(
+                            "Bearer {}",
+                            crate::auth::tests::jwt_typed(crate::auth::tests::citizen_claims())
+                        ),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let note = response
+            .extensions()
+            .get::<RefusalNote>()
+            .expect("the refusal is recorded with a note");
+        assert_eq!(note.check, FailedCheck::TokenType);
+        assert!(
+            note.remedy
+                .is_some_and(|remedy| remedy.contains("accessTokenType")),
+            "{:?}",
+            note.remedy
+        );
     }
 }

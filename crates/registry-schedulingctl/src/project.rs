@@ -671,6 +671,9 @@ pub(crate) struct RuntimeConfigRefusal {
     pub report: Report,
     /// The runtime file could not be read at all.
     pub unavailable: bool,
+    /// The explicit production settings a runtime file that loaded states,
+    /// listed beside its refusal. A file that did not load reports none.
+    pub explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 }
 
 impl std::fmt::Display for RuntimeConfigRefusal {
@@ -721,6 +724,15 @@ pub(super) fn check_runtime_config(
         }
         diagnostic
     };
+    // The settings the operator stated on purpose are facts for a reviewer,
+    // not findings, so they never change the verdict. An empty list says none
+    // were stated.
+    let explicit_settings = runtime.explicit_settings.as_ref().map(|settings| {
+        settings
+            .iter()
+            .map(|found| found.report_line(Some(&given)))
+            .collect::<Vec<_>>()
+    });
     let mut runtime_report = Report::new(runtime.diagnostics.into_iter().map(named).collect());
     runtime_report.set_files_checked(1);
     let (mut combined, mut checked) = match checked {
@@ -755,6 +767,7 @@ pub(super) fn check_runtime_config(
         return Err(RuntimeConfigRefusal {
             report: combined,
             unavailable: runtime.unavailable,
+            explicit_settings,
         }
         .into());
     }
@@ -762,6 +775,9 @@ pub(super) fn check_runtime_config(
         .take()
         .expect("an error-free project has a check report");
     checked["runtimeConfig"] = json!(given);
+    if let Some(settings) = explicit_settings {
+        checked["explicitProductionSettings"] = json!(settings);
+    }
     checked["diagnostics"] = combined.to_json_value();
     if let Some(files) = combined.files_checked() {
         checked["filesChecked"] = json!(files);
@@ -811,6 +827,7 @@ pub(crate) fn runtime_refusal(
         Some(report) => RuntimeConfigRefusal {
             report,
             unavailable,
+            explicit_settings: None,
         }
         .into(),
         None => anyhow::Error::new(error).context("loading the Scheduling runtime configuration"),

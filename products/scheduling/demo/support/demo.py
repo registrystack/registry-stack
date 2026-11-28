@@ -48,6 +48,7 @@ READER = "demo-reader"
 # `taskGrantStatus: unchecked-final-fifteen-minutes`, which accepts only a
 # grant with at most fifteen minutes left, so every grant is minted short.
 GRANT_LIFETIME_SECONDS = 600
+BOOKING_SCOPE = "scheduling:commit"
 
 # The task-grant permissions every booking caller carries: one permission per
 # location, naming the offering's service and the actions the demo exercises.
@@ -420,12 +421,14 @@ database:
   migrationUrlRef: secret:file/db-url
 {trust}authentication:
   oidc:
-    issuer: {DEMO_ISSUER}
-    audience: {DEMO_AUDIENCE}
-    allowedClients: [{BOOKER_A}, {BOOKER_B}, {READER}]
-    jwksSource:
-      type: static
-      documentRef: secret:file/jwks
+    issuers:
+      main:
+        issuer: {DEMO_ISSUER}
+        audience: {DEMO_AUDIENCE}
+        allowedClients: [{BOOKER_A}, {BOOKER_B}, {READER}]
+        jwksSource:
+          type: static
+          documentRef: secret:file/jwks
 taskGrantStatus: unchecked-final-fifteen-minutes
 audit:
   path: {audit_path}
@@ -543,7 +546,12 @@ class Verifier:
         )
 
     def booker_token(self, name: str, subject: str) -> str:
-        return mint_token(self.signer, caller_claims(name, subject, grant=True))
+        # A booking agent asks for the commit scope with its access token. A
+        # token with a grant and no scope is identity-only and is refused.
+        return mint_token(
+            self.signer,
+            caller_claims(name, subject, scopes=[BOOKING_SCOPE], grant=True),
+        )
 
     def admission(self, offering: str, start: str, subject: str) -> dict:
         return admission_body(offering, start, self.policy_revision, subject)

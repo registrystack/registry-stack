@@ -28,14 +28,12 @@ use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_PATH};
 use registry_platform_oidc::{
     task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry},
-    JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
+    DeclaredKinds, JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::Url;
 use registry_scheduling::audit::{AuditCapture, SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
-use registry_scheduling::auth::SchedulingAuthenticator;
-use registry_scheduling::config::{
-    DatabaseConfig, JwksSource, OidcClientsConfig, OidcConfig, OidcIssuerConfig,
-};
+use registry_scheduling::auth::{AuthorizationProfiles, IssuerSource, SchedulingAuthenticator};
+use registry_scheduling::config::DatabaseConfig;
 use registry_scheduling::config::{ReminderDestinationConfig, UrlHookDestinationConfig};
 use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
@@ -100,6 +98,10 @@ fn read_policy(text: &str) -> Result<SchedulingPolicy, registry_platform_yaml::R
 const AUDIENCE: &str = "urn:registry-scheduling:test";
 const CLIENT: &str = "task-agent";
 const SECRET: &[u8] = b"01234567890123456789012345678901";
+/// A second issuer the deployment trusts, with its own key and client.
+const SECOND_ISSUER: &str = "https://second-issuer.test";
+const SECOND_CLIENT: &str = "second-agent";
+const SECOND_SECRET: &[u8] = b"abcdefghijklmnopqrstuvwxyz012345";
 const SCHEDULING_ID: &str = "commitments-test";
 /// The database identity and package the fixture records as active, which
 /// the hook worker's identity check reads back from the activation record.
@@ -202,6 +204,10 @@ holdPolicy: {ttlMinutes: 10, maximumPerCaller: 2, because: test}
 
 struct Fixture {
     http: Router,
+    /// What the router was built over, so a test can serve the same
+    /// deployment under another declared posture.
+    service: Arc<SchedulingService>,
+    authenticator: Arc<SchedulingAuthenticator>,
     store: PostgresStore,
     hooks: ActivatedHooks,
     hook_secret_ref: String,
@@ -259,6 +265,35 @@ async fn send(
 }
 
 impl Fixture {
+    /// The same deployment served as `posture` declares it.
+    fn http_declared(&self, posture: registry_platform_config::Posture) -> Router {
+        router(HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            ),
+            service: Arc::clone(&self.service),
+            authenticator: Arc::clone(&self.authenticator),
+        })
+    }
+
+    /// The same deployment served over `authenticator`, in the development
+    /// posture, so a refusal names the check that made it.
+    fn http_authenticating(&self, authenticator: SchedulingAuthenticator) -> Router {
+        router(HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            ),
+            service: Arc::clone(&self.service),
+            authenticator: Arc::new(authenticator),
+        })
+    }
+
     async fn request(
         &self,
         method: &str,
@@ -498,19 +533,23 @@ async fn fixture_publishing_with_hook_and_status(
             AuditKeyHasher::Keyed(keying),
             audit.clone(),
             7,
+            &authenticator(),
         )
         .with_hooks(hooks.clone())
         .with_task_grant_status(task_grant_status),
     );
+    let authenticator = Arc::new(authenticator());
     let http = router(HttpState {
         posture: registry_platform_config::PostureReport::new(
             registry_scheduling::config::DEFAULT_POSTURE,
         ),
-        service,
-        authenticator: Arc::new(authenticator()),
+        service: Arc::clone(&service),
+        authenticator: Arc::clone(&authenticator),
     });
     Fixture {
         http,
+        service,
+        authenticator,
         store,
         hooks,
         hook_secret_ref: format!("secret:env/{hook_secret_name}"),
@@ -625,6 +664,14 @@ fn authenticator() -> SchedulingAuthenticator {
 fn authenticator_with_busy_profiles(
     busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
 ) -> SchedulingAuthenticator {
+    authenticator_declaring(busy_import_profiles, DeclaredKinds::None)
+}
+
+/// The test authenticator whose first issuer entry declares `main_kinds`.
+fn authenticator_declaring(
+    busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
+    main_kinds: DeclaredKinds,
+) -> SchedulingAuthenticator {
     let operational_profile = |scope: &str, attendance: bool| OperationalReadProfileConfig {
         scope: scope.to_owned(),
         maximum_past_days: 30,
@@ -651,18 +698,7 @@ fn authenticator_with_busy_profiles(
             external_reference_products: vec!["registry-casework".to_owned()],
         },
     };
-    let oidc = OidcConfig {
-        provider: OidcIssuerConfig {
-            issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
-            audience: AUDIENCE.to_owned(),
-            jwks_source: JwksSource::Discovery {},
-            allow_insecure_http: false,
-        },
-        clients: OidcClientsConfig {
-            allowed_clients: vec![CLIENT.to_owned()],
-            assertion_issuers: std::collections::BTreeMap::new(),
-        },
-        scope_claim: "registry_scopes".to_owned(),
+    let profiles = AuthorizationProfiles {
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),
         appointment_read_profiles: BTreeMap::from([
@@ -677,26 +713,46 @@ fn authenticator_with_busy_profiles(
         ]),
         busy_import_profiles,
     };
-    let verifier = TokenVerifierConfig::access_token_profile(
-        ISSUER,
-        vec![AUDIENCE.to_owned()],
-        vec![Algorithm::HS256],
-        vec!["at+jwt".to_owned()],
+    let source = |id: &str, issuer: &str, client: &str, secret: &[u8], kinds: DeclaredKinds| {
+        IssuerSource::new(
+            id,
+            TokenVerifierConfig::access_token_profile(
+                issuer,
+                vec![AUDIENCE.to_owned()],
+                vec![Algorithm::HS256],
+                vec!["at+jwt".to_owned()],
+            )
+            .with_scope_claim("registry_scopes")
+            .with_allowed_clients(vec![client.to_owned()]),
+            Arc::new(JwksFetcher::new_static(
+                serde_json::from_value(json!({"keys": [{
+                    "kty": "oct",
+                    "kid": "test",
+                    "alg": "HS256",
+                    "use": "sig",
+                    "k": URL_SAFE_NO_PAD.encode(secret),
+                }]}))
+                .expect("the test signing keys"),
+                JwksFetcherConfig::defaults(),
+            )),
+            kinds,
+            AUDIENCE,
+        )
+    };
+    SchedulingAuthenticator::new(
+        profiles,
+        vec![
+            source("main", ISSUER, CLIENT, SECRET, main_kinds),
+            source(
+                "second",
+                SECOND_ISSUER,
+                SECOND_CLIENT,
+                SECOND_SECRET,
+                DeclaredKinds::None,
+            ),
+        ],
     )
-    .with_scope_claim("registry_scopes")
-    .with_allowed_clients(vec![CLIENT.to_owned()]);
-    let keys = Arc::new(JwksFetcher::new_static(
-        serde_json::from_value(json!({"keys": [{
-            "kty": "oct",
-            "kid": "test",
-            "alg": "HS256",
-            "use": "sig",
-            "k": URL_SAFE_NO_PAD.encode(SECRET),
-        }]}))
-        .expect("the test signing keys"),
-        JwksFetcherConfig::defaults(),
-    ));
-    SchedulingAuthenticator::new(&oidc, verifier, keys)
+    .expect("the test issuers name distinct issuers")
 }
 
 /// Resolve the owned exact-time supply pieces a direct store commitment can
@@ -1732,6 +1788,7 @@ async fn rotating_the_audit_key_keeps_existing_claims_with_their_owner() {
                 AuditKeyHasher::Keyed(rotated_key),
                 fx.audit.clone(),
                 7,
+                &authenticator(),
             )
             .with_hooks(fx.hooks.clone()),
         ),
@@ -2989,6 +3046,7 @@ async fn a_duplicate_active_key_survives_an_opening_shift_on_the_same_pool() {
         AuditKeyHasher::Keyed(keying),
         fx.audit.clone(),
         7,
+        &authenticator(),
     ));
     fx.http = router(HttpState {
         posture: registry_platform_config::PostureReport::new(
@@ -3709,9 +3767,7 @@ async fn a_grant_covered_non_owner_is_refused_before_the_hold_state_is_read() {
 
     // A released hold is closed. The owner is told so.
     let released = hold_for("non-owner-released", 500, 640).await;
-    let (status, _) = fx
-        .delete(&format!("/v1/holds/{released}"), &fx.agent)
-        .await;
+    let (status, _) = fx.delete(&format!("/v1/holds/{released}"), &fx.agent).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert_not_authorized(
         "confirm a released hold",
@@ -3778,6 +3834,334 @@ async fn a_grant_covered_non_owner_is_refused_before_the_hold_state_is_read() {
         .await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{problem}");
     assert_eq!(problem["code"], "policy.changed");
+}
+
+/// A booking agent of the second issuer: the same scopes and grant as the
+/// first issuer's agent, its own client, and the subject given.
+fn second_issuer_agent_token(subject: &str) -> String {
+    let mut claims = json!({
+        "iss": SECOND_ISSUER,
+        "sub": subject,
+        "azp": SECOND_CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    let mut grant = grant_claims();
+    grant["registry_grant_client"] = json!(SECOND_CLIENT);
+    claims.as_object_mut().unwrap().extend(
+        grant
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    let now = Utc::now().timestamp();
+    let object = claims.as_object_mut().unwrap();
+    object.entry("aud").or_insert(json!(AUDIENCE));
+    object.entry("iat").or_insert(json!(now));
+    object
+        .entry("exp")
+        .or_insert(json!(pinned_now().timestamp() + 300));
+    let mut header = Header::new(Algorithm::HS256);
+    header.kid = Some("test".to_owned());
+    header.typ = Some("at+jwt".to_owned());
+    jsonwebtoken::encode(&header, &claims, &EncodingKey::from_secret(SECOND_SECRET)).unwrap()
+}
+
+/// One principal namespace per issuer: the same subject from a second issuer
+/// does not own a hold the first issuer's subject holds.
+#[tokio::test]
+async fn a_subject_from_one_issuer_does_not_own_a_hold_of_the_same_subject_from_another() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "namesake-hold",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().unwrap().to_owned();
+
+    // The same `sub` the owner carries, signed by the second issuer.
+    let namesake = second_issuer_agent_token("principal-agent");
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &namesake,
+            "namesake-confirm",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    let (status, problem) = fx.delete(&format!("/v1/holds/{hold_id}"), &namesake).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+
+    // The owner still holds it.
+    let (status, _) = fx.delete(&format!("/v1/holds/{hold_id}"), &fx.agent).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+/// A booking agent whose token carries a task grant and claims its kind but
+/// asks for no scope: identity-only, so the issuer set admits it only where
+/// the entry declares the client's kind.
+fn scopeless_grant_token(subject: &str) -> String {
+    let mut claims = json!({
+        "sub": subject,
+        "azp": CLIENT,
+        "registry_scopes": "",
+        "registry_actor_kind": "agent",
+    });
+    claims.as_object_mut().unwrap().extend(
+        grant_claims()
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    token(claims)
+}
+
+/// The narrowing the identity-only rule made: a grant with no scope and a
+/// merely claimed kind no longer commits.
+#[tokio::test]
+async fn a_grant_token_with_no_scope_and_a_claimed_kind_is_refused_at_a_commitment() {
+    let fx = fixture().await;
+    let start = first_slot(&fx, OFFERING, 90, 200).await;
+    let http = fx.http_authenticating(authenticator());
+    let response = send(
+        http,
+        "POST".to_owned(),
+        "/v1/holds".to_owned(),
+        scopeless_grant_token("scopeless-agent"),
+        Some("scopeless-hold".to_owned()),
+        Some(admission(&fx, OFFERING, start)),
+    )
+    .await;
+    assert_eq!(response.0, StatusCode::UNAUTHORIZED, "{}", response.1);
+    assert_eq!(response.1["failedCheck"], "actor-kind", "{}", response.1);
+}
+
+/// A grant with only OpenID Connect scopes is as identity-only as one with
+/// none.
+#[tokio::test]
+async fn a_grant_token_with_only_openid_scopes_and_a_claimed_kind_is_refused_at_a_commitment() {
+    let fx = fixture().await;
+    let start = first_slot(&fx, OFFERING, 90, 200).await;
+    let http = fx.http_authenticating(authenticator());
+    let mut claims = json!({
+        "sub": "openid-agent",
+        "azp": CLIENT,
+        "registry_scopes": "openid profile",
+        "registry_actor_kind": "agent",
+    });
+    claims.as_object_mut().unwrap().extend(
+        grant_claims()
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    let response = send(
+        http,
+        "POST".to_owned(),
+        "/v1/holds".to_owned(),
+        token(claims),
+        Some("openid-hold".to_owned()),
+        Some(admission(&fx, OFFERING, start)),
+    )
+    .await;
+    assert_eq!(response.0, StatusCode::UNAUTHORIZED, "{}", response.1);
+    assert_eq!(response.1["failedCheck"], "actor-kind", "{}", response.1);
+}
+
+/// The migration the changelog gives: the entry declares the client's kind,
+/// and the same token commits.
+#[tokio::test]
+async fn the_same_token_commits_once_the_entry_declares_the_client_kind() {
+    let fx = fixture().await;
+    let start = first_slot(&fx, OFFERING, 90, 200).await;
+    let http = fx.http_authenticating(authenticator_declaring(
+        BTreeMap::new(),
+        DeclaredKinds::Clients(BTreeMap::from([(
+            CLIENT.to_owned(),
+            registry_platform_oidc::ActorKind::Agent,
+        )])),
+    ));
+    let response = send(
+        http,
+        "POST".to_owned(),
+        "/v1/holds".to_owned(),
+        scopeless_grant_token("scopeless-agent"),
+        Some("declared-hold".to_owned()),
+        Some(admission(&fx, OFFERING, start)),
+    )
+    .await;
+    assert_eq!(response.0, StatusCode::CREATED, "{}", response.1);
+}
+
+/// With two issuer entries the principal an audit row of a commitment names
+/// covers the verifying issuer as well as the subject, as every ownership
+/// decision does: one subject from two issuers is two principals in the audit.
+#[tokio::test]
+async fn the_audit_principal_is_the_pair_of_issuer_and_subject() {
+    let fx = fixture().await;
+    let first_start = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "audit-principal-first",
+            admission(&fx, OFFERING, first_start),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let second_start = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &second_issuer_agent_token("principal-agent"),
+            "audit-principal-second",
+            admission(&fx, OFFERING, second_start),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+
+    let principals: Vec<String> = fx
+        .capture
+        .records("response")
+        .into_iter()
+        .filter(|record| {
+            record["operation"] == "hold.create" && record["reason"] == "authorization.allowed"
+        })
+        .map(|record| {
+            record["principalPseudonym"]
+                .as_str()
+                .expect("a granted row names its principal")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(principals.len(), 2, "{principals:?}");
+    assert_ne!(
+        principals[0], principals[1],
+        "one subject from two issuers is two principals"
+    );
+}
+
+/// The problem document of a response, without its per-request trace.
+async fn problem_members(response: axum::response::Response) -> serde_json::Map<String, Value> {
+    let bytes = to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("a bounded test body");
+    let mut members = serde_json::from_slice::<Value>(&bytes)
+        .expect("a JSON problem")
+        .as_object()
+        .expect("a problem object")
+        .clone();
+    assert!(members.remove("traceId").is_some());
+    members
+}
+
+async fn get_as(http: Router, uri: &str, token: &str) -> axum::response::Response {
+    http.oneshot(
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .expect("a well-formed test request"),
+    )
+    .await
+    .expect("an in-process request always answers")
+}
+
+#[tokio::test]
+async fn the_development_body_names_the_failed_check_and_production_does_not() {
+    let fx = fixture().await;
+    // A token signed with a key no issuer published.
+    let mut forged_claims = json!({
+        "sub": "principal-read",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read",
+        "registry_actor_kind": "service",
+    });
+    let now = Utc::now().timestamp();
+    let object = forged_claims.as_object_mut().unwrap();
+    object.insert("iss".to_owned(), json!(ISSUER));
+    object.insert("aud".to_owned(), json!(AUDIENCE));
+    object.insert("iat".to_owned(), json!(now));
+    object.insert("exp".to_owned(), json!(pinned_now().timestamp() + 300));
+    let mut header = Header::new(Algorithm::HS256);
+    header.kid = Some("test".to_owned());
+    header.typ = Some("at+jwt".to_owned());
+    let forged = jsonwebtoken::encode(
+        &header,
+        &forged_claims,
+        &EncodingKey::from_secret(b"another-secret-another-secret-another!"),
+    )
+    .unwrap();
+
+    let mut answers = Vec::new();
+    for posture in [
+        registry_platform_config::Posture::Production,
+        registry_platform_config::Posture::Development,
+    ] {
+        let response = get_as(fx.http_declared(posture), "/v1/services", &forged).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{posture:?}");
+        answers.push(problem_members(response).await);
+    }
+    let [production, mut development] = <[_; 2]>::try_from(answers).unwrap();
+    assert!(!production.contains_key("failedCheck"), "{production:?}");
+    assert_eq!(
+        development.remove("failedCheck"),
+        Some(json!(
+            registry_platform_authcommon::FailedCheck::TokenSignature.as_str()
+        ))
+    );
+    assert_eq!(
+        development, production,
+        "the development body adds failedCheck and nothing else"
+    );
+}
+
+#[tokio::test]
+async fn the_same_token_reaches_the_same_profile_in_both_postures() {
+    let fx = fixture().await;
+    let mut answers = Vec::new();
+    for posture in [
+        registry_platform_config::Posture::Production,
+        registry_platform_config::Posture::Development,
+    ] {
+        let response = get_as(fx.http_declared(posture), "/v1/services", &fx.reader).await;
+        assert_eq!(response.status(), StatusCode::OK, "{posture:?}");
+        answers.push(to_bytes(response.into_body(), 1 << 20).await.unwrap());
+    }
+    assert_eq!(answers[0], answers[1]);
+
+    // A token without the reads scope is refused the same way in both
+    // postures, and development alone says which check refused it.
+    let no_scope = operational_token("principal-read", "scheduling-other");
+    let mut refusals = Vec::new();
+    for posture in [
+        registry_platform_config::Posture::Production,
+        registry_platform_config::Posture::Development,
+    ] {
+        let response = get_as(fx.http_declared(posture), "/v1/services", &no_scope).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{posture:?}");
+        refusals.push(problem_members(response).await);
+    }
+    let [production, mut development] = <[_; 2]>::try_from(refusals).unwrap();
+    assert_eq!(
+        development.remove("failedCheck"),
+        Some(json!(
+            registry_platform_authcommon::FailedCheck::Scope.as_str()
+        ))
+    );
+    assert_eq!(development, production);
 }
 
 /// Every closing writer advances the claim's revision, so the history event
@@ -5628,11 +6012,11 @@ fn sealed_deployment(
             "migrationUrlRef": format!("secret:env/{secret_name}"),
             "testOnlyPlaintext": true,
         },
-        "authentication": {"oidc": {
+        "authentication": {"oidc": {"issuers": {"main": {
             "issuer": ISSUER,
             "audience": AUDIENCE,
             "allowedClients": [CLIENT],
-        }},
+        }}}},
         "taskGrantStatus": "unchecked-final-fifteen-minutes",
         "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:env/UNUSED"},
         "destinations": {},
@@ -8075,6 +8459,7 @@ async fn republished(fx: &Fixture, policy: SchedulingPolicy, pool_ids: &[String]
             AuditKeyHasher::Keyed(keying),
             fx.audit.clone(),
             7,
+            &authenticator(),
         )
         .with_hooks(fx.hooks.clone()),
     );

@@ -63,11 +63,9 @@ impl AccessProfiles {
         if first_missing_scope(profile, token).is_some() {
             return Err(AccessRefusal::Profile);
         }
-        // A malformed actor-kind claim is a malformed credential whatever the
-        // profile demands. Every profile names a kind, so an absent claim, or
-        // a kind no profile admits, is a profile refusal.
+        // Every profile names a kind, so an absent claim, or a kind no
+        // profile admits, is a profile refusal.
         let kind = match token.actor_kind {
-            ActorKindClaim::Malformed => return Err(AccessRefusal::Claims),
             ActorKindClaim::Absent | ActorKindClaim::Unadmitted => {
                 return Err(AccessRefusal::Profile)
             }
@@ -142,7 +140,6 @@ fn first_missing_scope<'a>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActorKindClaim {
     Absent,
-    Malformed,
     /// A well-formed kind no Document Store profile admits.
     Unadmitted,
     Present(ActorKind),
@@ -193,7 +190,7 @@ impl AccessRefusal {
     }
 }
 
-/// Whom a document is held for: a principal at the token issuer, with its
+/// Whom a document is held for: a principal at the caller's issuer, with its
 /// actor kind, and the represented principal when custody is held on a
 /// person's behalf.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -571,19 +568,11 @@ mod tests {
     }
 
     #[test]
-    fn malformed_identity_claims_are_refused_as_claims() {
+    fn unusable_identity_claims_are_refused_as_claims() {
         let profiles = AccessProfiles::new(&project());
         let claims = Map::new();
         let custody = vec!["documents:custody".to_owned()];
         let present = ActorKindClaim::Present(ActorKind::Service);
-        let malformed = facts(
-            "civil-registry-app",
-            "s",
-            &custody,
-            ActorKindClaim::Malformed,
-            &claims,
-        );
-        assert_eq!(profiles.resolve(&malformed), Err(AccessRefusal::Claims));
         let empty_subject = facts("civil-registry-app", "", &custody, present, &claims);
         assert_eq!(profiles.resolve(&empty_subject), Err(AccessRefusal::Claims));
         let mut no_issuer = facts("civil-registry-app", "s", &custody, present, &claims);
@@ -654,6 +643,23 @@ mod tests {
         assert!(!named.sees() && !named.may_grant);
         let institution = standing(&policy, &custody, BY_APP, &app());
         assert!(institution.custodian && institution.may_grant && !institution.owner);
+    }
+
+    #[test]
+    fn the_same_subject_at_another_issuer_is_another_principal() {
+        let policy = policy("citizen-delivery");
+        let custody = place_custody(&policy, &app(), ask("citizen-1")).unwrap();
+        assert_eq!(custody.issuer, ISSUER);
+        let held = standing(&policy, &custody, BY_APP, &citizen("citizen-1"));
+        assert!(held.custodian && held.may_grant);
+        let mut elsewhere = citizen("citizen-1");
+        elsewhere.issuer = "https://other.example.test".to_owned();
+        let stranger = standing(&policy, &custody, BY_APP, &elsewhere);
+        assert!(!stranger.sees() && !stranger.may_grant);
+        let mut service = app();
+        service.issuer = "https://other.example.test".to_owned();
+        let reserving = standing(&policy, &custody, BY_APP, &service);
+        assert!(!reserving.sees());
     }
 
     #[test]

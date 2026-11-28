@@ -193,9 +193,9 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
              listener:\n  bind: 127.0.0.1:8106\n  tlsTermination: development-loopback\n\
              secretProviders:\n  environment: {{}}\n\
              identity:\n  databaseId: scheduling-ctl-test\n\
-             authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
-             \x20   audience: urn:example:scheduling\n\
-             \x20   allowedClients: [scheduling-test-client]\n\
+             authentication:\n  oidc:\n    issuers:\n      main:\n        issuer: https://identity.example.test\n\
+             \x20       audience: urn:example:scheduling\n\
+             \x20       allowedClients: [scheduling-test-client]\n\
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_INTENTS_TEST_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_INTENTS_TEST_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\

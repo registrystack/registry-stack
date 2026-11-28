@@ -1861,7 +1861,7 @@ formats:
     check: schedulingctl check {project} --runtime-config {file}
     example: products/scheduling/examples/standalone-exact-time/runtime.example.yaml
     conformance:
-      requiredText: /authentication/oidc/audience
+      requiredText: /authentication/oidc/issuers/main/audience
       optionalText: /audit/path
       integer: /retention/hookPayloadRetentionDays
       boolean: none
@@ -1872,17 +1872,17 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/networkExposure
         whenOmitted: closed
-      - pointer: /authentication/oidc/allowedClients
+      - pointer: /authentication/oidc/issuers/*/allowedClients
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/issuers/*/allowInsecureHttp
         whenOmitted: closed
-      - pointer: /authentication/oidc/assertionIssuers
+      - pointer: /authentication/oidc/issuers/*/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
       - pointer: /taskGrantStatus
         whenOmitted: refused
-    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers, /taskGrantStatus]
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers, /taskGrantStatus]
   - id: scheduling/ctl-report
     product: scheduling
     title: schedulingctl --format json report
@@ -4164,11 +4164,11 @@ formats:
     check: documentsctl check --project {project} --runtime-config {file}
     example: products/documents/examples/starter/runtime.example.yaml
     conformance:
-      requiredText: /authentication/oidc/audience
+      requiredText: /authentication/oidc/issuers/main/audience
       optionalText: /audit/path
       integer: /retention/receiptRetentionDays
       boolean: none
-      set: /authentication/oidc/allowedClients
+      set: /authentication/oidc/issuers/main/allowedClients
     securityMembers:
       - pointer: /listener/bind
         whenOmitted: refused
@@ -4176,15 +4176,17 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/networkExposure
         whenOmitted: closed
-      - pointer: /authentication/oidc/allowedClients
+      - pointer: /authentication/oidc/issuers/*/allowedClients
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/issuers/*/allowInsecureHttp
         whenOmitted: closed
+      - pointer: /authentication/oidc/issuers/*/assertionIssuers
+        whenOmitted: open
       - pointer: /contentVerification
         whenOmitted: refused
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/allowedClients]
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers]
   - id: documents/ctl-report
     product: documents
     title: documentsctl --format json report

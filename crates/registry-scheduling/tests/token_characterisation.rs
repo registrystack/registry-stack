@@ -22,11 +22,12 @@ use std::path::{Path, PathBuf};
 
 use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::write_package;
-use registry_platform_oidc::TokenVerifier;
 use registry_platform_testing::{
     ClaimValue, Configuration, FixtureCase, Outcome, TokenCorpus, TokenSigner,
 };
-use registry_scheduling::auth::{AuthenticationError, SchedulingAuthenticator};
+use registry_scheduling::auth::{
+    AuthenticationError, AuthenticationFailure, SchedulingAuthenticator,
+};
 use registry_scheduling::config::{package_limits, RuntimeConfig, PACKAGE_COMMAND};
 use registry_scheduling::runtime::secret_resolver;
 use registry_scheduling_core::{
@@ -109,6 +110,43 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
         .fixture
         .read_scope(claim)
         .unwrap_or_else(|| PLACEHOLDER_SCOPE.to_owned());
+    let client = fixture_client(&case);
+    let mut entry = json!({
+        "issuer": case.issuer,
+        "audience": case.audience,
+        "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-jwks"},
+        "allowedClients": [client],
+        "scopeClaim": claim
+    });
+    // A row that admits a token typed `JWT`, or whose recipe does, says so.
+    let jwt_typed = case
+        .fixture
+        .header
+        .as_ref()
+        .and_then(|header| header.typ.as_deref())
+        .is_some_and(|typ| typ.eq_ignore_ascii_case("JWT"));
+    if case.configuration == Configuration::JwtAccepted
+        || (case.configuration == Configuration::Recipe && jwt_typed)
+    {
+        entry["accessTokenType"] = json!("JWT");
+    }
+    // The operator's declared kind is for the fixture's client, or for the
+    // whole issuer where the token names no client.
+    if let Some(kind) = case.declared_kind {
+        let kind = match kind {
+            registry_platform_oidc::ActorKind::Human => "human",
+            registry_platform_oidc::ActorKind::Agent => "agent",
+            registry_platform_oidc::ActorKind::Service => "service",
+        };
+        if literal_string(&case, "client_id")
+            .or_else(|| literal_string(&case, "azp"))
+            .is_some()
+        {
+            entry["clientActorKinds"] = json!({ client: kind });
+        } else {
+            entry["actorKind"] = json!(kind);
+        }
+    }
     let runtime_path = root.path().join("runtime.json");
     fs::write(
         &runtime_path,
@@ -124,11 +162,7 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
                 "migrationUrlRef": "secret:env/SCHEDULING_MIGRATION_URL"
             },
             "authentication": {"oidc": {
-                "issuer": case.issuer,
-                "audience": case.audience,
-                "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-jwks"},
-                "allowedClients": [fixture_client(&case)],
-                "scopeClaim": claim,
+                "issuers": {"main": entry},
                 "readsScope": scope,
                 "explainScope": EXPLAIN_SCOPE
             }},
@@ -143,55 +177,66 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
     let config = RuntimeConfig::load(&runtime_path, registry_scheduling::config::DEFAULT_POSTURE)
         .expect("the runtime configuration loads");
     let resolver = secret_resolver(&config).expect("the secret resolver");
-    let (verifier, keys) = config
-        .oidc_verifier(&resolver)
+    let sources = config
+        .issuer_sources(&resolver)
         .await
-        .expect("the static key source");
-
-    let authenticator =
-        SchedulingAuthenticator::new(&config.authentication.oidc, verifier.clone(), keys.clone());
+        .expect("the issuer entries build over the static key source");
+    let authenticator = SchedulingAuthenticator::new(&config.authentication.oidc, sources)
+        .expect("the issuer entries name distinct issuers");
     let token = case.token.expose();
+    // The verifier's own verdict names the stage of a refusal, which the
+    // authenticator reports only as the check that failed.
+    let verdict = authenticator.verify(token).await;
     match authenticator.authenticate_read(token).await {
-        Ok(caller) => Outcome::Admitted(Some(caller.actor_kind)),
-        Err(AuthenticationError::Claims(_)) => refusal("claims"),
-        Err(AuthenticationError::Unavailable) => refusal("unavailable"),
-        Err(error @ (AuthenticationError::Refused(_) | AuthenticationError::Profile(_))) => {
-            let reference = TokenVerifier::new(verifier, keys);
-            match reference.verify(token).await {
-                Err(failure) => {
-                    // The refusal records the shared verifier's own check, or
-                    // the malformed credential the compact-token admission
-                    // refuses before the verifier runs.
-                    assert!(
-                        matches!(
-                            error,
-                            AuthenticationError::Refused(check)
-                                if check == failure.failed_check()
-                                    || check == FailedCheck::CredentialMalformed
-                        ),
-                        "{error:?} does not carry the verifier check"
-                    );
-                    Outcome::refused_by(&failure)
-                }
-                Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {
-                    if verified.scopes.iter().any(|held| held == &scope) {
-                        refusal("profile")
-                    } else {
-                        assert_eq!(error, AuthenticationError::Profile(FailedCheck::Scope));
-                        refusal("scope")
-                    }
-                }
-                // The credential is not a compact access token, so the
-                // verifier is never reached.
-                Ok(_) => {
-                    assert_eq!(
+        Ok(caller) => {
+            assert!(verdict.is_ok(), "an admitted token the issuer set refused");
+            Outcome::Admitted(Some(caller.actor_kind))
+        }
+        Err(AuthenticationFailure {
+            error: AuthenticationError::Claims(_),
+            ..
+        }) => refusal("claims"),
+        Err(AuthenticationFailure {
+            error: AuthenticationError::Unavailable,
+            ..
+        }) => refusal("unavailable"),
+        Err(AuthenticationFailure {
+            error: error @ (AuthenticationError::Refused(_) | AuthenticationError::Profile(_)),
+            ..
+        }) => match verdict {
+            Err(failure) => {
+                // The refusal records the issuer set's own check, or the
+                // malformed credential the compact-token admission refuses
+                // before the set runs.
+                assert!(
+                    matches!(
                         error,
-                        AuthenticationError::Refused(FailedCheck::CredentialMalformed)
-                    );
-                    refusal("header")
+                        AuthenticationError::Refused(check)
+                            if check == failure.error.failed_check()
+                                || check == FailedCheck::CredentialMalformed
+                    ),
+                    "{error:?} does not carry the issuer set's check"
+                );
+                Outcome::refused_by(&failure.error)
+            }
+            Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {
+                if verified.token.scopes.iter().any(|held| held == &scope) {
+                    refusal("profile")
+                } else {
+                    assert_eq!(error, AuthenticationError::Profile(FailedCheck::Scope));
+                    refusal("scope")
                 }
             }
-        }
+            // The credential is not a compact access token, so the verifier is
+            // never reached.
+            Ok(_) => {
+                assert_eq!(
+                    error,
+                    AuthenticationError::Refused(FailedCheck::CredentialMalformed)
+                );
+                refusal("header")
+            }
+        },
     }
 }
 

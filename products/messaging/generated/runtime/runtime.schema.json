@@ -1084,19 +1084,32 @@
             "properties": {
               "oidc": {
                 "properties": {
-                  "jwksSource": {
-                    "properties": {
-                      "documentRef": {
-                        "pattern": "^secret:env/"
+                  "issuers": {
+                    "not": {
+                      "additionalProperties": {
+                        "not": {
+                          "properties": {
+                            "jwksSource": {
+                              "properties": {
+                                "documentRef": {
+                                  "pattern": "^secret:env/"
+                                }
+                              },
+                              "required": [
+                                "documentRef"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "jwksSource"
+                          ]
+                        }
                       }
-                    },
-                    "required": [
-                      "documentRef"
-                    ]
+                    }
                   }
                 },
                 "required": [
-                  "jwksSource"
+                  "issuers"
                 ]
               }
             },
@@ -1121,7 +1134,10 @@
               "environment"
             ]
           }
-        }
+        },
+        "required": [
+          "secretProviders"
+        ]
       }
     },
     {
@@ -1131,19 +1147,32 @@
             "properties": {
               "oidc": {
                 "properties": {
-                  "jwksSource": {
-                    "properties": {
-                      "documentRef": {
-                        "pattern": "^secret:file/"
+                  "issuers": {
+                    "not": {
+                      "additionalProperties": {
+                        "not": {
+                          "properties": {
+                            "jwksSource": {
+                              "properties": {
+                                "documentRef": {
+                                  "pattern": "^secret:file/"
+                                }
+                              },
+                              "required": [
+                                "documentRef"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "jwksSource"
+                          ]
+                        }
                       }
-                    },
-                    "required": [
-                      "documentRef"
-                    ]
+                    }
                   }
                 },
                 "required": [
-                  "jwksSource"
+                  "issuers"
                 ]
               }
             },
@@ -1168,7 +1197,10 @@
               "file"
             ]
           }
-        }
+        },
+        "required": [
+          "secretProviders"
+        ]
       }
     }
   ],

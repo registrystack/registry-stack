@@ -189,6 +189,15 @@
   (`OPENID_CONNECT_SCOPES`) grant nothing. `caller_kind` and
   `refuse_identity_only` are the two steps.
 
+- Caller contract: `AuthorizationAuditEvent` accepts the actor kind
+  `unspecified`. A product records a caller whose kind is `Unspecified` under
+  that kind, rather than leaving the event out or writing another kind.
+
+- Caller contract: `jwks_document_provider_requirements` reads the static
+  key set document of every entry under `authentication.oidc.issuers`. Where
+  any entry names a `secret:env/` or `secret:file/` document, the schema
+  requires `secretProviders` with that provider, as the runtime does.
+
 - Caller contract: a `TokenVerifier` whose access-token type set holds `JWT`
   refuses a token that carries a `nonce`, `at_hash`, `c_hash` or `s_hash`
   claim, or a `typ` claim equal to `ID`, as `OidcError::IdTokenPresented` (the
@@ -232,7 +241,11 @@
   same findings for an offline check of a runtime file, with each position,
   the first entry or listing as `related`, and no comparison of a member the
   check did not substitute. `client-in-two-issuers` points at the second
-  listing of the client. A product that resolves `from-package` or
+  listing of the client. `CallerIssuers::check_one_audience` and
+  `check_one_audience_file` report `platform.oidc.audiences-differ` at each
+  entry whose audience differs from the first entry's. A product runs them
+  only for a setting that checks every token against one audience, such as
+  task-grant status. A product that resolves `from-package` or
   `from-policies` clients runs the client kind and audience findings again
   over the resolved list. The client types are `AllowedClients` (list or
   `unrestricted`), `ClientList`, `PolicyClients` (`from-policies` or a list)

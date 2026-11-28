@@ -83,10 +83,12 @@ database:
   testOnlyPlaintext: true
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:documents
-    scopeClaim: scope
-    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:documents
+        scopeClaim: scope
+        allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
 audit:
   destination: file
   path: {audit}
@@ -174,7 +176,7 @@ async fn provision_then_apply_then_serve_with_split_roles() {
     // The runtime verifies tokens against a static key set, so it starts
     // without reaching the issuer.
     const ALLOWED_CLIENTS: &str =
-        "    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]\n";
+        "        allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]\n";
     assert!(document.contains("  testOnlyPlaintext: true\n"));
     assert!(document.contains(ALLOWED_CLIENTS));
     std::fs::write(
@@ -187,7 +189,7 @@ async fn provision_then_apply_then_serve_with_split_roles() {
             .replace(
                 ALLOWED_CLIENTS,
                 &format!(
-                    "{ALLOWED_CLIENTS}    jwksSource:\n      type: static\n      documentRef: secret:file/jwks.json\n"
+                    "{ALLOWED_CLIENTS}        jwksSource:\n          type: static\n          documentRef: secret:file/jwks.json\n"
                 ),
             ),
     )

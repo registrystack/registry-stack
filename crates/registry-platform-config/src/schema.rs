@@ -63,8 +63,9 @@ pub fn shared_blocks_document() -> Result<String, serde_json::Error> {
 }
 
 /// Root `allOf` members stating that a static JWKS document at
-/// `authentication.oidc.jwksSource.documentRef` names a secret provider by
-/// its prefix, so a configuration carrying one must enable that provider.
+/// `authentication.oidc.issuers.<id>.jwksSource.documentRef` names a secret
+/// provider by its prefix, so a configuration where any issuer entry carries
+/// one must enable that provider.
 pub fn jwks_document_provider_requirements() -> Value {
     serde_json::json!([
         secret_provider_requirement(
@@ -77,6 +78,15 @@ pub fn jwks_document_provider_requirements() -> Value {
 }
 
 fn secret_provider_requirement(reference_pattern: &str, provider: &str, definition: &str) -> Value {
+    let entry_names_the_provider = serde_json::json!({
+        "properties": {
+            "jwksSource": {
+                "properties": {"documentRef": {"pattern": reference_pattern}},
+                "required": ["documentRef"]
+            }
+        },
+        "required": ["jwksSource"]
+    });
     serde_json::json!({
         "if": {
             "properties": {
@@ -84,14 +94,13 @@ fn secret_provider_requirement(reference_pattern: &str, provider: &str, definiti
                     "properties": {
                         "oidc": {
                             "properties": {
-                                "jwksSource": {
-                                    "properties": {
-                                        "documentRef": {"pattern": reference_pattern}
-                                    },
-                                    "required": ["documentRef"]
+                                // Some entry names the provider: not every
+                                // entry fails to.
+                                "issuers": {
+                                    "not": {"additionalProperties": {"not": entry_names_the_provider}}
                                 }
                             },
-                            "required": ["jwksSource"]
+                            "required": ["issuers"]
                         }
                     },
                     "required": ["oidc"]
@@ -107,7 +116,8 @@ fn secret_provider_requirement(reference_pattern: &str, provider: &str, definiti
                     },
                     "required": [provider]
                 }
-            }
+            },
+            "required": ["secretProviders"]
         }
     })
 }
@@ -202,6 +212,15 @@ mod tests {
     #[test]
     fn a_static_jwks_document_requires_the_provider_its_reference_names() {
         let requirement = |pattern: &str, provider: &str, definition: &str| {
+            let entry = serde_json::json!({
+                "properties": {
+                    "jwksSource": {
+                        "properties": {"documentRef": {"pattern": pattern}},
+                        "required": ["documentRef"]
+                    }
+                },
+                "required": ["jwksSource"]
+            });
             serde_json::json!({
                 "if": {
                     "properties": {
@@ -209,12 +228,9 @@ mod tests {
                             "properties": {
                                 "oidc": {
                                     "properties": {
-                                        "jwksSource": {
-                                            "properties": {"documentRef": {"pattern": pattern}},
-                                            "required": ["documentRef"]
-                                        }
+                                        "issuers": {"not": {"additionalProperties": {"not": entry}}}
                                     },
-                                    "required": ["jwksSource"]
+                                    "required": ["issuers"]
                                 }
                             },
                             "required": ["oidc"]
@@ -228,7 +244,8 @@ mod tests {
                             "properties": {provider: {"$ref": format!("#/$defs/{definition}")}},
                             "required": [provider]
                         }
-                    }
+                    },
+                    "required": ["secretProviders"]
                 }
             })
         };

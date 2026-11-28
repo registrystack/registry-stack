@@ -73,35 +73,54 @@ database:
   # transport: verified-tls
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:scheduling
-    # The claim carrying the accepted OAuth scopes. The default is `scope`,
-    # the claim stock ThunderID emits.
-    scopeClaim: scope
     # The read scope defaults to `scheduling:read` and the explain scope to
-    # `scheduling:explain`; the two must differ. `allowedClients` names the
-    # client ids the runtime admits. It is required in every file, development
-    # loopback included: an omitted or empty list is refused when the file is
-    # read, and `unrestricted` is a startup refusal, because it would admit
-    # every client the issuer verifies.
-    allowedClients: [scheduling-booking-agent]
-    # `assertionIssuers` maps a client id to the assertion authorities it may
-    # exchange a subject token from. A deployment that performs no token
-    # exchange leaves it empty; once a client is listed, a token it
-    # exchanged is accepted only for one of that client's declared
-    # authorities.
-    # assertionIssuers:
-    #   scheduling-booking-agent: [https://issuer.example.test/assertions]
-    # Signing keys come from issuer discovery by default. Declare the static
-    # alternative instead when the runtime cannot reach the issuer's discovery
-    # document, when the deployment is air-gapped, or when a test issuer's
-    # keys are pinned by hand. It does no rotation of its own: rolling a key
-    # means replacing the referenced document and restarting Scheduling.
-    # jwksSource:
-    #   type: static
-    #   documentRef: secret:file/jwks.json
-    # `type: uri` with `uri: https://...` fetches the key set from a fixed
-    # address instead of the one discovery names.
+    # `scheduling:explain`, and the two must differ. Both hold for every issuer.
+    # readsScope: scheduling:read
+    # explainScope: scheduling:explain
+    # The issuers whose access tokens this runtime accepts, each under an id
+    # of your choice. A client belongs to one issuer.
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:scheduling
+        # The access-token type admitted: `at+jwt` when omitted. An issuer
+        # that types its access tokens `JWT` is named here. An ID token is
+        # refused under either type, so the audience names this service and
+        # no client.
+        # accessTokenType: at+jwt
+        # The claim carrying the accepted OAuth scopes: `scope` when
+        # omitted, the claim stock ThunderID emits. An issuer that emits
+        # `registry_scopes` names it here.
+        # scopeClaim: registry_scopes
+        # The OAuth clients this issuer admits: a list of at least one
+        # client. It is required in every file, development loopback
+        # included, and `unrestricted` is refused, because it would admit
+        # every client the issuer verifies.
+        allowedClients: [scheduling-booking-agent]
+        # The caller kind of every token from this issuer, or of each named
+        # client's tokens, when the issuer does not emit one. Write one of
+        # the two. A token that names another kind is refused.
+        # actorKind: service
+        # clientActorKinds:
+        #   scheduling-booking-agent: service
+        # `assertionIssuers` maps a client id to the assertion authorities it
+        # may exchange a subject token from. A deployment that performs no
+        # token exchange leaves it empty, and an exchanged token is then
+        # refused. Once a client is listed, a token it exchanged is accepted
+        # only for one of that client's declared authorities.
+        # assertionIssuers:
+        #   scheduling-booking-agent: [https://issuer.example.test/assertions]
+        # Signing keys come from issuer discovery by default. Declare the
+        # static alternative instead when the runtime cannot reach the
+        # issuer's discovery document, when the deployment is air-gapped, or
+        # when a test issuer's keys are pinned by hand. It does no rotation
+        # of its own: rolling a key means replacing the referenced document
+        # and restarting Scheduling.
+        # jwksSource:
+        #   type: static
+        #   documentRef: secret:file/jwks.json
+        # `type: uri` with `uri: https://...` fetches the key set from a
+        # fixed address instead of the one discovery names.
 # Required: how a task grant is checked before any hold or appointment
 # changes. List the task authorities whose fresh grant status Scheduling
 # checks for every commitment and replay, or write

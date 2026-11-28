@@ -209,9 +209,11 @@ listener: {{bind: '127.0.0.1:8105', tlsTermination: loopback-plaintext}}
 secretProviders: {{environment: {{}}}}
 authentication:
   oidc:
-    issuer: https://identity.example.test
-    audience: urn:example:scheduling
-    allowedClients: [scheduling-test-client]
+    issuers:
+      main:
+        issuer: https://identity.example.test
+        audience: urn:example:scheduling
+        allowedClients: [scheduling-test-client]
 database:
   runtimeUrlRef: secret:env/SCHEDULING_POSTURE_DATABASE
   migrationUrlRef: secret:env/SCHEDULING_POSTURE_DATABASE
@@ -372,9 +374,9 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
              secretProviders:\n  environment: {{}}\n\
              identity:\n  databaseId: scheduling-ctl-test\n\
-             authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
-             \x20   audience: urn:example:scheduling\n\
-             \x20   allowedClients: [scheduling-test-client]\n\
+             authentication:\n  oidc:\n    issuers:\n      main:\n        issuer: https://identity.example.test\n\
+             \x20       audience: urn:example:scheduling\n\
+             \x20       allowedClients: [scheduling-test-client]\n\
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_TEST_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_TEST_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
@@ -536,9 +538,9 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
              secretProviders:\n  environment: {{}}\n\
              identity:\n  databaseId: scheduling-ctl-test\n\
-             authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
-             \x20   audience: urn:example:scheduling\n\
-             \x20   allowedClients: [scheduling-test-client]\n\
+             authentication:\n  oidc:\n    issuers:\n      main:\n        issuer: https://identity.example.test\n\
+             \x20       audience: urn:example:scheduling\n\
+             \x20       allowedClients: [scheduling-test-client]\n\
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_IDENTITY_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_IDENTITY_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\
@@ -727,9 +729,9 @@ async fn records_apply_refuses_a_database_where_this_package_is_not_active() {
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
              secretProviders:\n  environment: {{}}\n\
              identity:\n  databaseId: scheduling-ctl-test\n\
-             authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
-             \x20   audience: urn:example:scheduling\n\
-             \x20   allowedClients: [scheduling-test-client]\n\
+             authentication:\n  oidc:\n    issuers:\n      main:\n        issuer: https://identity.example.test\n\
+             \x20       audience: urn:example:scheduling\n\
+             \x20       allowedClients: [scheduling-test-client]\n\
              database:\n  runtimeUrlRef: secret:env/SCHEDULING_RECORDS_INACTIVE_DATABASE\n\
              \x20 migrationUrlRef: secret:env/SCHEDULING_RECORDS_INACTIVE_DATABASE\n\
              \x20 testOnlyPlaintext: true\n\

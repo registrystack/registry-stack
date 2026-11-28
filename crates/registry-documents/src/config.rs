@@ -8,7 +8,7 @@
 //! own; each finding names the member it concerns and never a configured
 //! value.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::Path;
 
@@ -20,28 +20,31 @@ use registry_platform_audit::{
     MIN_AUDIT_ROTATE_BYTES,
 };
 use registry_platform_config::JwksSource;
+use registry_platform_config::{
+    AccessTokenType, CallerIssuerCore, CallerIssuerEntry, CallerIssuers, ConfigBlockError,
+    DeclaredPosture, DevelopmentClass, DevelopmentSetting, DevelopmentWitness,
+    FoundExplicitSetting, Gated, OidcClientsConfig, Posture, PostureReport, PostureSource,
+    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretResolver,
+    DEFAULT_STAND_IN,
+};
 pub use registry_platform_config::{
     AdmittedClients, AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig,
-    MetricsListenerConfig, ObjectStorageConfig, OidcIssuerConfig, OidcPackageClientsConfig,
-    PackageClients, PackageClientsError, PackageConfig, PrivateListenerConfig as ListenerConfig,
-    SecretProvidersConfig, TlsTermination, UrlHookDestinationConfig,
-};
-use registry_platform_config::{
-    ConfigBlockError, DeclaredPosture, DevelopmentClass, DevelopmentSetting, DevelopmentWitness,
-    Gated, Posture, PostureReport, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
-    RuntimeFileCheck, SecretResolver, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND,
-    REMOVED_OIDC_JWKS_URI,
+    MetricsListenerConfig, ObjectStorageConfig, PackageClients, PackageClientsError, PackageConfig,
+    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
+    UrlHookDestinationConfig,
 };
 use registry_platform_httputil::client::transport_protects_the_credential;
 use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
+    fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm, DeclaredKinds,
     IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
     TokenVerifierConfig,
 };
-use registry_platform_yaml::{BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId, Report};
+use registry_platform_yaml::{BoundedU32, BoundedU64, Diagnostic, LocalId, Report};
 use serde::Deserialize;
 use thiserror::Error;
+
+use crate::auth::IssuerSource;
 
 pub(crate) use registry_platform_config::describe_secret_failure;
 
@@ -59,17 +62,51 @@ pub const DOCUMENTS_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 };
 
 /// The keys the runtime document refuses with the sentence naming what
-/// replaced them (CFG-CHANGE-2): the shared OIDC key-source spellings.
-const DOCUMENTS_REMOVED_KEYS: &[registry_platform_config::RemovedKey] =
-    &[REMOVED_OIDC_JWKS_URI, REMOVED_OIDC_JWKS_SOURCE_KIND];
+/// replaced them (CFG-CHANGE-2): the members of the one issuer block, now
+/// declared per issuer entry.
+const DOCUMENTS_REMOVED_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "authentication.oidc.issuer",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.audience",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksUri",
+        replacement:
+            "declare it under authentication.oidc.issuers.ISSUER_ID as jwksSource with type: uri",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksSource",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowInsecureHttp",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowedClients",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.assertionIssuers",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.scopeClaim",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+];
+
+/// The JSON Pointer of the `issuers` member.
+const ISSUERS_POINTER: &str = "/authentication/oidc/issuers";
 
 const METRICS_LISTENER_CODE: &str = "documents.runtime.invalid-metrics-listener";
 /// The config path of the exposure key a wildcard metrics refusal names.
 const METRICS_NETWORK_EXPOSURE_KEY: &str = "metricsListener.networkExposure";
 const METRICS_OVERLAP_CODE: &str = "documents.runtime.metrics-listener-overlaps-listener";
-
-/// The media type an access token must declare (RFC 9068).
-const DOCUMENTS_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 
 /// The largest transfer deadline floor, in seconds.
 pub const MAXIMUM_TRANSFER_DEADLINE_SECONDS: u32 = 3_600;
@@ -90,6 +127,10 @@ const ALLOWED_CLIENTS_REQUIRED_CODE: &str = "documents.runtime.allowed-clients-r
 const PROFILE_CLIENT_NOT_ALLOWED_CODE: &str = "documents.runtime.profile-client-not-allowed";
 const ASSERTION_ISSUER_CLIENT_NOT_ALLOWED_CODE: &str =
     "documents.runtime.assertion-issuer-client-not-allowed";
+const CLIENT_IN_TWO_ISSUERS_CODE: &str = "platform.oidc.client-in-two-issuers";
+const AUDIENCE_IS_A_CLIENT_CODE: &str = "platform.oidc.audience-is-a-client";
+const ACTOR_KIND_FOR_UNADMITTED_CLIENT_CODE: &str =
+    "platform.oidc.actor-kind-for-unadmitted-client";
 
 /// The code of the refusal a runtime document earns when `destinations.hooks`
 /// leaves unbound a destination the project's hooks name. `documentsctl
@@ -163,29 +204,55 @@ pub struct AuthenticationConfig {
     pub oidc: OidcConfig,
 }
 
-/// The OIDC issuer whose access tokens this runtime accepts, the clients it
-/// admits, and the claim carrying their scopes.
+/// The OIDC issuers whose access tokens this runtime accepts, each with the
+/// clients it admits and the claim carrying their scopes.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
-    /// The exact token issuer, audience, and signing-key source.
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuers"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub provider: OidcIssuerConfig,
-    /// The OAuth clients this runtime admits: `from-package` for the
-    /// requester clients of the project's access profiles, or a list that
-    /// covers every client a profile names. Every access profile resolves its
-    /// caller from the matched client, so the admitted set is never empty.
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-package-clients"))]
-    #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub clients: OidcPackageClientsConfig,
-    #[serde(default = "default_scope_claim")]
-    pub scope_claim: ExternalId,
+    pub issuers: CallerIssuers<IssuerConfig>,
 }
 
-fn default_scope_claim() -> ExternalId {
-    ExternalId::new("scope").expect("`scope` is an external identifier")
+/// One issuer the Document Store accepts access tokens from: the shared
+/// caller-issuer members and the assertion authorities each client may
+/// exchange from.
+///
+/// `allowedClients` is `from-package` for the requester clients of the
+/// project's access profiles, or a list. Every access profile resolves its
+/// caller from the matched client, so the admitted set is never empty and
+/// `unrestricted` is refused. A client belongs to one issuer, and the lists of
+/// all entries together cover every client a profile names.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssuerConfig {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer-core"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    core: CallerIssuerCore<PackageClients>,
+    /// Assertion authorities each client may exchange a subject token from,
+    /// keyed by client identifier. Omitted, no assertion-issuer rule applies
+    /// and a token that arrived through an exchange is refused. Written, it
+    /// lists at least one client, each with at least one authority.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "registry_platform_config::non_empty_assertion_issuers"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_config::assertion_issuers_schema")
+    )]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+impl CallerIssuerEntry for IssuerConfig {
+    type Clients = PackageClients;
+
+    fn core(&self) -> &CallerIssuerCore<PackageClients> {
+        &self.core
+    }
 }
 
 /// Where the audit journal is written and the key its hashes are made with.
@@ -495,25 +562,34 @@ fn default_hook_payload_retention_days() -> BoundedU32<1, MAXIMUM_HOOK_PAYLOAD_R
 /// pointer, and what to do about it. It never carries a configured value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Finding {
-    pub code: &'static str,
+    pub code: String,
     pub pointer: String,
     pub message: String,
     pub suggested_action: String,
+    /// Another member the finding involves, as a JSON pointer, and what it
+    /// holds that matters here.
+    pub related: Option<(String, String)>,
 }
 
 impl Finding {
     fn new(
-        code: &'static str,
+        code: impl Into<String>,
         pointer: &str,
         message: impl Into<String>,
         suggested_action: impl Into<String>,
     ) -> Self {
         Self {
-            code,
+            code: code.into(),
             pointer: pointer.to_owned(),
             message: message.into(),
             suggested_action: suggested_action.into(),
+            related: None,
         }
+    }
+
+    fn related(mut self, pointer: String, note: impl Into<String>) -> Self {
+        self.related = Some((pointer, note.into()));
+        self
     }
 
     fn block(pointer: &str, error: &ConfigBlockError) -> Self {
@@ -539,23 +615,30 @@ pub enum RuntimeConfigError {
     /// The secret providers could not be prepared.
     #[error("the secret providers could not be prepared: {0}")]
     SecretProviders(String),
-    /// The token issuer's discovery document or key set could not be
-    /// fetched or read.
+    /// An issuer entry's discovery document or key set could not be fetched
+    /// or read.
     #[error("the OIDC issuer's signing keys could not be loaded")]
     Oidc,
-    /// The static key set named by `authentication.oidc.jwksSource.documentRef`
+    /// An issuer entry the load checks passed could not be built. The text
+    /// names the entry and what it lacked.
+    #[error("the issuer configuration is inconsistent: {0}")]
+    Inconsistent(String),
+    /// The static key set an issuer entry names by `jwksSource.documentRef`
     /// could not be resolved.
     #[error("{0}")]
     OidcJwksSecret(String),
 }
 
-/// The static key set the operator pinned. A document that breaks a key set
-/// rule is the operator's to fix, so the refusal says which rule: it never
-/// holds a key value.
-fn parse_static_key_set(document: &[u8]) -> Result<jsonwebtoken::jwk::JwkSet, RuntimeConfigError> {
+/// The static key set the operator pinned at `field`. A document that breaks
+/// a key set rule is the operator's to fix, so the refusal says which rule: it
+/// never holds a key value.
+fn parse_static_key_set(
+    field: &str,
+    document: &[u8],
+) -> Result<jsonwebtoken::jwk::JwkSet, RuntimeConfigError> {
     parse_static_jwks(document).map_err(|error| match error {
         OidcError::StaticKeySet(refusal) => RuntimeConfigError::OidcJwksSecret(format!(
-            "the document at authentication.oidc.jwksSource.documentRef was refused: {refusal}"
+            "the document at {field} was refused: {refusal}"
         )),
         _ => RuntimeConfigError::Oidc,
     })
@@ -625,13 +708,27 @@ impl RuntimeConfig {
             .map_err(|error| RuntimeConfigError::SecretProviders(error.to_string()))
     }
 
-    /// Build the token verifier's key source from the configured JWKS
+    /// The entry `id` names.
+    fn issuer(&self, id: &str) -> Result<&IssuerConfig, RuntimeConfigError> {
+        self.authentication
+            .oidc
+            .issuers
+            .iter()
+            .find_map(|(entry_id, entry)| (entry_id.as_str() == id).then_some(entry))
+            .ok_or_else(|| {
+                RuntimeConfigError::Inconsistent(format!("no issuer entry is named `{id}`"))
+            })
+    }
+
+    /// Build the key source of the issuer entry `id` from its configured JWKS
     /// source.
     pub async fn jwks_fetcher(
         &self,
+        id: &str,
         secrets: &SecretResolver,
     ) -> Result<std::sync::Arc<JwksFetcher>, RuntimeConfigError> {
-        let provider = &self.authentication.oidc.provider;
+        let provider = &self.issuer(id)?.core().provider;
+        let document_field = format!("authentication.oidc.issuers.{id}.jwksSource.documentRef");
         let network =
             IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
                 .map_err(|_| RuntimeConfigError::Oidc)?;
@@ -662,52 +759,116 @@ impl RuntimeConfig {
             JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
                     RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
-                        "authentication.oidc.jwksSource.documentRef",
+                        &document_field,
                         document_ref,
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_key_set(document.expose_secret())?;
+                let jwks = parse_static_key_set(&document_field, document.expose_secret())?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
         Ok(std::sync::Arc::new(fetcher))
     }
 
-    /// The access-token verifier profile this deployment's OIDC settings
-    /// describe: RFC 9068 access tokens only, from the configured issuer,
-    /// for the configured audience, from an admitted client.
-    #[must_use]
-    pub fn verifier_profile(&self, admitted: &AdmittedClients) -> TokenVerifierConfig {
-        let oidc = &self.authentication.oidc;
-        TokenVerifierConfig::access_token_profile(
-            oidc.provider.issuer.to_string(),
-            vec![oidc.provider.audience.clone()],
+    /// The access-token verifier profile of the issuer entry `id`, over the
+    /// clients `admitted` resolved for it.
+    ///
+    /// The entry's `accessTokenType` selects the token media type. An ID token
+    /// is refused under either type.
+    pub fn verifier_profile(
+        &self,
+        id: &str,
+        admitted: &AdmittedClients,
+    ) -> Result<TokenVerifierConfig, RuntimeConfigError> {
+        let entry = self.issuer(id)?;
+        TokenVerifierConfig::for_caller_issuer(
+            entry.core(),
             vec![
                 AccessTokenAlgorithm::RS256.to_jsonwebtoken(),
                 AccessTokenAlgorithm::ES256.to_jsonwebtoken(),
             ],
-            access_token_typ_set(DOCUMENTS_ACCESS_TOKEN_TYPE),
+            Some(admitted),
         )
-        .with_scope_claim(oidc.scope_claim.as_str().to_owned())
-        .with_allowed_clients(admitted.as_slice().to_vec())
-        .with_assertion_issuers(oidc.clients.assertion_issuers.clone())
+        .map(|profile| profile.with_assertion_issuers(entry.assertion_issuers.clone()))
+        .map_err(|_| {
+            RuntimeConfigError::Inconsistent(format!(
+                "the issuer entry `{id}` could not make a verifier profile"
+            ))
+        })
     }
 
-    /// Whether this deployment declared any token-exchange authority.
+    /// Every issuer entry as the authenticator takes it: its verifier
+    /// profile over the clients resolved against `project`, its signing keys,
+    /// and the caller kinds it declares.
+    pub async fn issuer_sources(
+        &self,
+        secrets: &SecretResolver,
+        project: &DocumentsProject,
+    ) -> Result<Vec<IssuerSource>, RuntimeConfigError> {
+        let admitted = self
+            .admitted_clients(project)
+            .map_err(|finding| RuntimeConfigError::Refused(vec![*finding]))?;
+        let mut sources = Vec::new();
+        for (id, entry) in self.authentication.oidc.issuers.iter() {
+            let id = id.as_str();
+            let entry_admitted = admitted.get(id).ok_or_else(|| {
+                RuntimeConfigError::Inconsistent(format!(
+                    "the issuer entry `{id}` has no resolved clients"
+                ))
+            })?;
+            sources.push(IssuerSource::new(
+                id,
+                self.verifier_profile(id, entry_admitted)?,
+                self.jwks_fetcher(id, secrets).await?,
+                DeclaredKinds::from_core(entry.core()).map_err(|_| {
+                    RuntimeConfigError::Inconsistent(format!(
+                        "the issuer entry `{id}` declares its actor kinds twice"
+                    ))
+                })?,
+            ));
+        }
+        Ok(sources)
+    }
+
+    /// The refusal for an issuer set the entries could not make. The shared
+    /// check reports the same rules at load, so this names them when it is
+    /// reached after one.
     #[must_use]
-    pub fn binds_assertion_issuers(&self) -> bool {
-        !self
-            .authentication
+    pub fn issuer_set_refusal(&self) -> RuntimeConfigError {
+        let findings = self.issuer_findings();
+        if findings.is_empty() {
+            RuntimeConfigError::Inconsistent(
+                "two issuer entries could not be set side by side".to_owned(),
+            )
+        } else {
+            RuntimeConfigError::Refused(findings)
+        }
+    }
+
+    /// The id of every issuer entry.
+    fn issuer_ids(&self) -> Vec<&str> {
+        self.authentication
             .oidc
-            .clients
-            .assertion_issuers
-            .is_empty()
+            .issuers
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect()
     }
 
     /// Every rule this document breaks, in document order.
     #[must_use]
     pub fn findings(&self) -> Vec<Finding> {
+        let mut findings = self.own_findings();
+        findings.extend(self.issuer_findings());
+        findings
+    }
+
+    /// Every rule this document breaks except the ones the shared issuer
+    /// block holds about its entries together. An offline check reports those
+    /// through [`CallerIssuers::check_file`], at their positions and with the
+    /// entry each involves.
+    fn own_findings(&self) -> Vec<Finding> {
         let mut findings = Vec::new();
         self.check_identity(&mut findings);
         if let Err(error) = self.package.check() {
@@ -842,16 +1003,45 @@ impl RuntimeConfig {
         }
     }
 
+    /// The rules the shared issuer block holds about the entries together.
+    fn issuer_findings(&self) -> Vec<Finding> {
+        self.authentication
+            .oidc
+            .issuers
+            .check(ISSUERS_POINTER)
+            .into_iter()
+            .map(|diagnostic| {
+                Finding::new(
+                    diagnostic.code,
+                    &diagnostic.path,
+                    diagnostic.message,
+                    diagnostic.suggested_action,
+                )
+            })
+            .collect()
+    }
+
     fn check_oidc(&self, findings: &mut Vec<Finding>) {
-        let oidc = &self.authentication.oidc;
-        if let Err(error) = oidc.provider.check("authentication.oidc") {
-            findings.push(Finding::block("/authentication/oidc", &error));
-        }
-        if let Err(error) = oidc.clients.check("authentication.oidc") {
-            findings.push(Finding::block("/authentication/oidc", &error));
-        }
-        if oidc.clients.allowed_clients == PackageClients::Unrestricted {
-            findings.push(allowed_clients_required());
+        for (id, entry) in self.authentication.oidc.issuers.iter() {
+            let id = id.as_str();
+            let field = format!("authentication.oidc.issuers.{id}");
+            let pointer = entry_pointer(id);
+            if let Err(error) = entry.core().provider.check(&field) {
+                findings.push(Finding::block(&pointer, &error));
+            }
+            let assertions = OidcClientsConfig {
+                allowed_clients: Vec::new(),
+                assertion_issuers: entry.assertion_issuers.clone(),
+            };
+            if let Err(error) = assertions.check(&field) {
+                findings.push(Finding::block(&pointer, &error));
+            }
+            // Every access profile resolves its caller from the matched
+            // client, so `allowedClients: unrestricted` would admit every
+            // client the issuer verifies while reaching no profile.
+            if entry.core().allowed_clients == PackageClients::Unrestricted {
+                findings.push(allowed_clients_required(id));
+            }
         }
     }
 
@@ -941,68 +1131,139 @@ impl RuntimeConfig {
         findings
     }
 
-    /// The clients the token verifier admits, given the project this runtime
-    /// serves. `from-package` is the sorted union of the access profiles'
-    /// requester clients, and a list must cover every one of them, or the
-    /// profile naming the missing client could never be reached. The verifier
-    /// is never handed an empty list, which it reads as "every client".
-    pub fn admitted_clients(&self, project: &DocumentsProject) -> Result<AdmittedClients, Finding> {
-        self.authentication
-            .oidc
-            .clients
-            .allowed_clients
-            .resolve(&requester_clients(project))
-            .map_err(|error| match error {
-                PackageClientsError::Unrestricted | PackageClientsError::Empty => {
-                    allowed_clients_required()
-                }
-                PackageClientsError::Missing(client) => {
-                    let profile = project
-                        .access_profiles
-                        .iter()
-                        .find(|(_, profile)| {
-                            profile
-                                .requester_clients
-                                .as_slice()
-                                .iter()
-                                .any(|listed| listed.as_str() == client)
-                        })
-                        .map_or("", |(id, _)| id.as_str());
-                    Finding::new(
-                        PROFILE_CLIENT_NOT_ALLOWED_CODE,
-                        "/authentication/oidc/allowedClients",
-                        format!(
-                            "authentication.oidc.allowedClients does not list {client}, a requester client of access profile {profile}"
-                        ),
-                        "Add the client to allowedClients, or write allowedClients: from-package to admit every requester client the project names.",
-                    )
-                }
-            })
+    /// The clients each token verifier admits, by issuer id, given the project
+    /// this runtime serves. `from-package` is the sorted union of the access
+    /// profiles' requester clients and a list is the list. A client belongs to
+    /// one issuer, so an entry that reads its clients from the package refuses
+    /// every other entry's list naming a package client. Without such an
+    /// entry, the lists together must cover every client a profile names, or
+    /// the profile naming the missing client could never be reached. No
+    /// verifier is handed an empty list, which it reads as "every client".
+    pub fn admitted_clients(
+        &self,
+        project: &DocumentsProject,
+    ) -> Result<BTreeMap<String, AdmittedClients>, Box<Finding>> {
+        let (admitted, findings) = self.resolve_clients(project);
+        match findings.into_iter().next() {
+            Some(finding) => Err(Box::new(finding)),
+            None => Ok(admitted),
+        }
     }
 
-    /// What the admitted clients leave wrong against the project. An
-    /// `unrestricted` value is reported by [`Self::findings`] alone.
+    /// What the admitted clients leave wrong against the project, every rule
+    /// in one pass. An `unrestricted` value is reported once, as a missing
+    /// client list.
     fn client_findings(&self, project: &DocumentsProject) -> Vec<Finding> {
-        let oidc = &self.authentication.oidc;
-        if oidc.clients.allowed_clients == PackageClients::Unrestricted {
+        self.resolve_clients(project).1
+    }
+
+    /// The clients each entry admits and every rule they break against the
+    /// project: a list an entry leaves empty, a client two entries admit, a
+    /// package client no entry admits, an assertion authority for a client
+    /// the entry does not admit, and the audience and client kind rules over
+    /// the clients `from-package` resolved to.
+    fn resolve_clients(
+        &self,
+        project: &DocumentsProject,
+    ) -> (BTreeMap<String, AdmittedClients>, Vec<Finding>) {
+        let package_clients = requester_clients(project);
+        let issuers = &self.authentication.oidc.issuers;
+        let mut admitted = BTreeMap::new();
+        let mut findings = Vec::new();
+        let mut from_package: Option<&str> = None;
+        for (id, entry) in issuers.iter() {
+            let list = match &entry.core().allowed_clients {
+                PackageClients::FromPackage => {
+                    from_package.get_or_insert(id.as_str());
+                    AdmittedClients::new(package_clients.clone())
+                }
+                PackageClients::Listed(listed) => AdmittedClients::new(listed.clone()),
+                PackageClients::Unrestricted => None,
+            };
+            match list {
+                Some(list) => {
+                    admitted.insert(id.as_str().to_owned(), list);
+                }
+                None => findings.push(allowed_clients_required(id.as_str())),
+            }
+        }
+        match from_package {
+            Some(reading) => {
+                for (id, entry) in issuers.iter() {
+                    let PackageClients::Listed(listed) = &entry.core().allowed_clients else {
+                        continue;
+                    };
+                    for (index, client) in listed.iter().enumerate() {
+                        if package_clients.contains(client) {
+                            findings.push(client_in_two_issuers(id.as_str(), index, reading));
+                        }
+                    }
+                }
+            }
+            None => findings.extend(self.uncovered_package_clients(project, &package_clients)),
+        }
+        for (id, entry) in issuers.iter() {
+            let Some(clients) = admitted.get(id.as_str()) else {
+                continue;
+            };
+            findings.extend(assertion_issuer_findings(id.as_str(), entry, clients));
+            if entry.core().allowed_clients == PackageClients::FromPackage {
+                findings.extend(resolved_client_findings(id.as_str(), entry, clients));
+            }
+        }
+        (admitted, findings)
+    }
+
+    /// The package clients no entry's list names, each as the profile that
+    /// could never be reached.
+    fn uncovered_package_clients(
+        &self,
+        project: &DocumentsProject,
+        package_clients: &[String],
+    ) -> Vec<Finding> {
+        let issuers = &self.authentication.oidc.issuers;
+        let listed: BTreeSet<&str> = issuers
+            .iter()
+            .filter_map(|(_, entry)| match &entry.core().allowed_clients {
+                PackageClients::Listed(clients) => Some(clients),
+                PackageClients::FromPackage | PackageClients::Unrestricted => None,
+            })
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        // An entry that states no list has already been reported.
+        if issuers
+            .iter()
+            .any(|(_, entry)| entry.core().allowed_clients == PackageClients::Unrestricted)
+        {
             return Vec::new();
         }
-        let admitted = match self.admitted_clients(project) {
-            Ok(admitted) => admitted,
-            Err(finding) => return vec![finding],
+        let pointer = match (issuers.len(), issuers.iter().next()) {
+            (1, Some((id, _))) => clients_pointer(id.as_str()),
+            _ => ISSUERS_POINTER.to_owned(),
         };
-        oidc.clients
-            .assertion_issuers
-            .keys()
-            .filter(|client| !admitted.as_slice().contains(client))
+        package_clients
+            .iter()
+            .filter(|client| !listed.contains(client.as_str()))
             .map(|client| {
+                let profile = project
+                    .access_profiles
+                    .iter()
+                    .find(|(_, profile)| {
+                        profile
+                            .requester_clients
+                            .as_slice()
+                            .iter()
+                            .any(|listed| listed.as_str() == client)
+                    })
+                    .map_or("", |(id, _)| id.as_str());
                 Finding::new(
-                    ASSERTION_ISSUER_CLIENT_NOT_ALLOWED_CODE,
-                    &format!("/authentication/oidc/assertionIssuers/{}", escape(client)),
+                    PROFILE_CLIENT_NOT_ALLOWED_CODE,
+                    &pointer,
                     format!(
-                        "authentication.oidc.assertionIssuers names {client}, which no access profile of the project lists as a requester client"
+                        "authentication.oidc.issuers allowedClients lists do not name {client}, a requester client of access profile {profile}"
                     ),
-                    "Name a requester client of an access profile, or remove the entry.",
+                    "Add the client to the allowedClients of one issuer entry, or write allowedClients: from-package on one entry to admit every requester client the project names.",
                 )
             })
             .collect()
@@ -1055,13 +1316,105 @@ fn requester_clients(project: &DocumentsProject) -> Vec<String> {
     clients
 }
 
-fn allowed_clients_required() -> Finding {
+/// The JSON Pointer of the issuer entry `id`.
+fn entry_pointer(id: &str) -> String {
+    format!("{ISSUERS_POINTER}/{}", escape(id))
+}
+
+/// The JSON Pointer of the `allowedClients` member of the issuer entry `id`.
+fn clients_pointer(id: &str) -> String {
+    format!("{}/allowedClients", entry_pointer(id))
+}
+
+fn allowed_clients_required(id: &str) -> Finding {
     Finding::new(
         ALLOWED_CLIENTS_REQUIRED_CODE,
-        "/authentication/oidc/allowedClients",
-        "authentication.oidc.allowedClients must be `from-package` or list the clients this runtime admits; `unrestricted` is refused",
-        "Write allowedClients: from-package, or list every OAuth client an access profile names.",
+        &clients_pointer(id),
+        format!(
+            "authentication.oidc.issuers.{id}.allowedClients must be `from-package` or list the clients this issuer admits. `unrestricted` is refused"
+        ),
+        "Write allowedClients: from-package, or list every OAuth client an access profile names that this issuer admits.",
     )
+}
+
+/// The client listed at `index` of entry `id` is also admitted by the entry
+/// `reading`, which reads its clients from the package.
+fn client_in_two_issuers(id: &str, index: usize, reading: &str) -> Finding {
+    Finding::new(
+        CLIENT_IN_TWO_ISSUERS_CODE,
+        &format!("{}/{index}", clients_pointer(id)),
+        format!("the client is already admitted by the entry {reading}"),
+        "Admit each client through one issuer entry, so a client rule binds to one issuer.",
+    )
+    .related(
+        clients_pointer(reading),
+        format!("the entry {reading} reads its clients from the package"),
+    )
+}
+
+/// Every client an entry's `assertionIssuers` names must be one the entry
+/// admits.
+fn assertion_issuer_findings(
+    id: &str,
+    entry: &IssuerConfig,
+    admitted: &AdmittedClients,
+) -> Vec<Finding> {
+    entry
+        .assertion_issuers
+        .keys()
+        .filter(|client| !admitted.as_slice().contains(client))
+        .map(|client| {
+            Finding::new(
+                ASSERTION_ISSUER_CLIENT_NOT_ALLOWED_CODE,
+                &format!("{}/assertionIssuers/{}", entry_pointer(id), escape(client)),
+                format!(
+                    "authentication.oidc.issuers.{id}.assertionIssuers names {client}, which the entry does not admit"
+                ),
+                "Name a client the entry admits, or remove the assertion authority.",
+            )
+        })
+        .collect()
+}
+
+/// The rules about an entry's audience and client kinds, run again over the
+/// clients `from-package` resolved to, as the shared check runs them over a
+/// list.
+fn resolved_client_findings(
+    id: &str,
+    entry: &IssuerConfig,
+    admitted: &AdmittedClients,
+) -> Vec<Finding> {
+    let core = entry.core();
+    let clients = admitted.as_slice();
+    let mut findings = Vec::new();
+    if core.access_token_type.get() == &AccessTokenType::Jwt
+        && clients.contains(&core.provider.audience)
+    {
+        findings.push(Finding::new(
+            AUDIENCE_IS_A_CLIENT_CODE,
+            &format!("{}/audience", entry_pointer(id)),
+            "with accessTokenType JWT the audience is also one of the clients the project names",
+            "Use an audience that names this service and no client, so an ID token issued to a client is not read as an access token.",
+        ));
+    }
+    if let Some(kinds) = &core.client_actor_kinds {
+        findings.extend(
+            kinds
+                .get()
+                .0
+                .keys()
+                .filter(|client| !clients.iter().any(|admitted| admitted == client.as_str()))
+                .map(|client| {
+                    Finding::new(
+                        ACTOR_KIND_FOR_UNADMITTED_CLIENT_CODE,
+                        &format!("{}/clientActorKinds/{}", entry_pointer(id), escape(client.as_str())),
+                        "clientActorKinds names a client the project does not name",
+                        "Name only clients the project's access profiles name, or list the client in allowedClients.",
+                    )
+                }),
+        );
+    }
+    findings
 }
 
 /// What an offline check of one runtime document found (CFG-CHECK-1).
@@ -1071,6 +1424,12 @@ pub struct RuntimeCheck {
     pub report: Report,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
+    /// The explicit production settings the document states, each with its
+    /// position. A setting is never a finding: it records a choice the
+    /// operator made on purpose. `None` when the document never decoded, so
+    /// nothing was read to state any. `Some` of an empty list says the
+    /// document was read and stated none.
+    pub explicit_settings: Option<Vec<FoundExplicitSetting>>,
 }
 
 /// Check the runtime document at the absolute `path` as `documents serve`
@@ -1104,23 +1463,33 @@ pub fn check_runtime_file_with_posture(
         substitute,
         stand_in_for,
     );
-    let diagnostics: Vec<Diagnostic> = match &check.loaded {
+    let (diagnostics, explicit_settings) = match &check.loaded {
         Some(loaded) => {
-            let mut findings = loaded.config.findings();
+            let mut findings = loaded.config.own_findings();
             if let Some(project) = project {
                 findings.extend(loaded.config.project_findings(project));
             }
-            findings
+            let mut diagnostics: Vec<Diagnostic> = findings
                 .iter()
-                .filter(|finding| !is_deferred(&check, finding))
+                .filter(|finding| !is_deferred(&check, loaded.config.issuer_ids(), finding))
                 .map(|finding| positioned(&check, finding))
-                .collect()
+                .collect();
+            diagnostics.extend(loaded.config.authentication.oidc.issuers.check_file(
+                ISSUERS_POINTER,
+                &check,
+                DOCUMENTS_RUNTIME_KIND,
+            ));
+            (
+                diagnostics,
+                Some(loaded.posture.explicit_settings().to_vec()),
+            )
         }
-        None => Vec::new(),
+        None => (Vec::new(), None),
     };
     RuntimeCheck {
         report: check.report_with(DOCUMENTS_RUNTIME_KIND, diagnostics),
         unavailable: check.unavailable,
+        explicit_settings,
     }
 }
 
@@ -1128,11 +1497,50 @@ pub fn check_runtime_file_with_posture(
 /// stand-in, not the operator's value, decided it. The overlap finding reads
 /// both binds, and sits at the metrics bind: when only the serving bind is
 /// an expression it is the only finding left out.
-fn is_deferred(check: &RuntimeFileCheck<RuntimeConfig>, finding: &Finding) -> bool {
-    check.defers_within(&finding.pointer)
-        || (finding.code == METRICS_OVERLAP_CODE && check.defers("/listener/bind"))
-        || (finding.code == METRICS_LISTENER_CODE
-            && check.defers("/metricsListener/networkExposure"))
+///
+/// A rule that compares the lists of several entries reads every entry's
+/// `allowedClients`. A rule about one entry reads that entry's list and the
+/// member its pointer names, and the audience rule also reads the token type.
+fn is_deferred(
+    check: &RuntimeFileCheck<RuntimeConfig>,
+    issuer_ids: Vec<&str>,
+    finding: &Finding,
+) -> bool {
+    let entry_list_deferred =
+        || entry_of(&finding.pointer).is_some_and(|id| check.defers_within(&clients_pointer(id)));
+    match finding.code.as_str() {
+        PROFILE_CLIENT_NOT_ALLOWED_CODE | CLIENT_IN_TWO_ISSUERS_CODE => issuer_ids
+            .iter()
+            .any(|id| check.defers_within(&clients_pointer(id))),
+        AUDIENCE_IS_A_CLIENT_CODE => {
+            check.defers_within(&finding.pointer)
+                || entry_list_deferred()
+                || entry_of(&finding.pointer).is_some_and(|id| {
+                    check.defers_within(&format!("{}/accessTokenType", entry_pointer(id)))
+                })
+        }
+        ACTOR_KIND_FOR_UNADMITTED_CLIENT_CODE | ASSERTION_ISSUER_CLIENT_NOT_ALLOWED_CODE => {
+            check.defers_within(&finding.pointer) || entry_list_deferred()
+        }
+        METRICS_OVERLAP_CODE => {
+            check.defers_within(&finding.pointer) || check.defers("/listener/bind")
+        }
+        METRICS_LISTENER_CODE => {
+            check.defers_within(&finding.pointer)
+                || check.defers("/metricsListener/networkExposure")
+        }
+        _ => check.defers_within(&finding.pointer),
+    }
+}
+
+/// The id of the issuer entry a pointer is at or below.
+fn entry_of(pointer: &str) -> Option<&str> {
+    pointer
+        .strip_prefix(ISSUERS_POINTER)?
+        .strip_prefix('/')?
+        .split('/')
+        .next()
+        .filter(|id| !id.is_empty())
 }
 
 /// The metrics listener binds a concrete loopback or private address on a
@@ -1176,6 +1584,7 @@ pub fn startup_report_with_posture(
         }
         RuntimeConfigError::SecretProviders(_)
         | RuntimeConfigError::Oidc
+        | RuntimeConfigError::Inconsistent(_)
         | RuntimeConfigError::OidcJwksSecret(_) => None,
     }
 }
@@ -1185,7 +1594,7 @@ pub fn startup_report_with_posture(
 fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &Finding) -> Diagnostic {
     let mut diagnostic = check.error_at(
         DOCUMENTS_RUNTIME_KIND,
-        finding.code,
+        &finding.code,
         &finding.pointer,
         finding.message.clone(),
         finding.suggested_action.clone(),
@@ -1201,6 +1610,9 @@ fn positioned(check: &RuntimeFileCheck<RuntimeConfig>, finding: &Finding) -> Dia
         diagnostic.source = check
             .error_at(DOCUMENTS_RUNTIME_KIND, "", located, "", "")
             .source;
+    }
+    if let Some((pointer, note)) = &finding.related {
+        check.add_related_at(&mut diagnostic, pointer, note.clone());
     }
     diagnostic
 }
@@ -1222,8 +1634,8 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["package", "expectedDigest"] => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         }
-        ["authentication", "oidc", "issuer"]
-        | ["authentication", "oidc", "jwksSource", "uri"]
+        ["authentication", "oidc", "issuers", _, "issuer"]
+        | ["authentication", "oidc", "issuers", _, "jwksSource", "uri"]
         | ["contentVerification", "url"]
         | ["storage", "url"]
         | ["destinations", "hooks", _, "url"] => "https://deferred.invalid",
@@ -1274,6 +1686,7 @@ pub(crate) mod tests {
                 .collect(),
             RuntimeConfigError::SecretProviders(message) => vec![message],
             RuntimeConfigError::Oidc => vec!["oidc".to_owned()],
+            RuntimeConfigError::Inconsistent(message) => vec![message],
             RuntimeConfigError::OidcJwksSecret(message) => vec![message],
         }
     }
@@ -1361,7 +1774,11 @@ pub(crate) mod tests {
     #[test]
     fn a_static_key_set_with_unknown_public_members_loads() {
         let document = key_set(r#""ext":true,"x5t":"abc","x5c":["AAAA"]"#);
-        let jwks = parse_static_key_set(document.as_bytes()).expect("unknown public members load");
+        let jwks = parse_static_key_set(
+            "authentication.oidc.issuers.main.jwksSource.documentRef",
+            document.as_bytes(),
+        )
+        .expect("unknown public members load");
         assert_eq!(jwks.keys.len(), 1);
     }
 
@@ -1369,16 +1786,18 @@ pub(crate) mod tests {
     fn a_static_key_set_that_holds_a_private_member_is_refused_by_rule_and_not_by_value() {
         let secret = "private-canary-value";
         let document = key_set(&format!(r#""d":"{secret}""#));
-        let RuntimeConfigError::OidcJwksSecret(message) =
-            parse_static_key_set(document.as_bytes()).expect_err("a private member is refused")
-        else {
+        let RuntimeConfigError::OidcJwksSecret(message) = parse_static_key_set(
+            "authentication.oidc.issuers.main.jwksSource.documentRef",
+            document.as_bytes(),
+        )
+        .expect_err("a private member is refused") else {
             panic!("a refused key set is not an issuer outage");
         };
         assert!(
             message.contains(r#"private-key member "d""#),
             "the refusal names the private-key member rule"
         );
-        assert!(message.contains("authentication.oidc.jwksSource.documentRef"));
+        assert!(message.contains("authentication.oidc.issuers.main.jwksSource.documentRef"));
         assert!(
             !message.contains(secret),
             "the refusal holds the private member's value"
@@ -1388,7 +1807,10 @@ pub(crate) mod tests {
     #[test]
     fn a_static_key_set_that_is_not_json_is_not_an_issuer_outage() {
         assert!(matches!(
-            parse_static_key_set(b"not json"),
+            parse_static_key_set(
+                "authentication.oidc.issuers.main.jwksSource.documentRef",
+                b"not json"
+            ),
             Err(RuntimeConfigError::OidcJwksSecret(_))
         ));
     }
@@ -1511,7 +1933,7 @@ pub(crate) mod tests {
     fn from_package_is_accepted_and_names_no_second_list() {
         let config = parse(&from_package_runtime()).expect("from-package loads");
         assert_eq!(
-            config.authentication.oidc.clients.allowed_clients,
+            config.issuer("main").unwrap().core().allowed_clients,
             PackageClients::FromPackage
         );
         assert_eq!(
@@ -1546,7 +1968,7 @@ pub(crate) mod tests {
         let config = parse(&text).expect("a list is a valid file on its own");
         assert_eq!(
             project_finding_codes(&config, &starter_project()),
-            ["documents.runtime.profile-client-not-allowed /authentication/oidc/allowedClients"]
+            ["documents.runtime.profile-client-not-allowed /authentication/oidc/issuers/main/allowedClients"]
         );
     }
 
@@ -1569,14 +1991,14 @@ pub(crate) mod tests {
             from_package_runtime().replace(
                 "allowedClients: from-package\n",
                 &format!(
-                    "allowedClients: from-package\n    assertionIssuers:\n      {client}: [https://assertions.example.test]\n"
+                    "allowedClients: from-package\n        assertionIssuers:\n          {client}: [https://assertions.example.test]\n"
                 ),
             )
         };
         let config = parse(&with_issuers("unknown-client")).unwrap();
         assert_eq!(
             project_finding_codes(&config, &starter_project()),
-            ["documents.runtime.assertion-issuer-client-not-allowed /authentication/oidc/assertionIssuers/unknown-client"]
+            ["documents.runtime.assertion-issuer-client-not-allowed /authentication/oidc/issuers/main/assertionIssuers/unknown-client"]
         );
         let config = parse(&with_issuers("citizen-portal")).unwrap();
         assert_eq!(
@@ -1589,12 +2011,12 @@ pub(crate) mod tests {
     fn an_assertion_issuer_client_with_dots_is_reported_at_its_own_pointer() {
         let text = from_package_runtime().replace(
             "allowedClients: from-package\n",
-            "allowedClients: from-package\n    assertionIssuers:\n      com.example.portal: [https://assertions.example.test]\n",
+            "allowedClients: from-package\n        assertionIssuers:\n          com.example.portal: [https://assertions.example.test]\n",
         );
         let config = parse(&text).unwrap();
         assert_eq!(
             project_finding_codes(&config, &starter_project()),
-            ["documents.runtime.assertion-issuer-client-not-allowed /authentication/oidc/assertionIssuers/com.example.portal"]
+            ["documents.runtime.assertion-issuer-client-not-allowed /authentication/oidc/issuers/main/assertionIssuers/com.example.portal"]
         );
     }
 
@@ -1602,13 +2024,13 @@ pub(crate) mod tests {
     fn assertion_issuer_client_outside_an_explicit_list_is_refused() {
         let text = STARTER_RUNTIME.replace(
             "allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]\n",
-            "allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]\n    assertionIssuers:\n      unknown-client: [https://assertions.example.test]\n",
+            "allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]\n        assertionIssuers:\n          unknown-client: [https://assertions.example.test]\n",
         );
         assert_ne!(text, STARTER_RUNTIME);
         let config = parse(&text).unwrap();
         assert_eq!(
             project_finding_codes(&config, &starter_project()),
-            ["documents.runtime.assertion-issuer-client-not-allowed /authentication/oidc/assertionIssuers/unknown-client"]
+            ["documents.runtime.assertion-issuer-client-not-allowed /authentication/oidc/issuers/main/assertionIssuers/unknown-client"]
         );
     }
 
@@ -1631,6 +2053,7 @@ pub(crate) mod tests {
         .value;
         let config = parse(&from_package_runtime()).unwrap();
         let admitted = config.admitted_clients(&project).unwrap();
+        let admitted = admitted.get("main").expect("the main entry's clients");
         assert_eq!(
             admitted.as_slice(),
             [
@@ -1641,7 +2064,7 @@ pub(crate) mod tests {
                 "second-app"
             ]
         );
-        let mut profile = config.verifier_profile(&admitted);
+        let mut profile = config.verifier_profile("main", admitted).unwrap();
         profile.allowed_algorithms = vec![jsonwebtoken::Algorithm::HS256];
         let verifier = TokenVerifier::new(profile, keys());
         let signed = |client: &str| {
@@ -1667,6 +2090,403 @@ pub(crate) mod tests {
             ),
             "{refused:?}"
         );
+    }
+
+    /// The starter runtime with a second issuer entry, `partner`, naming
+    /// `clients`.
+    fn with_partner(base: &str, clients: &str) -> String {
+        let text = base.replace(
+            "    issuers:\n      main:\n",
+            &format!(
+                "    issuers:\n      partner:\n        issuer: https://partner.example.test\n        audience: urn:example:documents-partner\n        allowedClients: {clients}\n      main:\n"
+            ),
+        );
+        assert_ne!(text, base, "the starter names the issuers block");
+        text
+    }
+
+    /// The first finding of a refused file, as its code and pointer.
+    fn first_finding(error: RuntimeConfigError) -> (String, String) {
+        match error {
+            RuntimeConfigError::Refused(findings) => {
+                (findings[0].code.clone(), findings[0].pointer.clone())
+            }
+            other => panic!("expected findings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn two_issuers_with_the_same_iss_refuse_at_startup() {
+        let text = with_partner(STARTER_RUNTIME, "[partner-service]").replace(
+            "https://partner.example.test",
+            "https://identity.example.test/realms/registry",
+        );
+        let (code, pointer) = first_finding(parse(&text).unwrap_err());
+        assert_eq!(code, "platform.oidc.duplicate-issuer");
+        assert_eq!(pointer, "/authentication/oidc/issuers/partner/issuer");
+    }
+
+    #[test]
+    fn a_client_listed_by_two_issuers_is_refused_and_the_check_names_the_other_entry() {
+        let text = with_partner(STARTER_RUNTIME, "[citizen-portal]");
+        let (code, pointer) = first_finding(parse(&text).unwrap_err());
+        assert_eq!(code, CLIENT_IN_TWO_ISSUERS_CODE);
+        assert_eq!(
+            pointer,
+            "/authentication/oidc/issuers/partner/allowedClients/0"
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("runtime.yaml");
+        std::fs::write(&path, &text).unwrap();
+        let checked = check_runtime_file(&path, false, Some(&starter_project()));
+        let found = checked
+            .report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == CLIENT_IN_TWO_ISSUERS_CODE)
+            .unwrap_or_else(|| panic!("{:?}", checked.report.diagnostics()));
+        assert!(!found.related.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn every_conflict_of_a_package_client_beside_from_package_is_reported() {
+        let text = with_partner(&from_package_runtime(), "[citizen-portal, case-portal]");
+        let config = parse(&text).expect("each file is valid on its own");
+        let findings = config.project_findings(&starter_project());
+        let conflicts: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.code == CLIENT_IN_TWO_ISSUERS_CODE)
+            .collect();
+        assert_eq!(conflicts.len(), 2, "{findings:?}");
+        assert!(conflicts.iter().all(|finding| finding.related.is_some()));
+    }
+
+    #[test]
+    fn a_resolved_package_client_equal_to_the_audience_under_jwt_is_refused() {
+        let jwt = from_package_runtime()
+            .replace(
+                "        # accessTokenType: at+jwt\n",
+                "        accessTokenType: JWT\n",
+            )
+            .replace(
+                "audience: urn:example:documents",
+                "audience: citizen-portal",
+            );
+        assert!(jwt.contains("accessTokenType: JWT"));
+        let config = parse(&jwt).expect("the file is valid before clients resolve");
+        let findings = config.project_findings(&starter_project());
+        assert_eq!(
+            findings
+                .iter()
+                .map(|finding| (finding.code.as_str(), finding.pointer.as_str()))
+                .collect::<Vec<_>>(),
+            [(
+                AUDIENCE_IS_A_CLIENT_CODE,
+                "/authentication/oidc/issuers/main/audience"
+            )]
+        );
+        assert!(
+            !findings[0].message.contains("citizen-portal"),
+            "the message names no client: {findings:?}"
+        );
+
+        // The same audience under the default token type is not refused.
+        let default = from_package_runtime().replace(
+            "audience: urn:example:documents",
+            "audience: citizen-portal",
+        );
+        let config = parse(&default).unwrap();
+        let findings = config.project_findings(&starter_project());
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn a_client_actor_kind_for_a_client_the_package_does_not_name_is_refused() {
+        let kinds = |client: &str| {
+            from_package_runtime().replace(
+                "        # clientActorKinds:\n        #   civil-registry-app: service\n",
+                &format!("        clientActorKinds:\n          {client}: service\n"),
+            )
+        };
+        let config = parse(&kinds("reporting-job")).expect("valid before clients resolve");
+        let findings = config.project_findings(&starter_project());
+        assert_eq!(
+            findings
+                .iter()
+                .map(|finding| (finding.code.as_str(), finding.pointer.as_str()))
+                .collect::<Vec<_>>(),
+            [(
+                ACTOR_KIND_FOR_UNADMITTED_CLIENT_CODE,
+                "/authentication/oidc/issuers/main/clientActorKinds/reporting-job"
+            )]
+        );
+        let config = parse(&kinds("civil-registry-app")).unwrap();
+        let findings = config.project_findings(&starter_project());
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn an_issuer_list_with_no_entry_is_refused_by_one_code() {
+        let a = STARTER_RUNTIME.find("    issuers:\n").unwrap();
+        let b = STARTER_RUNTIME.find("audit:\n").unwrap();
+        let text = format!(
+            "{}    issuers: {{}}\n{}",
+            &STARTER_RUNTIME[..a],
+            &STARTER_RUNTIME[b..]
+        );
+        let error = parse(&text).unwrap_err();
+        let found = codes(error);
+        assert_eq!(found, ["platform.oidc.no-issuer"], "{found:?}");
+    }
+
+    #[test]
+    fn an_issuer_expression_does_not_mask_a_client_the_profiles_name() {
+        // The offline check leaves `issuer` as an expression. A package
+        // client no list admits is still reported.
+        let directory = tempfile::tempdir().unwrap();
+        let text = STARTER_RUNTIME
+            .replace(
+                "issuer: https://identity.example.test/realms/registry",
+                "issuer: ${DOCUMENTS_ISSUER_UNSET}",
+            )
+            .replace(
+                STARTER_CLIENTS,
+                "allowedClients: [civil-registry-app, citizen-portal, case-portal]",
+            );
+        let path = directory.path().join("runtime.yaml");
+        std::fs::write(&path, text).unwrap();
+        let checked = check_runtime_file(&path, false, Some(&starter_project()));
+        assert!(
+            checked
+                .report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == PROFILE_CLIENT_NOT_ALLOWED_CODE),
+            "{:?}",
+            checked.report.diagnostics()
+        );
+    }
+
+    /// The starter runtime with a second entry `partner` that admits two of
+    /// the four package clients, and `main` the other two.
+    fn two_entry_runtime() -> String {
+        STARTER_RUNTIME
+            .replace(
+                STARTER_CLIENTS,
+                "allowedClients: [civil-registry-app, citizen-portal]",
+            )
+            .replace(
+                "    issuers:\n      main:\n",
+                "    issuers:\n      partner:\n        issuer: https://partner.example.test\n        audience: urn:example:documents-partner\n        allowedClients: [case-portal, partner-portal]\n      main:\n",
+            )
+    }
+
+    /// The codes and pointers the offline check reports for `text` against
+    /// the starter project.
+    fn offline_findings(text: &str) -> Vec<(String, String)> {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("runtime.yaml");
+        std::fs::write(&path, text).unwrap();
+        check_runtime_file(&path, false, Some(&starter_project()))
+            .report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn an_expression_in_an_entry_list_defers_that_entrys_client_rules() {
+        let kinds = "        clientActorKinds:\n          reporting-job: service\n        assertionIssuers:\n          reporting-job: [https://authority.example.test]\n";
+        let with_kinds = |list: &str| {
+            two_entry_runtime().replace(
+                "allowedClients: [civil-registry-app, citizen-portal]\n",
+                &format!("allowedClients: {list}\n{kinds}"),
+            )
+        };
+        let reported = offline_findings(&with_kinds("[civil-registry-app, citizen-portal]"));
+        for code in [
+            ACTOR_KIND_FOR_UNADMITTED_CLIENT_CODE,
+            ASSERTION_ISSUER_CLIENT_NOT_ALLOWED_CODE,
+        ] {
+            assert!(
+                reported.iter().any(|(found, _)| found == code),
+                "{code} is reported when the list is whole: {reported:?}"
+            );
+        }
+        let deferred = offline_findings(&with_kinds(
+            "[civil-registry-app, \"${DOCUMENTS_CLIENT_UNSET}\"]",
+        ));
+        for code in [
+            ACTOR_KIND_FOR_UNADMITTED_CLIENT_CODE,
+            ASSERTION_ISSUER_CLIENT_NOT_ALLOWED_CODE,
+        ] {
+            assert!(
+                deferred.iter().all(|(found, _)| found != code),
+                "{code} waits for the list: {deferred:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_expression_in_another_entrys_list_leaves_an_entrys_audience_rule_reported() {
+        let text = two_entry_runtime()
+            .replace(
+                "        # accessTokenType: at+jwt\n",
+                "        accessTokenType: JWT\n",
+            )
+            .replace(
+                "audience: urn:example:documents\n",
+                "audience: citizen-portal\n",
+            )
+            .replace(
+                "allowedClients: [case-portal, partner-portal]",
+                "allowedClients: [case-portal, \"${DOCUMENTS_CLIENT_UNSET}\"]",
+            );
+        assert!(text.contains("accessTokenType: JWT"));
+        let reported = offline_findings(&text);
+        assert!(
+            reported.contains(&(
+                AUDIENCE_IS_A_CLIENT_CODE.to_owned(),
+                "/authentication/oidc/issuers/main/audience".to_owned()
+            )),
+            "{reported:?}"
+        );
+    }
+
+    #[test]
+    fn a_profile_client_no_entry_admits_is_reported_at_the_entry_or_at_the_list() {
+        let pointer_of = |text: &str| {
+            let config = parse(text).expect("valid before clients resolve");
+            config
+                .project_findings(&starter_project())
+                .into_iter()
+                .filter(|finding| finding.code == PROFILE_CLIENT_NOT_ALLOWED_CODE)
+                .map(|finding| finding.pointer)
+                .collect::<Vec<_>>()
+        };
+        let one = STARTER_RUNTIME.replace(
+            STARTER_CLIENTS,
+            "allowedClients: [civil-registry-app, citizen-portal, case-portal]",
+        );
+        assert_eq!(
+            pointer_of(&one),
+            ["/authentication/oidc/issuers/main/allowedClients"]
+        );
+        let several = two_entry_runtime().replace(
+            "allowedClients: [case-portal, partner-portal]",
+            "allowedClients: [case-portal]",
+        );
+        assert_eq!(pointer_of(&several), ["/authentication/oidc/issuers"]);
+    }
+
+    #[test]
+    fn every_removed_single_issuer_key_names_the_entry_it_moves_under() {
+        for key in [
+            "issuer",
+            "audience",
+            "jwksUri",
+            "jwksSource",
+            "allowInsecureHttp",
+            "allowedClients",
+            "assertionIssuers",
+            "scopeClaim",
+        ] {
+            let text =
+                STARTER_RUNTIME.replace("    issuers:\n", &format!("    {key}: x\n    issuers:\n"));
+            let RuntimeConfigError::Load(error) = parse(&text).unwrap_err() else {
+                panic!("{key}: a load refusal");
+            };
+            let moved: Vec<_> = error
+                .diagnostics()
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "config.removed-key")
+                .collect();
+            assert_eq!(moved.len(), 1, "{key}: {:?}", error.diagnostics());
+            assert!(
+                moved[0]
+                    .suggested_action
+                    .contains("authentication.oidc.issuers.ISSUER_ID"),
+                "{key}: {}",
+                moved[0].suggested_action
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_default_token_type_or_scope_claim_is_an_explicit_production_setting() {
+        let directory = tempfile::tempdir().unwrap();
+        let strict = directory.path().join("strict.yaml");
+        std::fs::write(&strict, STARTER_RUNTIME).unwrap();
+        assert_eq!(
+            check_runtime_file(&strict, false, None)
+                .explicit_settings
+                .map(|settings| settings.len()),
+            Some(0)
+        );
+        let text = STARTER_RUNTIME
+            .replace(
+                "        # accessTokenType: at+jwt\n",
+                "        accessTokenType: JWT\n",
+            )
+            .replace("        # scopeClaim: scope\n", "        scopeClaim: scp\n");
+        let path = directory.path().join("runtime.yaml");
+        std::fs::write(&path, text).unwrap();
+        let checked = check_runtime_file(&path, false, None);
+        let found: Vec<(&str, Option<&str>)> = checked
+            .explicit_settings
+            .iter()
+            .flatten()
+            .map(|found| (found.setting.code, found.pointer.as_deref()))
+            .collect();
+        assert!(
+            found.contains(&(
+                "platform.posture.jwt-access-token",
+                Some("/authentication/oidc/issuers/main/accessTokenType")
+            )),
+            "{found:?}"
+        );
+        assert!(
+            found.contains(&(
+                "platform.posture.scope-claim",
+                Some("/authentication/oidc/issuers/main/scopeClaim")
+            )),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_settings_are_absent_for_a_file_that_never_decoded_and_empty_for_a_refused_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let undecoded = directory.path().join("undecoded.yaml");
+        std::fs::write(
+            &undecoded,
+            STARTER_RUNTIME.replace("    issuers:\n", "    scopeClaim: scp\n    issuers:\n"),
+        )
+        .unwrap();
+        let checked = check_runtime_file(&undecoded, false, None);
+        assert!(checked.report.has_errors());
+        assert!(checked.explicit_settings.is_none());
+        let refused = directory.path().join("refused.yaml");
+        std::fs::write(
+            &refused,
+            STARTER_RUNTIME.replace(STARTER_CLIENTS, "allowedClients: unrestricted"),
+        )
+        .unwrap();
+        let checked = check_runtime_file(&refused, false, None);
+        assert!(checked.report.has_errors());
+        assert_eq!(
+            checked.explicit_settings.map(|settings| settings.len()),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn the_old_single_issuer_keys_are_refused_with_the_entry_they_move_under() {
+        let text = STARTER_RUNTIME.replace("    issuers:\n", "    scopeClaim: scp\n    issuers:\n");
+        let found = codes(parse(&text).unwrap_err());
+        assert_eq!(found, ["config.removed-key"], "{found:?}");
     }
 
     #[test]

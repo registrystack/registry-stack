@@ -128,7 +128,10 @@ decisions:
       over current claims. A grant's recipient issuer is the granting caller's
       issuer.
     alsoTrue: >-
-      A new grant is the way to extend access.
+      A new grant is the way to extend access. Custody a service places, and a
+      grant's recipient, are at the placing caller's issuer, so a person who
+      signs in through another issuer entry is another principal and does not
+      see them.
     evidence:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_or_revocation}
   - id: DOCUMENTS-DEC-10
@@ -492,9 +495,10 @@ decisions:
   - id: DOCUMENTS-DEC-36
     subject: An explicit allowedClients list must cover every package client, and from-package admits exactly them
     decision: >-
-      authentication.oidc.allowedClients: from-package admits the requester
-      clients of the package's access profiles and no others. An explicit list
-      that omits a client a profile names is refused at startup with
+      An issuer entry's allowedClients: from-package admits the requester
+      clients of the package's access profiles and no others, and a client
+      belongs to one entry. Explicit lists that together omit a client a
+      profile names are refused at startup with
       documents.runtime.profile-client-not-allowed, so a missing client
       never fails at run time. A client named under assertionIssuers that is
       not admitted is refused with

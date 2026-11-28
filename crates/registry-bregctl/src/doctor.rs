@@ -393,7 +393,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::AuthenticationClientsUnlisted => (
             "startup.authentication.clients-unlisted",
             "authentication",
-            "the project names clients in requesterClients, trusted actors, or consent recipients that no authentication.oidc.issuers entry lists in allowedClients; list each of them in the allowedClients of an entry, because the keyword unrestricted lists none",
+            "the project names clients in requesterClients, trusted actors, or consent recipients that no authentication.oidc.issuers entry lists in allowedClients. List each of them in the allowedClients of the entry whose issuer signs its tokens, because the keyword unrestricted lists none",
         ),
         StartupError::EventDestinations(_) => unreachable!("handled above"),
         StartupError::RetainedHookBindings { .. } => {

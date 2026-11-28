@@ -136,7 +136,7 @@ impl Deployment {
             allowed_clients:
                 "[civil-registry-app, citizen-portal, case-portal, partner-portal, partner-service]"
                     .to_owned(),
-            jwks_source: "type: static\n      documentRef: secret:file/jwks.json".to_owned(),
+            jwks_source: "type: static\n          documentRef: secret:file/jwks.json".to_owned(),
         };
         deployment.secret("runtime-database-url", runtime_url.unwrap_or(&scoped_url));
         deployment.secret("migration-database-url", &scoped_url);
@@ -202,10 +202,17 @@ impl Deployment {
         self.write_runtime();
     }
 
+    /// Write the clients the runtime admits as the flow list `clients`, such
+    /// as `[civil-registry-app]`.
+    pub fn admit_clients(&mut self, clients: &str) {
+        self.allowed_clients = clients.to_owned();
+        self.write_runtime();
+    }
+
     /// Name the issuer's key set by `uri` in place of the static key set, so a
     /// refusal to verify can be driven by a key source that does not answer.
     pub fn fetch_keys_from(&mut self, uri: &str) {
-        self.jwks_source = format!("type: uri\n      uri: {uri}");
+        self.jwks_source = format!("type: uri\n          uri: {uri}");
         self.write_runtime();
     }
 
@@ -237,12 +244,14 @@ database:
   testOnlyPlaintext: true
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:documents
-    scopeClaim: scope
-    allowedClients: {allowed_clients}
-    jwksSource:
-      {jwks_source}
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:documents
+        scopeClaim: scope
+        allowedClients: {allowed_clients}
+        jwksSource:
+          {jwks_source}
 audit:
   destination: file
   path: {audit}

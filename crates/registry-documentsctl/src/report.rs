@@ -162,7 +162,10 @@ impl Serialize for Ordered<'_> {
         for (key, value) in members {
             if !named(key)
                 && (posture.is_none()
-                    || !matches!(key.as_str(), "posture" | "diagnostics" | "outcome"))
+                    || !matches!(
+                        key.as_str(),
+                        "posture" | "explicitProductionSettings" | "diagnostics" | "outcome"
+                    ))
             {
                 map.serialize_entry(key, value)?;
             }
@@ -173,7 +176,7 @@ impl Serialize for Ordered<'_> {
                 source: &posture["source"],
             };
             map.serialize_entry("posture", &member)?;
-            for key in ["outcome", "diagnostics"] {
+            for key in ["explicitProductionSettings", "outcome", "diagnostics"] {
                 if let Some(value) = members.get(key) {
                     map.serialize_entry(key, value)?;
                 }

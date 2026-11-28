@@ -8,7 +8,7 @@
 //! token fixture corpus (`products/platform/conformance/tokens`).
 //!
 //! Every row of `expected.yaml` with a `documents` cell is run through the
-//! authenticator the server builds: the verifier profile comes from a
+//! authenticator the server builds: the issuer entry comes from a
 //! `RuntimeConfig` loaded from a runtime file, the keys from that file's static
 //! key source, the access profiles from a project package, and the credential
 //! goes through `DocumentsAuthenticator::authenticate`. No database is involved.
@@ -19,9 +19,8 @@
 //! none, or when the row selects the human-only profile).
 //!
 //! The authenticator reports a verifier refusal as one error. The stage of that
-//! refusal is read by running the same token through a second verifier built
-//! from the same configuration and keys, so the stage is the shared verifier's
-//! own label.
+//! refusal is read from the issuer set's own verdict on the same token, so the
+//! stage is the shared verifier's own label.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -33,7 +32,6 @@ use registry_documents::config::RuntimeConfig;
 use registry_documents::package::{package_limits, PACKAGE_COMMAND, PROJECT_FILE};
 use registry_documents_core::{AccessProfiles, DocumentsProject};
 use registry_platform_config::write_package;
-use registry_platform_oidc::TokenVerifier;
 use registry_platform_testing::{
     Against, ClaimValue, Configuration, FixtureCase, Outcome, TokenCorpus, TokenSigner,
 };
@@ -82,12 +80,15 @@ fn scope_claim(case: &FixtureCase) -> &'static str {
     }
 }
 
-/// The actor kind the profile admits: the one the fixture declares when it is
-/// a kind the Document Store has, and `human` otherwise or when the row
-/// selects the human-only profile.
+/// The actor kind the profile admits: the one the operator declared or the
+/// fixture carries when it is a kind the Document Store has, and `human`
+/// otherwise or when the row selects the human-only profile.
 fn profile_actor_kind(case: &FixtureCase) -> &'static str {
     if case.against == Against::HumanOnlyProfile {
         return "human";
+    }
+    if case.declared_kind == Some(registry_platform_oidc::ActorKind::Service) {
+        return "service";
     }
     match literal_string(case, "registry_actor_kind").as_deref() {
         Some("service") => "service",
@@ -174,8 +175,49 @@ async fn observe(case: FixtureCase) -> Outcome {
     )
     .expect("the package for the row");
 
-    let mut allowed = vec![client];
+    let mut allowed = vec![client.clone()];
     allowed.extend(STARTER_CLIENTS.map(str::to_owned));
+    let mut entry = json!({
+        "issuer": case.issuer,
+        "audience": case.audience,
+        "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"},
+        "allowedClients": allowed,
+        "scopeClaim": claim,
+    });
+    // A row that admits a token typed `JWT`, or whose recipe does, says so.
+    let jwt_typed = case
+        .fixture
+        .header
+        .as_ref()
+        .and_then(|header| header.typ.as_deref())
+        .is_some_and(|typ| typ.eq_ignore_ascii_case("JWT"));
+    if case.configuration == Configuration::JwtAccepted
+        || (case.configuration == Configuration::Recipe && jwt_typed)
+    {
+        entry["accessTokenType"] = json!("JWT");
+    }
+    // The operator's declared kind is for the fixture's client, or for the
+    // whole issuer where the token names no client.
+    if let Some(kind) = case.declared_kind {
+        let kind = match kind {
+            registry_platform_oidc::ActorKind::Human => "human",
+            registry_platform_oidc::ActorKind::Agent => "agent",
+            registry_platform_oidc::ActorKind::Service => "service",
+        };
+        if literal_string(&case, "client_id")
+            .or_else(|| literal_string(&case, "azp"))
+            .is_some()
+        {
+            entry["clientActorKinds"] = json!({ client: kind });
+        } else {
+            entry["actorKind"] = json!(kind);
+        }
+    }
+    let oidc = serde_norway::to_string(&json!({"issuers": {"main": entry}}))
+        .expect("the issuer entries serialise")
+        .lines()
+        .map(|line| format!("    {line}\n"))
+        .collect::<String>();
     let runtime_path = root.path().join("runtime.yaml");
     fs::write(
         &runtime_path,
@@ -199,14 +241,7 @@ database:
   migrationUrlRef: secret:file/database-url
 authentication:
   oidc:
-    issuer: {issuer}
-    audience: {audience}
-    scopeClaim: {claim}
-    allowedClients: {allowed}
-    jwksSource:
-      type: static
-      documentRef: secret:file/jwks.json
-audit:
+{oidc}audit:
   destination: file
   path: {audit}
   hashKeyRef: secret:file/audit-key
@@ -229,43 +264,38 @@ destinations:
 ",
             package = package.display(),
             secrets = secrets.display(),
-            issuer = case.issuer,
-            audience = case.audience,
-            allowed = serde_json::to_string(&allowed).expect("a client list"),
             audit = root.path().join("audit.ndjson").display(),
         ),
     )
     .expect("write the runtime file");
     let config = RuntimeConfig::load(&runtime_path).expect("the runtime configuration loads");
     let resolver = config.secret_resolver().expect("the secret resolver");
-    let keys = config
-        .jwks_fetcher(&resolver)
-        .await
-        .expect("the static key source");
     let decoded = DocumentsProject::decode(PROJECT_FILE, project.as_bytes())
         .expect("the rewritten project decodes")
         .value;
 
-    let admitted = config
-        .admitted_clients(&decoded)
-        .expect("the listed clients cover the project");
-    let authenticator = DocumentsAuthenticator::new(
-        config.verifier_profile(&admitted),
-        keys.clone(),
-        AccessProfiles::new(&decoded),
-        config.binds_assertion_issuers(),
-    );
+    let sources = config
+        .issuer_sources(&resolver, &decoded)
+        .await
+        .expect("the issuer entries build over the static key source");
+    let authenticator = DocumentsAuthenticator::new(sources, AccessProfiles::new(&decoded))
+        .expect("the issuer entries name distinct issuers");
     let token = case.token.expose();
+    // The issuer set's own verdict names the stage of a refusal, which the
+    // authenticator reports only as the check that failed.
+    let verdict = authenticator.verify(token).await;
     match authenticator.authenticate(token).await {
-        Ok(caller) => Outcome::Admitted(Some(caller.kind.as_str().to_owned())),
+        Ok(caller) => {
+            assert!(verdict.is_ok(), "an admitted token the issuer set refused");
+            Outcome::Admitted(Some(caller.kind.as_str().to_owned()))
+        }
         Err(AuthenticationError::Claims(_)) => refusal("claims"),
         Err(AuthenticationError::Unavailable) => refusal("unavailable"),
         Err(error @ (AuthenticationError::Refused(_) | AuthenticationError::Profile(_))) => {
-            let reference = TokenVerifier::new(config.verifier_profile(&admitted), keys);
-            match reference.verify(token).await {
-                Err(failure) => Outcome::refused_by(&failure),
+            match verdict {
+                Err(failure) => Outcome::refused_by(&failure.error),
                 Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {
-                    if verified.scopes.iter().any(|held| held == &scope) {
+                    if verified.token.scopes.iter().any(|held| held == &scope) {
                         refusal("profile")
                     } else {
                         refusal("scope")

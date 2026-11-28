@@ -81,12 +81,14 @@ secretProviders:
     root: {secrets}
 authentication:
   oidc:
-    issuer: https://identity.example.test
-    audience: urn:example:scheduling
-    allowedClients: [scheduling-test-client]
-    jwksSource:
-      type: static
-      documentRef: secret:file/jwks.json
+    issuers:
+      main:
+        issuer: https://identity.example.test
+        audience: urn:example:scheduling
+        allowedClients: [scheduling-test-client]
+        jwksSource:
+          type: static
+          documentRef: secret:file/jwks.json
 database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url

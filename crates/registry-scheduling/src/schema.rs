@@ -98,31 +98,22 @@ fn install_runtime_constraints(schema: &mut Value) {
         Value::String(registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN.to_owned()),
     );
     set_audit_destination_constraints(schema);
-    set_allowed_clients_constraints(schema);
+    // The shared block also admits the keyword `unrestricted`, which this
+    // runtime refuses in every mode, so the member is restated as the list.
+    if let Some(clients) = schema.pointer_mut("/$defs/IssuerConfig/properties/allowedClients") {
+        *clients = serde_json::json!({
+            "description": "The clients whose tokens the entry admits. `unrestricted`, which would admit every client the issuer verifies, is refused.",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+        });
+    }
     if let Some(root) = schema.as_object_mut() {
         root.insert(
             "allOf".to_owned(),
             registry_platform_config::schema::jwks_document_provider_requirements(),
         );
-    }
-}
-
-/// State that `authentication.oidc.allowedClients` is a list in every file.
-/// The shared block requires the member and also admits the keyword
-/// `unrestricted`, which this runtime refuses in every mode, so the member
-/// is restated as the list alone and the shared definition is dropped.
-fn set_allowed_clients_constraints(schema: &mut Value) {
-    if let Some(clients) = schema.pointer_mut("/$defs/OidcConfig/properties/allowedClients") {
-        *clients = serde_json::json!({
-            "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, a repeated client, and `unrestricted`\nare refused.",
-            "type": "array",
-            "items": {"type": "string"},
-            "minItems": 1,
-            "uniqueItems": true,
-        });
-    }
-    if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
-        definitions.remove("OidcAllowedClients");
     }
 }
 
@@ -301,11 +292,11 @@ mod tests {
             document["$defs"]["AuditConfig"]["properties"]["hashKeyRef"]["$ref"],
             "#/$defs/SecretReference"
         );
-        // `allowedClients` is decided in every file (CFG-EMPTY-2), and only
-        // as a list: the runtime refuses `unrestricted` in every mode.
-        let oidc = &document["$defs"]["OidcConfig"];
+        // `allowedClients` is decided in every issuer entry (CFG-EMPTY-2), and
+        // only as a list: `unrestricted` is not a client list.
+        let issuer = &document["$defs"]["IssuerConfig"];
         assert_eq!(
-            oidc["required"]
+            issuer["required"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -313,14 +304,22 @@ mod tests {
                 .count(),
             1
         );
-        let clients = &oidc["properties"]["allowedClients"];
+        let clients = &issuer["properties"]["allowedClients"];
         assert!(clients.get("default").is_none());
         assert!(clients.get("$ref").is_none(), "{clients}");
         assert_eq!(clients["type"], "array");
         assert_eq!(clients["minItems"], 1);
+        assert_eq!(clients["items"]["minLength"], 1);
+        // The description gives Scheduling's own reason for the refusal.
+        let description = issuer["description"].as_str().unwrap();
+        assert!(description.contains("every client the issuer verifies"));
+        assert!(!description.contains("every route"));
         assert_eq!(clients["uniqueItems"], true);
-        assert!(document["$defs"].get("OidcAllowedClients").is_none());
-        let assertion_issuers = &document["$defs"]["OidcConfig"]["properties"]["assertionIssuers"];
+        assert_eq!(
+            document["$defs"]["OidcConfig"]["properties"]["issuers"]["minProperties"], 1,
+            "at least one issuer entry"
+        );
+        let assertion_issuers = &issuer["properties"]["assertionIssuers"];
         assert_eq!(assertion_issuers["maxProperties"], 64);
         assert_eq!(assertion_issuers["propertyNames"]["maxLength"], 128);
         assert_eq!(assertion_issuers["additionalProperties"]["maxItems"], 16);
@@ -328,10 +327,7 @@ mod tests {
             assertion_issuers["additionalProperties"]["items"]["maxLength"],
             512
         );
-        assert_eq!(
-            document["$defs"]["OidcConfig"]["properties"]["issuer"]["$ref"],
-            "#/$defs/Url"
-        );
+        assert_eq!(issuer["properties"]["issuer"]["$ref"], "#/$defs/Url");
         let audit = &document["$defs"]["AuditConfig"];
         assert_eq!(
             audit["properties"]["rotateBytes"]["minimum"],
@@ -470,6 +466,37 @@ mod tests {
         ] {
             assert!(!validator.is_valid(&refused), "{refused}");
         }
+    }
+
+    #[test]
+    fn a_static_key_set_document_in_any_issuer_entry_needs_its_secret_provider() {
+        let documents = runtime_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        let rule = serde_json::json!({"$defs": document["$defs"], "allOf": document["allOf"]});
+        let validator = jsonschema::JSONSchema::compile(&rule).unwrap();
+        let file_with = |partners: Value, providers: Option<Value>| {
+            let mut file = serde_json::json!({"authentication": {"oidc": {"issuers": {
+                "main": {"issuer": "https://id.example.org/realms/registry"},
+                "partners": partners,
+            }}}});
+            if let Some(providers) = providers {
+                file["secretProviders"] = providers;
+            }
+            validator.is_valid(&file)
+        };
+        let environment_document =
+            serde_json::json!({"jwksSource": {"documentRef": "secret:env/PARTNER_JWKS"}});
+        let file_document =
+            serde_json::json!({"jwksSource": {"documentRef": "secret:file/partner-jwks"}});
+        let environment = serde_json::json!({"environment": {}});
+
+        assert!(!file_with(environment_document.clone(), None));
+        assert!(file_with(environment_document, Some(environment.clone())));
+        assert!(!file_with(file_document, Some(environment)));
+        assert!(file_with(
+            serde_json::json!({"issuer": "https://login.partner.example/v2.0"}),
+            None
+        ));
     }
 
     #[test]

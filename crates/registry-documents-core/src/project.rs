@@ -99,8 +99,9 @@ impl DocumentsProject {
         let mut findings = Vec::new();
         let mut clients: BTreeMap<&str, &LocalId> = BTreeMap::new();
         // Custody and grants compare a caller by issuer, subject, and actor
-        // kind, and every profile accepts the deployment's one issuer, so
-        // profiles of one actor kind must read the subject from one claim.
+        // kind, and any profile can be reached through any issuer entry that
+        // admits its client, so profiles of one actor kind must read the
+        // subject from one claim.
         let mut claims: BTreeMap<&str, &str> = BTreeMap::new();
         for (id, profile) in &self.access_profiles {
             let claim = profile.principal_claim.as_str();

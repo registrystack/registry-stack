@@ -253,10 +253,10 @@ impl Deployment {
              identity:\n  databaseId: {database_id}\n\
              listener:\n  bind: {bind}\n  tlsTermination: development-loopback\n\
              secretProviders:\n  environment: {{}}\n\
-             authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
-             \x20   audience: urn:example:scheduling\n\
-             \x20   allowedClients: [scheduling-test-client]\n\
-             \x20   jwksSource:\n      type: static\n      documentRef: secret:env/{jwks}\n\
+             authentication:\n  oidc:\n    issuers:\n      main:\n        issuer: https://identity.example.test\n\
+             \x20       audience: urn:example:scheduling\n\
+             \x20       allowedClients: [scheduling-test-client]\n\
+             \x20       jwksSource:\n          type: static\n          documentRef: secret:env/{jwks}\n\
              database:\n  runtimeUrlRef: secret:env/{runtime}\n\
              \x20 migrationUrlRef: secret:env/{migration}\n\
              \x20 testOnlyPlaintext: true\n\

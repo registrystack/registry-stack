@@ -9,18 +9,17 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use registry_messaging::auth::{IssuerSource, MessagingAuthenticator};
+use registry_messaging::auth::MessagingAuthenticator;
+use registry_messaging::config::RuntimeConfig;
 use registry_messaging::package::LoadedPackage;
 use registry_messaging_core::{AccessProfile, ActorKind, Caller};
+use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
-use registry_platform_oidc::{
-    access_token_typ_set, parse_static_jwks, DeclaredKinds, JwksFetcher, JwksFetcherConfig,
-    OidcError, TokenVerifier, TokenVerifierConfig,
-};
+use registry_platform_oidc::{parse_static_jwks, OidcError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zeroize::Zeroizing;
@@ -379,6 +378,47 @@ async fn acquire(
         .map(|(expires, caller)| (signed, expires, caller))
 }
 
+/// The authenticator over the session's issuer entry, built as the runtime
+/// builds it: from the runtime document the session writes for `binding`.
+async fn session_authenticator(
+    root: &Path,
+    loaded: &LoadedPackage,
+    binding: &Binding,
+) -> DevResult<MessagingAuthenticator> {
+    let endpoints = config::Endpoints {
+        api_port: 8107,
+        metrics_port: 9107,
+        smtp_port: 1025,
+        gateway_port: 8025,
+    };
+    let document = config::runtime_document_with_issuer(
+        &root.join("package"),
+        root,
+        loaded,
+        &endpoints,
+        Some(binding),
+    )
+    .map_err(|_| refusal())?;
+    let path = root.join("probe-runtime.yaml");
+    private::create(&path, document.as_bytes()).map_err(|_| refusal())?;
+    let runtime = RuntimeConfig::load(
+        &path,
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        },
+    );
+    std::fs::remove_file(&path).map_err(|_| refusal())?;
+    let runtime = runtime.map_err(|_| refusal())?;
+    let secrets = runtime.secret_resolver().map_err(|_| refusal())?;
+    let profiles = loaded.package.access_profiles();
+    let sources = runtime
+        .issuer_sources(&secrets, profiles)
+        .await
+        .map_err(|_| refusal())?;
+    MessagingAuthenticator::new(sources, profiles.clone()).map_err(|_| refusal())
+}
+
 pub(super) async fn verify(
     root: &Path,
     loaded: &LoadedPackage,
@@ -388,41 +428,20 @@ pub(super) async fn verify(
 ) -> DevResult<(u64, CallerPin)> {
     let bytes =
         private::read(&root.join("secrets/jwks.json"), 256 * 1024).map_err(|_| refusal())?;
-    let keys = Arc::new(JwksFetcher::new_static(
-        parse_static_jwks(&bytes).map_err(static_key_refusal)?,
-        JwksFetcherConfig::defaults(),
-    ));
-    let verifier = TokenVerifierConfig::access_token_profile(
-        binding.issuer.clone(),
-        vec![binding.resource.clone()],
-        vec![
-            jsonwebtoken::Algorithm::RS256,
-            jsonwebtoken::Algorithm::ES256,
-        ],
-        access_token_typ_set("at+jwt"),
-    )
-    .with_scope_claim("scope")
-    .with_allowed_clients(loaded.package.access_profiles().requester_clients());
-    let verified = TokenVerifier::new(verifier.clone(), keys.clone())
+    parse_static_jwks(&bytes).map_err(static_key_refusal)?;
+    let authenticator = session_authenticator(root, loaded, binding).await?;
+    let verified = authenticator
         .verify(signed)
         .await
-        .map_err(|_| refusal())?;
+        .map_err(|_| refusal())?
+        .token;
     if verified.matched_client_id().map_err(|_| refusal())? != Some(client) {
         return Err(refusal());
     }
-    let caller = MessagingAuthenticator::new(
-        vec![IssuerSource::new(
-            super::config::SESSION_ISSUER_ID,
-            verifier,
-            keys,
-            DeclaredKinds::None,
-        )],
-        loaded.package.access_profiles().clone(),
-    )
-    .map_err(|_| refusal())?
-    .authenticate(signed)
-    .await
-    .map_err(|_| refusal())?;
+    let caller = authenticator
+        .authenticate(signed)
+        .await
+        .map_err(|_| refusal())?;
     if caller.profile.id != profile(loaded, client)?.id {
         return Err(refusal());
     }
