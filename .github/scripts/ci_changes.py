@@ -333,6 +333,20 @@ DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS = (
     "crates/registry-evidencectl/src/fixtures.rs",
     "crates/registry-evidencectl/tests/production_build.rs",
 )
+# The TypeScript clients generate from these OpenAPI documents and verify the
+# shared Standard Webhooks vectors.
+TYPESCRIPT_CLIENT_INPUTS = (
+    "clients/typescript/**",
+    "products/casework/generated/registry-casework.openapi.json",
+    "products/coordinator/generated/openapi/coordinator.openapi.json",
+    "products/documents/generated/registry-documents.openapi.json",
+    "products/evidence/generated/registry-evidence.openapi.json",
+    "products/messaging/generated/registry-messaging.openapi.json",
+    "products/scheduling/generated/registry-scheduling.openapi.json",
+    "products/breg/generated/minimal/generated/openapi.json",
+    "products/breg/generated/facility/generated/openapi.json",
+    "crates/registry-platform-crypto/tests/fixtures/standard-webhooks.json",
+)
 DISCOVERY_PROVIDER_INPUTS = DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS + (
     "products/evidence/contracts/bundle.schema.yaml",
     "products/evidence/fixtures/acceptance/*/catalog.jsonld",
@@ -1775,6 +1789,8 @@ def classify(
         "docs": docs,
         "docs_archives": docs_archives,
         "client_bindings": client_bindings,
+        "typescript_clients": complete
+        or any(matches(path, *TYPESCRIPT_CLIENT_INPUTS) for path in paths),
         "release_linux_node_clients": release_linux_node_clients,
         "evidence_tutorial": evidence_tutorial,
         "breg_tutorial": breg_tutorial,

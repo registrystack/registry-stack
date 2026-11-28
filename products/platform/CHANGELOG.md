@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Fetch-based TypeScript clients, generated from each registry's contract, are
+  in `clients/typescript/`. They use Fetch and WebCrypto and have no runtime
+  dependencies. Their tests run on Node 24 and Deno, and the browser build has
+  a manual smoke page. Every
+  generated module exports `createRegistryClient(options)`, and the client it
+  returns is typed to that registry's operations. Code that talks to two
+  registries renames one import. A base URL is HTTPS, or plain HTTP to a
+  loopback host, or with `allowInsecureHttp` to a private or link-local
+  address or a host name without a dot. Operations that declare `Idempotency-Key`
+  send the caller's key or a generated one. The Messaging and Scheduling
+  receipt lookups, listed by contract and route, require the original key.
+  A dispatched write whose outcome could not be established
+  is marked `outcomeUnknown`. `describeError` returns a fixed sentence chosen by
+  reason and status, never text from the answer, and shows a refused guard's
+  label only from the caller's `guardLabels`. Operations authenticated by a
+  Standard Webhooks signature send the caller's exact signed bytes and no
+  bearer credential. Page methods exist only for read operations.
+  `verifyDelivery` and `verifyRequest` in `webhook.ts` check a Standard
+  Webhooks delivery from raw headers and body, or from a Fetch request. They
+  require one `application/json` content type, refuse a body over 1 MiB, and
+  `verifyRequest` checks the headers before it reads the body.
+
 - Every URL hook delivery is signed with Standard Webhooks. The signature is
   `v1,<base64>` over `webhook-id`, `webhook-timestamp` and the exact body
   bytes, joined by periods, with HMAC-SHA-256. `webhook-id` is the envelope

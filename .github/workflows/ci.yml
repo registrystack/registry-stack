@@ -86,6 +86,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       docs_archives: ${{ steps.filter.outputs.docs_archives }}
       client_bindings: ${{ steps.filter.outputs.client_bindings }}
+      typescript_clients: ${{ steps.filter.outputs.typescript_clients }}
       release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
       breg_tutorial: ${{ steps.filter.outputs.breg_tutorial }}
@@ -3986,6 +3987,52 @@ jobs:
             exit 1
           fi
 
+  # The TypeScript clients still match the OpenAPI documents they generate
+  # from, and their types, tests and build pass.
+  # Clients owns this gate. Remove it when the TypeScript clients leave the repository.
+  typescript-clients:
+    name: TypeScript clients
+    needs: changes
+    if: needs.changes.outputs.typescript_clients == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.11.0
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix clients/typescript ci
+
+      - name: Check generated clients
+        run: npm --prefix clients/typescript run check:generated
+
+      - name: Check types
+        run: npm --prefix clients/typescript run check:types
+
+      - name: Test
+        run: npm --prefix clients/typescript test
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: 2.9.7
+
+      - name: Test under Deno
+        run: npm --prefix clients/typescript run test:deno
+
+      - name: Build
+        run: npm --prefix clients/typescript run build
+
   ci-result:
     name: CI result
     if: always()
@@ -4032,6 +4079,7 @@ jobs:
       - evidence-anchors
       - docs
       - client-bindings
+      - typescript-clients
       - release-linux-node-clients
       - deployment
     runs-on: ubuntu-slim
