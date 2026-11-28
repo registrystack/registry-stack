@@ -62,6 +62,7 @@ pub enum CaseworkProblemCode {
     RequestUnsupportedMediaType,
     ReviewAskAlreadyOpen,
     ReviewAskAnswerTimeInvalid,
+    ReviewAskLimitReached,
     ReviewAskNotOffered,
     ReviewAskNotOpen,
     ReviewAskProducerUnsupported,
@@ -90,7 +91,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 44] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -115,6 +116,7 @@ impl CaseworkProblemCode {
         Self::RequestUnsupportedMediaType,
         Self::ReviewAskAlreadyOpen,
         Self::ReviewAskAnswerTimeInvalid,
+        Self::ReviewAskLimitReached,
         Self::ReviewAskNotOffered,
         Self::ReviewAskNotOpen,
         Self::ReviewAskProducerUnsupported,
@@ -165,6 +167,7 @@ impl CaseworkProblemCode {
             Self::ReviewPolicyMismatch => REVIEW_POLICY_MISMATCH_PROBLEM,
             Self::ReviewResultExpired => REVIEW_RESULT_EXPIRED_PROBLEM,
             Self::ReviewAskAlreadyOpen => "review.ask-already-open",
+            Self::ReviewAskLimitReached => "review.ask-limit-reached",
             Self::ReviewAskAnswerTimeInvalid => "review.ask-answer-time-invalid",
             Self::ReviewAskNotOffered => "review.ask-not-offered",
             Self::ReviewAskNotOpen => "review.ask-not-open",
@@ -214,6 +217,7 @@ impl CaseworkProblemCode {
             REVIEW_POLICY_MISMATCH_PROBLEM => Self::ReviewPolicyMismatch,
             REVIEW_RESULT_EXPIRED_PROBLEM => Self::ReviewResultExpired,
             "review.ask-already-open" => Self::ReviewAskAlreadyOpen,
+            "review.ask-limit-reached" => Self::ReviewAskLimitReached,
             "review.ask-answer-time-invalid" => Self::ReviewAskAnswerTimeInvalid,
             "review.ask-not-offered" => Self::ReviewAskNotOffered,
             "review.ask-not-open" => Self::ReviewAskNotOpen,
@@ -263,6 +267,7 @@ impl CaseworkProblemCode {
             Self::RequestMethodNotAllowed => 405,
             Self::IdempotencyKeyReused
             | Self::ReviewAskAlreadyOpen
+            | Self::ReviewAskLimitReached
             | Self::ReviewAskNotOffered
             | Self::ReviewAskNotOpen
             | Self::ReviewAskProducerUnsupported
@@ -367,6 +372,10 @@ impl CaseworkProblemCode {
             Self::RequestUnsupportedMediaType => (
                 "Unsupported media type",
                 "Send a JSON request body with Content-Type application/json.",
+            ),
+            Self::ReviewAskLimitReached => (
+                "Review ask limit reached",
+                "This review request has reached its limit of 50 asks. Continue the review without opening another ask.",
             ),
             Self::ReviewAskAlreadyOpen => (
                 "Review ask already open",
@@ -873,6 +882,23 @@ mod tests {
                 "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
             ))
         );
+    }
+
+    #[test]
+    fn the_ask_limit_problem_is_registered_under_conflict() {
+        let code = CaseworkProblemCode::ALL
+            .iter()
+            .find(|code| code.code() == "review.ask-limit-reached");
+        assert!(
+            code.is_some(),
+            "the canonical client must recognise the ask-limit refusal"
+        );
+        assert_eq!(code.unwrap().expected_status(), Some(409));
+        assert_eq!(
+            CaseworkProblemCode::parse("review.ask-limit-reached"),
+            *code.unwrap()
+        );
+        assert_eq!(code.unwrap().expected_text(),Some(("Review ask limit reached","This review request has reached its limit of 50 asks. Continue the review without opening another ask.")));
     }
 
     #[test]

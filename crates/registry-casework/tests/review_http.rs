@@ -1,5 +1,8 @@
 #![cfg(feature = "postgres-test")]
 
+#[path = "support/ask_limit_http.rs"]
+mod ask_limit_http;
+
 use registry_platform_config::{DeclaredPosture, Posture, PostureReport, PostureSource};
 use std::{
     collections::BTreeMap,

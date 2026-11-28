@@ -113,6 +113,30 @@ fn registered_statuses() -> BTreeMap<&'static str, u16> {
         .collect()
 }
 
+#[test]
+fn the_ask_limit_refusal_is_registered_in_the_ask_operation_only() {
+    let code = ProblemCode::ALL
+        .iter()
+        .find(|code| code.code() == "review.ask-limit-reached");
+    assert!(
+        code.is_some(),
+        "the runtime catalogue must name the ask limit"
+    );
+    assert_eq!(code.unwrap().status().as_u16(), 409);
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../products/casework/generated/registry-casework.openapi.json"
+    ))
+    .unwrap();
+    assert!(
+        schema["paths"]["/v1/review-tasks/{task_id}/asks"]["post"]["responses"]["409"]
+            .to_string()
+            .contains("ProblemReviewAskLimitReached")
+    );
+    let answer = &schema["paths"]["/v1/review-requests/{request_id}/asks/{ask_id}/answer"]["post"];
+    assert!(answer.is_object());
+    assert!(!answer.to_string().contains("ProblemReviewAskLimitReached"));
+}
+
 /// The members of one TypeScript string-literal union, in declaration order.
 fn typescript_union(source: &str, name: &str) -> Vec<String> {
     let declaration = format!("export type {name} =");

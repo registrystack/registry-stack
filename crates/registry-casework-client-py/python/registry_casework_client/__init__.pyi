@@ -357,6 +357,7 @@ KnownCaseworkProblemCode: TypeAlias = Literal[
     "request.unsupported-media-type",
     "review.ask-already-open",
     "review.ask-answer-time-invalid",
+    "review.ask-limit-reached",
     "review.ask-not-offered",
     "review.ask-not-open",
     "review.ask-producer-unsupported",

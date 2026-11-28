@@ -28,6 +28,8 @@ use tokio_postgres::NoTls;
 use tracing::instrument::WithSubscriber;
 use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
+#[path = "support/ask_limit.rs"]
+mod ask_limit;
 #[path = "support/source_ask_answers.rs"]
 mod source_ask_answers;
 

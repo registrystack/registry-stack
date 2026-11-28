@@ -13,6 +13,7 @@ use registry_casework_core::{ReviewContextAsk, ReviewTaskAskRequest, ReviewTaskA
 /// producer records the time it committed the answer, and the two clocks may
 /// differ a little.
 const ASK_ANSWER_CLOCK_SKEW: TimeDelta = TimeDelta::minutes(5);
+const MAXIMUM_ASKS_PER_REQUEST: i64 = 50;
 
 /// A time Casework stores and then serves or compares. PostgreSQL keeps
 /// microseconds and the ask protocol carries them, so a time with a finer clock
@@ -240,6 +241,18 @@ impl PostgresStore {
         let options = stage.asks.ok_or(ReviewRuntimeError::ReviewAskNotOffered)?;
         if !producer_reads_asks {
             return Err(ReviewRuntimeError::ReviewAskProducerUnsupported);
+        }
+        // The request lock serializes this count with every ask creation,
+        // across holders, tasks and stages. Terminal asks still count.
+        let count: i64 = transaction
+            .query_one(
+                "SELECT count(*) FROM casework_review_asks WHERE request_id=$1",
+                &[&request_id],
+            )
+            .await?
+            .get(0);
+        if count >= MAXIMUM_ASKS_PER_REQUEST {
+            return Err(ReviewRuntimeError::ReviewAskLimitReached);
         }
         let ask_id = Uuid::new_v4();
         let due_at = options

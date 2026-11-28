@@ -122,6 +122,8 @@ pub enum ReviewRuntimeError {
     ResultExpired,
     #[error("the request already has an open ask")]
     ReviewAskAlreadyOpen,
+    #[error("the request has reached its limit of 50 asks")]
+    ReviewAskLimitReached,
     #[error("the answer time precedes the ask or lies in the future")]
     ReviewAskAnswerTimeInvalid,
     #[error("the stage of this task does not offer asks")]

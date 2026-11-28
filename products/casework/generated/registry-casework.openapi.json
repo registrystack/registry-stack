@@ -2177,6 +2177,32 @@
           }
         ]
       },
+      "ProblemReviewAskLimitReached": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "review.ask-limit-reached"
+              },
+              "detail": {
+                "const": "This review request has reached its limit of 50 asks. Continue the review without opening another ask."
+              },
+              "status": {
+                "const": 409
+              },
+              "title": {
+                "const": "Review ask limit reached"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/review/ask-limit-reached"
+              }
+            }
+          }
+        ]
+      },
       "ProblemReviewAskNotOffered": {
         "allOf": [
           {
@@ -19556,6 +19582,9 @@
                       "$ref": "#/components/schemas/ProblemReviewAskAlreadyOpen"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemReviewAskLimitReached"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemReviewAskNotOffered"
                     },
                     {
@@ -19571,7 +19600,7 @@
                 }
               }
             },
-            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-not-offered, review.ask-producer-unsupported, review.ask-task-inactive, review.task-not-held",
+            "description": "Problem: idempotency.key-reused, review.ask-already-open, review.ask-limit-reached, review.ask-not-offered, review.ask-producer-unsupported, review.ask-task-inactive, review.task-not-held",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"

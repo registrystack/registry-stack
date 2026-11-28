@@ -1836,6 +1836,7 @@ pub enum HttpError {
     SourceVersionMismatch,
     SourceVersionUnavailable,
     ReviewAskAlreadyOpen,
+    ReviewAskLimitReached,
     ReviewAskAnswerTimeInvalid,
     ReviewAskNotOffered,
     ReviewAskNotOpen,
@@ -1915,6 +1916,7 @@ impl From<ReviewRuntimeError> for HttpError {
             ReviewRuntimeError::ResultExpired => Self::ReviewResultExpired,
             ReviewRuntimeError::TaskNotHeld => Self::ReviewTaskNotHeld,
             ReviewRuntimeError::ReviewAskAlreadyOpen => Self::ReviewAskAlreadyOpen,
+            ReviewRuntimeError::ReviewAskLimitReached => Self::ReviewAskLimitReached,
             ReviewRuntimeError::ReviewAskAnswerTimeInvalid => Self::ReviewAskAnswerTimeInvalid,
             ReviewRuntimeError::ReviewAskNotOffered => Self::ReviewAskNotOffered,
             ReviewRuntimeError::ReviewAskNotOpen => Self::ReviewAskNotOpen,
@@ -1995,6 +1997,7 @@ impl HttpError {
             | Self::SourceVersionUnavailable
             | Self::ReviewInitiatorRequired
             | Self::ReviewAskAlreadyOpen
+            | Self::ReviewAskLimitReached
             | Self::ReviewAskAnswerTimeInvalid
             | Self::ReviewAskNotOffered
             | Self::ReviewAskNotOpen
@@ -2064,6 +2067,7 @@ impl HttpError {
             Self::SourceVersionMismatch => ProblemCode::SourceVersionMismatch,
             Self::SourceVersionUnavailable => ProblemCode::SourceVersionUnavailable,
             Self::ReviewAskAlreadyOpen => ProblemCode::ReviewAskAlreadyOpen,
+            Self::ReviewAskLimitReached => ProblemCode::ReviewAskLimitReached,
             Self::ReviewAskAnswerTimeInvalid => ProblemCode::ReviewAskAnswerTimeInvalid,
             Self::ReviewAskNotOffered => ProblemCode::ReviewAskNotOffered,
             Self::ReviewAskNotOpen => ProblemCode::ReviewAskNotOpen,
@@ -3214,6 +3218,7 @@ mod tests {
             HttpError::SourceVersionMismatch,
             HttpError::SourceVersionUnavailable,
             HttpError::ReviewAskAlreadyOpen,
+            HttpError::ReviewAskLimitReached,
             HttpError::ReviewAskAnswerTimeInvalid,
             HttpError::ReviewAskNotOffered,
             HttpError::ReviewAskNotOpen,
