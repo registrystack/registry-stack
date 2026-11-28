@@ -836,6 +836,8 @@ mod tests {
             casework_principals: BTreeMap::new(),
             binaries: BTreeMap::new(),
             managed_database: false,
+            project_key: None,
+            clean: false,
         }
     }
 

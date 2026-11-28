@@ -91,6 +91,42 @@ fn rstack_dev_with_host(state: &std::path::Path, json: bool, bregctl: &std::path
     command
 }
 
+#[test]
+fn canonical_casework_names_its_breg_pair_before_starting_postgresql() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("review");
+    let tool = host("caseworkctl");
+    let init = Command::new(&tool)
+        .args(["init", "--template", "canonical-review"])
+        .arg(&project)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{init:?}");
+
+    let invoke = |action| {
+        rstack_dev(&scratch.path().join("runs"), true)
+            .arg(action)
+            .arg(&project)
+            .env("RSTACK_CASEWORKCTL_BIN", &tool)
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .output()
+            .unwrap()
+    };
+    let checked = invoke("check");
+    assert!(checked.status.success(), "{checked:?}");
+    let started = invoke("start");
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    assert_eq!(started.status.code(), Some(1), "{report}");
+    let message = report["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("facility-registry BReg project"),
+        "{message}"
+    );
+    assert!(message.contains("caseworkctl provider pair"), "{message}");
+    assert!(!scratch.path().join("runs").exists());
+}
+
 /// Runs `rstack --format json dev ARGUMENTS` with run state under `state`.
 fn dev_json(state: &std::path::Path, arguments: &[&str]) -> std::process::Output {
     rstack_dev(state, true).args(arguments).output().unwrap()
@@ -2417,7 +2453,7 @@ fn live_runs(state: &std::path::Path) -> Vec<String> {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             // A `.RUN_ID.removing` directory is a stopped run whose files are
             // still being deleted.
-            .filter(|name| name != "failed" && !name.starts_with('.'))
+            .filter(|name| name.len() == 32 && name.bytes().all(|byte| byte.is_ascii_hexdigit()))
             .collect(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => panic!("cannot read the run state: {error}"),
@@ -2618,6 +2654,7 @@ fn start_without_database_url_runs_a_labelled_container() {
         "{argv}"
     );
     assert_eq!(fs::read_dir(docker.join("containers")).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(docker.join("volumes")).unwrap().count(), 1);
     assert!(report.get("run_id").is_none(), "{report}");
     assert_eq!(live_runs(&state), Vec::<String>::new());
     // The drawn administrator password reached Docker only in a file.

@@ -198,14 +198,16 @@ impl ProductRunner<'_> {
             .filter(|provider| provider.kind == ProviderKind::Http)
             .collect();
         if !http.is_empty() {
-            let token = random_secret()?;
-            let callback_key = random_secret()?;
-            let token_ref = self.secret("messaging-gateway-token", token.as_bytes())?;
-            let key_ref = self.secret("messaging-gateway-callback-key", callback_key.as_bytes())?;
+            let token_file = "messaging-gateway-token";
+            let key_file = "messaging-gateway-callback-key";
+            let token_ref =
+                self.retained_secret("messaging", token_file, random_secret()?.as_bytes())?;
+            let key_ref =
+                self.retained_secret("messaging", key_file, random_secret()?.as_bytes())?;
             let gateway = GatewayServer::start(GatewaySettings {
                 providers: http.iter().map(|provider| provider.id.clone()).collect(),
-                token,
-                callback_key: zeroize::Zeroizing::new(callback_key.as_bytes().to_vec()),
+                token: zeroize::Zeroizing::new(fs::read_to_string(self.root.join(token_file))?),
+                callback_key: zeroize::Zeroizing::new(fs::read(self.root.join(key_file))?),
                 runtime_origin: format!("http://{bind}"),
             })
             .map_err(operational)?;

@@ -218,6 +218,8 @@ enum DevCommand {
         deny_warnings: bool,
     },
     /// Start a development environment for a registry project.
+    ///
+    /// Managed development data survives a stop. Use --clean to clear it.
     #[command(after_help = "Example:\n  rstack dev start ./my-registry-project --ttl 1h")]
     Start {
         /// Project directory containing dev.yaml.
@@ -230,6 +232,9 @@ enum DevCommand {
         /// without either, the run starts its own PostgreSQL server in Docker.
         #[arg(long, value_name = "URL")]
         database_url: Option<String>,
+        /// Clear this project's managed development data before starting.
+        #[arg(long)]
+        clean: bool,
         /// Lifetime after readiness, from 1s to 24h. Defaults to 8h.
         #[arg(long, value_name = "DURATION")]
         ttl: Option<String>,
@@ -1782,6 +1787,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
             project,
             application_root,
             database_url,
+            clean,
             ttl,
         } => (
             "start",
@@ -1789,6 +1795,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
                 .iter()
                 .map(|root| option("application-root", root.as_os_str()))
                 .chain(ttl.iter().map(|ttl| option("ttl", ttl.as_ref())))
+                .chain(clean.then(|| OsString::from("--clean")))
                 .collect(),
             project.as_os_str(),
             database_url.as_deref(),

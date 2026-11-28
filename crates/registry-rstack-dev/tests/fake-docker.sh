@@ -3,7 +3,7 @@
 # under the name `docker`. It appends each invocation's arguments, one
 # invocation per line, to argv.log in its state directory and answers the
 # verbs a managed run uses: version, image inspect, pull, run, port, exec,
-# cp, ps and rm.
+# cp, ps, rm and volume.
 #
 # The state directory is $FAKE_DOCKER_STATE, else a fake-docker-state
 # directory beside the invoked path. Without either it answers as a Docker
@@ -30,7 +30,7 @@ if [[ -z "$state" ]]; then
 	printf 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n' >&2
 	exit 1
 fi
-mkdir -p "$state/containers" "$state/copied"
+mkdir -p "$state/containers" "$state/copied" "$state/volumes"
 printf '%s\n' "$*" >>"$state/argv.log"
 
 verb="${1:-}"
@@ -53,6 +53,28 @@ image)
 pull)
 	printf '%s\n' "${*: -1}" >>"$state/pulled"
 	;;
+volume)
+    case "$1" in
+    create)
+        volume="${*: -1}"
+        if [[ ! -f "$state/volumes/$volume" ]]; then
+            printf '%s\n' "$3" >"$state/volumes/$volume"
+        fi
+        printf '%s\n' "$volume"
+        ;;
+    ls)
+        filter="${*: -1}"
+        for record in "$state/volumes"/*; do
+            if [[ -f "$record" && "$(cat "$record")" == "${filter#label=}" ]]; then
+                basename "$record"
+            fi
+        done
+        ;;
+    rm)
+        rm "$state/volumes/$2"
+        ;;
+    esac
+    ;;
 run)
 	label=""
 	env_file=""
@@ -66,7 +88,7 @@ run)
 			env_file="$2"
 			shift 2
 			;;
-		--name | --publish | --platform)
+		--name | --publish | --platform | -v)
 			shift 2
 			;;
 		*)

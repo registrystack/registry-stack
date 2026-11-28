@@ -28622,7 +28622,7 @@
               "name": "start",
               "invocation": "rstack dev start",
               "about": "Start a development environment for a registry project",
-              "long_about": null,
+              "long_about": "Start a development environment for a registry project. Managed development data survives a stop. Use --clean to clear it.",
               "usage": "rstack dev start [OPTIONS] <PROJECT>",
               "arguments": [
                 {
@@ -28655,6 +28655,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--clean",
+                  "description": "Clear this project's managed development data before starting",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--ttl <DURATION>",
                   "description": "Lifetime after readiness, from 1s to 24h. Defaults to 8h",
                   "always_required": false,
@@ -28679,7 +28688,7 @@
                 },
                 {
                   "display": "-h, --help",
-                  "description": "Print help",
+                  "description": "Print help (see a summary with '-h')",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

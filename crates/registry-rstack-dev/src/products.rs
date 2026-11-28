@@ -456,7 +456,8 @@ impl<'a> ProductRunner<'a> {
             .iter()
             .any(|entry| entry.product == Product::Coordinator)
         {
-            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+            let state = self.product_state("coordinator");
+            let listener = coordinator_issuer_listener(state.as_deref())?;
             self.coordinator_issuer = Some(evidence::JwksServer::start(
                 listener,
                 &issuer.public_jwks(),
@@ -759,12 +760,50 @@ impl<'a> ProductRunner<'a> {
             .expect("BReg authority")
             .requires_postgis;
         self.write_field_key()?;
+        self.prepare_breg_hooks(project)?;
+        let urls = database
+            .provision("breg", true, requires_postgis)
+            .map_err(operational)?;
+        let build = self.root.join("breg-build");
+        let candidate = build.join("package");
+        let baseline = if let Some(state) = self.product_state("breg") {
+            // Status validates the runtime file before it reads the ledger.
+            let probe = self.root.join("breg-status-package");
+            private_directory(&probe)?;
+            let config = self.config(Product::Breg, "breg", bind, &probe, urls.clone())?;
+            self.breg_baseline(&config, &state)?
+        } else {
+            None
+        };
+        if let Some(baseline) = &baseline {
+            let (status, diff) = self.breg_report(
+                "diff",
+                &[
+                    project.as_os_str(),
+                    "--package".as_ref(),
+                    baseline.as_os_str(),
+                ],
+            )?;
+            ensure!(
+                status.success(),
+                "bregctl diff refused the retained package or project: {}",
+                report_codes(serde_json::to_vec(&diff)?.as_slice())?
+            );
+            if diff["changes"].as_array().is_some_and(Vec::is_empty) {
+                let config = self.config(Product::Breg, "breg", bind, baseline, urls)?;
+                self.tool(
+                    Product::Breg,
+                    "verify",
+                    &["--runtime-config".as_ref(), config.as_os_str()],
+                )?;
+                return Ok((config, baseline.clone()));
+            }
+        }
         // A server that cannot provision, for example without PostGIS or the
         // privilege to create it, is an environment failure.
         let rehearsal = database
             .provision("breg_test", true, requires_postgis)
             .map_err(operational)?;
-        self.prepare_breg_hooks(project)?;
         let empty_package = self.root.join("breg-test-package");
         fs::create_dir(&empty_package)?;
         let config = self.config(
@@ -776,48 +815,92 @@ impl<'a> ProductRunner<'a> {
         )?;
         let credentials = self.schema_credentials(issuer)?;
         let receipt = self.root.join("schema-test-receipt.json");
-        self.tool(
+        let mut test_args = vec![
+            project.as_os_str(),
+            "--runtime-config".as_ref(),
+            config.as_os_str(),
+            "--credentials".as_ref(),
+            credentials.as_os_str(),
+            "--output".as_ref(),
+            receipt.as_os_str(),
+        ];
+        let mut package_args = breg_package_arguments(project, &receipt, &build).to_vec();
+        if let Some(baseline) = &baseline {
+            for args in [&mut test_args, &mut package_args] {
+                args.extend(["--baseline-package".as_ref(), baseline.as_os_str()]);
+            }
+        }
+        self.tool(Product::Breg, "test", &test_args)?;
+        self.tool(Product::Breg, "package", &package_args)?;
+        let package = if let Some(state) = self.product_state("breg") {
+            let sums = plan::read(&candidate.join("SHA256SUMS"), 4 * 1024 * 1024)?;
+            let digest = registry_platform_config::sha256_uri(&sums);
+            let retained = state.join(format!("breg-package-{}", &digest["sha256:".len()..]));
+            if !retained.exists() {
+                fs::rename(&candidate, &retained)
+                    .context("cannot retain the verified BReg package")?;
+            }
+            retained
+        } else {
+            candidate
+        };
+        let config = self.config(
             Product::Breg,
-            "test",
-            &[
-                project.as_os_str(),
-                "--runtime-config".as_ref(),
-                config.as_os_str(),
-                "--credentials".as_ref(),
-                credentials.as_os_str(),
-                "--output".as_ref(),
-                receipt.as_os_str(),
-            ],
+            "breg",
+            bind,
+            baseline.as_deref().unwrap_or(&package),
+            urls.clone(),
         )?;
-        let build = self.root.join("breg-build");
-        // The run packages under the development posture because it is never deployed.
-        self.tool(
-            Product::Breg,
-            "package",
-            &breg_package_arguments(project, &receipt, &build),
-        )?;
-        let package = build.join("package");
-        let urls = database
-            .provision("breg", true, requires_postgis)
-            .map_err(operational)?;
+        let mut apply = vec![
+            "--runtime-config".as_ref(),
+            config.as_os_str(),
+            "--package".as_ref(),
+            package.as_os_str(),
+        ];
+        if baseline.is_none() {
+            apply.push("--initial".as_ref());
+        }
+        self.tool(Product::Breg, "apply", &apply)?;
         let config = self.config(Product::Breg, "breg", bind, &package, urls)?;
-        self.tool(
-            Product::Breg,
-            "apply",
-            &[
-                "--runtime-config".as_ref(),
-                config.as_os_str(),
-                "--package".as_ref(),
-                package.as_os_str(),
-                "--initial".as_ref(),
-            ],
-        )?;
         self.tool(
             Product::Breg,
             "verify",
             &["--runtime-config".as_ref(), config.as_os_str()],
         )?;
         Ok((config, package))
+    }
+
+    fn breg_report(&self, stage: &str, args: &[&std::ffi::OsStr]) -> Result<(ExitStatus, Value)> {
+        tool_report(
+            &self.input.binaries[&Product::Breg].tool,
+            "bregctl",
+            stage,
+            args,
+            self.terminate,
+        )
+    }
+
+    fn breg_baseline(&self, config: &Path, state: &Path) -> Result<Option<PathBuf>> {
+        let (status, report) =
+            self.breg_report("status", &["--runtime-config".as_ref(), config.as_os_str()])?;
+        if !status.success() {
+            let codes = report_codes(serde_json::to_vec(&report)?.as_slice())?;
+            ensure!(
+                only_refusal(&report, "status.database.uninitialized"),
+                "bregctl status refused the retained database: {codes}"
+            );
+            return Ok(None);
+        }
+        let digest = report["activePackageDigest"]
+            .as_str()
+            .filter(|digest| registry_platform_config::is_sha256_label(digest))
+            .context("bregctl status did not report the active package digest")?;
+        let package = state.join(format!("breg-package-{}", &digest["sha256:".len()..]));
+        ensure!(
+            package.is_dir(),
+            "the active BReg package is missing from the development project state"
+        );
+        Ok(Some(package))
     }
 
     /// Draw the run's own data key when the project encrypts fields. `bregctl
@@ -828,15 +911,20 @@ impl<'a> ProductRunner<'a> {
         if !self.encrypts_fields() {
             return Ok(());
         }
-        self.tool(
-            Product::Breg,
-            "field-encryption",
-            &[
-                "keygen".as_ref(),
-                "--output".as_ref(),
-                self.root.join(FIELD_KEY).as_os_str(),
-            ],
-        )
+        let state = self.input.project_state(self.root);
+        let key = state.as_deref().unwrap_or(self.root).join(FIELD_KEY);
+        if !key.exists() {
+            self.tool(
+                Product::Breg,
+                "field-encryption",
+                &["keygen".as_ref(), "--output".as_ref(), key.as_os_str()],
+            )?;
+        }
+        if state.is_some() {
+            let bytes = zeroize::Zeroizing::new(fs::read(key)?);
+            write_private(&self.root.join(FIELD_KEY), &bytes)?;
+        }
+        Ok(())
     }
 
     fn encrypts_fields(&self) -> bool {
@@ -928,7 +1016,11 @@ impl<'a> ProductRunner<'a> {
         let sink = GatewayServer::start_hooks()?;
         let mut hooks = serde_json::Map::new();
         for (id, (classification, timeout, maximum_attempts)) in destinations {
-            let key = self.secret(&format!("breg-hook-{id}"), random_secret()?.as_bytes())?;
+            let key = self.retained_secret(
+                "breg",
+                &format!("breg-hook-{id}"),
+                random_secret()?.as_bytes(),
+            )?;
             let classification = ["public", "internal", "restricted"][usize::from(classification)];
             hooks.insert(
                 id,
@@ -1075,19 +1167,52 @@ impl<'a> ProductRunner<'a> {
             let args = ["--runtime-config".as_ref(), path.as_os_str()];
             self.tool(product, "apply", &args)?;
             if product == Product::Scheduling {
-                self.tool(
-                    product,
-                    "records",
-                    &[
-                        "apply".as_ref(),
-                        args[0],
-                        args[1],
-                        project.join("records.yaml").as_os_str(),
-                    ],
-                )?;
+                self.apply_scheduling_records(project, &path)?;
             }
         }
         Ok(path)
+    }
+
+    fn apply_scheduling_records(&self, project: &Path, config: &Path) -> Result<()> {
+        let source = project.join("records.yaml");
+        let retained = self
+            .product_state("scheduling")
+            .map(|state| {
+                let bytes = plan::read(
+                    &source,
+                    registry_platform_yaml::MAXIMUM_DOCUMENT_BYTES as u64,
+                )?;
+                let digest = registry_platform_config::sha256_uri(&bytes);
+                Ok::<_, anyhow::Error>((state.join("scheduling-records-digest"), bytes, digest))
+            })
+            .transpose()?;
+        let records = if let Some((state, bytes, digest)) = &retained {
+            match fs::read_to_string(state) {
+                Ok(applied) if applied == *digest => return Ok(()),
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            let captured = self.root.join("scheduling-records.yaml");
+            write_private(&captured, bytes)?;
+            captured
+        } else {
+            source
+        };
+        self.tool(
+            Product::Scheduling,
+            "records",
+            &[
+                "apply".as_ref(),
+                "--runtime-config".as_ref(),
+                config.as_os_str(),
+                records.as_os_str(),
+            ],
+        )?;
+        if let Some((state, _, digest)) = retained {
+            write_private(&state, digest.as_bytes())?;
+        }
+        Ok(())
     }
 
     fn additional_config(
@@ -1099,7 +1224,7 @@ impl<'a> ProductRunner<'a> {
         urls: Option<&DatabaseUrls>,
     ) -> Result<Value> {
         let name = product.name();
-        let identity = format!("dev-{}-{name}", self.input.run_id);
+        let identity = self.database_identity(name);
         let (mut config, mut oidc) = shared_config(
             &self.input.plan,
             product,
@@ -1108,13 +1233,18 @@ impl<'a> ProductRunner<'a> {
             package,
             &BTreeSet::new(),
         );
+        config["audit"]["path"] = json!(self.audit_path(name));
         config["apiVersion"] = json!(format!(
             "id.registrystack.org/formats/{name}/runtime/v1alpha1"
         ));
         config["listener"] = json!({"bind": bind, "tlsTermination": "loopback-plaintext"});
         match product {
             Product::Scheduling | Product::Documents => {
-                self.secret(&format!("{name}-audit-key"), random_secret()?.as_bytes())?;
+                self.retained_secret(
+                    name,
+                    &format!("{name}-audit-key"),
+                    random_secret()?.as_bytes(),
+                )?;
                 config["kind"] = json!(if product == Product::Scheduling {
                     "SchedulingRuntimeConfig"
                 } else {
@@ -1156,7 +1286,7 @@ impl<'a> ProductRunner<'a> {
                 oidc["allowedClients"] = json!("from-policies");
                 let mut authentication = issuer_set(oidc);
                 authentication["policies"] = json!(policies);
-                let key = |file| self.secret(file, random_key_bytes()?.as_slice());
+                let key = |file| self.retained_secret(name, file, random_key_bytes()?.as_slice());
                 let mut connections = runtime["connections"].clone();
                 if let Some(connections) = connections.as_object_mut() {
                     for (id, connection) in connections {
@@ -1176,7 +1306,8 @@ impl<'a> ProductRunner<'a> {
                             let client_key = registry_platform_crypto::generate_private_jwk(
                                 registry_platform_crypto::GeneratedKeyAlgorithm::Es256,
                             )?;
-                            let reference = self.secret(
+                            let reference = self.retained_secret(
+                                name,
                                 &format!("coordinator-{id}-{field}-key"),
                                 &super::bindings::encode_private_jwk(&client_key)?,
                             )?;
@@ -1254,7 +1385,7 @@ impl<'a> ProductRunner<'a> {
                     "oidc": issuer_set(oidc),
                     "audit": {"retentionDays": 1},
                     "idempotency": {"responseRetentionSeconds": 3600},
-                    "cursorKeyRef": self.secret("adapter-cursor-key", random_key_bytes()?.as_slice())?,
+                    "cursorKeyRef": self.retained_secret(name, "adapter-cursor-key", random_key_bytes()?.as_slice())?,
                 }));
             }
             Product::Render => {
@@ -1303,8 +1434,12 @@ impl<'a> ProductRunner<'a> {
         let plan = &self.input.plan;
         self.secret(&format!("{name}-runtime-url"), urls.runtime.as_bytes())?;
         self.secret(&format!("{name}-migration-url"), urls.migration.as_bytes())?;
-        self.secret(&format!("{name}-audit-key"), random_secret()?.as_bytes())?;
-        let identity = format!("dev-{}-{name}", self.input.run_id);
+        self.retained_secret(
+            name,
+            &format!("{name}-audit-key"),
+            random_secret()?.as_bytes(),
+        )?;
+        let identity = self.database_identity(name);
         let mut config = match product {
             Product::Breg => {
                 let authority = self.input.breg_authority.as_ref().expect("BReg authority");
@@ -1357,7 +1492,7 @@ impl<'a> ProductRunner<'a> {
                     "authorityClaims": authority_claims
                 });
                 config["cursor"] = json!({
-                    "secretRef": self.secret(&format!("{name}-cursor-key"), random_secret()?.as_bytes())?, "maximumAgeSeconds": 300
+                    "secretRef": self.retained_secret(name, &format!("{name}-cursor-key"), random_secret()?.as_bytes())?, "maximumAgeSeconds": 300
                 });
                 let bindings = match fs::read(self.root.join("breg-hook-bindings.json")) {
                     Ok(bytes) => serde_json::from_slice::<Value>(&bytes)?,
@@ -1387,12 +1522,50 @@ impl<'a> ProductRunner<'a> {
             }
             _ => unreachable!("additional products write their own runtime configuration"),
         };
+        config["audit"]["path"] = json!(self.audit_path(name));
         if let Some(bindings) = &self.bindings {
             bindings.configure(product, &mut config);
         }
         let path = self.root.join(format!("{name}-runtime.yaml"));
         write_private(&path, &serde_json::to_vec(&config)?)?;
         Ok(path)
+    }
+
+    fn product_state(&self, name: &str) -> Option<PathBuf> {
+        self.input
+            .project_state(self.root)
+            .filter(|_| name != "breg-test")
+    }
+
+    fn database_identity(&self, name: &str) -> String {
+        let id = self
+            .input
+            .project_key
+            .as_deref()
+            .filter(|_| name != "breg-test")
+            .unwrap_or(&self.input.run_id);
+        format!("dev-{id}-{name}")
+    }
+
+    fn audit_path(&self, name: &str) -> PathBuf {
+        let state = self.product_state(name);
+        state
+            .as_deref()
+            .unwrap_or(self.root)
+            .join(format!("{name}-audit"))
+            .join("audit.jsonl")
+    }
+
+    fn retained_secret(&self, product: &str, name: &str, fresh: &[u8]) -> Result<String> {
+        let Some(state) = self.product_state(product) else {
+            return self.secret(name, fresh);
+        };
+        let file = state.join(name);
+        if !file.exists() {
+            write_private(&file, fresh)?;
+        }
+        let bytes = zeroize::Zeroizing::new(fs::read(file)?);
+        self.secret(name, &bytes)
     }
 
     fn secret(&self, name: &str, bytes: &[u8]) -> Result<String> {
@@ -1538,6 +1711,30 @@ impl<'a> ProductRunner<'a> {
     }
 }
 
+/// Coordinator binds the token endpoint into its live workflows. Keep the
+/// local issuer address as long as those workflows can be resumed.
+fn coordinator_issuer_listener(state: Option<&Path>) -> Result<TcpListener> {
+    let Some(state) = state else {
+        return Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?);
+    };
+    let file = state.join("coordinator-issuer-port");
+    let port = match fs::read_to_string(&file) {
+        Ok(saved) => saved
+            .parse::<std::num::NonZeroU16>()
+            .context("the retained Coordinator issuer port is invalid")?
+            .get(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(error.into()),
+    };
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).with_context(|| {
+        format!("cannot bind the Coordinator development issuer on loopback port {port}")
+    })?;
+    if port == 0 {
+        write_private(&file, listener.local_addr()?.port().to_string().as_bytes())?;
+    }
+    Ok(listener)
+}
+
 fn log_path(root: &Path, name: &str) -> PathBuf {
     root.join("logs").join(format!("{name}.log"))
 }
@@ -1623,6 +1820,26 @@ fn run_logged_tool(
         .with_context(|| format!("cannot start {product} {stage}"))
         .map_err(operational)?;
     let status = wait_for_guarded_tool(&mut child, active)?;
+    if stage == "apply" && !status.success() {
+        let unchanged = match product {
+            "casework" => Some("casework.activation.already-active"),
+            "scheduling" => Some("schedulingctl.activation.package-already-active"),
+            _ => None,
+        };
+        if let Some(code) = unchanged {
+            output.rewind()?;
+            let mut bytes = Vec::new();
+            (&mut output)
+                .take(MAX_TOOL_REPORT + 1)
+                .read_to_end(&mut bytes)?;
+            if serde_json::from_slice::<Value>(&bytes)
+                .is_ok_and(|report| only_refusal(&report, code))
+            {
+                return Ok(());
+            }
+            output.rewind()?;
+        }
+    }
     logged_tool_result(status, &mut output, root, (product, stage))?;
     if retain_receipt {
         retain_tool_receipt(&mut output, root, product, stage)?;
@@ -1992,6 +2209,22 @@ struct SelectedProduct {
 }
 
 /// Whether the project's Messaging providers need the run to start Mailpit.
+pub(super) fn require_canonical_review_pair(root: &Path, plan: &Plan) -> Result<()> {
+    if plan.bindings.casework_context_provider.is_some() {
+        return Ok(());
+    }
+    let Some(project) = product_root(root, plan, Product::Casework)? else {
+        return Ok(());
+    };
+    let policy = authored_document(&project.root.join("casework.yaml"))?;
+    let provider = &policy["contextProviders"]["facility-proposal-context"];
+    ensure!(
+        policy["project"]["id"] != "canonical-review" || provider.is_null() || !provider["description"].is_null(),
+        "Canonical review needs its facility-registry BReg project paired with `caseworkctl provider pair PROJECT --provider-id facility-proposal-context --breg-package BREG_PACKAGE --action-id correct-address --apply`."
+    );
+    Ok(())
+}
+
 pub(super) fn needs_mailpit(root: &Path, plan: &Plan) -> Result<bool> {
     messaging::needs_mailpit(root, plan)
 }
@@ -2712,6 +2945,15 @@ fn wait_for_guarded_tool(
         }
         thread::sleep(POLL);
     }
+}
+
+fn only_refusal(report: &Value, code: &str) -> bool {
+    let mut errors = report["diagnostics"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["severity"] == "error");
+    errors.next().is_some_and(|item| item["code"] == code) && errors.next().is_none()
 }
 
 fn report_codes(output: impl Read) -> Result<String> {
@@ -4616,6 +4858,16 @@ mod tests {
     }
 
     #[test]
+    fn coordinator_reopens_the_same_managed_development_issuer() {
+        let state = tempfile::tempdir().unwrap();
+        let listener = coordinator_issuer_listener(Some(state.path())).unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let restarted = coordinator_issuer_listener(Some(state.path())).unwrap();
+        assert_eq!(restarted.local_addr().unwrap(), address);
+    }
+
+    #[test]
     fn additional_runtime_configuration_uses_run_authority_and_loopback() {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("package");
@@ -4746,6 +4998,8 @@ mod tests {
             casework_principals: BTreeMap::new(),
             binaries: BTreeMap::new(),
             managed_database: false,
+            project_key: None,
+            clean: false,
         }
     }
 
@@ -4823,6 +5077,32 @@ INVENTORY
             .unwrap();
         let text = fs::read_to_string(path).unwrap();
         (serde_json::from_str(&text).unwrap(), text)
+    }
+
+    #[test]
+    fn managed_breg_runs_write_the_same_database_identity_and_audit_path() {
+        let scratch = tempfile::tempdir().unwrap();
+        let mut configs = Vec::new();
+        let mut keys = Vec::new();
+        for run_id in ["first", "second"] {
+            let root = scratch.path().join(run_id);
+            private_directory(&root).unwrap();
+            let mut input = breg_input(false);
+            input.run_id = run_id.into();
+            input.project_key = Some(crate::project_key(scratch.path()));
+            crate::ensure_private(&input.project_state(&root).unwrap(), true).unwrap();
+            let terminate = AtomicBool::new(false);
+            let runner = ProductRunner::new(Arc::new(input), &root, &terminate).unwrap();
+            let (config, _) = breg_config(&runner, &root, "breg");
+            configs.push(config);
+            keys.push(fs::read(root.join("breg-audit-key")).unwrap());
+        }
+        assert_eq!(
+            configs[0]["identity"]["databaseId"],
+            configs[1]["identity"]["databaseId"]
+        );
+        assert_eq!(configs[0]["audit"]["path"], configs[1]["audit"]["path"]);
+        assert!(keys[0] == keys[1], "the audit key changed on restart");
     }
 
     #[test]

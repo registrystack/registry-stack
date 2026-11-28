@@ -33,6 +33,7 @@ use registry_platform_yaml::{Diagnostic, Report};
 use rustix::fs::{flock, FlockOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -125,6 +126,8 @@ enum Entry {
         #[arg(long)]
         ttl: Option<String>,
         #[arg(long)]
+        clean: bool,
+        #[arg(long)]
         json: bool,
         project: PathBuf,
     },
@@ -176,9 +179,19 @@ struct RunInput {
     /// when the run ends.
     #[serde(default)]
     managed_database: bool,
+    #[serde(default)]
+    project_key: Option<String>,
+    #[serde(default)]
+    clean: bool,
 }
 
 impl RunInput {
+    fn project_state(&self, root: &Path) -> Option<PathBuf> {
+        self.project_key
+            .as_ref()
+            .map(|key| root.with_file_name(format!("development-project-{key}")))
+    }
+
     /// Whether any product in the plan keeps its data in PostgreSQL. Evidence
     /// holds no database, so a plan of Evidence alone needs neither a server
     /// nor Docker.
@@ -585,6 +598,7 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
             project,
             application_root,
             ttl,
+            clean,
             json,
         } => {
             let outcome = require_development(declared(None))
@@ -595,7 +609,7 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
                     if let Some(notice) = live_run_notice(&live_run_ids(&state_dir())) {
                         let _ = writeln!(stderr, "{notice}");
                     }
-                    start(&project, application_root.as_deref(), ttl.as_deref())
+                    start(&project, application_root.as_deref(), ttl.as_deref(), clean)
                 });
             let failed = outcome.as_ref().is_ok_and(|value| {
                 value["scenarios"].as_array().is_some_and(|scenarios| {
@@ -718,6 +732,9 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
                 container.as_str().unwrap_or("?")
             )?;
         }
+    }
+    if let Some(retention) = report["database"]["retention"].as_str() {
+        writeln!(output, "  {retention}")?;
     }
     if let Some(products) = report["products"].as_object() {
         for (product, url) in products {
@@ -915,7 +932,37 @@ fn write_check_json(stdout: &mut dyn Write, mut payload: Value) -> Result<()> {
     Ok(())
 }
 
-fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> Result<Value> {
+fn project_key(canonical_project: &Path) -> String {
+    let digest = Sha256::digest(canonical_project.as_os_str().as_encoded_bytes());
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn lock_project(root: &Path, key: &str) -> Result<File> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(root.with_file_name(format!("development-project-{key}.lock")))?;
+    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => Ok(file),
+        Err(rustix::io::Errno::WOULDBLOCK) => {
+            anyhow::bail!("a live development run holds this project; stop that run first")
+        }
+        Err(error) => Err(error).context("cannot acquire the development project lock"),
+    }
+}
+
+fn start(
+    project: &Path,
+    application_root: Option<&Path>,
+    ttl: Option<&str>,
+    clean: bool,
+) -> Result<Value> {
     let ttl_seconds = parse_ttl(ttl.unwrap_or(DEFAULT_TTL))?;
     let project = project.canonicalize().with_context(|| {
         format!(
@@ -925,6 +972,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     })?;
     let loaded = plan::load(&project)?;
     let mut plan = loaded.plan;
+    products::require_canonical_review_pair(&project, &plan)?;
     ensure!(
         plan.application.is_some() == application_root.is_some(),
         "supply --application-root exactly when dev.yaml declares application"
@@ -955,6 +1003,11 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         .iter()
         .any(|entry| entry.product.needs_database());
     let managed_database = needs_database && !named(DATABASE_URL);
+    ensure!(
+        !clean || managed_database,
+        "--clean requires a project using managed development PostgreSQL"
+    );
+    let project_key = managed_database.then(|| project_key(&project));
     if managed_database {
         ensure!(
             !named(CA_FILE),
@@ -995,6 +1048,8 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         casework_principals: inspection.casework_principals,
         binaries,
         managed_database,
+        project_key,
+        clean,
     };
     let preparation = (|| {
         write_private(&root.join("input.json"), &capture_input(&input)?)?;
@@ -1161,6 +1216,18 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         restored.run_id == name,
         "captured development plan has a different run ID"
     );
+    if let Some(key) = &restored.project_key {
+        ensure!(
+            restored.managed_database && *key == project_key(&restored.project),
+            "captured development plan has an invalid project key"
+        );
+    }
+    let project_state = restored.project_state(root);
+    let _project_lock = restored
+        .project_key
+        .as_deref()
+        .map(|key| lock_project(root, key))
+        .transpose()?;
     let mut issuer_listener = reserve_run_issuer(&mut restored.plan)?;
     let input = Arc::new(restored);
     let signals = signals()?;
@@ -1192,10 +1259,28 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             let (admin, ca) = if input.managed_database {
                 // The run's own server hands the by-address path its URL and the
                 // CA the run drew, as an operator's server would.
-                let server =
-                    docker
-                        .insert(Docker::connect()?)
-                        .start_server(root, &input.run_id, image)?;
+                let key = input
+                    .project_key
+                    .as_deref()
+                    .context("missing development project key")?;
+                let state = project_state
+                    .as_deref()
+                    .context("missing development project state")?;
+                let engine = docker.insert(Docker::connect()?);
+                engine.require_free_volume(key)?;
+                if input.clean {
+                    engine.remove_project_volume(key)?;
+                    if state.exists() {
+                        ensure_private(state, false)?;
+                        fs::remove_dir_all(state)?;
+                    }
+                }
+                ensure!(
+                    state.exists() || !engine.has_project_volume(key)?,
+                    "the project's development volume exists without its local state; restore that state directory or start with --clean"
+                );
+                ensure_private(state, true)?;
+                let server = engine.start_server(root, &input.run_id, image, key)?;
                 write_private(&root.join("postgres-ca"), &server.ca_pem)?;
                 (server.admin_url, Some(server.ca_pem))
             } else {
@@ -1214,8 +1299,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                 );
                 (admin, ca)
             };
-            let connected =
+            let mut connected =
                 Database::connect(&admin, ca.as_deref(), &input.run_id).map_err(with_ca_hint)?;
+            connected.set_project_key(input.project_key.clone());
             // The cluster identity must be recorded before anything can create a database or role.
             write_private(
                 &root.join(POSTGRES_IDENTITY),
@@ -1268,9 +1354,14 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         report["database"] = if !input.needs_database() {
             json!({"mode": "none"})
         } else if input.managed_database {
-            json!({"mode": "managed", "image": image.reference})
+            json!({
+                "mode": "managed", "image": image.reference,
+                "developmentState": project_state,
+                "volume": docker::volume_name(input.project_key.as_deref().expect("managed key")),
+                "retention": format!("Development data is kept after stop in {}; start this project with --clean to clear it.", project_state.as_ref().expect("managed state").display())
+            })
         } else {
-            json!({"mode": "address"})
+            json!({"mode": "address", "retention": "Databases and roles on the supplied PostgreSQL server are run-scoped and dropped at stop."})
         };
         let sinks = products.sinks();
         if sinks.as_object().is_some_and(|sinks| !sinks.is_empty()) {
@@ -1330,19 +1421,16 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let mark_stopping = write_private(&root.join(REPORT), &serde_json::to_vec(&stopped)?);
     let mut told_parent = false;
     // Keep the exact ownership list until both the supervised processes and
-    // their database resources have been released. A run's own server goes
-    // with its container, so nothing in it is dropped first. The run's
-    // containers, its server and any Mailpit, are removed by label.
+    // their database resources have been released. Drop the run-scoped
+    // objects before removing any managed server. Docker keeps named volumes
+    // when the run's containers are removed by label.
     let cleanup = retry_cleanup(
         CLEANUP_BUDGET,
         CLEANUP_PAUSE,
         || {
             products.stop().and_then(|()| {
-                if input.managed_database {
-                    drop(database.take());
-                } else {
-                    database.as_mut().map_or(Ok(()), Database::cleanup)?;
-                }
+                database.as_mut().map_or(Ok(()), Database::cleanup)?;
+                drop(database.take());
                 docker
                     .as_ref()
                     .map_or(Ok(()), |docker| docker.remove(&input.run_id).map(drop))
@@ -1566,15 +1654,29 @@ fn recover_run(run_id: &str) -> Result<Value> {
         )
         .context("cannot mark the run as stopping")?;
         let mailpit = root.join(MAILPIT_MARKER).exists();
-        if captured_input(&root)?.managed_database {
-            // The run's own server holds every database and role it made, so
-            // removing its container releases them without an administrator
-            // URL. The same label removes the run's Mailpit.
+        let input = captured_input(&root)?;
+        if input.managed_database {
+            // The container's local administrator socket needs no supplied
+            // URL. Release only the lost run's rehearsal objects, then remove
+            // its containers by label.
             let docker = Docker::connect()?;
             let stopped_groups = recovery::wait_for_guards(&root)?;
+            let provisioned = input.project_key.is_some()
+                && read_json::<Option<RecoveryIdentity>>(&root.join(POSTGRES_IDENTITY), 1024)?
+                    .is_some();
+            let dropped = if provisioned {
+                let names = provisioned_labels(&root)?
+                    .into_iter()
+                    .filter(|(label, _)| *label == "breg_test")
+                    .map(|(label, spatial)| database::run_object_names(run_id, label, spatial))
+                    .collect::<Result<Vec<_>>>()?;
+                docker.drop_rehearsals(run_id, names)?
+            } else {
+                Vec::new()
+            };
             let containers = docker.remove(run_id)?;
             remove_run_dir(&root)?;
-            return Ok((stopped_groups, Vec::new(), containers));
+            return Ok((stopped_groups, dropped, containers));
         }
         // A null identity means the worker never began provisioning. Missing
         // or invalid metadata cannot prove that there is nothing to release.
@@ -2244,7 +2346,7 @@ mod tests {
         assert!(error.contains("\"Bad Name\""), "{error}");
 
         let missing = Path::new("/definitely/missing/project");
-        let error = format!("{:#}", start(missing, None, None).unwrap_err());
+        let error = format!("{:#}", start(missing, None, None, false).unwrap_err());
         assert!(error.contains("/definitely/missing/project"), "{error}");
         let (mut out, mut err) = (Vec::new(), Vec::new());
         assert_ne!(check(missing, false, false, &mut out, &mut err), 0);
@@ -2261,6 +2363,36 @@ mod tests {
         let error = unknown_person("reviewer", &plan.people).to_string();
         assert!(error.contains("\"reviewer\""), "{error}");
         assert!(error.contains("operator"), "{error}");
+    }
+
+    #[test]
+    fn project_keys_follow_canonical_paths_and_fit_postgresql_names() {
+        let scratch = tempfile::tempdir().unwrap();
+        let first = scratch.path().join("project");
+        let second = scratch.path().join("other");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let key = project_key(&first.canonicalize().unwrap());
+        assert_eq!(key, project_key(&first.join(".").canonicalize().unwrap()));
+        assert_ne!(key, project_key(&second.canonicalize().unwrap()));
+        let names = database::run_object_names(&key, "coordinator", false).unwrap();
+        assert!(names
+            .iter()
+            .all(|name| name.contains(&key) && name.len() <= 63));
+    }
+
+    #[test]
+    fn cleaning_cannot_acquire_a_held_project() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        let key = project_key(scratch.path());
+        let held = lock_project(&root, &key).unwrap();
+        assert!(lock_project(&root, &key)
+            .unwrap_err()
+            .to_string()
+            .contains("live development run"));
+        drop(held);
+        assert!(lock_project(&root, &key).is_ok());
     }
 
     #[test]

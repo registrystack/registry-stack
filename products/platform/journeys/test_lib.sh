@@ -1355,7 +1355,7 @@ case_usage() {
 
 case_binaries() {
 	local artifacts="$work/bins/debug/build/aws-lc-fips-sys-0f1e2d/out/build/artifacts"
-	local cargo_path="$test_path:$work/cargo-bin"
+	local cargo_path="$work/cargo-bin:$test_path"
 
 	begin_case bin-dir-darwin
 	drive 0 FAKE_UNAME_S=Darwin DRIVER_DYLD=/caller/lib PREPARE=print-env -- --product alpha --bin-dir "$work/bin-link/debug"
@@ -1417,8 +1417,10 @@ case_binaries() {
 	check "with neither --bin-dir nor CARGO_TARGET_DIR the run stops" has "pass --bin-dir DIR or export CARGO_TARGET_DIR" "$last_err"
 	drive 2 PATH="$cargo_path" CARGO_TARGET_DIR="$work/target" -- --product alpha --timed
 	check "--timed refuses a build" has "--timed needs --bin-dir" "$last_err"
-	drive 2 CARGO_TARGET_DIR="$work/target" -- --product alpha
-	check "a build needs cargo on PATH" has "cargo is not on PATH" "$last_err"
+	if ! PATH="$test_path" command -v cargo >/dev/null; then
+		drive 2 CARGO_TARGET_DIR="$work/target" -- --product alpha
+		check "a build needs cargo on PATH" has "cargo is not on PATH" "$last_err"
+	fi
 	check "no refused build ran cargo" no_file "$state/cargo.argv"
 
 	begin_case build-fails
