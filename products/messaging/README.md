@@ -190,15 +190,12 @@ artifact drift test, `messagingctl init` against the published starter,
 `messagingctl check` over the starter, a pinned digest, and five refusals,
 `messagingctl preview` byte stability, and `messagingctl messages` refusing a
 malformed id and an unreachable database. `test-dev.sh` needs Docker: it
-starts `messagingctl dev` on a starter whose SMS provider is the example mock
+starts `rstack dev` on a starter whose SMS provider is the example mock
 provider, sends one email and one SMS, requires the SMS to be `delivered`
 through one applied signed callback and the email to be `submitted` with one
 message in Mailpit, and requires the stopped session to leave no container.
-`test-dev-shared-issuer.sh` also needs Docker: it starts a BReg owner with the
-two Messaging requester clients and their explicit resource, runs the same
-Messaging journey with borrowed tokens, exercises retained-owner restart and
-replacement refusals, and requires Messaging cleanup to leave the owner
-running.
+`test-dev-shared-issuer.sh` uses a fixture-owned ThunderID issuer and verifies
+exact audience and refusal of stale tokens after issuer key rotation.
 The harness's `--messaging` mode needs Docker: it runs the starter under `rstack dev` with no other
 product, requires the scenario's SMS to reach the run's gateway, sends an email that reaches the
 run's Mailpit, and requires the stopped run to leave no container.

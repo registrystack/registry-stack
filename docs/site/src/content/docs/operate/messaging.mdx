@@ -98,10 +98,6 @@ Neither acceptance nor `submitted` is proof of delivery to the recipient or of l
 
 The runtime and ctl read `REGISTRY_STACK_POSTURE` or `--posture`.
 The default is `production`.
-For `messagingctl dev`, an unset posture means `development` and an explicit `production` declaration is refused.
-
-{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs PostureSource::Default, crates/registry-messagingctl/tests/dev_posture.rs dev_refuses_explicit_production_before_writing. */}
-
 For a laptop deployment that uses development settings, run with `rstack dev` or declare `development` explicitly.
 Use the same posture for the entire deployment. Production peers refuse development responses.
 

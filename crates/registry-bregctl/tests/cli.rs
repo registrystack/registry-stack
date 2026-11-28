@@ -4988,7 +4988,7 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
     }
     assert!(!project.path().join("build").exists());
     // No command-line spelling packages the placeholder for deployment:
-    // `bregctl dev` packages its loopback session in process instead.
+    // `rstack dev` drives the local rehearsal and package commands.
     let bypass = bregctl(&[
         "package",
         path(&destination),
@@ -5701,7 +5701,7 @@ fn init_prints_the_next_command_and_what_the_example_leaves_open() {
     );
     assert_eq!(
         numbered_step(&stdout, 3),
-        format!("start the local registry with 'bregctl dev start {destination_argument}'")
+        format!("start the local registry with 'rstack dev start {destination_argument}'")
     );
     assert_eq!(
         numbered_step(&stdout, 4),
@@ -11803,57 +11803,6 @@ fn collect_tree(root: &Path, directory: &Path, files: &mut BTreeMap<String, Vec<
             );
         }
     }
-}
-
-#[test]
-fn dev_refuses_explicit_production_before_writing_state() {
-    let project = packaging_project();
-    for from_flag in [true, false] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
-        command
-            .args(["--format", "json", "dev", path(project.path())])
-            .env_remove("REGISTRY_STACK_POSTURE");
-        if from_flag {
-            command.args(["--posture", "production"]);
-        } else {
-            command.env("REGISTRY_STACK_POSTURE", "production");
-        }
-        let output = command.output().unwrap();
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
-        let report = json_stdout(&output);
-        let diagnostic = &report["diagnostics"][0];
-        assert_eq!(diagnostic["code"], "platform.posture.conflict");
-        assert!(diagnostic["message"]
-            .as_str()
-            .unwrap()
-            .contains("bregctl dev"));
-        assert!(!project.path().join(".breg").exists());
-    }
-}
-
-#[test]
-fn dev_supervisor_refuses_explicit_production() {
-    let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
-        .args([
-            "--format",
-            "json",
-            "__dev-supervisor",
-            "--dev-root",
-            path(scratch.path()),
-            "--breg-bin",
-            "breg",
-            "--docker-bin",
-            "docker",
-        ])
-        .env("REGISTRY_STACK_POSTURE", "production")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert_eq!(
-        json_stdout(&output)["diagnostics"][0]["code"],
-        "platform.posture.conflict"
-    );
 }
 
 #[test]

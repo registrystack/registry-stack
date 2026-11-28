@@ -96,7 +96,7 @@ pub(crate) fn scenarios_schema() -> schemars::Schema {
 }
 
 #[cfg(feature = "schema")]
-fn keyed_schema<K: schemars::JsonSchema, V: schemars::JsonSchema>(
+pub(super) fn keyed_schema<K: schemars::JsonSchema, V: schemars::JsonSchema>(
     generator: &mut schemars::SchemaGenerator,
 ) -> schemars::Schema {
     schemars::json_schema!({
@@ -283,6 +283,14 @@ pub(super) struct Plan {
     /// The issuer name written into every test token. Use an HTTPS URL that the products' trusted issuers and producers name. Set `run` instead only when the plan declares an `application` or a paired BReg and Casework `runIssuerBinding`: each of those requires `run`, and `run` requires one of them.
     #[cfg_attr(feature = "schema", schemars(schema_with = "issuer_schema"))]
     pub issuer: String,
+    /// JWKS endpoint for an externally managed issuer. When set, the runner
+    /// delegates authentication to that issuer and does not mint person tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<PlatformUrl>"))]
+    pub external_jwks_uri: Option<String>,
+    /// Explicit connections from a development BReg to external fixture services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_breg: Option<super::external_breg::ExternalBreg>,
     /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
     /// The test people, keyed by a lowercase local identifier. Define up to 256, and give at least one grant to every started product that verifies tokens.
@@ -1045,6 +1053,10 @@ impl Plan {
             .expect("validated product")
     }
 
+    pub(super) fn jwks_uri(&self) -> Option<&str> {
+        self.external_jwks_uri.as_deref()
+    }
+
     fn validate(&self, root: &Path) -> SemanticResult<()> {
         let path = &self.scenario_file;
         require(
@@ -1059,19 +1071,30 @@ impl Plan {
         )?;
         require_file_inside(root, path, "/scenarioFile", "authored scenario file")?;
         require(
-            self.issuer == "run" || ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
-                url.scheme() == "https"
-                    && url.host().is_some()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-                    && url.query().is_none()
-                    && url.fragment().is_none()
-                    && self.issuer.len() <= 512
-            }),
+            self.issuer == "run"
+                || issuer_url(&self.issuer, self.jwks_uri().is_some()),
             "/issuer",
-            "The issuer must be `run` or a bounded HTTPS URL without credentials, query, or fragment.",
+            "The issuer must be `run`, an HTTPS URL, or a loopback HTTP URL with externalJwksUri. URLs cannot contain credentials, query, or fragment.",
             "Set issuer to `run` for an application or exact paired run issuer binding, or to an HTTPS URL with a host and no credentials, query, or fragment.",
         )?;
+        if let Some(bindings) = &self.external_breg {
+            require(
+                self.jwks_uri().is_some()
+                    && self.products.iter().any(|p| p.product == Product::Breg),
+                "/externalBreg",
+                "External BReg connections require BReg and an external issuer.",
+                "Add BReg and externalJwksUri to this plan, or remove externalBreg.",
+            )?;
+            bindings.validate(root)?;
+        }
+        if let Some(uri) = self.jwks_uri() {
+            require(
+                self.issuer != "run" && issuer_url(uri, true),
+                "/externalJwksUri",
+                "An external key endpoint needs a fixed issuer and an HTTPS or loopback HTTP URL.",
+                "Set issuer to the exact external issuer and externalJwksUri to its key endpoint.",
+            )?;
+        }
         require(
             (self.issuer != "run"
                 || self.application.is_some()
@@ -1083,10 +1106,12 @@ impl Plan {
             "Use issuer `run` with application, the exact paired runIssuerBinding, or Evidence; otherwise remove them and set an HTTPS issuer.",
         )?;
         require(
-            !self.runs_evidence() || (self.issuer == "run" && self.application.is_none()),
+            !self.runs_evidence()
+                || (self.issuer == "run" && self.application.is_none())
+                || self.jwks_uri().is_some(),
             "/issuer",
-            "An Evidence target accepts only the run's own loopback issuer, and a browser application already owns that issuer.",
-            "Set issuer to `run` and remove the application when the plan starts Evidence.",
+            "An Evidence target needs the run's loopback issuer or an external key endpoint.",
+            "Set issuer to `run` and remove the application, or configure externalJwksUri.",
         )?;
         if let Some(application) = &self.application {
             if let Some(roles) = &application.casework_source_credential_roles {
@@ -1675,6 +1700,14 @@ impl Journey {
 
 impl ScenarioFile {
     fn validate(&self, plan: &Plan) -> SemanticResult<()> {
+        if plan.jwks_uri().is_some() {
+            return require(
+                self.scenarios.is_empty(),
+                "/scenarios",
+                "An external issuer run cannot mint tokens for authored scenarios.",
+                "Set scenarios to an empty list and run the scenario using externally acquired tokens.",
+            );
+        }
         require(
             (1..=16).contains(&self.scenarios.len()),
             "/scenarios",
@@ -1696,6 +1729,23 @@ impl ScenarioFile {
         }
         Ok(())
     }
+}
+
+pub(super) fn issuer_url(value: &str, allow_loopback: bool) -> bool {
+    value.len() <= 512
+        && ParsedUrl::parse(value).is_ok_and(|url| {
+            let loopback = url.host().is_some_and(|host| match host {
+                url::Host::Ipv4(ip) => ip.is_loopback(),
+                url::Host::Ipv6(ip) => ip.is_loopback(),
+                url::Host::Domain(host) => host == "localhost",
+            });
+            (url.scheme() == "https" || (allow_loopback && url.scheme() == "http" && loopback))
+                && url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        })
 }
 
 fn step_identifier(value: &str) -> bool {
@@ -1817,6 +1867,29 @@ mod tests {
         .unwrap();
         write_scenarios(root.path(), json!({"id": "smoke", "steps": [step]}));
         (root, plan)
+    }
+
+    #[test]
+    fn an_external_issuer_accepts_loopback_keys_and_requires_an_empty_scenario_pack() {
+        let (root, mut plan) = plan(json!({"id": "read", "product": "breg",
+            "as": "operator", "method": "GET", "path": "/v1/records", "expect": {"status": 200}}));
+        plan.issuer = "http://127.0.0.1:41000".to_owned();
+        assert!(plan.validate(root.path()).is_err());
+        plan.external_jwks_uri = Some(format!("{}/keys", plan.issuer));
+        plan.validate(root.path()).unwrap();
+        assert!(scenario_file(root.path(), &plan).validate(&plan).is_err());
+        let empty = ScenarioFile {
+            scenarios: Vec::new(),
+        };
+        empty.validate(&plan).unwrap();
+
+        for uri in [
+            "http://identity.example.test/keys",
+            "https://user@127.0.0.1/keys",
+        ] {
+            plan.external_jwks_uri = Some(uri.to_owned());
+            assert!(plan.validate(root.path()).is_err());
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Measure SMS dispatch throughput of one runtime replica against a mock HTTP
-# provider that answers after a fixed latency. It starts `messagingctl dev`
+# provider that answers after a fixed latency. It starts `rstack dev`
 # from a release build on a starter whose SMS provider is the example mock
 # provider, raises the sender's request rate so admission is not the limit,
 # submits MESSAGING_THROUGHPUT_COUNT SMS (default 600) from
@@ -29,10 +29,10 @@ if limits not in text:
     sys.exit("measure-throughput: the starter's access limits changed; update this script")
 path.write_text(text.replace(limits, "requestsPerMinute: 600000\n    burst: 10000\n", 1))
 PY
-dev_start --mock-latency-ms "$latency_ms"
+RSTACK_DEV_MESSAGING_MOCK_LATENCY_MS="$latency_ms" dev_start
 dev_log "session ready with a ${latency_ms} ms mock provider"
 
-header=$("$messagingctl_bin" dev token case-system "$dev_project" --format json | dev_member headerFile)
+header=$(dev_header case-system)
 
 case "$(uname -s)" in
 Darwin) machine="$(sysctl -n machdep.cpu.brand_string), $(sysctl -n hw.ncpu) logical CPUs" ;;

@@ -414,53 +414,16 @@ decisions:
       - {path: crates/registry-messaging/src/smtp/settings.rs, name: plaintext_is_refused_for_a_host_that_is_not_loopback}
       - {path: crates/registry-messagingctl/src/lib.rs, name: a_retired_smtp_mode_names_loopback_plaintext}
   - id: MESSAGING-DEC-27
-    subject: The development session is foreground, in-process, and owns only what it starts
+    subject: The stack runner owns the local Messaging deployment
     decision: >-
-      `messagingctl dev` runs in the foreground until Ctrl-C or SIGTERM. It
-      starts a pinned PostgreSQL container and a pinned Mailpit container,
-      each publishing on 127.0.0.1 only and labelled with the session's
-      random owner, runs a mock HTTP gateway and the Messaging runtime inside
-      the `messagingctl` process under the development posture on a `loopback-plaintext` listener, and
-      removes both containers with their volumes when it stops. Its secrets,
-      generated runtime configuration, audit journal, and log live in the
-      project's owner-only `.messaging/dev` directory, which the next start
-      removes, together with any container the previous record names, before
-      it generates everything again. By default, `messagingctl dev token CLIENT`
-      signs a one-hour ES256 token with the session's key for a client one
-      access profile names, carrying that profile's scopes and actor kind.
-      With the paired `--issuer-project OWNER --resource URI` options, the
-      session instead exports each requester client's credential through the
-      public `bregctl` CLI, requests the explicit resource and profile scopes,
-      and verifies a real RS256 token against one bounded public key snapshot
-      before reporting ready. It reads no private BReg state and never manages
-      the owner session. A borrowed `dev token` re-exports and compares the
-      credential and endpoint, requires the Messaging session to be ready,
-      and verifies the new token against the retained keys and same caller
-      identity before publishing its header.
-    alsoTrue: >-
-      The session keeps no database across starts, so it leaves no rendered
-      payload or recipient behind. The runtime runs in process and is the
-      same library `messaging serve` runs, reading a generated configuration
-      that `messagingctl check` would accept. The static key set generated
-      with the session replaces a local issuer container, and the signing
-      key never leaves the session directory. Each foreground start captures
-      current public trust anew, so Messaging keeps no owner UUID, reset
-      path, or lifecycle control. A BReg restart with the same public
-      authority continues to work; changed credentials, endpoint, signing
-      keys, or principal require a new Messaging start. An explicit
-      Messaging resource binds the intended audience for the invocation, and
-      a real OAuth grant proves that every requester client can use it.
+      rstack dev runs Messaging under the development posture with a loopback
+      Mailpit SMTP relay and signed mock gateway callbacks. A run either uses
+      its own test issuer or the exact issuer and key endpoint declared in the
+      development plan. The runtime still checks the configured audience and
+      current issuer keys.
     evidence:
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: the_generated_configuration_is_one_the_runtime_accepts}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: every_session_file_is_owner_only}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: a_token_verifies_under_the_session_key_set_with_the_profile_claims}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: a_second_start_in_the_same_project_is_refused_while_the_first_runs}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_configuration_uses_scope_and_static_issuer_keys}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_client_tokens_preserve_messaging_authorization}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_refuses_changed_client_credentials}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_refuses_changed_principal}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_requires_ready_session}
-      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: paired_issuer_options_require_an_explicit_resource}
+      - {path: products/messaging/scripts/test-dev.sh, name: dev_stop}
+      - {path: products/messaging/scripts/test-dev-shared-issuer.sh, name: start_fixture}
   - id: MESSAGING-DEC-28
     subject: Provider callbacks are charged to a fixed per-provider rate before they are verified
     decision: >-

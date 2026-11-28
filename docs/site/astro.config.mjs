@@ -848,7 +848,6 @@ export default defineConfig({
                 { label: 'Access profiles as ODRL', slug: 'reference/breg-odrl-export' },
                 { label: 'PublicSchema wizard', slug: 'reference/bregctl-publicschema-wizard' },
                 { label: 'bregctl explain output', slug: 'reference/bregctl-explain' },
-                { label: 'Native local lifecycle', slug: 'reference/bregctl-dev' },
                 { label: 'Authenticate with eSignet', slug: 'explanation/esignet-authentication-over-breg' },
               ],
             },

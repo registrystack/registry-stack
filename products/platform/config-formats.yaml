@@ -696,7 +696,7 @@ formats:
       apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
       kind: BRegDevClients
       checkedBy:
-        file: crates/registry-bregctl/src/dev/config.rs
+        file: crates/registry-bregctl/src/dev_clients.rs
         symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
@@ -709,8 +709,8 @@ formats:
       driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/config.rs
-      function: clients
+      file: crates/registry-bregctl/src/dev_clients.rs
+      function: check
       type: Clients
     check: bregctl check --file {file}
     example: products/breg/acceptance/facility/dev-clients.yaml
@@ -864,7 +864,7 @@ formats:
       apiVersion: id.registrystack.org/formats/breg/example-scenarios/v1alpha1
       kind: BRegExampleScenarios
       checkedBy:
-        file: crates/registry-bregctl/src/dev/examples.rs
+        file: crates/registry-bregctl/src/examples.rs
         symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/example-scenarios/v1alpha1
@@ -877,7 +877,7 @@ formats:
       driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/examples.rs
+      file: crates/registry-bregctl/src/examples.rs
       function: catalogue
       type: Catalogue
     check: bregctl check --file {file}
@@ -989,99 +989,6 @@ formats:
       requiredText: /database
       optionalText: none
       integer: /maximumAgeSeconds
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: breg/dev-state
-    product: breg
-    title: Development environment state
-    files: [.breg/dev/state.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1
-      kind: BRegDevState
-      checkedBy:
-        file: crates/registry-bregctl/src/dev/mod.rs
-        symbol: STATE_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1
-      kind: BRegDevState
-    schema: none
-    reader:
-      crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/mod.rs
-      function: read_state
-      type: State
-    check: bregctl check --file {file}
-    example: products/breg/examples/formats/dev-session/.breg/dev/state.json
-    conformance:
-      requiredText: /project
-      optionalText: none
-      integer: /bregPort
-      boolean: /activated
-    securityMembers: []
-    restrictingMembers: []
-  - id: breg/dev-prepared-source
-    product: breg
-    title: Development prepared source record
-    files: [.breg/dev/source-prepared-*.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1
-      kind: BRegDevPreparedSource
-      checkedBy:
-        file: crates/registry-bregctl/src/dev/prepare_source.rs
-        symbol: PREPARED_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1
-      kind: BRegDevPreparedSource
-    schema: none
-    reader:
-      crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/prepare_source.rs
-      function: read_prepared
-      type: PreparedSource
-    check: bregctl check --file {file}
-    example: products/breg/examples/formats/dev-session/.breg/dev/source-prepared-source.json
-    conformance:
-      requiredText: /requestDigest
-      optionalText: none
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: breg/dev-source-transition
-    product: breg
-    title: Development source transition journal
-    files: [.breg/dev/source-transition.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/breg/dev-source-transition/v1alpha1
-      kind: BRegDevSourceTransition
-      checkedBy:
-        file: crates/registry-bregctl/src/dev/prepare_source.rs
-        symbol: TRANSITION_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/breg/dev-source-transition/v1alpha1
-      kind: BRegDevSourceTransition
-    schema: none
-    reader:
-      crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/prepare_source.rs
-      function: read_transition
-      type: Transition
-    check: bregctl check --file {file}
-    example: products/breg/examples/formats/dev-session/.breg/dev/source-transition.json
-    conformance:
-      requiredText: /priorDigest
-      optionalText: none
-      integer: /sequence
       boolean: none
     securityMembers: []
     restrictingMembers: []
@@ -2084,37 +1991,6 @@ formats:
       - pointer: /package/expectedDigest
         whenOmitted: open
     restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers]
-  - id: messaging/dev-state
-    product: messaging
-    title: Development environment state
-    files: [.messaging/dev/session.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/messaging/dev-state/v1alpha1
-      kind: MessagingDevState
-      checkedBy:
-        file: crates/registry-messagingctl/src/dev/mod.rs
-        symbol: DEV_STATE_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/messaging/dev-state/v1alpha1
-      kind: MessagingDevState
-    schema: none
-    reader:
-      crate: registry-messagingctl
-      file: crates/registry-messagingctl/src/dev/mod.rs
-      function: read_session
-      type: SessionRecord
-    check: messagingctl check --dev-state {file}
-    example: products/messaging/examples/formats/dev-session/.messaging/dev/session.json
-    conformance:
-      requiredText: /owner
-      optionalText: /borrowedIssuer/clients/case-system/actorKind
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
   - id: messaging/template-schema
     product: messaging
     title: Messaging template data schema

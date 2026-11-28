@@ -54,6 +54,7 @@ pub(super) struct GatewaySettings {
     pub(super) callback_key: Zeroizing<Vec<u8>>,
     /// The runtime's origin, such as `http://127.0.0.1:8107`.
     pub(super) runtime_origin: String,
+    pub(super) response_latency: Duration,
 }
 
 struct Gateway {
@@ -258,6 +259,7 @@ async fn send(
     if !gateway.settings.providers.contains(&provider) {
         return refusal(StatusCode::NOT_FOUND, "unknown-provider");
     }
+    tokio::time::sleep(gateway.settings.response_latency).await;
     let key = headers
         .get("idempotency-key")
         .and_then(|value| value.to_str().ok())
@@ -405,6 +407,7 @@ mod tests {
             token: Zeroizing::new("gateway-token".to_owned()),
             callback_key: Zeroizing::new(b"callback-key".to_vec()),
             runtime_origin: origin.to_owned(),
+            response_latency: Duration::ZERO,
         })
         .unwrap()
     }

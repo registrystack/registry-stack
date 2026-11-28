@@ -198,7 +198,7 @@ shellcheck -x products/breg/loadtest/*.sh
 for profile in products/breg/loadtest/profiles/*.js; do
   k6 inspect -e \
     ESTABLISHMENT_IDS_FILE="$PWD/products/breg/loadtest/.run/seed/establishment-ids.txt" \
-    -e AUTHORIZATION_HEADER_FILE="$PWD/products/breg/loadtest/.run/project/.breg/dev/secrets/loadtest-driver.header" \
+    -e AUTHORIZATION_HEADER_FILE="${AUTHORIZATION_HEADER_FILE:?obtain a fresh loadtest-driver header with rstack dev token}" \
     "$profile" >/dev/null
 done
 ```

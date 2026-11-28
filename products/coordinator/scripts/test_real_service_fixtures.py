@@ -125,7 +125,9 @@ if __name__ == "__main__":
 class OwnedCleanupTests(unittest.TestCase):
     def test_an_auto_removed_owned_image_container_is_already_clean(self):
         journey = native.Journey.__new__(native.Journey)
-        journey.proxies, journey.children, journey.sessions = [], [], []
+        journey.proxies, journey.children = [], []
+        journey.rstack_runs, journey.rstack_volumes = [], []
+        journey.issuer_root = Path("/synthetic/owned/thunderid")
         journey.containers = ["coordinator-tutorial-messagingctl-owned"]
         journey.env, journey.root = {}, Path("/synthetic/owned")
         with patch.object(native.subprocess, "run", side_effect=[
@@ -135,7 +137,9 @@ class OwnedCleanupTests(unittest.TestCase):
 
     def test_an_unavailable_container_listing_does_not_hide_cleanup_failure(self):
         journey = native.Journey.__new__(native.Journey)
-        journey.proxies, journey.children, journey.sessions = [], [], []
+        journey.proxies, journey.children = [], []
+        journey.rstack_runs, journey.rstack_volumes = [], []
+        journey.issuer_root = Path("/synthetic/owned/thunderid")
         journey.containers = ["coordinator-tutorial-messagingctl-owned"]
         journey.env, journey.root = {}, Path("/synthetic/owned")
         with patch.object(native.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout=b"")):

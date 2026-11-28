@@ -908,7 +908,6 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'reference/breg-odrl-export',
     'reference/bregctl-publicschema-wizard',
     'reference/bregctl-explain',
-    'reference/bregctl-dev',
     'explanation/esignet-authentication-over-breg',
     'tutorials/send-registry-events-to-a-webhook',
     'tutorials/evidence-from-breg',

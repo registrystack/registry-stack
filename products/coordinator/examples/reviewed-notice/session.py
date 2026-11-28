@@ -62,9 +62,9 @@ def checkpoint_cleanup(state_path, journey, **updates):
         "cleanupStatus": "pending",
         "ownedBinDir": str(journey.bin),
         "ownedContainers": list(journey.containers),
-        "ownedSessions": [
-            {"tool": tool, "project": str(project)} for tool, project in journey.sessions
-        ],
+        "ownedRuns": list(journey.rstack_runs),
+        "ownedRunVolumes": list(journey.rstack_volumes),
+        "ownedIssuer": str(journey.issuer_fixture),
     })
     current.update(updates)
     write_private(state_path, current)
@@ -73,26 +73,43 @@ def checkpoint_cleanup(state_path, journey, **updates):
 def retry_cleanup(session_dir, state):
     failures = []
     bin_dir = Path(state.get("ownedBinDir", ""))
-    sessions = state.get("ownedSessions", [])
+    runs = state.get("ownedRuns", [])
     containers = state.get("ownedContainers", [])
-    if not isinstance(sessions, list) or not isinstance(containers, list):
+    volumes = state.get("ownedRunVolumes", [])
+    if not all(isinstance(value, list) for value in (runs, containers, volumes)):
         raise SystemExit("the reviewed-notice cleanup journal is invalid")
-    for owned in reversed(sessions):
-        if not isinstance(owned, dict) or owned.get("tool") not in ("bregctl", "caseworkctl"):
-            failures.append("invalid session ownership")
-            continue
-        project = Path(owned.get("project", ""))
-        marker = project / (".breg/dev/state.json" if owned["tool"] == "bregctl"
-                            else ".casework/dev/state.json")
-        if not marker.is_file():
+    owned = session_dir / "owned"
+    environment = dict(os.environ, RSTACK_DEV_STATE_DIR=str(owned / "rstack-runs"))
+    for run in reversed(runs):
+        if not isinstance(run, str) or not re.fullmatch(r"[0-9a-f]{32}", run):
+            failures.append("invalid run ownership")
             continue
         result = subprocess.run(
-            [str(bin_dir / owned["tool"]), "--format", "json", "dev", "stop", str(project), "--remove"],
-            capture_output=True,
-            timeout=120,
+            [str(bin_dir / "rstack"), "--format", "json", "dev", "stop", run, "--recover"],
+            capture_output=True, timeout=120, env=environment,
         )
         if result.returncode != 0:
-            failures.append(owned["tool"])
+            failures.append("rstack " + run)
+    for volume in reversed(volumes):
+        if not isinstance(volume, str) or not re.fullmatch(r"rstack-development-project-[0-9a-f]{32}", volume):
+            failures.append("invalid run volume ownership")
+            continue
+        remaining = subprocess.run(
+            ["docker", "volume", "ls", "--quiet", "--filter", "name=^" + volume + "$"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if remaining.returncode != 0:
+            failures.append("docker volume " + volume)
+        elif volume in remaining.stdout.splitlines():
+            result = subprocess.run(["docker", "volume", "rm", volume], capture_output=True, timeout=60)
+            if result.returncode != 0:
+                failures.append("docker volume " + volume)
+    issuer_root = owned / "thunderid"
+    if (issuer_root / "fixture.json").is_file():
+        result = subprocess.run([state["ownedIssuer"], "stop", str(issuer_root)],
+                                capture_output=True, timeout=120)
+        if result.returncode != 0:
+            failures.append("ThunderID fixture")
     for container in reversed(containers):
         if not isinstance(container, str) or not container or len(container) > 128:
             failures.append("invalid container ownership")
@@ -223,6 +240,7 @@ def messaging_image_tools(journey, image):
                    "--label", "org.registrystack.journey=coordinator-real-services",
                    "--network", "host", "--user", f"{os.getuid()}:{os.getgid()}",
                    "--mount", f"type=bind,source={journey.root},target={journey.root}",
+                   "--env", "REGISTRY_STACK_POSTURE=development",
                    "--entrypoint", "/usr/local/bin/" + tool, image]
         path = journey.bin / tool
         path.write_text("#!/usr/bin/env bash\nset -euo pipefail\nexec " + shlex.join(command) + ' "$@"\n')
@@ -246,15 +264,15 @@ def serve(args):
 
             class ClientJourney(fixture.Journey):
                 def reviewed_notice_input(self, owner, application):
-                    report = self.ctl("bregctl", "dev", "token", "application-reader", owner)
+                    report = self.token_file("application-reader")
                     return prepare_input(self.urls["breg"], report["headerFile"], application)
 
                 def start(self, owner, url, label, data, flow="deferred-appointment"):
-                    token = self.token("bregctl", owner, "coordinator-producer")
+                    token = self.token("coordinator-producer")
                     return start_run(url, token, flow, label, data)
 
             journey_type = ClientJourney
-        binaries = ["breg", "bregctl", "casework", "caseworkctl", "coordinator", "coordinatorctl"]
+        binaries = ["rstack", "breg", "bregctl", "casework", "caseworkctl", "coordinator", "coordinatorctl"]
         if not args.messaging_image:
             binaries.extend(("messaging", "messagingctl"))
         journey = journey_type(owned, args.bin_dir.resolve(), 2,
@@ -272,11 +290,9 @@ def serve(args):
 
         owner = fixture.write_breg(journey.root / "breg", journey.urls)
         journey.ctl("bregctl", "check", owner)
-        journey.sessions.append(("bregctl", owner))
         checkpoint_cleanup(state_path, journey)
-        breg_report = journey.ctl("bregctl", "dev", "start", owner,
-            "--breg-port", journey.ports["breg"], "--issuer-port", journey.ports["issuer"],
-            "--database-port", journey.ports["bregdb"], "--breg-bin", journey.bin / "breg")
+        breg_report = journey.start_breg(owner)
+        checkpoint_cleanup(state_path, journey)
         resource = breg_report.get("resource", breg_report.get("audience"))
         messaging_url, messaging_runtime = journey.messaging_service(
             owner, test_only_plaintext=False,
@@ -307,7 +323,7 @@ def serve(args):
                 "authorization": journey.authorization(sender, sender["resource"], ["messaging:send"])},
         }, coordinator_port, "coordinator-reviewed-notice-tutorial")
 
-        seed = journey.token("bregctl", owner, "seed-client")
+        seed = journey.token("seed-client")
         application = fixture.http("POST", journey.urls["breg"] + "/v1/records/applications?accessProfile=seeder",
             seed, {"data": {"tenant": "tenant-a", "applicantName": "Amina Example",
                 "benefitProgram": "housing-support", "requestedAmount": 1200,
@@ -321,8 +337,8 @@ def serve(args):
             assert run["state"] == "running", f"run stopped at {run['step']}: {run['failureCode']}"
             assert time.monotonic() < deadline, "run did not reach its review wait"
             time.sleep(0.2)
-        staff_header = Path(journey.ctl("bregctl", "dev", "token", "staff", owner)["headerFile"])
-        producer_header = Path(journey.ctl("bregctl", "dev", "token", "coordinator-producer", owner)["headerFile"])
+        staff_header = Path(journey.token_file("staff")["headerFile"])
+        producer_header = Path(journey.token_file("coordinator-producer")["headerFile"])
         state = {
             "status": "ready", "supervisorPid": os.getpid(), "coordinatorRestarts": 0,
             "cleanupStatus": "pending",
@@ -349,6 +365,14 @@ def serve(args):
                                    coordinatorRestarts=state["coordinatorRestarts"])
                 (control / "restart.request").unlink(missing_ok=True)
                 (control / "restart.done").touch(mode=0o600)
+            if (control / "refresh.request").exists():
+                checkpoint_cleanup(
+                    state_path, journey,
+                    staffHeaderFile=journey.token_file("staff")["headerFile"],
+                    coordinatorHeaderFile=journey.token_file("coordinator-producer")["headerFile"],
+                )
+                (control / "refresh.request").unlink()
+                (control / "refresh.done").touch(mode=0o600)
             time.sleep(0.2)
         succeeded = True
     except Exception as error:
@@ -381,7 +405,7 @@ def serve(args):
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     sub = result.add_subparsers(dest="command", required=True)
-    for name in ("start", "status", "restart-coordinator", "stop", "_serve"):
+    for name in ("start", "status", "restart-coordinator", "refresh-tokens", "stop", "_serve"):
         command = sub.add_parser(name)
         command.add_argument("--session-dir", type=Path, default=Path("tutorial-work/reviewed-notice"))
         if name in ("start", "_serve"):
@@ -392,7 +416,7 @@ def parser():
                                  help="use the installed unified client instead of a Rust input helper")
         if name == "start":
             command.add_argument("--start-timeout", type=int, default=240)
-        if name in ("restart-coordinator", "stop"):
+        if name in ("restart-coordinator", "refresh-tokens", "stop"):
             command.add_argument("--command-timeout", type=int, default=60)
     return result
 
@@ -405,6 +429,8 @@ def main():
         status(args)
     elif args.command == "restart-coordinator":
         signal_command(args, "restart")
+    elif args.command == "refresh-tokens":
+        signal_command(args, "refresh")
     elif args.command == "stop":
         signal_command(args, "stop")
     else:

@@ -449,12 +449,13 @@ impl<'a> ProductRunner<'a> {
         issuer: Arc<Issuer>,
     ) -> Result<BTreeMap<Product, String>> {
         self.issuer = Some(issuer.clone());
-        if self
-            .input
-            .plan
-            .products
-            .iter()
-            .any(|entry| entry.product == Product::Coordinator)
+        if self.input.plan.jwks_uri().is_none()
+            && self
+                .input
+                .plan
+                .products
+                .iter()
+                .any(|entry| entry.product == Product::Coordinator)
         {
             let coordinator =
                 product_root(&self.input.project, &self.input.plan, Product::Coordinator)?
@@ -994,12 +995,19 @@ impl<'a> ProductRunner<'a> {
     fn schema_credentials(&self, issuer: &Issuer) -> Result<PathBuf> {
         let mut bindings = Vec::with_capacity(self.input.schema_people.len());
         for (index, binding) in self.input.schema_people.iter().enumerate() {
-            let token = issuer.token(
-                &self.input,
-                &self.input.plan.people[&binding.person],
-                Product::Breg,
-                clock()? + 300,
-            )?;
+            let token = if self.input.plan.jwks_uri().is_some() {
+                let path = self.input.plan.external_breg.as_ref()
+                    .and_then(|external| external.schema_test_headers.get(&binding.person))
+                    .context("external BReg rehearsals need an owner-only schema test header for each person")?;
+                crate::external_breg::ExternalBreg::bearer(&self.input.project, path)?
+            } else {
+                issuer.token(
+                    &self.input,
+                    &self.input.plan.people[&binding.person],
+                    Product::Breg,
+                    clock()? + 300,
+                )?
+            };
             let filename = format!("breg-schema-token-{index}");
             write_private(&self.root.join(&filename), token.as_bytes())?;
             bindings.push(SchemaCredentialBinding {
@@ -1067,23 +1075,54 @@ impl<'a> ProductRunner<'a> {
             limits.1 = limits.1.min(timeout);
             limits.2 = limits.2.min(maximum_attempts);
         }
+        let external_hooks = self
+            .input
+            .plan
+            .external_breg
+            .as_ref()
+            .map(|bindings| &bindings.hooks)
+            .filter(|hooks| !hooks.is_empty());
+        if let Some(hooks) = external_hooks {
+            ensure!(
+                hooks.keys().eq(destinations.keys()),
+                "The external hooks must name exactly the BReg destinations this project declares."
+            );
+        }
         if destinations.is_empty() {
             return Ok(());
         }
-        let sink = GatewayServer::start_hooks()?;
+        let sink = if external_hooks.is_none() {
+            Some(GatewayServer::start_hooks()?)
+        } else {
+            None
+        };
         let mut hooks = serde_json::Map::new();
         for (id, (classification, timeout, maximum_attempts)) in destinations {
-            let key = self.retained_secret(
-                "breg",
-                &format!("breg-hook-{id}"),
-                random_secret()?.as_bytes(),
-            )?;
+            let file = format!("breg-hook-{id}");
+            let (origin, path, key) = if let Some(hooks) = external_hooks {
+                let hook = &hooks[&id];
+                let key = crate::external_breg::ExternalBreg::hook_key(&self.input.project, hook)?;
+                (
+                    hook.origin.as_str(),
+                    hook.path.as_str(),
+                    self.secret(&file, &key)?,
+                )
+            } else {
+                (
+                    sink.as_ref()
+                        .expect("internal hook receiver")
+                        .origin
+                        .as_str(),
+                    "/events",
+                    self.retained_secret("breg", &file, random_secret()?.as_bytes())?,
+                )
+            };
             let classification = ["public", "internal", "restricted"][usize::from(classification)];
             hooks.insert(
                 id,
                 json!({
-                    "origin": sink.origin,
-                    "path": "/events",
+                    "origin": origin,
+                    "path": path,
                     "networkProfile": "loopback-http",
                     "dnsFamily": "dual-stack-strict",
                     "allowedPrivateCidrs": [],
@@ -1100,7 +1139,7 @@ impl<'a> ProductRunner<'a> {
             &self.root.join("breg-hook-bindings.json"),
             &serde_json::to_vec(&hooks)?,
         )?;
-        self.hook_sink = Some(sink);
+        self.hook_sink = sink;
         Ok(())
     }
 
@@ -1352,6 +1391,9 @@ impl<'a> ProductRunner<'a> {
                             else {
                                 continue;
                             };
+                            if self.input.plan.jwks_uri().is_some() {
+                                continue;
+                            }
                             let origin = self
                                 .coordinator_issuer
                                 .as_ref()
@@ -1505,7 +1547,11 @@ impl<'a> ProductRunner<'a> {
                     package,
                     &authority.named_clients,
                 );
-                oidc["allowedAlgorithm"] = json!("ES256");
+                oidc["allowedAlgorithm"] = json!(if plan.jwks_uri().is_some() {
+                    "RS256"
+                } else {
+                    "ES256"
+                });
                 oidc["accessTokenType"] = json!("at+jwt");
                 oidc["scopeSeparator"] = json!(" ");
                 oidc["maximumTokenLifetimeSeconds"] = json!(super::issuer::TOKEN_LIFETIME_SECONDS);
@@ -1554,6 +1600,14 @@ impl<'a> ProductRunner<'a> {
                     Err(error) => return Err(error.into()),
                 };
                 config["destinations"] = json!({"hooks": bindings});
+                if let Some(external) = &plan.external_breg {
+                    external.configure(
+                        |file, bytes| self.secret(file, bytes),
+                        &self.input.project,
+                        &plan.issuer,
+                        &mut config,
+                    )?;
+                }
                 config["operationalTimeouts"] = json!({
                     "httpRequestMilliseconds": 10000, "shutdownGraceMilliseconds": 1000,
                     "recordLockMilliseconds": 5000, "migrationLockMilliseconds": 30000,
@@ -1562,15 +1616,20 @@ impl<'a> ProductRunner<'a> {
                 config
             }
             Product::Casework => casework_config(plan, name, self.root, package, &identity, bind),
-            Product::Messaging => messaging::messaging_config(
-                plan,
-                name,
-                self.root,
-                package,
-                &identity,
-                bind,
-                self.messaging_providers.as_ref(),
-            ),
+            Product::Messaging => {
+                let mut config = messaging::messaging_config(
+                    plan,
+                    name,
+                    self.root,
+                    package,
+                    &identity,
+                    bind,
+                    self.messaging_providers.as_ref(),
+                );
+                let metrics = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?.local_addr()?;
+                config["metricsListener"] = json!({"bind": metrics.to_string()});
+                config
+            }
             Product::Evidence => {
                 unreachable!("Evidence writes its runtime configuration by packaging")
             }
@@ -2060,7 +2119,10 @@ fn shared_config(
         "audience": plan.product(product).audience,
         "allowedClients": clients,
         "scopeClaim": "scope",
-        "jwksSource": {"type": "test-issuer", "documentRef": secret_ref("jwks")}
+        "jwksSource": plan.jwks_uri().map_or_else(
+            || json!({"type": "test-issuer", "documentRef": secret_ref("jwks")}),
+            |uri| json!({"type": "uri", "uri": uri}),
+        )
     });
     let mut database = json!({
         "runtimeUrlRef": secret_ref(&format!("{name}-runtime-url")),
@@ -2377,6 +2439,33 @@ fn breg_authority(
         },
     };
     validate_breg_binding_ids(&plan.bindings, &facts)?;
+    if let Some(external) = &plan.external_breg {
+        if let Some(review) = &external.review_authority {
+            plan::require(
+                plan.bindings.breg_review_authority.is_none()
+                    && facts.review_authorities.contains(review.id.as_str()),
+                "/externalBreg/reviewAuthority/id",
+                "This BReg project needs the named review authority and cannot bind it to two producers.",
+                "Declare this review authority in registry.yaml and remove the paired synthetic binding.",
+            )?;
+        }
+        if let Some(grant) = &external.task_grant {
+            let authored = authored_document(&project.root.join("registry.yaml"))?;
+            let has_task_profile = authored["accessProfiles"]
+                .as_object()
+                .is_some_and(|profiles| {
+                    profiles
+                        .values()
+                        .any(|profile| !profile["taskGrant"].is_null())
+                });
+            plan::require(
+                has_task_profile && facts.named_clients.contains(&grant.assertion_client),
+                "/externalBreg/taskGrant/assertionClient",
+                "This BReg project needs a task-grant profile and must name the exact assertion client.",
+                "Declare taskGrant and the registered assertion client in a BReg access profile.",
+            )?;
+        }
+    }
     check_breg_grants(&facts, &plan.people)?;
     let principal = breg_principal(plan, &facts.principal_claims)?;
     Ok(Some(BregAuthority {
@@ -3412,7 +3501,7 @@ fn checked_casework_run_issuer(plan: &Plan, project: &Path) -> Result<Value> {
 }
 
 /// Only a reserved loopback run URL is bound, never a remote issuer.
-fn is_loopback_run_issuer(issuer: &str) -> bool {
+pub(super) fn is_loopback_run_issuer(issuer: &str) -> bool {
     issuer
         .strip_prefix("http://127.0.0.1:")
         .map(|rest| rest.strip_suffix('/').unwrap_or(rest))

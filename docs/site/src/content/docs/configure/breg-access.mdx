@@ -76,15 +76,18 @@ BReg has no built-in notion of jurisdiction, region, or office. In the template,
 is an ordinary token claim, and the row boundary compares it with the Record's `jurisdiction`
 field. The local test clients show two readers that differ only in that claim:
 
-```yaml title="dev-clients.yaml" test-excerpt="facility/dev-clients.yaml"
-  - id: reader
-    accessProfiles: [facility-reader]
-    scopes: [registry:facility:read]
-    claims: {registry_principal: synthetic-reader, registry_purpose: facility-administration, jurisdiction: zone-a}
-  - id: foreign-reader
-    accessProfiles: [facility-reader]
-    scopes: [registry:facility:read]
-    claims: {registry_principal: synthetic-foreign-reader, registry_purpose: facility-administration, jurisdiction: zone-b}
+```yaml title="dev.yaml"
+people:
+  transfer-clerk:
+    subject: synthetic-transfer-clerk
+    client: transfer-clerk
+    grants:
+      breg:
+        profile: transfer-clerk
+        scopes: [permit:write]
+        claims:
+          registry_purpose: permit-administration
+          allowed_jurisdictions: [north-district, south-district]
 ```
 
 `dev-clients.yaml` only mints local tokens that ask for these profiles; it adds no authority. In
@@ -104,7 +107,7 @@ not its `apiName`. A write never reveals a field the profile cannot read.
 
 A [row boundary](../../reference/glossary/#row-boundary) compares a Record field with a token claim.
 `equals` compares with one scalar claim value. `in` requires a claim whose value is a JSON array;
-in `dev-clients.yaml`, write the array as a YAML sequence:
+in a development plan, write the array as a YAML sequence under the BReg grant:
 
 ```yaml title="dev-clients.yaml"
 claims:
@@ -115,7 +118,7 @@ claims:
 
 A missing `in` claim or a scalar in its place fails closed. When journeys need another claim
 variant for a refusal, bind that client to the exact step with
-[`testBindings`](../../reference/bregctl-dev/#explicit-teaching-clients).
+[`schemaTestPeople`](../run-a-project-with-rstack-dev/).
 
 Every boundary on a permission must hold. Reads leave other rows out, and writes check both the
 stored row and the row as it would be after the change. A permission that creates must keep its

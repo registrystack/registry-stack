@@ -173,12 +173,17 @@ They do not establish live HTTP authorisation, signing, or retained-session oper
 You can use an existing authored registry before it has an Evidence lookup or client.
 Generate the export with `bregctl generate evidence-source`, then add it with `evidencectl source import` as shown above.
 The import supplies no AssertionDefinition or Evidence caller grant.
-A lower-level `bregctl dev export-client` copies an explicit retained client pair and grants no authority.
-Maintain an already imported Source through `source diff` and `source update`, rather than attaching it again under conflicting choices.
-The [development command reference](../../reference/bregctl-dev/#prepare-a-source-after-using-a-registry) covers preparing a dedicated source client on a retained session.
+To add a dedicated lookup client, open a ready BReg run from
+[`rstack dev`](../run-a-project-with-rstack-dev/) and run `bregctl prepare-source PROJECT --run-id RUN_ID`.
+Select one unique identifier, the fields the Source may see, and an explicit row boundary or
+`--all-records`. Review the preview before adding `--apply`. Stop the run and start the project
+again to activate the policy successor. Obtain its short-lived header with `rstack dev token`
+for the named Source client and configure the local Evidence connection with that credential.
+
+Maintain an already imported Source through `source diff` and `source update`.
 
 {/* Evidence: crates/registry-evidencectl/src/source_cli.rs;
-    crates/registry-bregctl/src/dev/prepare_source.rs. */}
+    crates/registry-bregctl/src/prepare_source.rs. */}
 
 ## Configure the connection in Evidence
 

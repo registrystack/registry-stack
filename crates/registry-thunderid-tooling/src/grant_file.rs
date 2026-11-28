@@ -12,9 +12,10 @@ use registry_platform_yaml::{
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-use crate::grant::{acquire, GrantConnection};
+use crate::grant::{acquire_with_peer_policy, GrantConnection};
 use crate::task_connection::{client_pointer, valid_client_id, TaskClient, TaskConnection, KIND};
 use crate::ToolingError;
+use registry_platform_httputil::PeerPolicy;
 
 /// Non-secret CLI output. Header contents are never returned or printed.
 #[derive(Debug, Serialize)]
@@ -191,6 +192,40 @@ pub async fn acquire_to_header(
     client_id: &str,
     grant_id: &str,
 ) -> Result<GrantOutput, ToolingError> {
+    acquire_header(
+        connection_file,
+        private_root,
+        client_id,
+        grant_id,
+        PeerPolicy::RefuseDevelopmentPeer,
+    )
+    .await
+}
+
+/// Acquire a grant through the loopback Casework service owned by a development fixture.
+pub async fn acquire_development_to_header(
+    connection_file: &Path,
+    private_root: &Path,
+    client_id: &str,
+    grant_id: &str,
+) -> Result<GrantOutput, ToolingError> {
+    acquire_header(
+        connection_file,
+        private_root,
+        client_id,
+        grant_id,
+        PeerPolicy::AcceptDevelopmentPeer,
+    )
+    .await
+}
+
+async fn acquire_header(
+    connection_file: &Path,
+    private_root: &Path,
+    client_id: &str,
+    grant_id: &str,
+    peer_policy: PeerPolicy,
+) -> Result<GrantOutput, ToolingError> {
     if !valid_client_id(client_id) || !crate::description::valid_uuid(grant_id) {
         return Err(refuse(
             "a bounded registered client ID and approved grant UUID are required",
@@ -216,12 +251,21 @@ pub async fn acquire_to_header(
         resource: client.resource.to_string(),
         scopes: client.scopes.iter().map(ToString::to_string).collect(),
     };
+    if peer_policy == PeerPolicy::AcceptDevelopmentPeer
+        && !reqwest::Url::parse(&connection.casework_url)
+            .is_ok_and(|url| url.host_str() == Some("127.0.0.1"))
+    {
+        return Err(refuse(
+            "a development fixture requires a numeric loopback Casework endpoint",
+        ));
+    }
     connection.validate()?;
     let key = assertion_key(&document, &connections, client_id, client)?;
     directory(private_root)?;
     let output_root = private_root.join("grants");
     directory(&output_root)?;
-    let credential = acquire(&connection, client_id, key, grant_id).await?;
+    let credential =
+        acquire_with_peer_policy(&connection, client_id, key, grant_id, peer_policy).await?;
     let header = credential.token.authorization_header_value();
     let mut bytes = Zeroizing::new(b"Authorization: ".to_vec());
     bytes.extend_from_slice(header.as_bytes());

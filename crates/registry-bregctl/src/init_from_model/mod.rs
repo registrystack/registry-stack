@@ -295,12 +295,12 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
     }
     steps.extend([
         format!(
-            "run 'bregctl dev {}' to start the registry locally and replay {}",
+            "write a dev.yaml for {} and run 'rstack dev start {}' to serve the registry locally",
             destination.display(),
-            destination.join(crate::FIXTURE_JOURNEYS_PATH).display()
+            destination.display()
         ),
         format!(
-            "replace canonicalBaseIri in {} before you build a production package. The derived value is a reserved .invalid name. Package the unchanged project with 'bregctl package --posture development', or set REGISTRY_STACK_POSTURE=development. Run it unchanged with 'bregctl dev'",
+            "replace canonicalBaseIri in {} before you build a production package. The derived value is a reserved .invalid name. Package the unchanged project with 'bregctl package --posture development', or set REGISTRY_STACK_POSTURE=development. Serve it locally with 'rstack dev start'",
             destination.join("registry.yaml").display()
         ),
         format!(

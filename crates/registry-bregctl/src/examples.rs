@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Bounded, explicitly initiated examples against this project's owned dev instance.
-use super::{config, private, Clients, State, Status, MAX_BYTES};
+use crate::local_files as private;
+use registry_rstack_dev::BregRun;
+
+const MAX_BYTES: u64 = 1024 * 1024;
 mod proposals;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -32,6 +35,9 @@ enum ExamplesAction {
         /// Authored project containing examples/scenarios.json.
         #[arg(default_value = ".")]
         project: PathBuf,
+        /// Ready run whose retained example attempts to list.
+        #[arg(long)]
+        run_id: Option<String>,
     },
     /// Run or resume an example against the project's ready owned development instance.
     Run(RunArgs),
@@ -43,6 +49,9 @@ struct RunArgs {
     /// Authored project whose owned local development instance is ready.
     #[arg(default_value = ".")]
     project: PathBuf,
+    /// Ready run serving the exact project.
+    #[arg(long)]
+    run_id: String,
     /// Editable JSON input (default: the scenario's declared examples input file).
     #[arg(long)]
     input: Option<PathBuf>,
@@ -956,7 +965,7 @@ fn attempts(directory: &Path) -> Result<Vec<Attempt>> {
         if attempt.version != 1
             || attempt.id.is_nil()
             || attempt.from_attempt.is_some_and(|id| id.is_nil())
-            || !config::identifier(&attempt.scenario)
+            || !crate::dev_clients::identifier(&attempt.scenario)
             || entry.file_name().to_str() != Some(&format!("{}.json", attempt.id))
             || attempt.captures.len() > 100
             || attempt.proposals.len() > 100
@@ -964,16 +973,16 @@ fn attempts(directory: &Path) -> Result<Vec<Attempt>> {
         {
             bail!("retained example attempt is incompatible or malformed");
         }
-        if attempt
-            .captures
-            .iter()
-            .any(|(k, v)| !config::identifier(k) || !config::identifier(&v.entity) || v.id.is_nil())
-        {
+        if attempt.captures.iter().any(|(k, v)| {
+            !crate::dev_clients::identifier(k)
+                || !crate::dev_clients::identifier(&v.entity)
+                || v.id.is_nil()
+        }) {
             bail!("retained example capture is malformed");
         }
         if attempt.proposals.iter().any(|(alias, capture)| {
-            !config::identifier(alias)
-                || !config::identifier(&capture.action)
+            !crate::dev_clients::identifier(alias)
+                || !crate::dev_clients::identifier(&capture.action)
                 || capture.id.is_nil()
         }) {
             bail!("retained Proposal capture is malformed");
@@ -1021,15 +1030,19 @@ fn inherit_captures(attempt: &mut Attempt, parent: &Attempt, catalogue: &Catalog
 
 pub fn run(args: ExamplesArgs) -> Result<Value> {
     match args.action {
-        ExamplesAction::List { project } => {
-            let project = super::project(&project)?;
+        ExamplesAction::List { project, run_id } => {
+            let project = project.canonicalize()?;
             let (catalogue, _) = catalogue(&project)?;
-            let directory = project.join(".breg/dev/examples");
-            let retained = if directory.exists() {
-                private::check(&project.join(".breg"), true)?;
-                private::check(&project.join(".breg/dev"), true)?;
-                private::check(&directory, true)?;
-                attempts(&directory)?.iter().map(|a|json!({"attempt":a.id,"scenario":a.scenario,"completedSteps":a.completed.keys().collect::<Vec<_>>(),"pendingStep":a.pending.as_ref().map(|p|&p.step)})).collect::<Vec<_>>()
+            let retained = if let Some(run_id) = run_id {
+                let run = BregRun::open(&run_id, &project)?;
+                let directory = run.state.join("examples");
+                let _lock = private::lock(&run.state.join("examples.lock"))?;
+                if directory.exists() {
+                    private::check(&directory, true)?;
+                    attempts(&directory)?.iter().map(|a|json!({"attempt":a.id,"scenario":a.scenario,"completedSteps":a.completed.keys().collect::<Vec<_>>(),"pendingStep":a.pending.as_ref().map(|p|&p.step)})).collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                }
             } else {
                 Vec::new()
             };
@@ -1041,29 +1054,22 @@ pub fn run(args: ExamplesArgs) -> Result<Value> {
     }
 }
 fn run_example(args: RunArgs) -> Result<Value> {
-    let project = super::project(&args.project)?;
-    let parent = project.join(".breg");
-    private::check(&parent, true).context("start this project first with bregctl dev")?;
-    let _lock = private::lock(&parent.join("dev.lock"))?;
-    let state = super::read_state(&parent.join("dev"))?;
-    if !matches!(state.status, Status::Ready) || super::control(&state.root(), "status")? != "ready"
-    {
-        bail!("examples require this project's ready owned instance; run bregctl dev");
+    let run = BregRun::open(&args.run_id, &args.project)?;
+    let project = &run.project;
+    let _lock = private::lock(&run.state.join("examples.lock"))?;
+    let package = registry_breg::package::load_package(
+        &run.package,
+        &registry_breg::package::PackageLoadContext {
+            posture: registry_platform_config::Posture::Development,
+        },
+    )?;
+    let compiled = crate::compile(project, crate::ProfileArg::Production, "examples")
+        .map_err(|_| anyhow::anyhow!("The authored registry could not be compiled."))?;
+    let revision = compiled.revision();
+    if revision != package.registry().revision() {
+        bail!("The authored registry differs from the active package. Start a run from the current project.");
     }
-    let client_bytes = crate::read_bounded_source_file(
-        &state.clients_file,
-        "examples.clients",
-        "clients",
-        MAX_BYTES,
-    )
-    .map_err(|_| anyhow::anyhow!("examples require the original bounded dev clients file"))?;
-    if super::capture(&project, &client_bytes)?.digest != state.source_digest {
-        bail!(
-            "governed source changed since dev start; restore the captured source or use the documented migration/restart workflow"
-        );
-    }
-    let clients = config::clients(&state.clients_file.display().to_string(), &client_bytes)?;
-    let (catalogue, bytes) = catalogue(&project)?;
+    let (catalogue, bytes) = catalogue(project)?;
     let scenario = catalogue
         .scenarios
         .iter()
@@ -1077,19 +1083,16 @@ fn run_example(args: RunArgs) -> Result<Value> {
     let input: Value =
         serde_json::from_slice(&input_bytes).context("example input must be JSON")?;
     validate_scenario_input(scenario, &input)?;
-    let directory = state.root().join("examples");
+    let directory = run.state.join("examples");
     private::directory(&directory)?;
     let retained = attempts(&directory)?;
     let binding = Binding {
-        source: state.source_digest.clone(),
-        package: state
-            .package_digest
-            .clone()
-            .context("ready instance lacks package digest")?,
-        database: state.container_id()?.into(),
-        clients: config::hash(&client_bytes),
-        scenario: config::hash(&bytes),
-        input: config::hash(&input_bytes),
+        source: revision.to_owned(),
+        package: package.package_digest().to_owned(),
+        database: run.instance.clone(),
+        clients: run.identities_digest()?,
+        scenario: registry_platform_config::sha256_uri(&bytes),
+        input: registry_platform_config::sha256_uri(&input_bytes),
     };
     let mut eligible: Vec<_> = retained
         .iter()
@@ -1144,12 +1147,22 @@ fn run_example(args: RunArgs) -> Result<Value> {
         }
         attempt
     };
+    let mut native = BTreeMap::new();
+    let origin = run.origin.parse::<reqwest::Url>()?;
+    for step in &scenario.steps {
+        let key = (step.client.clone(), step.access_profile.clone());
+        if let std::collections::btree_map::Entry::Vacant(entry) = native.entry(key) {
+            let mut token = run.example_token(&step.client, &step.access_profile)?;
+            let provider = StaticToken::new(std::mem::take(&mut *token))?;
+            entry.insert(example_client(origin.clone(), provider)?);
+        }
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     let result = runtime.block_on(execute(
-        &state,
-        &clients,
+        &run,
+        &native,
         scenario,
         &input,
         &directory,
@@ -1163,9 +1176,10 @@ fn run_example(args: RunArgs) -> Result<Value> {
                 .is_none()
         {
             let mut resume = format!(
-                "bregctl examples run {} {} --attempt {}",
+                "bregctl examples run {} {} --run-id {} --attempt {}",
                 scenario.id,
-                shell_path(&project),
+                shell_path(project),
+                args.run_id,
                 attempt.id
             );
             if args.input.is_some() {
@@ -1272,8 +1286,8 @@ fn example_client(base_url: reqwest::Url, token: StaticToken) -> Result<BaseRegi
 }
 
 async fn execute(
-    state: &State,
-    clients: &Clients,
+    run: &BregRun,
+    native: &BTreeMap<(String, String), BaseRegistryClient>,
     scenario: &Scenario,
     input: &Value,
     directory: &Path,
@@ -1290,36 +1304,12 @@ async fn execute(
             "an uncertain mutation must be resumed with its original --step before another action"
         );
     }
-    let mut native = BTreeMap::new();
     let mut metadata = BTreeMap::new();
     for step in &scenario.steps {
-        if !clients
-            .clients
-            .iter()
-            .any(|c| c.id == step.client && c.access_profiles.contains(&step.access_profile))
-        {
-            bail!("scenario client/profile is not explicitly declared in dev clients");
-        }
-        if !native.contains_key(&step.client) {
-            super::token_async(state, &step.client).await?;
-            let token = private::read(
-                &state
-                    .root()
-                    .join("secrets")
-                    .join(format!("{}-token", step.client)),
-                65536,
-            )?;
-            let provider =
-                StaticToken::new(String::from_utf8(token).context("retained token is invalid")?)?;
-            native.insert(
-                step.client.clone(),
-                example_client(state.breg_origin().parse()?, provider)?,
-            );
-        }
         let key = (step.client.clone(), step.access_profile.clone());
-        if let std::collections::btree_map::Entry::Vacant(entry) = metadata.entry(key) {
+        if let std::collections::btree_map::Entry::Vacant(entry) = metadata.entry(key.clone()) {
             entry.insert(
-                native[&step.client]
+                native[&key]
                     .registry_contract(Some(&step.access_profile))
                     .await?
                     .value,
@@ -1332,8 +1322,9 @@ async fn execute(
     let mut declared = attempt.captures.clone();
     let mut declared_proposals = attempt.proposals.clone();
     for step in &scenario.steps {
-        let client = &native[&step.client];
-        let contract = &metadata[&(step.client.clone(), step.access_profile.clone())];
+        let key = (step.client.clone(), step.access_profile.clone());
+        let client = &native[&key];
+        let contract = &metadata[&key];
         if step.operation.is_proposal() {
             proposals::preflight(
                 step,
@@ -1481,8 +1472,9 @@ async fn execute(
                 continue;
             }
         }
-        let client = &native[&step.client];
-        let contract = &metadata[&(step.client.clone(), step.access_profile.clone())];
+        let key = (step.client.clone(), step.access_profile.clone());
+        let client = &native[&key];
+        let contract = &metadata[&key];
         if step.operation.is_proposal() {
             let result =
                 proposals::execute(step, client, contract, input, directory, attempt).await?;
@@ -1643,9 +1635,10 @@ async fn execute(
         results.insert(step.id.clone(), result);
     }
     let next = format!(
-        "bregctl examples run {} {} --attempt {}",
+        "bregctl examples run {} {} --run-id {} --attempt {}",
         scenario.id,
-        shell_path(&state.project),
+        shell_path(&run.project),
+        args.run_id,
         attempt.id
     );
     let next = if scenario.id != "first-record" {
@@ -1658,7 +1651,7 @@ async fn execute(
         next
     };
     Ok(
-        json!({"ok":true,"command":"examples run","project":state.project,"scenario":scenario.id,"attempt":attempt.id,"captures":attempt.captures,"proposals":attempt.proposals,"fromAttempt":attempt.from_attempt,"completedSteps":attempt.completed.keys().collect::<Vec<_>>(),"results":results,"nextCommand":next,"historyScope":"first-page-only","message":"Example progress retained. External review remains independent from these source-owned steps."}),
+        json!({"ok":true,"command":"examples run","project":run.project,"scenario":scenario.id,"attempt":attempt.id,"captures":attempt.captures,"proposals":attempt.proposals,"fromAttempt":attempt.from_attempt,"completedSteps":attempt.completed.keys().collect::<Vec<_>>(),"results":results,"nextCommand":next,"historyScope":"first-page-only","message":"Example progress retained. External review remains independent from these source-owned steps."}),
     )
 }
 fn validate_scenario_input(scenario: &Scenario, input: &Value) -> Result<()> {
@@ -1692,7 +1685,6 @@ mod tests {
         reason = "tests read back the YAML the code under test wrote, or a published contract or fixture, to assert on it; they read no operator configuration"
     )]
     use super::*;
-    use std::process::Command;
 
     pub(super) fn interrupt_after_commit(step: &Step) {
         // Exists only in the Rust test harness. The released CLI has neither
@@ -1701,6 +1693,18 @@ mod tests {
             std::process::exit(79);
         }
     }
+    fn copy_tree(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for entry in fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &to.join(entry.file_name()));
+            } else {
+                fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+            }
+        }
+    }
+
     fn assets() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/retained-native/example-catalog")
@@ -1739,12 +1743,42 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a ready rstack dev BReg run of the minimal project"]
+    fn live_run_examples_replay_the_same_attempt() {
+        let project = PathBuf::from(std::env::var_os("BREG_EXAMPLE_PROJECT").unwrap());
+        let run_id = std::env::var("BREG_EXAMPLE_RUN_ID").unwrap();
+        let args = RunArgs {
+            scenario: "contact".to_owned(),
+            project,
+            run_id,
+            input: None,
+            attempt: None,
+            new_attempt: true,
+            from_attempt: None,
+        };
+        let first = run_example(args).unwrap();
+        let next = RunArgs {
+            scenario: first["scenario"].as_str().unwrap().to_owned(),
+            project: PathBuf::from(first["project"].as_str().unwrap()),
+            run_id: std::env::var("BREG_EXAMPLE_RUN_ID").unwrap(),
+            input: None,
+            attempt: Some(first["attempt"].as_str().unwrap().parse().unwrap()),
+            new_attempt: false,
+            from_attempt: None,
+        };
+        let replay = run_example(next).unwrap();
+        assert_eq!(first["attempt"], replay["attempt"]);
+        assert_eq!(first["captures"], replay["captures"]);
+    }
+
+    #[test]
     fn listing_is_offline_and_does_not_create_dev_state() {
         let temp = tempfile::tempdir().unwrap();
         copy_tree(&assets(), temp.path());
         let value = run(ExamplesArgs {
             action: ExamplesAction::List {
                 project: temp.path().into(),
+                run_id: None,
             },
         })
         .unwrap();
@@ -2525,895 +2559,5 @@ mod tests {
             json!({"receipt":"missing-second-result"})
         );
         assert!(require_retained_invocation_capture(&reloaded, &step).is_err());
-    }
-
-    fn copy_tree(from: &Path, to: &Path) {
-        fs::create_dir_all(to).unwrap();
-        for entry in fs::read_dir(from).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_dir() {
-                copy_tree(&entry.path(), &to.join(entry.file_name()));
-            } else {
-                fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
-            }
-        }
-    }
-
-    #[test]
-    #[ignore = "subprocess entry point for native recovery test"]
-    fn native_child() {
-        let project = PathBuf::from(
-            std::env::var_os("BREG_EXAMPLE_TEST_PROJECT").expect("parent supplies owned project"),
-        );
-        let scenario = std::env::var("BREG_EXAMPLE_TEST_SCENARIO").unwrap();
-        let result = run_example(RunArgs {
-            scenario,
-            project: project.clone(),
-            input: None,
-            attempt: None,
-            new_attempt: false,
-            from_attempt: std::env::var("BREG_EXAMPLE_TEST_FROM_ATTEMPT")
-                .ok()
-                .map(|id| id.parse().unwrap()),
-        })
-        .unwrap();
-        private::replace(
-            &project.join(".breg/dev/example-test-result.json"),
-            &serde_json::to_vec(&result).unwrap(),
-        )
-        .unwrap();
-    }
-    fn child(
-        project: &Path,
-        scenario: &str,
-        step: Option<&str>,
-        interrupt: Option<&str>,
-    ) -> Option<Value> {
-        child_with_parent(project, scenario, step, interrupt, None)
-    }
-    fn child_with_parent(
-        project: &Path,
-        scenario: &str,
-        step: Option<&str>,
-        interrupt: Option<&str>,
-        parent: Option<uuid::Uuid>,
-    ) -> Option<Value> {
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command.env_remove("REGISTRY_STACK_POSTURE");
-        command
-            .env_remove("SSL_CERT_FILE")
-            .args([
-                "--ignored",
-                "--exact",
-                "dev::examples::tests::native_child",
-                "--nocapture",
-            ])
-            .env("BREG_EXAMPLE_TEST_PROJECT", project)
-            .env("BREG_EXAMPLE_TEST_SCENARIO", scenario);
-        if let Some(parent) = parent {
-            command.env("BREG_EXAMPLE_TEST_FROM_ATTEMPT", parent.to_string());
-        }
-        if let Some(step) = step {
-            command.env("BREG_EXAMPLE_TEST_STEP", step);
-        }
-        if let Some(step) = interrupt {
-            command.env("BREG_EXAMPLE_TEST_INTERRUPT", step);
-        }
-        let output = command.output().unwrap();
-        if interrupt.is_some() {
-            assert_eq!(
-                output.status.code(),
-                Some(79),
-                "{}",
-                String::from_utf8_lossy(&output.stdout)
-            );
-            None
-        } else {
-            assert!(
-                output.status.success(),
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            Some(
-                serde_json::from_slice(
-                    &private::read(
-                        &project.join(".breg/dev/example-test-result.json"),
-                        MAX_BYTES,
-                    )
-                    .unwrap(),
-                )
-                .unwrap(),
-            )
-        }
-    }
-    struct OwnedDev {
-        ctl: PathBuf,
-        project: PathBuf,
-    }
-    impl OwnedDev {
-        fn dev(&self, args: &[&str]) -> std::process::Output {
-            Command::new(&self.ctl)
-                .env_remove("REGISTRY_STACK_POSTURE")
-                .env_remove("SSL_CERT_FILE")
-                .env(
-                    "PATH",
-                    std::env::join_paths(
-                        std::iter::once(self.ctl.parent().unwrap().to_path_buf()).chain(
-                            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
-                        ),
-                    )
-                    .unwrap(),
-                )
-                .args(["--format", "json", "dev"])
-                .args(args)
-                .arg(&self.project)
-                .output()
-                .unwrap()
-        }
-        fn succeed(&self, args: &[&str]) {
-            let out = self.dev(args);
-            assert!(
-                out.status.success(),
-                "{}\n{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-    }
-    impl Drop for OwnedDev {
-        fn drop(&mut self) {
-            let _ = self.dev(&["stop", "--remove"]);
-        }
-    }
-    fn test_args(project: &Path, scenario: &str) -> RunArgs {
-        RunArgs {
-            scenario: scenario.into(),
-            project: project.into(),
-            input: None,
-            attempt: None,
-            new_attempt: false,
-            from_attempt: None,
-        }
-    }
-    fn observed_count(project: &Path) -> usize {
-        let canonical = project.canonicalize().unwrap();
-        let state = super::super::read_state(&canonical.join(".breg/dev")).unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let bytes = private::read(&state.root().join("secrets/editor-token"), 65536).unwrap();
-            let client = BaseRegistryClient::new(
-                BaseRegistryClientConfig::new(
-                    state.breg_origin().parse().unwrap(),
-                    PeerPolicy::AcceptDevelopmentPeer,
-                )
-                .with_token_provider(Arc::new(
-                    StaticToken::new(String::from_utf8(bytes).unwrap()).unwrap(),
-                )),
-            )
-            .unwrap();
-            client
-                .list_records(
-                    "contacts",
-                    &BRegListRequest::default().options(
-                        BRegRecordOptions::default()
-                            .access_profile("directory-editor")
-                            .unwrap(),
-                    ),
-                )
-                .await
-                .unwrap()
-                .value
-                .value
-                .items
-                .len()
-        })
-    }
-
-    /// Extend the canonical minimal project only inside this disposable test:
-    /// unique contacts and typed links exercise crash recovery and tombstones.
-    fn prepare_native_fixture(project: &Path) {
-        let mut source: Value = serde_norway::from_slice(include_bytes!(
-            "../../../../products/breg/examples/minimal/registry.yaml"
-        ))
-        .unwrap();
-        source["package"] = json!({"sourceRevision":"native-example-recovery"});
-        // Recovery covers generated CRUD only; the canonical Actions stay out.
-        source.as_object_mut().unwrap().remove("actions");
-        let editor = source["accessProfiles"]["directory-editor"]["permissions"]
-            .as_object_mut()
-            .unwrap();
-        editor.remove("actions");
-        editor.remove("proposals");
-        let contact = &mut source["recordTypes"]["contact"];
-        contact["constraints"] =
-            json!([{"id":"contact-email-unique","type":"unique","fields":["email"]}]);
-        contact["fields"].as_array_mut().unwrap().push(json!({
-            "id":"notes","type":"structured","required":false,
-            "classification":"restricted","maximumBytes":2048,
-            "schema":{"type":"object","additionalProperties":false,"properties":{
-                "related":{"type":"string","maxLength":64},
-                "items":{"type":"array","maxItems":4,"items":{"type":"string","maxLength":64}}
-            }}
-        }));
-        source["recordTypes"].as_object_mut().unwrap().insert("contact-link".to_owned(), json!({"route":"contact-links","primaryDataset":"directory",
-            "mutationMode":"mutable","tombstone":true,
-            "fields":[
-                {"id":"from","type":"reference","target":"contact","required":true,"classification":"internal"},
-                {"id":"to","type":"reference","target":"contact","required":true,"classification":"internal"},
-                {"id":"jurisdiction","type":"string","required":true,"minimumLength":1,"maximumLength":40,"classification":"internal"}
-            ]
-        }));
-        let grant = &mut source["accessProfiles"]["directory-editor"]["permissions"]["records"][0];
-        grant["operations"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("revisions"));
-        grant["revisionAccess"] = json!(true);
-        for key in ["readableFields", "writableFields"] {
-            grant[key].as_array_mut().unwrap().push(json!("notes"));
-        }
-        let boundary = json!([{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]);
-        source["accessProfiles"]["directory-editor"]["permissions"]["records"].as_array_mut().unwrap().push(json!({
-            "recordType":"contact-link","operations":["create","get","list","tombstone","revisions"],
-            "readableFields":["from","to","jurisdiction"],"writableFields":["from","to","jurisdiction"],
-            "rowBoundaries":boundary,"revisionAccess":true
-        }));
-        source["accessProfiles"].as_object_mut().unwrap().insert("directory-reader".to_owned(), json!({"principalClaim":"registry_principal",
-            "requiredScopes":["registry:directory:read"],"requiredPurposes":["directory-administration"],
-            "permissions":{"records":[{
-                "recordType":"contact","operations":["get","list"],
-                "readableFields":["name","email","jurisdiction"],"rowBoundaries":boundary
-            }]}
-        }));
-        fs::write(
-            project.join("registry.yaml"),
-            serde_json::to_vec_pretty(&source).unwrap(),
-        )
-        .unwrap();
-        let clients = json!({
-            "apiVersion":"id.registrystack.org/formats/breg/dev-clients/v1alpha1","kind":"BRegDevClients",
-            "clients":[
-                {"id":"editor","accessProfiles":["directory-editor"],"scopes":["registry:directory:write"],
-                 "claims":{"registry_principal":"synthetic-editor","registry_purpose":"directory-administration","jurisdiction":"synthetic-district"}},
-                {"id":"reader","accessProfiles":["directory-reader"],"scopes":["registry:directory:read"],
-                 "claims":{"registry_principal":"synthetic-reader","registry_purpose":"directory-administration","jurisdiction":"synthetic-district"}}
-            ]
-        });
-        fs::write(
-            project.join("dev-clients.yaml"),
-            serde_json::to_vec_pretty(&clients).unwrap(),
-        )
-        .unwrap();
-        fs::create_dir_all(project.join("tests")).unwrap();
-        fs::write(
-            project.join("tests/journeys.yaml"),
-            br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
-kind: BRegJourneys
-journeys:
-  - id: directory-empty
-    steps:
-      - id: list
-        recordType: contact
-        accessProfile: directory-editor
-        claims:
-          principal: synthetic-editor
-          scopes: [registry:directory:write]
-          purpose: directory-administration
-          directClaims: {jurisdiction: synthetic-district}
-        request: {type: list}
-        expect: {outcome: success, status: 200, count: 0}
-"#,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn native_recovery_fixture_compiles_and_has_no_review_dependency() {
-        let temporary = tempfile::tempdir().unwrap();
-        prepare_native_fixture(temporary.path());
-        let project = registry_breg::contract::parse_project_yaml(
-            &fs::read(temporary.path().join("registry.yaml")).unwrap(),
-        )
-        .unwrap();
-        let registry = registry_breg::compiler::compile_project(
-            &project,
-            &[],
-            registry_breg::compiler::CompileProfile::Production,
-        )
-        .unwrap();
-        assert!(registry.actions().is_empty());
-        assert!(registry.entities()["contact-link"].tombstone);
-        assert!(registry.entities()["contact"].access_profiles["directory-editor"].revision_access);
-        let claims = registry_breg::authority::authority_inventory(&registry).unwrap();
-        assert_eq!(claims.direct_claims["jurisdiction"].uses.len(), 3);
-        registry_breg::fixtures::validate_fixture_journeys(
-            &fs::read(temporary.path().join("tests/journeys.yaml")).unwrap(),
-            &registry,
-        )
-        .unwrap();
-    }
-
-    fn preflight_refuses_before_writes(project: &Path, first: &Value) {
-        let canonical = project.canonicalize().unwrap();
-        let project = canonical.as_path();
-        let state = super::super::read_state(&canonical.join(".breg/dev")).unwrap();
-        let clients = config::clients(
-            &state.clients_file.display().to_string(),
-            &fs::read(&state.clients_file).unwrap(),
-        )
-        .unwrap();
-        let (catalogue, _) = catalogue(project).unwrap();
-        let directory = state.root().join("examples");
-        let retained_before = fs::read_dir(&directory).unwrap().count();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let mut cases = Vec::new();
-        let observation = catalogue
-            .scenarios
-            .iter()
-            .find(|s| s.id == "observe-created")
-            .unwrap();
-        {
-            let mut scenario = observation.clone();
-            let mut steps = scenario.steps.into_vec();
-            let step = steps.iter_mut().find(|s| s.id == "history").unwrap();
-            step.client = "reader".into();
-            step.access_profile = "directory-reader".into();
-            scenario.steps = UniqueIdList::new(steps).unwrap();
-            let input =
-                serde_json::from_slice(&read_source(&project.join(&scenario.input)).unwrap())
-                    .unwrap();
-            cases.push((
-                scenario,
-                input,
-                "requires advertised revisions permission".to_owned(),
-            ));
-        }
-        let samples = catalogue
-            .scenarios
-            .iter()
-            .find(|s| s.id == "starter-data")
-            .unwrap();
-        for notes in [
-            json!({"related":{"recordCapture":"department"}}),
-            json!({"items":[{"recordCapture":"department"}]}),
-        ] {
-            let mut input: Value =
-                serde_json::from_slice(&read_source(&project.join(&samples.input)).unwrap())
-                    .unwrap();
-            input["river"]["notes"] = notes;
-            cases.push((samples.clone(), input, "nested logical references".into()));
-        }
-        for (scenario, input, message) in cases {
-            let mut attempt = attempt();
-            attempt.scenario = scenario.id.clone();
-            if scenario.id == "observe-created" {
-                attempt.captures = serde_json::from_value(first["captures"].clone()).unwrap();
-            }
-            let original_captures = attempt.captures.clone();
-            let error = runtime
-                .block_on(execute(
-                    &state,
-                    &clients,
-                    &scenario,
-                    &input,
-                    &directory,
-                    &mut attempt,
-                    &test_args(project, &scenario.id),
-                ))
-                .unwrap_err();
-            assert!(format!("{error:#}").contains(&message), "{error:#}");
-            assert_eq!(
-                serde_json::to_value(&attempt.captures).unwrap(),
-                serde_json::to_value(&original_captures).unwrap()
-            );
-            assert!(attempt.pending.is_none());
-            assert!(attempt.completed.is_empty());
-            assert!(!directory.join(format!("{}.json", attempt.id)).exists());
-            assert_eq!(fs::read_dir(&directory).unwrap().count(), retained_before);
-            assert_eq!(observed_count(project), 1);
-        }
-    }
-
-    /// Exercise deletion through the runtime's ordinary authenticated HTTP
-    /// contract, then observe both current absence and the retained tombstone.
-    fn deleted_sample_observation(project: &Path, id: &str, delete: bool) -> (usize, Value) {
-        let canonical = project.canonicalize().unwrap();
-        let state = super::super::read_state(&canonical.join(".breg/dev")).unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let bytes = private::read(&state.root().join("secrets/editor-token"), 65536).unwrap();
-            let token = zeroize::Zeroizing::new(String::from_utf8(bytes).unwrap());
-            let client = BaseRegistryClient::new(
-                BaseRegistryClientConfig::new(
-                    state.breg_origin().parse().unwrap(),
-                    PeerPolicy::AcceptDevelopmentPeer,
-                )
-                .with_token_provider(Arc::new(StaticToken::new(token.to_string()).unwrap())),
-            )
-            .unwrap();
-            let options = BRegRecordOptions::default()
-                .access_profile("directory-editor")
-                .unwrap();
-            let route = "contact-links";
-            let url = format!(
-                "{}/v1/records/{route}/{id}?accessProfile=directory-editor",
-                state.breg_origin()
-            );
-            let http = reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap();
-            if delete {
-                let before = client.get_record(route, id, &options).await.unwrap();
-                let etag = before.metadata.etag().unwrap().as_str();
-                let response = http
-                    .delete(&url)
-                    .bearer_auth(token.as_str())
-                    .header("if-match", etag)
-                    .header("idempotency-key", "native-example-delete-sample")
-                    .send()
-                    .await
-                    .unwrap();
-                assert_eq!(
-                    response.status(),
-                    reqwest::StatusCode::OK,
-                    "fixture policy authorizes a real tombstone"
-                );
-            }
-            let current = http
-                .get(&url)
-                .bearer_auth(token.as_str())
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(
-                current.status(),
-                reqwest::StatusCode::NOT_FOUND,
-                "deleted sample UUID must remain absent"
-            );
-            let records = client
-                .list_records(route, &BRegListRequest::default().options(options))
-                .await
-                .unwrap();
-            assert!(records
-                .value
-                .value
-                .items
-                .iter()
-                .all(|record| record.record_identifier != id));
-            let revisions = client
-                .record_revisions(route, id, Some("directory-editor"))
-                .await
-                .unwrap();
-            let history: Value = serde_json::from_slice(revisions.value.as_bytes()).unwrap();
-            assert_eq!(
-                history["items"].as_array().unwrap().len(),
-                2,
-                "only create and tombstone revisions remain"
-            );
-            assert_eq!(history["items"][0]["mutationKind"], "tombstone");
-            (records.value.value.items.len(), history)
-        })
-    }
-    #[test]
-    #[ignore = "requires source-built bregctl/breg and Docker; creates one disposable owned dev database"]
-    fn native_proposal_recovers_start_submit_and_apply_after_restart() {
-        let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("facility project");
-        assert!(crate::starters::run(&project, "facility-registry").is_ok());
-        let binaries = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let owned = OwnedDev {
-            ctl: binaries.join("bregctl"),
-            project,
-        };
-        let listeners: Vec<_> = (0..3)
-            .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
-            .collect();
-        let ports: Vec<_> = listeners
-            .iter()
-            .map(|listener| listener.local_addr().unwrap().port().to_string())
-            .collect();
-        drop(listeners);
-        owned.succeed(&[
-            "--breg-bin",
-            binaries.join("breg").to_str().unwrap(),
-            "--breg-port",
-            &ports[0],
-            "--issuer-port",
-            &ports[1],
-            "--database-port",
-            &ports[2],
-        ]);
-        child(&owned.project, "register-facility", None, Some("register"));
-        let interrupted = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
-        let population_attempt = interrupted
-            .iter()
-            .find(|attempt| attempt.scenario == "register-facility")
-            .unwrap();
-        assert_eq!(
-            population_attempt.pending.as_ref().unwrap().step,
-            "register"
-        );
-        assert!(population_attempt.captures.contains_key("operator"));
-        assert!(!population_attempt.captures.contains_key("facility"));
-        assert!(!population_attempt.captures.contains_key("assignment"));
-        owned.succeed(&["stop"]);
-        owned.succeed(&[]);
-        let population = child(&owned.project, "register-facility", None, None).unwrap();
-        let repeated_population = child(&owned.project, "register-facility", None, None).unwrap();
-        assert_eq!(population["captures"], repeated_population["captures"]);
-        assert!(population["captures"]["facility"]["id"].is_string());
-        assert!(population["captures"]["assignment"]["id"].is_string());
-        let parent = population["attempt"].as_str().unwrap().parse().unwrap();
-        for step in ["start", "submit", "apply"] {
-            child_with_parent(
-                &owned.project,
-                "deactivate-facility",
-                None,
-                Some(step),
-                Some(parent),
-            );
-            let retained = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
-            let attempt = retained
-                .iter()
-                .find(|attempt| attempt.scenario == "deactivate-facility")
-                .unwrap();
-            assert_eq!(attempt.pending.as_ref().unwrap().step, step);
-            owned.succeed(&["stop"]);
-            owned.succeed(&[]);
-        }
-        let recovered = child(&owned.project, "deactivate-facility", None, None).unwrap();
-        let repeated = child(&owned.project, "deactivate-facility", None, None).unwrap();
-        assert_eq!(recovered["proposals"], repeated["proposals"]);
-        assert_eq!(recovered["results"]["apply"], repeated["results"]["apply"]);
-        assert_eq!(
-            recovered["results"]["read"]["data"]["domainData"]["status"],
-            "inactive"
-        );
-        assert_eq!(
-            recovered["results"]["read"], repeated["results"]["read"],
-            "receipt recovery cannot apply a second revision"
-        );
-        assert!(attempts(&owned.project.join(".breg/dev/examples"))
-            .unwrap()
-            .iter()
-            .all(|attempt| attempt.pending.is_none()));
-    }
-
-    #[test]
-    #[ignore = "requires source-built bregctl/breg and Docker; creates one disposable owned dev database"]
-    fn native_invoke_recovers_original_conditions_after_restart() {
-        let temp = tempfile::tempdir().unwrap();
-        let project = temp.path().join("project");
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/breg/fixtures/household-contact-actions");
-        copy_tree(&fixture, &project);
-        let project = project.canonicalize().unwrap();
-        let registry = project.join("registry.yaml");
-        fs::write(
-            &registry,
-            fs::read_to_string(&registry)
-                .unwrap()
-                .replace("environment: acceptance", "environment: local"),
-        )
-        .unwrap();
-        fs::create_dir(project.join("examples")).unwrap();
-        fs::write(project.join("dev-clients.yaml"), serde_json::to_vec(&json!({"apiVersion":"id.registrystack.org/formats/breg/dev-clients/v1alpha1","kind":"BRegDevClients","clients":[
-            {"id":"operator","accessProfiles":["household-operator"],"scopes":["registry:household:operate"],
-             "claims":{"registry_principal":"synthetic-household-operator","registry_purpose":"household-administration","district":"north-district"}},
-            {"id":"registrar","accessProfiles":["contact-registrar"],"scopes":["registry:contact:register"],
-             "claims":{"registry_principal":"synthetic-contact-registrar","registry_purpose":"contact-registration","district":"north-district"}},
-            {"id":"maintainer","accessProfiles":["household-maintainer"],"scopes":["registry:household:maintain"],
-             "claims":{"registry_principal":"synthetic-household-maintainer","registry_purpose":"household-maintenance","district":"north-district"}},
-            {"id":"southern-operator","accessProfiles":["household-operator"],"scopes":["registry:household:operate"],
-             "claims":{"registry_principal":"synthetic-household-operator","registry_purpose":"household-administration","district":"south-district"},
-             "testBindings":[{"journeyId":"link-only-target-authority-is-still-enforced","stepId":"create-south-service-center"}]}
-        ]})).unwrap()).unwrap();
-        fs::write(project.join("examples/scenarios.json"), serde_json::to_vec(&json!({"apiVersion":API_VERSION,"kind":KIND,"scenarios":[
-            {"id":"population","description":"Create action targets","input":"examples/population.json","steps":[
-                {"id":"household","operation":"create","recordType":"household","client":"operator","accessProfile":"household-operator","input":"household","capture":"household"},
-                {"id":"center","operation":"create","recordType":"service-center","client":"operator","accessProfile":"household-operator","input":"center","capture":"center"}
-            ]},
-            {"id":"contact","description":"Register a contact with inherited targets","input":"examples/contact.json","steps":[
-                {"id":"contact","operation":"invoke","recordType":"person","client":"registrar","accessProfile":"contact-registrar","input":"contact","capture":"person","action":"register-household-contact","result":"person"},
-                {"id":"observe","operation":"get","recordType":"household","client":"operator","accessProfile":"household-operator","record":"household"}
-            ]}
-        ]})).unwrap()).unwrap();
-        fs::write(project.join("examples/population.json"), serde_json::to_vec(&json!({
-            "household":{"householdCode":"SYN-HOUSEHOLD","householdName":"Synthetic household","district":"north-district"},
-            "center":{"centerCode":"SYN-CENTER","label":"Synthetic center","district":"north-district"}
-        })).unwrap()).unwrap();
-        let input = json!({"contact":{"householdId":{"recordCapture":"household"},"serviceCenterId":{"recordCapture":"center"},
-            "personCode":"SYN-PERSON","contactName":"Synthetic contact","district":"north-district"}});
-        fs::write(
-            project.join("examples/contact.json"),
-            serde_json::to_vec(&input).unwrap(),
-        )
-        .unwrap();
-        let binaries = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let owned = OwnedDev {
-            ctl: binaries.join("bregctl"),
-            project,
-        };
-        let listeners: Vec<_> = (0..3)
-            .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
-            .collect();
-        let ports: Vec<_> = listeners
-            .iter()
-            .map(|l| l.local_addr().unwrap().port().to_string())
-            .collect();
-        drop(listeners);
-        owned.succeed(&[
-            "--breg-bin",
-            binaries.join("breg").to_str().unwrap(),
-            "--breg-port",
-            &ports[0],
-            "--issuer-port",
-            &ports[1],
-            "--database-port",
-            &ports[2],
-        ]);
-        let population = child(&owned.project, "population", None, None).unwrap();
-        let saved_population = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
-        let retained_create = &saved_population[0].completed["household"];
-        assert_eq!(retained_create["recordType"], "household");
-        assert!(retained_create.get("entity").is_none());
-        let parent = population["attempt"].as_str().unwrap().parse().unwrap();
-        let mut wrong_input = input;
-        wrong_input["contact"]["householdId"] = json!({"recordCapture":"center"});
-        let wrong_path = owned.project.join("wrong.json");
-        fs::write(&wrong_path, serde_json::to_vec(&wrong_input).unwrap()).unwrap();
-        let mut args = test_args(&owned.project, "contact");
-        args.from_attempt = Some(parent);
-        args.input = Some(wrong_path);
-        let error = run_example(args).unwrap_err();
-        assert!(format!("{error:#}").contains("another entity"), "{error:#}");
-        assert_eq!(
-            attempts(&owned.project.join(".breg/dev/examples"))
-                .unwrap()
-                .len(),
-            1,
-            "bad typed references fail before an attempt or mutation"
-        );
-        child_with_parent(
-            &owned.project,
-            "contact",
-            None,
-            Some("contact"),
-            Some(parent),
-        );
-        let saved = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
-        let pending = saved.iter().find(|a| a.scenario == "contact").unwrap();
-        assert!(!pending.captures.contains_key("person"));
-        assert!(pending.pending.is_some());
-        let body: Value = serde_json::from_str(
-            pending.pending.as_ref().unwrap().capsule["body"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(body["preconditions"].as_object().unwrap().len(), 1);
-        owned.succeed(&["stop"]);
-        owned.succeed(&[]);
-        let recovered = child(&owned.project, "contact", None, None).unwrap();
-        let repeated = child(&owned.project, "contact", None, None).unwrap();
-        assert_eq!(recovered["captures"], repeated["captures"]);
-        assert_eq!(
-            recovered["results"]["contact"],
-            repeated["results"]["contact"]
-        );
-        let observed = &recovered["results"]["observe"];
-        assert_eq!(
-            observed, &repeated["results"]["observe"],
-            "retry cannot produce another target revision"
-        );
-        assert_eq!(recovered["fromAttempt"], population["attempt"]);
-        let retained = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
-        assert!(retained.iter().all(|a| a.pending.is_none()));
-    }
-
-    #[test]
-    #[ignore = "requires source-built bregctl/breg and Docker; creates one disposable owned dev database"]
-    fn native_create_recovers_after_process_exit_without_duplicate_records() {
-        let temp = tempfile::Builder::new()
-            .prefix("breg-example-recovery-")
-            .tempdir()
-            .unwrap()
-            .keep();
-        let project = temp.join("project with ' spaces");
-        copy_tree(&assets(), &project);
-        prepare_native_fixture(&project);
-        let binaries = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let owned = OwnedDev {
-            ctl: binaries.join("bregctl"),
-            project,
-        };
-        let listeners: Vec<_> = (0..3)
-            .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
-            .collect();
-        let ports: Vec<_> = listeners
-            .iter()
-            .map(|l| l.local_addr().unwrap().port().to_string())
-            .collect();
-        drop(listeners);
-        // The copied starter carries dev-clients.yaml, which a first start reads.
-        owned.succeed(&[
-            "--breg-bin",
-            binaries.join("breg").to_str().unwrap(),
-            "--breg-port",
-            &ports[0],
-            "--issuer-port",
-            &ports[1],
-            "--database-port",
-            &ports[2],
-        ]);
-        assert_ne!(std::env::current_dir().unwrap(), owned.project);
-        let attempts_dir = owned.project.join(".breg/dev/examples");
-        match fs::symlink_metadata(&attempts_dir) {
-            Ok(_) => assert!(attempts(&attempts_dir).unwrap().is_empty()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => panic!("cannot inspect initial example attempts: {error}"),
-        }
-        assert_eq!(observed_count(&owned.project), 0);
-        child(&owned.project, "first-record", None, Some("create"));
-        let interrupted = attempts(&owned.project.join(".breg/dev/examples")).unwrap();
-        assert_eq!(interrupted.len(), 1);
-        assert!(interrupted[0].captures.is_empty());
-        assert!(interrupted[0].pending.is_some());
-        owned.succeed(&["stop"]);
-        owned.succeed(&[]);
-        let first = child(&owned.project, "first-record", None, None).unwrap();
-        preflight_refuses_before_writes(&owned.project, &first);
-        let repeated = child(&owned.project, "first-record", None, None).unwrap();
-        assert_eq!(first["captures"], repeated["captures"]);
-        assert_eq!(
-            observed_count(&owned.project),
-            1,
-            "uncertain create must not duplicate records"
-        );
-        let original_input =
-            fs::read(owned.project.join("examples/inputs/first-record.json")).unwrap();
-        let mut changed: Value = serde_json::from_slice(&original_input).unwrap();
-        changed["record"]["name"] = json!("An explicitly edited input");
-        fs::write(
-            owned.project.join("examples/inputs/first-record.json"),
-            serde_json::to_vec(&changed).unwrap(),
-        )
-        .unwrap();
-        assert!(run_example(test_args(&owned.project, "first-record"))
-            .unwrap_err()
-            .to_string()
-            .contains("input"));
-        fs::write(
-            owned.project.join("examples/inputs/first-record.json"),
-            original_input,
-        )
-        .unwrap();
-        {
-            let _lock = private::lock(&owned.project.join(".breg/dev.lock")).unwrap();
-            assert!(
-                run_example(test_args(&owned.project, "first-record")).is_err(),
-                "concurrent examples cannot enter while dev lock is held"
-            );
-        }
-        let sample_path = owned.project.join("examples/inputs/starter-data.json");
-        let mut sample_input: Value =
-            serde_json::from_slice(&fs::read(&sample_path).unwrap()).unwrap();
-        sample_input["river"]["notes"] = json!({"related":"literal", "items":["literal"]});
-        fs::write(&sample_path, serde_json::to_vec(&sample_input).unwrap()).unwrap();
-        let sample_bytes = fs::read(&sample_path).unwrap();
-        let mut invalid: Value = serde_json::from_slice(&sample_bytes).unwrap();
-        invalid["hill-link"]["from"] = json!({"recordCapture":"river-link"});
-        fs::write(&sample_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
-        assert!(format!(
-            "{:#}",
-            run_example(test_args(&owned.project, "starter-data")).unwrap_err()
-        )
-        .contains("wrong target entity"));
-        assert_eq!(
-            observed_count(&owned.project),
-            1,
-            "invalid later alias must be refused before earlier sample creates"
-        );
-        fs::write(&sample_path, sample_bytes).unwrap();
-        let samples = child(&owned.project, "starter-data", None, None).unwrap();
-        let repeated = child(&owned.project, "starter-data", None, None).unwrap();
-        assert_eq!(samples["captures"], repeated["captures"]);
-        assert_eq!(
-            observed_count(&owned.project),
-            4,
-            "completed sample runs do not duplicate records"
-        );
-        let deleted_id = samples["captures"]["hill-link"]["id"].as_str().unwrap();
-        let (remaining, deleted_history) =
-            deleted_sample_observation(&owned.project, deleted_id, true);
-        assert_eq!(remaining, 1);
-        let retry = child(&owned.project, "starter-data", None, None).unwrap();
-        assert_eq!(retry["captures"], samples["captures"]);
-        let (remaining, retry_history) =
-            deleted_sample_observation(&owned.project, deleted_id, false);
-        assert_eq!(
-            remaining, 1,
-            "retry must not recreate the deleted sample under another UUID"
-        );
-        assert_eq!(retry_history, deleted_history);
-        owned.succeed(&["stop"]);
-        owned.succeed(&[]);
-        let restarted = child(&owned.project, "starter-data", None, None).unwrap();
-        assert_eq!(restarted["captures"], samples["captures"]);
-        let (remaining, restart_history) =
-            deleted_sample_observation(&owned.project, deleted_id, false);
-        assert_eq!(remaining, 1, "restart must not repopulate a deleted sample");
-        assert_eq!(restart_history, deleted_history);
-        let mut duplicate = test_args(&owned.project, "first-record");
-        duplicate.new_attempt = true;
-        assert!(
-            run_example(duplicate).is_err(),
-            "explicit new attempts retain ordinary uniqueness checks"
-        );
-        assert_eq!(observed_count(&owned.project), 4);
-        let mut second: Value = serde_json::from_slice(
-            &fs::read(owned.project.join("examples/inputs/first-record.json")).unwrap(),
-        )
-        .unwrap();
-        second["record"]["email"] = json!("second@example.test");
-        let second_path = owned
-            .project
-            .canonicalize()
-            .unwrap()
-            .join("examples/inputs/second-record.json");
-        fs::write(&second_path, serde_json::to_vec(&second).unwrap()).unwrap();
-        let mut distinct = test_args(&owned.project, "first-record");
-        distinct.input = Some(second_path);
-        distinct.new_attempt = true;
-        run_example(distinct).unwrap();
-        assert_eq!(observed_count(&owned.project), 5);
-        assert!(run_example(test_args(&owned.project, "first-record"))
-            .unwrap_err()
-            .to_string()
-            .contains("multiple attempts"));
-        let old_id = uuid::Uuid::parse_str(first["attempt"].as_str().unwrap()).unwrap();
-        owned.succeed(&["stop", "--remove"]);
-        owned.succeed(&[]);
-        let mut old = test_args(&owned.project, "first-record");
-        old.attempt = Some(old_id);
-        assert!(
-            run_example(old)
-                .unwrap_err()
-                .to_string()
-                .contains("database generation"),
-            "removed database invalidates captures even under retained outer owner"
-        );
-        owned.succeed(&["stop", "--remove"]);
     }
 }

@@ -236,18 +236,10 @@ The run never contacts a real provider.
     crates/registry-rstack-dev/src/sinks.rs;
     crates/registry-rstack-dev/src/docker.rs. */}
 
-`messagingctl dev` is for a developer's machine, and some of what it writes outlives a session
-until the next start in the same project removes it: the last session's audit journal and log in
-`.messaging/dev` (neither carries a payload value), the containers of a session killed with
-SIGKILL, and, for a borrowed session, each exported client assertion key in an owner-only file.
-A `dev token` killed before it returns can leave a second owner-only copy of that key under
-`.messaging/dev/.client-check-*`.
-These are development keys for a loopback issuer only.
+Managed development runs retain their database and audit journal between starts.
+The run directory keeps any token header files owner-only and is removed when stop completes.
 
-{/* Evidence: crates/registry-messaging/src/dispatch.rs OperatorTool;
-    crates/registry-messagingctl/tests/postgres_messages_cli.rs operator-tool;
-    crates/registry-messagingctl/src/dev/mod.rs clear_previous;
-    crates/registry-messagingctl/src/dev/borrowed.rs refresh. */}
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs token and stop. */}
 
 ### Listeners
 

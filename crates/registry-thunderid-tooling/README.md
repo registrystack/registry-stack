@@ -159,8 +159,7 @@ retained files.
 `bregctl`, `caseworkctl`, and `evidencectl` expose the same bounded command:
 
 ```sh
-bregctl dev grant task-agent --grant APPROVED-GRANT-UUID \
-  --connection /absolute/private/task-connection.yaml ./project
+journey-issuer grant FIXTURE_DIRECTORY CONNECTION_FILE task-agent APPROVED-GRANT-UUID
 ```
 
 The grant must already have been approved through the configured Casework API

@@ -10,7 +10,7 @@ use std::{
 
 use clap::Parser;
 use registry_breg_client::{
-    BRegRecordOptions, BaseRegistryClient, BaseRegistryClientConfig, StaticToken,
+    BRegRecordOptions, BaseRegistryClient, BaseRegistryClientConfig, PeerPolicy, StaticToken,
 };
 use registry_review_protocol::{canonical_bytes, ContentDigest};
 use serde_json::{json, Map, Value};
@@ -38,8 +38,12 @@ struct Arguments {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = Arguments::parse();
     let token = read_token(&arguments.token_file)?;
+    let peer_policy = match registry_platform_config::declared(None)?.posture {
+        registry_platform_config::Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+        registry_platform_config::Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+    };
     let client = BaseRegistryClient::new(
-        BaseRegistryClientConfig::new_without_peer_policy(arguments.breg_url)
+        BaseRegistryClientConfig::new(arguments.breg_url, peer_policy)
             .with_token_provider(Arc::new(StaticToken::new(token)?)),
     )?;
     let options = BRegRecordOptions::default().access_profile(arguments.access_profile)?;

@@ -1517,8 +1517,12 @@ jobs:
         run: >-
           cargo test --locked -p registry-messagingctl --features postgres-test --tests
           -- --skip provision_then_apply_then_serve_with_split_roles
-      - name: Send one email and one SMS through messagingctl dev
+      - name: Build the Messaging development runner
+        run: cargo build --locked -p registry-rstack -p registry-messaging -p registry-messagingctl
+      - name: Send one email and one SMS through rstack dev
         env:
+          RSTACK_BIN: ${{ github.workspace }}/target/debug/rstack
+          MESSAGING_BIN: ${{ github.workspace }}/target/debug/messaging
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: products/messaging/scripts/test-dev.sh
 

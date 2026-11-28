@@ -259,7 +259,6 @@ fn cli_catalogue_exposes_only_current_action_and_proposal_commands() {
         vec!["data", "export", "--help"],
         vec!["generate", "--help"],
         vec!["import-authority", "open", "--help"],
-        vec!["dev", "prepare-source", "--help"],
     ] {
         let output = run(&arguments);
         assert!(output.status.success());
@@ -268,6 +267,18 @@ fn cli_catalogue_exposes_only_current_action_and_proposal_commands() {
         assert!(!help.contains("--entity"), "{help}");
     }
 }
+
+#[test]
+fn retired_dev_prepare_source_command_is_refused() {
+    let output = run(&["dev", "prepare-source", "--help"]);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("error: unrecognized subcommand"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn generated_proposal_paths_have_no_target_condition_operation() {
     let registry = compiled();

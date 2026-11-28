@@ -38,17 +38,9 @@ invariants:
       origin. Cloud metadata and redirects remain denied. Non-loopback HTTP
       requires development and explicit `allowInsecureHttp: true`, with a
       startup warning. A loopback HTTP issuer needs no opt-in in either posture.
-      For a development session borrowing a ready BReg issuer, `messagingctl`
-      obtains each requester client's credential only through public
-      `bregctl dev export-client`, then uses the explicit Messaging resource,
-      the profile's scopes, `scopeClaim: scope`, and a bounded static RS256
-      key snapshot to acquire and authenticate a real token before reporting
-      ready. A later `dev token` requires that ready state, re-exports and
-      compares the credential and endpoint, and authenticates the new token
-      against the retained keys and caller identity before publishing it.
-      A local raw API request uses the same client-token acquisition without
-      publishing a header file, requires the ready session's exact numeric
-      loopback API origin, and passes the token to the shared CLI transport.
+      For a development run with external issuer keys, Messaging verifies
+      the declared issuer, audience and current key set. A caller supplies
+      the credential to the shared CLI transport.
       That transport confines the relative path to the selected origin and
       deployment prefix, owns Host and automatic Authorization, follows no
       redirects, and ignores ambient proxy settings. The runtime still makes
@@ -59,17 +51,11 @@ invariants:
       separate file and root policy, and the saved-connections document uses
       the platform's separate bounded regular-file reader. Standard input is
       available only for a request body explicitly named by `--input -`.
-      Messaging reads no private BReg state and has no owner lifecycle action.
     refusal: >-
       Refuse with profile.not-authorized for a sender profile, template, or
       direct content outside the profile, and with operation.not-authorized
-      for an operator; accept nothing. Refuse a borrowed development session
-      or token before readiness or header publication when its issuer,
-      resource, credential, scopes, keys, or caller identity do not match the
-      foreground session's capture. Refuse a local raw API request before
-      connection when the session is not ready, its retained API endpoint is
-      not one exact numeric-loopback HTTP origin, its path escapes the selected
-      endpoint, or a caller attempts to replace connection-owned authority.
+      for an operator; accept nothing. Refuse tokens from a replaced key
+      or for a different audience.
       Refuse non-regular file inputs before the API request is sent; on Unix,
       refuse a FIFO without blocking while opening it. Refuse an explicit or
       implicit saved-connections store that is not a regular file, likewise

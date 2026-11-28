@@ -4801,543 +4801,6 @@
           "subcommands": []
         },
         {
-          "name": "dev",
-          "invocation": "bregctl dev",
-          "about": "Start or stop this project's retained local development services",
-          "long_about": null,
-          "usage": "bregctl dev [OPTIONS] [PROJECT]\n       bregctl dev <COMMAND>",
-          "arguments": [
-            {
-              "display": "[PROJECT]",
-              "description": "Existing authored registry project. A symbolic link at any component of this path is refused.",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "."
-              ],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "options": [
-            {
-              "display": "--posture <POSTURE>",
-              "description": "Declared posture: development or production. Unset means production",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--clients-file <FILE>",
-              "description": "Local clients, profile bindings, and optional seed records (default on first start: dev-clients.yaml in the project; retained for restarts). A symbolic link at any component of this path is refused.",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--breg-port <BREG_PORT>",
-              "description": "Registry loopback port on first start (prefers 8090 when available; retained for restarts)",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--issuer-port <ISSUER_PORT>",
-              "description": "Local issuer loopback port on first start (prefers 8091 when available; retained for restarts)",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--issuer-project <PROJECT>",
-              "description": "Ready Base Registry Engine (BReg) dev project that owns the shared local issuer and client registrations. A symbolic link at any component of this path is refused.",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--issuer-image <ISSUER_IMAGE>",
-              "description": "Immutable local candidate issuer image ID on first start; retained for restarts",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--database-port <DATABASE_PORT>",
-              "description": "PostgreSQL loopback port on first start (prefers 15432 when available; retained for restarts)",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [],
-          "subcommands": [
-            {
-              "name": "start",
-              "invocation": "bregctl dev start",
-              "about": "Start or reuse the project's retained local database and services",
-              "long_about": "Start or reuse the project's retained local database and services. A resident supervisor owns this project's PostgreSQL and ThunderID containers plus its Base Registry Engine (BReg) child. The database runs the pinned image docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675, the Docker Official Images reference at that digest, or, when the compiled schema requires PostGIS, the Docker Hub image postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6, which the supervisor pulls on the first start. Each supervised prerequisite command may run for 120 seconds, and the database and each started service have 45 seconds to answer as ready. A start that passes a deadline fails, stops what it acquired, and keeps its owner-only diagnostics in the project's private .breg/dev/logs directory. Catchable termination signals trigger owned cleanup, but an uncatchable outside kill can leave surviving service owners that need inspection before restart. The lifecycle is documented at `https://docs.registrystack.org/reference/bregctl-dev/` and its recovery under 'Retained state and recovery'.",
-              "usage": "bregctl dev start [OPTIONS] [PROJECT]",
-              "arguments": [
-                {
-                  "display": "[PROJECT]",
-                  "description": "Existing authored registry project. A symbolic link at any component of this path is refused.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "."
-                  ],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--posture <POSTURE>",
-                  "description": "Declared posture: development or production. Unset means production",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--clients-file <FILE>",
-                  "description": "Local clients, profile bindings, and optional seed records (default on first start: dev-clients.yaml in the project; retained for restarts). A symbolic link at any component of this path is refused.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--breg-port <BREG_PORT>",
-                  "description": "Registry loopback port on first start (prefers 8090 when available; retained for restarts)",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--issuer-port <ISSUER_PORT>",
-                  "description": "Local issuer loopback port on first start (prefers 8091 when available; retained for restarts)",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--issuer-project <PROJECT>",
-                  "description": "Ready Base Registry Engine (BReg) dev project that owns the shared local issuer and client registrations. A symbolic link at any component of this path is refused.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--issuer-image <ISSUER_IMAGE>",
-                  "description": "Immutable local candidate issuer image ID on first start; retained for restarts",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--database-port <DATABASE_PORT>",
-                  "description": "PostgreSQL loopback port on first start (prefers 15432 when available; retained for restarts)",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help (see a summary with '-h')",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            },
-            {
-              "name": "stop",
-              "invocation": "bregctl dev stop",
-              "about": "Stop only this project's supervised services, preserving its database, records, audit history, keys and built package",
-              "long_about": "Stop only this project's supervised services, preserving its database, records, audit history, keys and built package. Add --remove to also remove the owned container and its data volume, discarding records so the next start can take edited inputs; to change inputs while keeping the records, copy the authored files to a new project directory instead. The full stop and recovery behavior is documented at `https://docs.registrystack.org/reference/bregctl-dev/` under 'Retained state and recovery'.",
-              "usage": "bregctl dev stop [OPTIONS] [PROJECT]",
-              "arguments": [
-                {
-                  "display": "[PROJECT]",
-                  "description": "Registry project whose owned services should stop while preserving records. A symbolic link at any component of this path is refused.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "."
-                  ],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--remove",
-                  "description": "Also remove the owned container and its data volume, discarding records, event receipts and seed checkpoints; the next start can then take edited inputs. The audit files under .breg/dev/audit are kept",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help (see a summary with '-h')",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            },
-            {
-              "name": "events",
-              "invocation": "bregctl dev events",
-              "about": "Show received local webhook deliveries, hiding projected values by default",
-              "long_about": null,
-              "usage": "bregctl dev events [OPTIONS] [PROJECT]",
-              "arguments": [
-                {
-                  "display": "[PROJECT]",
-                  "description": "Local registry project whose retained deliveries should be inspected. A symbolic link at any component of this path is refused.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "."
-                  ],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--include-payload",
-                  "description": "Explicitly show projected values captured by the development receiver",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            },
-            {
-              "name": "export-client",
-              "invocation": "bregctl dev export-client",
-              "about": "Copy an explicitly selected retained local client credential pair",
-              "long_about": null,
-              "usage": "bregctl dev export-client [OPTIONS] --client <CLIENT> --client-id-file <FILE> --assertion-key-file <FILE> [PROJECT]",
-              "arguments": [
-                {
-                  "display": "[PROJECT]",
-                  "description": "Registry project containing the retained development session. A symbolic link at any component of this path is refused.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "."
-                  ],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--client <CLIENT>",
-                  "description": "Explicit local client label from the retained session",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--client-id-file <FILE>",
-                  "description": "Client ID destination in an existing owner-only directory. A symbolic link at any component of this path is refused.",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--assertion-key-file <FILE>",
-                  "description": "Assertion key destination in an existing owner-only directory. A symbolic link at any component of this path is refused.",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            },
-            {
-              "name": "token",
-              "invocation": "bregctl dev token",
-              "about": "Acquire a fresh local client token and report its private header-file path",
-              "long_about": null,
-              "usage": "bregctl dev token [OPTIONS] <CLIENT> [PROJECT]",
-              "arguments": [
-                {
-                  "display": "<CLIENT>",
-                  "description": "Registered local client ID",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "[PROJECT]",
-                  "description": "Ready local project (defaults to the current directory). A symbolic link at any component of this path is refused.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "."
-                  ],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            },
-            {
-              "name": "grant",
-              "invocation": "bregctl dev grant",
-              "about": "Exchange an existing Casework approval using an explicit configured issuer connection",
-              "long_about": null,
-              "usage": "bregctl dev grant [OPTIONS] --grant <GRANT> --connection <FILE> <CLIENT> [PROJECT]",
-              "arguments": [
-                {
-                  "display": "<CLIENT>",
-                  "description": "Registered agent client ID listed under `clients` in the task connection file",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "[PROJECT]",
-                  "description": "Existing project whose private directory receives the grant-specific header. A symbolic link at any component of this path is refused.",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "."
-                  ],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
-                {
-                  "display": "--grant <GRANT>",
-                  "description": "Existing Casework-approved grant UUID; this command does not approve tasks",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--connection <FILE>",
-                  "description": "Task connection file (`PlatformTaskConnection`) naming the fixed target and each client's assertion key reference. A symbolic link at any component of this path is refused.",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            }
-          ]
-        },
-        {
           "name": "examples",
           "invocation": "bregctl examples",
           "about": "List or explicitly run retained local teaching examples",
@@ -5392,6 +4855,15 @@
               ],
               "options": [
                 {
+                  "display": "--run-id <RUN_ID>",
+                  "description": "Ready run whose retained example attempts to list",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -5423,7 +4895,7 @@
               "invocation": "bregctl examples run",
               "about": "Run or resume an example against the project's ready owned development instance",
               "long_about": null,
-              "usage": "bregctl examples run [OPTIONS] <SCENARIO> [PROJECT]",
+              "usage": "bregctl examples run [OPTIONS] --run-id <RUN_ID> <SCENARIO> [PROJECT]",
               "arguments": [
                 {
                   "display": "<SCENARIO>",
@@ -5447,6 +4919,15 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--run-id <RUN_ID>",
+                  "description": "Ready run serving the exact project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--input <INPUT>",
                   "description": "Editable JSON input (default: the scenario's declared examples input file)",
@@ -5520,6 +5001,222 @@
               "subcommands": []
             }
           ]
+        },
+        {
+          "name": "prepare-source",
+          "invocation": "bregctl prepare-source",
+          "about": "Inspect or prepare an exact lookup-only Evidence source for an rstack dev project",
+          "long_about": null,
+          "usage": "bregctl prepare-source [OPTIONS] --run-id <RUN_ID> [PROJECT]",
+          "arguments": [
+            {
+              "display": "[PROJECT]",
+              "description": "Existing project served by the development run. A symbolic link at any component of this path is refused.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "."
+              ],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--run-id <RUN_ID>",
+              "description": "Ready development run serving this exact project",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--record-type <ID>",
+              "description": "Record type authored directly in registry.yaml; omit to inspect available fields",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--selector-field <SELECTOR_FIELD>",
+              "description": "Existing required scalar identifier with an exact single-field unique constraint",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--readable-fields <READABLE_FIELDS>",
+              "description": "Comma-separated selection of 1 to 16 readable fact fields; the identifier is also readable for identity verification",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--all-records",
+              "description": "Explicitly authorize lookup across all records of the selected Record type",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--row-field <ROW_FIELD>",
+              "description": "Existing string, text or vocabulary-code field that bounds permitted records",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--row-claim <ROW_CLAIM>",
+              "description": "Nonreserved direct claim name for the fixed local row boundary",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--row-value-file <ROW_VALUE_FILE>",
+              "description": "Owner-only input file containing a nonsecret scope label as a JSON string of 1 to 512 bytes; stored in dev.yaml",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--client <CLIENT>",
+              "description": "Fresh dedicated development client ID",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "evidence-source"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--access-profile <ACCESS_PROFILE>",
+              "description": "Fresh lookup-only access profile ID for the selected Record type and facts",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "evidence-source"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--selector-profile <SELECTOR_PROFILE>",
+              "description": "Fresh selector profile ID for the selected unique identifier",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "evidence-source"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--source-id <SOURCE_ID>",
+              "description": "Technical Evidence source identity used to validate the exact export",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "evidence-source"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--connection <CONNECTION>",
+              "description": "Technical connection identity used to validate generated selector names",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "evidence-source"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--apply",
+              "description": "Prepare the reviewed successor and credential; next dev start activates it",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--row-field <ROW_FIELD>",
+              "arguments": [
+                "--row-claim <ROW_CLAIM>",
+                "--row-value-file <ROW_VALUE_FILE>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--row-claim <ROW_CLAIM>",
+              "arguments": [
+                "--row-value-file <ROW_VALUE_FILE>",
+                "--row-field <ROW_FIELD>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--row-value-file <ROW_VALUE_FILE>",
+              "arguments": [
+                "--row-claim <ROW_CLAIM>",
+                "--row-field <ROW_FIELD>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--all-records",
+                "--row-field <ROW_FIELD>"
+              ]
+            }
+          ],
+          "subcommands": []
         },
         {
           "name": "explain",
@@ -24284,7 +23981,7 @@
           "invocation": "messagingctl check",
           "about": "Check an authoring project, installed package, or runtime file",
           "long_about": null,
-          "usage": "messagingctl check [OPTIONS] <--runtime-config <FILE>|--package <DIRECTORY>|--project <DIRECTORY>|--dev-state <FILE>>",
+          "usage": "messagingctl check [OPTIONS] <--runtime-config <FILE>|--package <DIRECTORY>|--project <DIRECTORY>>",
           "arguments": [],
           "options": [
             {
@@ -24299,15 +23996,6 @@
             {
               "display": "--posture <POSTURE>",
               "description": "Declared posture: development or production. Unset means production.",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--dev-state <FILE>",
-              "description": "Generated development session state. Checked offline without secrets",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -24390,38 +24078,13 @@
               "arguments": [
                 "--runtime-config <FILE>",
                 "--package <DIRECTORY>",
-                "--project <DIRECTORY>",
-                "--dev-state <FILE>"
+                "--project <DIRECTORY>"
               ]
             },
             {
               "kind": "requires-all",
               "when": "--environment",
               "arguments": [
-                "--runtime-config <FILE>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--dev-state <FILE>",
-                "--package <DIRECTORY>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--dev-state <FILE>",
-                "--project <DIRECTORY>"
-              ]
-            },
-            {
-              "kind": "mutually-exclusive",
-              "when": null,
-              "arguments": [
-                "--dev-state <FILE>",
                 "--runtime-config <FILE>"
               ]
             },
@@ -25347,170 +25010,6 @@
                   "possible_values": [],
                   "environment": null
                 },
-                {
-                  "display": "--format <FORMAT>",
-                  "description": "Emit the selected command's report in this format",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "human"
-                  ],
-                  "possible_values": [
-                    "human",
-                    "json"
-                  ],
-                  "environment": null
-                },
-                {
-                  "display": "-h, --help",
-                  "description": "Print help",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "constraints": [],
-              "subcommands": []
-            }
-          ]
-        },
-        {
-          "name": "dev",
-          "invocation": "messagingctl dev",
-          "about": "Run an authoring project locally with PostgreSQL, Mailpit, and a mock HTTP gateway in Docker, until Ctrl-C",
-          "long_about": "Run an authoring project locally with PostgreSQL, Mailpit, and a mock HTTP gateway in Docker, until Ctrl-C. The session pulls and runs the pinned images docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675 and ghcr.io/axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d, the Docker Official Images reference and upstream GHCR mirror of postgres:17.11 and axllent/mailpit:v1.31.2 at those digests. Each publishes on 127.0.0.1 only, and the session removes both when it stops.",
-          "usage": "messagingctl dev [OPTIONS] [PROJECT]\n       messagingctl dev <COMMAND>",
-          "arguments": [
-            {
-              "display": "[PROJECT]",
-              "description": "The package directory to run, as `messagingctl init` writes it",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "."
-              ],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "options": [
-            {
-              "display": "--posture <POSTURE>",
-              "description": "Declared posture: development or production. Unset means development; production is refused.",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--port <PORT>",
-              "description": "The runtime's loopback port",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "8107"
-              ],
-              "possible_values": [],
-              "environment": "MESSAGINGCTL_DEV_PORT"
-            },
-            {
-              "display": "--metrics-port <METRICS_PORT>",
-              "description": "The runtime's loopback metrics port",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "9107"
-              ],
-              "possible_values": [],
-              "environment": "MESSAGINGCTL_DEV_METRICS_PORT"
-            },
-            {
-              "display": "--mock-latency-ms <MILLISECONDS>",
-              "description": "How long the mock gateway takes to answer each send, in milliseconds",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "200"
-              ],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--issuer-project <PROJECT>",
-              "description": "Borrow pre-registered clients from this Base Registry Engine (BReg) development project",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--resource <URI>",
-              "description": "The exact Messaging audience registered at the borrowed issuer",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            },
-            {
-              "display": "--format <FORMAT>",
-              "description": "Emit the selected command's report in this format",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [
-                "human"
-              ],
-              "possible_values": [
-                "human",
-                "json"
-              ],
-              "environment": null
-            },
-            {
-              "display": "-h, --help",
-              "description": "Print help (see a summary with '-h')",
-              "always_required": false,
-              "repeatable": false,
-              "default_values": [],
-              "possible_values": [],
-              "environment": null
-            }
-          ],
-          "constraints": [],
-          "subcommands": [
-            {
-              "name": "token",
-              "invocation": "messagingctl dev token",
-              "about": "Write a bearer header file for a client an access profile names, using the running session's local key or borrowed issuer",
-              "long_about": null,
-              "usage": "messagingctl dev token [OPTIONS] <CLIENT> [PROJECT]",
-              "arguments": [
-                {
-                  "display": "<CLIENT>",
-                  "description": "A client that one access profile in messaging.yaml names",
-                  "always_required": true,
-                  "repeatable": false,
-                  "default_values": [],
-                  "possible_values": [],
-                  "environment": null
-                },
-                {
-                  "display": "[PROJECT]",
-                  "description": "The package directory the session runs",
-                  "always_required": false,
-                  "repeatable": false,
-                  "default_values": [
-                    "."
-                  ],
-                  "possible_values": [],
-                  "environment": null
-                }
-              ],
-              "options": [
                 {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",

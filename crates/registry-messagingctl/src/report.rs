@@ -192,22 +192,6 @@ pub(crate) fn write_with_posture(
     writeln!(stdout)
 }
 
-/// Write one report on a single line, envelope members first, so a caller
-/// can read it while the command keeps running.
-pub(crate) fn write_line(
-    report: &Value,
-    stdout: &mut dyn io::Write,
-    declared: registry_platform_config::DeclaredPosture,
-) -> io::Result<()> {
-    let value = envelope(report)?;
-    let report =
-        registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
-            .map_err(io::Error::other)?
-            .with_posture(declared);
-    serde_json::to_writer(&mut *stdout, &report).map_err(io::Error::other)?;
-    writeln!(stdout)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,27 +270,6 @@ mod tests {
         );
         assert_eq!(report["diagnostics"], json!([]));
         assert_eq!(report["alpha"], 1);
-    }
-
-    #[test]
-    fn a_one_line_report_keeps_the_result_class_and_names_its_outcome() {
-        let mut out = Vec::new();
-        write_line(
-            &json!({"alpha":1,"status":"ready","command":"dev","ok":true}),
-            &mut out,
-            registry_messaging::config::DEFAULT_POSTURE,
-        )
-        .unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert_eq!(text.lines().count(), 1);
-        assert!(text.starts_with("{\"ok\":true,\"command\":\"dev\",\"status\":\"complete\","));
-        let report: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(report["outcome"], "ready");
-        assert_eq!(
-            report["posture"],
-            json!({"value":"production","source":"default"})
-        );
-        assert_eq!(report["diagnostics"], json!([]));
     }
 
     #[test]

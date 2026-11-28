@@ -1,5 +1,5 @@
 // Generated for Stack version 0.49.0, client version 0.49.0.
-// Source SHA-256 2814f11a768a576ea818a48a0b4f52392880a4a29dda292c89fb0bca678332ea
+// Source SHA-256 0859c890595bbe1d6229c78bc4ab324b60222f5689a8d47c9272e03490ff5631
 import { assertClientVersion, type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
 import { validator } from "../schema.ts"
 

@@ -46,8 +46,9 @@ mod apply_lifecycle;
 mod check;
 mod consent_module;
 mod data_lifecycle;
-mod dev;
+mod dev_clients;
 mod doctor;
+mod examples;
 mod explain_report;
 mod field_encryption;
 mod field_encryption_lifecycle;
@@ -59,10 +60,12 @@ mod identity_facts;
 mod import_authority_lifecycle;
 mod init_from_model;
 mod instance_claim_lifecycle;
+mod local_files;
 mod migration_draft;
 mod module_lock_patch;
 mod package_inspection;
 mod package_lifecycle;
+mod prepare_source;
 mod proposal_retention;
 mod provision;
 mod reconcile_lifecycle;
@@ -139,11 +142,6 @@ fn peer_policy(posture: DeclaredPosture) -> registry_platform_httputil::PeerPoli
 
 const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
     posture: Posture::Production,
-    source: PostureSource::Default,
-};
-
-const DEV_POSTURE: DeclaredPosture = DeclaredPosture {
-    posture: Posture::Development,
     source: PostureSource::Default,
 };
 
@@ -226,6 +224,7 @@ static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Parser)]
 #[command(
     name = "bregctl",
+    after_help = "Use rstack dev to run a local BReg project.",
     version = registry_platform_buildinfo::DISPLAY_VERSION,
     about = "Base Registry Engine project checking and deterministic generation"
 )]
@@ -266,12 +265,10 @@ enum Command {
     Module(ModuleArgs),
     /// Write selected compiler artifacts to a new directory.
     Generate(GenerateArgs),
-    /// Start or stop this project's retained local development services.
-    Dev(dev::DevArgs),
     /// List or explicitly run retained local teaching examples.
-    Examples(dev::examples::ExamplesArgs),
-    #[command(name = "__dev-supervisor", hide = true)]
-    DevSupervisor(dev::SupervisorArgs),
+    Examples(examples::ExamplesArgs),
+    /// Inspect or prepare an exact lookup-only Evidence source for an rstack dev project.
+    PrepareSource(prepare_source::PrepareSourceArgs),
     #[command(name = "rstack-dev", hide = true)]
     RstackDev(registry_rstack_dev::Args),
     /// Explain compiled model, access, route, or event inventories.
@@ -3201,8 +3198,6 @@ where
         Command::Generate(args) => Some(args.posture.flag.as_deref()),
         Command::Provision(args) => Some(args.shared.posture.as_deref()),
         Command::Timer(args) => Some(args.posture_flag()),
-        Command::Dev(args) => Some(args.posture_flag()),
-        Command::DevSupervisor(_) => Some(None),
         Command::Mcp(McpArgs { command, .. }) | Command::Review(ReviewArgs { command, .. }) => {
             Some(match command {
                 SupportingServiceCommand::Check(args) => args.posture.flag.as_deref(),
@@ -3215,6 +3210,7 @@ where
         | Command::Project(_)
         | Command::Module(_)
         | Command::Examples(_)
+        | Command::PrepareSource(_)
         | Command::RstackDev(_)
         | Command::Hook(HookArgs {
             command: HookCommand::Sample(_),
@@ -3228,7 +3224,6 @@ where
         }) => None,
     };
     let force_production = matches!(&cli.command, Command::Check(args) if args.production);
-    let is_dev = matches!(&cli.command, Command::Dev(_) | Command::DevSupervisor(_));
     let (posture, format) = if let Some(flag) = posture_flag {
         if force_production && flag == Some("development") {
             return write_posture_usage(
@@ -3260,19 +3255,6 @@ where
                     stderr,
                 );
             }
-        };
-        let posture = if is_dev && posture.posture == Posture::Production {
-            if posture.source != PostureSource::Default {
-                return write_posture_usage(
-                    "platform.posture.conflict",
-                    "bregctl dev is a development command and contradicts the declared production posture",
-                    "Start it with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
-                    cli.format, stdout, stderr,
-                );
-            }
-            DEV_POSTURE
-        } else {
-            posture
         };
         (posture, cli.format.with_posture(posture))
     } else {
@@ -3358,9 +3340,9 @@ where
             );
         }
         Command::Examples(args) => {
-            return match dev::examples::run(args) {
+            return match examples::run(args) {
                 Ok(report) => write_examples_success(&report, format, stdout, stderr),
-                Err(error) => match error.downcast::<dev::examples::CatalogueRefused>() {
+                Err(error) => match error.downcast::<examples::CatalogueRefused>() {
                     Ok(refused) => write_refusal(
                         &Refusal::Document(DocumentRefusal {
                             command: "examples",
@@ -3385,41 +3367,24 @@ where
                 },
             };
         }
-        Command::Dev(args) => {
-            return match dev::run(args) {
-                Ok(report) => write_dev_success(&report, format, stdout, stderr),
-                Err(error) => match error.downcast::<dev::ClientsRefused>() {
-                    Ok(refused) => write_refusal(
-                        &Refusal::Document(DocumentRefusal {
-                            command: "dev",
-                            subject: "the development clients",
-                            report: refused.0,
-                        }),
-                        format,
-                        stdout,
-                        stderr,
-                    ),
-                    Err(error) => write_failure(
-                        &source_failure(
-                            "dev",
-                            diagnostic("dev.failed", "dev", &format!("{error:#}")),
-                            DiagnosticArtifact::CommandArguments,
-                            SuggestedAction::CorrectCommandUsage,
+        Command::PrepareSource(args) => {
+            return match prepare_source::run(args) {
+                Ok(report) => write_source_preparation(&report, format, stdout, stderr),
+                Err(error) => write_failure(
+                    &source_failure(
+                        "prepare-source",
+                        diagnostic(
+                            "prepare-source.failed",
+                            "prepare-source",
+                            &format!("{error:#}"),
                         ),
-                        format,
-                        stdout,
-                        stderr,
+                        DiagnosticArtifact::CommandArguments,
+                        SuggestedAction::CorrectCommandUsage,
                     ),
-                },
-            };
-        }
-        Command::DevSupervisor(args) => {
-            return match dev::run_supervisor(args) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => {
-                    let _ = writeln!(stderr, "{error:#}");
-                    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
-                }
+                    format,
+                    stdout,
+                    stderr,
+                ),
             };
         }
         Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
@@ -11488,55 +11453,6 @@ const INIT_RUNTIME_EXAMPLE: &[u8] = include_bytes!(
     "../../../products/breg/fixtures/generic-operator-workflows/runtime.example.yaml"
 );
 
-/// Retained generic rehearsal coverage uses native governed files independently
-/// of the small public initializer. Only its ordinary module lock is filled in.
-#[cfg(test)]
-pub(crate) fn retained_native_fixture_files() -> BTreeMap<String, Vec<u8>> {
-    let module = include_bytes!(
-        "../../../products/breg/fixtures/generic-operator-workflows/modules/record-notes/module.yaml"
-    );
-    let parsed = parse_module_yaml(module).expect("retained native module parses");
-    let project = render_project_with_module_locks(
-        include_bytes!("../../../products/breg/fixtures/generic-operator-workflows/registry.yaml"),
-        &[ModuleLockSource {
-            id: parsed.id.clone(),
-            version: parsed.version.clone(),
-            digest: Some(module_digest_with_assets(&parsed, &[])),
-        }],
-    )
-    .expect("retained native module lock renders");
-    BTreeMap::from([
-        ("registry.yaml".to_owned(), project),
-        (
-            "modules/record-notes/module.yaml".to_owned(),
-            module.to_vec(),
-        ),
-        (
-            "README.md".to_owned(),
-            include_bytes!("../../../products/breg/fixtures/generic-operator-workflows/README.md")
-                .to_vec(),
-        ),
-        (
-            "dev-clients.yaml".to_owned(),
-            include_bytes!(
-                "../../../products/breg/fixtures/generic-operator-workflows/dev-clients.yaml"
-            )
-            .to_vec(),
-        ),
-        (
-            FIXTURE_JOURNEYS_PATH.to_owned(),
-            include_bytes!(
-                "../../../products/breg/fixtures/generic-operator-workflows/tests/journeys.yaml"
-            )
-            .to_vec(),
-        ),
-        (
-            "runtime.example.yaml".to_owned(),
-            INIT_RUNTIME_EXAMPLE.to_vec(),
-        ),
-    ])
-}
-
 /// The media type an initialized project's file is reported with.
 fn init_media_type(path: &str) -> &'static str {
     if path.ends_with(".md") {
@@ -13923,6 +13839,47 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
     lines.pairs_at(depth + 1, &fields);
 }
 
+fn write_source_preparation(
+    report: &Value,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    if format.is_json() {
+        return write_result(
+            write_ctl_report(format, &mut *stdout, report)
+                .map_err(io::Error::other)
+                .and_then(|()| writeln!(stdout)),
+            stderr,
+        );
+    }
+    let mut lines = report::Lines::new();
+    lines.lead("BReg development Evidence source");
+    for key in [
+        "status",
+        "project",
+        "client",
+        "accessProfile",
+        "selectorProfile",
+    ] {
+        if let Some(value) = report[key].as_str() {
+            lines.pairs(&[(key, value.to_owned())]);
+        }
+    }
+    for entity in report["entities"].as_array().into_iter().flatten() {
+        if let Some(id) = entity["recordType"].as_str() {
+            lines.item(id);
+        }
+    }
+    if report["requiresRestart"] == true {
+        lines.prose(
+            0,
+            "Stop the run and start it again to activate the prepared source.",
+        );
+    }
+    write_result(stdout.write_all(lines.finish().as_bytes()), stderr)
+}
+
 fn write_examples_success(
     report: &Value,
     format: OutputFormat,
@@ -14014,111 +13971,6 @@ fn write_examples_success(
     write_result(stdout.write_all(lines.finish().as_bytes()), stderr)
 }
 
-fn write_dev_success(
-    report: &Value,
-    format: OutputFormat,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> ExitCode {
-    let result = if format.is_json() {
-        write_ctl_report(format, &mut *stdout, report)
-            .map_err(io::Error::other)
-            .and_then(|()| writeln!(stdout))
-    } else {
-        {
-            let mut lines = report::Lines::new();
-            lines.lead(&format!(
-                "bregctl {} succeeded.",
-                report["command"].as_str().unwrap_or("dev")
-            ));
-            let pairs: Vec<(&str, String)> = [
-                ("status", "status"),
-                ("client", "client"),
-                ("access profiles", "accessProfilesText"),
-                ("client id file", "clientIdFile"),
-                ("assertion key file", "assertionKeyFile"),
-                ("project", "project"),
-                ("breg url", "bregUrl"),
-                ("token endpoint", "tokenEndpoint"),
-                ("audience", "audience"),
-                ("package digest", "packageDigest"),
-                ("state file", "stateFile"),
-                ("runtime config", "runtimeConfig"),
-                ("webhook receiver", "webhookUrl"),
-                ("events file", "eventsFile"),
-            ]
-            .into_iter()
-            .filter_map(|(label, field)| {
-                report[field]
-                    .as_str()
-                    .map(|value| (label, value.to_owned()))
-            })
-            .collect();
-            lines.pairs(&pairs);
-            if let Some(deliveries) = report["deliveries"].as_array() {
-                lines.blank();
-                lines.item(&format!(
-                    "{} received.",
-                    report::counted(deliveries.len(), "delivery")
-                ));
-                for delivery in deliveries {
-                    lines.blank();
-                    let pairs: Vec<(&str, String)> = [
-                        ("event id", "eventId"),
-                        ("event", "eventType"),
-                        ("entity", "entity"),
-                        ("trigger", "trigger"),
-                        ("delivery", "deliveryId"),
-                        ("destination", "destinationId"),
-                        ("status", "status"),
-                        ("generation", "generation"),
-                        ("attempt", "attempt"),
-                    ]
-                    .into_iter()
-                    .filter_map(|(label, field)| {
-                        delivery.get(field).map(|value| {
-                            (
-                                label,
-                                value
-                                    .as_str()
-                                    .map(str::to_owned)
-                                    .unwrap_or_else(|| value.to_string()),
-                            )
-                        })
-                    })
-                    .collect();
-                    lines.pairs_at(2, &pairs);
-                    if let Some(payload) = delivery.get("payload") {
-                        lines.pairs_at(2, &[("payload", payload.to_string())]);
-                    }
-                }
-            }
-            // Credential file references, never credential bytes.
-            let clients = report["clients"].as_array().into_iter().flatten();
-            for client in clients {
-                lines.blank();
-                lines.item(&format!(
-                    "client {}",
-                    client["id"].as_str().unwrap_or_default()
-                ));
-                let files: Vec<(&str, String)> = [
-                    ("client id file", "clientIdFile"),
-                    ("assertion key file", "assertionKeyFile"),
-                ]
-                .into_iter()
-                .filter_map(|(label, field)| {
-                    client[field].as_str().map(|path| (label, path.to_owned()))
-                })
-                .collect();
-                lines.pairs_at(2, &files);
-            }
-            stdout.write_all(lines.finish().as_bytes())
-        }
-    };
-    write_result(result, stderr)
-}
-
-#[allow(clippy::too_many_arguments)]
 fn write_doctor_success(
     success: &doctor::DoctorSuccess,
     format: OutputFormat,
@@ -18280,8 +18132,8 @@ mod tests {
                 "project",
                 "module",
                 "generate",
-                "dev",
                 "examples",
+                "prepare-source",
                 "explain",
                 "diff",
                 "package",
@@ -18366,165 +18218,9 @@ mod tests {
     }
 
     #[test]
-    fn dev_reports_honour_the_requested_output_format() {
-        let report = json!({
-            "ok": true,
-            "command": "dev",
-            "status": "ready",
-            "project": "/local/registry",
-            "stateFile": "/local/registry/.breg/dev/state.json",
-            "runtimeConfig": "/local/registry/.breg/dev/runtime.yaml",
-            "bregUrl": "http://127.0.0.1:8090",
-            "tokenEndpoint": "http://127.0.0.1:8091/token",
-            "audience": "urn:breg:dev:local",
-            "packageDigest": "sha256:package-1",
-            "clients": [{
-                "id": "operator",
-                "accessProfiles": ["operator"],
-                "clientIdFile": "/local/registry/.breg/dev/credentials/operator/client-id",
-                "assertionKeyFile":
-                    "/local/registry/.breg/dev/credentials/operator/assertion-key.jwk"
-            }]
-        });
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        assert_eq!(
-            write_dev_success(&report, OutputFormat::Human, &mut stdout, &mut stderr),
-            ExitCode::SUCCESS
-        );
-        assert_eq!(
-            plain(&stdout),
-            "bregctl dev succeeded.\n\
-             \x20 status          ready\n\
-             \x20 project         /local/registry\n\
-             \x20 breg url        http://127.0.0.1:8090\n\
-             \x20 token endpoint  http://127.0.0.1:8091/token\n\
-             \x20 audience        urn:breg:dev:local\n\
-             \x20 package digest  sha256:package-1\n\
-             \x20 state file      /local/registry/.breg/dev/state.json\n\
-             \x20 runtime config  /local/registry/.breg/dev/runtime.yaml\n\
-             \n\
-             \x20 client operator\n\
-             \x20   client id file      \
-             /local/registry/.breg/dev/credentials/operator/client-id\n\
-             \x20   assertion key file  \
-             /local/registry/.breg/dev/credentials/operator/assertion-key.jwk\n"
-        );
-        assert!(stderr.is_empty());
-
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        assert_eq!(
-            write_dev_success(&report, OutputFormat::Json, &mut stdout, &mut stderr),
-            ExitCode::SUCCESS
-        );
-        let rendered = String::from_utf8(stdout).expect("output is UTF-8");
-        assert_eq!(
-            serde_json::from_str::<Value>(&rendered).expect("report is JSON"),
-            with_ctl_report_header(&report)
-        );
-        assert!(rendered.ends_with("\n}\n"));
-        assert!(stderr.is_empty());
-
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        assert_eq!(
-            write_dev_success(
-                &json!({"ok": true, "command": "dev stop", "status": "stopped"}),
-                OutputFormat::Human,
-                &mut stdout,
-                &mut stderr
-            ),
-            ExitCode::SUCCESS
-        );
-        assert_eq!(
-            plain(&stdout),
-            "bregctl dev stop succeeded.\n\x20 status  stopped\n"
-        );
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn dev_start_takes_no_detach_flag() {
-        assert!(Cli::try_parse_from(["bregctl", "dev", "."]).is_ok());
-        assert!(Cli::try_parse_from(["bregctl", "dev", "start", "."]).is_ok());
-        for arguments in [
-            vec!["bregctl", "dev", "--detach"],
-            vec!["bregctl", "dev", "start", "--detach"],
-        ] {
-            assert!(Cli::try_parse_from(arguments).is_err());
-        }
-    }
-
-    #[test]
-    fn dev_start_takes_no_mint_issuer_flags() {
-        for arguments in [
-            vec!["bregctl", "dev", "start", ".", "--mint-port", "8091"],
-            vec!["bregctl", "dev", "start", ".", "--mint-bin", "/mint"],
-        ] {
-            let error = Cli::try_parse_from(&arguments).expect_err("unknown flag");
-            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-        }
-    }
-
-    #[test]
-    fn dev_names_its_project_the_way_every_other_command_does() {
-        // `check`, `test`, `generate` and the rest take the project as their
-        // positional argument, so `dev` does too, defaulting to the current
-        // directory when it is absent. The clients file stays a flag because
-        // a first start reads the project's own dev-clients.yaml without it.
-        for arguments in [
-            vec!["bregctl", "dev"],
-            vec!["bregctl", "dev", "tutorial-work/project"],
-            vec!["bregctl", "dev", "start", "tutorial-work/project"],
-            vec!["bregctl", "dev", "stop", "tutorial-work/project"],
-            vec![
-                "bregctl",
-                "dev",
-                "stop",
-                "tutorial-work/project",
-                "--remove",
-            ],
-            vec![
-                "bregctl",
-                "dev",
-                "tutorial-work/project",
-                "--clients-file",
-                "clients.yaml",
-            ],
-        ] {
-            assert!(Cli::try_parse_from(&arguments).is_ok(), "{arguments:?}");
-        }
-        for arguments in [
-            vec!["bregctl", "dev", "--project", "."],
-            vec!["bregctl", "dev", "start", "--project", "."],
-            vec!["bregctl", "dev", "stop", "--project", "."],
-            // A project before the action would stop a different directory
-            // than the one named, so the two forms do not combine.
-            vec!["bregctl", "dev", "tutorial-work/project", "stop"],
-            vec!["bregctl", "dev", "one", "two"],
-            vec![
-                "bregctl",
-                "dev",
-                "tutorial-work/project",
-                "--clients",
-                "clients.yaml",
-            ],
-        ] {
-            assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
-        }
-    }
-
-    #[test]
-    fn dev_stop_reclaims_only_when_removal_is_explicit() {
-        assert!(Cli::try_parse_from(["bregctl", "dev", "stop", "."]).is_ok());
-        assert!(Cli::try_parse_from(["bregctl", "dev", "stop", ".", "--remove"]).is_ok());
-        for arguments in [
-            vec!["bregctl", "dev", "--remove"],
-            vec!["bregctl", "dev", "start", "--remove"],
-        ] {
-            assert!(Cli::try_parse_from(arguments).is_err());
-        }
+    fn legacy_dev_is_an_unknown_subcommand() {
+        let error = Cli::try_parse_from(["bregctl", "dev"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
     #[test]
@@ -19517,7 +19213,7 @@ accessProfiles:
             reviewed_migrations: None,
         };
 
-        // `bregctl dev` compiles and `bregctl test` captures the placeholder
+        // `rstack dev` compiles and `bregctl test` captures the placeholder
         // unchanged.
         compile(&project, ProfileArg::Production, "dev")
             .unwrap_or_else(|_| panic!("the dev compile accepts the placeholder"));

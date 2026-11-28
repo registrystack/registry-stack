@@ -19,8 +19,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..'
 // matches a command a fence runs and not a path or file that shares its name.
 const CASES = {
   breg: {
-    runs: ['bregctl init .', 'bregctl dev start .', 'breg --version', 'rstack breg api /v1/records', 'version=$(bregctl --version)', 'bregctl dev stop .; echo done'],
-    names: ['cd tutorial-work/breg', 'cat .breg/dev/state.json', 'ls ./breg', 'cat breg.yaml', 'cd breg-demo', 'ls breg/'],
+    runs: ['bregctl init .', 'rstack breg check .', 'breg --version', 'rstack breg api /v1/records', 'version=$(bregctl --version)', 'bregctl examples list .; echo done'],
+    names: ['cd tutorial-work/breg', 'cat rstack-dev/report.json', 'ls ./breg', 'cat breg.yaml', 'cd breg-demo', 'ls breg/'],
   },
   casework: {
     runs: ['rstack casework init . --template standalone-decision', 'casework --version', 'caseworkctl check . | tail -1'],
@@ -251,7 +251,7 @@ test('the breg toolset installs the client packages only for a journey that runs
   for (const code of ['python -m pip install "registry-stack-client==${version}"', 'npm install "@registrystack/client-node@${version}"']) {
     assert.equal(clients.test(code), true, `must match: ${code}`);
   }
-  for (const code of ['bregctl dev start tutorial-work/project', 'cd registry-stack-client-demo', 'ls crates/registry-stack-client-node']) {
+  for (const code of ['rstack dev start tutorial-work/project', 'cd registry-stack-client-demo', 'ls crates/registry-stack-client-node']) {
     assert.equal(clients.test(code), false, `must not match: ${code}`);
   }
 });
@@ -360,7 +360,7 @@ test('a journey that installs the client gets the packages served, and closing s
 });
 
 test('a journey that installs no client needs no packages and serves nothing', async () => {
-  const steps = [{ kind: 'run', code: 'bregctl dev start tutorial-work/project' }];
+  const steps = [{ kind: 'run', code: 'rstack dev start tutorial-work/project' }];
   const { env, close } = await withPackagesDir('relative', () => clientEnvironment(steps, REPO_ROOT, '/work'));
   assert.deepEqual(env, {});
   await close();
