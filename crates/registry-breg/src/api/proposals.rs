@@ -429,6 +429,13 @@ pub(crate) fn authorize_checked(
             profile_kind,
             None | Some(crate::contract::ActorKindSource::Human)
         );
+    // Answering is the applicant's own act and takes the same human test.
+    // The Proposal document's `asks` member follows this admission.
+    if operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Answer)
+        && !authority.receives_review_answers
+    {
+        return Err(FailedCheck::ActorKind);
+    }
     match (task_source, claims.grant()) {
         (None, None) => {}
         (Some(source), Some(grant)) => {

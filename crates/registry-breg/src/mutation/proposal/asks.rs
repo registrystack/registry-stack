@@ -120,14 +120,18 @@ impl MutationTransaction {
             ProposalAuthorityOperation::Lifecycle(ProposalOperation::Answer),
             Some(document.proposal_id),
         );
-        let write = match write {
-            Some(authority) => link_readable(
-                self.check_proposal_document(tx, registry, document, &authority, false)
-                    .await,
-            )?
-            .then_some(authority),
-            None => None,
+        // Questions and answers reach only the party who may answer on this
+        // Proposal. The Answer admission carries the human test, so other Get
+        // holders, agents and services receive no `asks` member at all.
+        let Some(write) = write else {
+            return Ok(());
         };
+        if !link_readable(
+            self.check_proposal_document(tx, registry, document, &write, false)
+                .await,
+        )? {
+            return Ok(());
+        }
         let progress = match frozen {
             Some(frozen) => review_progress(tx, document, frozen).await?,
             None => ProposalReviewProgress::NotRequired,
@@ -175,21 +179,18 @@ impl MutationTransaction {
                 .transpose()?
                 .unwrap_or(false);
             let mut ask = ask_value(&row);
-            ask["links"] = json!({});
-            if let Some(write) = &write {
-                let refusal = shared.or_else(|| {
-                    if answered {
-                        Some(LinkRefusal::AskAnswered)
-                    } else if state != "open" {
-                        Some(LinkRefusal::AskClosed)
-                    } else if due_passed {
-                        Some(LinkRefusal::AskDuePassed)
-                    } else {
-                        None
-                    }
-                });
-                ask["links"]["answer"] = json!({"method":"POST","path":format!("/v1/proposals/{}/asks/{id}/answer",document.proposal_id),"accessProfile":write.common.access_profile(),"operation":"answer","ifMatch":self.proposal_etag(document,write)?,"availability":ProposalAvailability::new(document.header.workflow_revision as u64,refusal)});
-            }
+            let refusal = shared.or_else(|| {
+                if answered {
+                    Some(LinkRefusal::AskAnswered)
+                } else if state != "open" {
+                    Some(LinkRefusal::AskClosed)
+                } else if due_passed {
+                    Some(LinkRefusal::AskDuePassed)
+                } else {
+                    None
+                }
+            });
+            ask["links"] = json!({"answer":{"method":"POST","path":format!("/v1/proposals/{}/asks/{id}/answer",document.proposal_id),"accessProfile":write.common.access_profile(),"operation":"answer","ifMatch":self.proposal_etag(document,&write)?,"availability":ProposalAvailability::new(document.header.workflow_revision as u64,refusal)}});
             asks.push(ask);
         }
         value["asks"] = json!(asks);

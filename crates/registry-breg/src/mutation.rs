@@ -2383,6 +2383,10 @@ impl std::fmt::Debug for ProposalGuardFailure {
 }
 
 /// Party recovery for a refusal after admission of an exact frozen application.
+/// Only facts about the frozen data block the Proposal. A write outside the
+/// applying caller's row boundary is a fact about that caller: it refuses the
+/// call and records nothing, so a caller whose boundary covers the result can
+/// still Apply.
 #[derive(Clone, Copy)]
 pub(crate) enum ApplicationRefusal {
     Rebase,
@@ -2395,9 +2399,7 @@ impl ApplicationRefusal {
             MutationError::ProposalTargetChanged | MutationError::ProposalGuardFailed(_) => {
                 Some(Self::Rebase)
             }
-            MutationError::ProposalUniqueConflict | MutationError::WriteOutsideBoundary => {
-                Some(Self::Revise)
-            }
+            MutationError::ProposalUniqueConflict => Some(Self::Revise),
             _ => None,
         }
     }

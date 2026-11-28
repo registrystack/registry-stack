@@ -472,6 +472,9 @@ Casework resumes within the earlier request's result retention, and starts a res
 Once any later request of the same producer and policy ID has been erased, Casework also starts at the first stage, because erasure removes the subject that would show whether that request was a later round. A later request whose records are already deleted cannot be detected.
 The `review-resumed-at-stage` history detail carries only `stageId`, without linking to the earlier request.
 Earlier approvals are not carried over.
+The earlier stages do not see content that the resubmission changed: the producer may change any input on resubmission, and only the stages from the returning stage on review it.
+A two-person control that needs every stage to see the final content must use the default, which starts at the first stage.
+Use `resume-at-returning-stage` only where the earlier stages do not depend on what the applicant can change.
 The staff who decided a stage of an earlier round, up to and including the returning stage, count as reviewers of that stage, so a later stage with `excludePreviousStageReviewers` keeps them out, as within one request, even after the earlier request is erased.
 A reviewer of the returning stage may review that stage again.
 The subject clock starts with a fresh budget.
@@ -534,6 +537,7 @@ The text is plain, bounded like a public reason, and has no control characters.
 `wants` lists what the applicant should give, from `answer` and `document`.
 Casework refuses the ask when the caller does not hold the task, the request is no longer under review, the task is not at the active stage, the stage declares no `asks`, the producer does not read asks, or the request already has an open ask.
 Each refusal has its own problem code: `review.ask-task-inactive`, `review.ask-not-offered`, `review.ask-producer-unsupported` and `review.ask-already-open`, besides `review.task-not-held` and the usual precondition failure.
+Each review request allows at most 50 asks across all tasks and stages, including answered, expired and closed asks, and further attempts return `409 review.ask-limit-reached` without changing the request, task or clocks.
 The task stays claimed by the same holder.
 
 The producer reads the ask on `GET /v1/review-asks`, a resumable feed of announcements, and then on `GET /v1/review-requests/{requestId}/asks/{askId}`.

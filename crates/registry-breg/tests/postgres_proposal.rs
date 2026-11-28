@@ -2035,7 +2035,7 @@ async fn proposal_list_pages_by_limit_and_refuses_top_naming_limit() {
 }
 
 #[tokio::test]
-async fn admitted_apply_write_boundary_conflict_offers_revise() {
+async fn admitted_apply_outside_the_callers_write_boundary_persists_nothing() {
     let caller = |zones: &[&str]| {
         VerifiedRequestClaims::authenticated_with_actor_kind(
             "sub",
@@ -2101,33 +2101,35 @@ async fn admitted_apply_write_boundary_conflict_offers_revise() {
         refusal.problem_code(),
         Some(BRegProblemCode::WriteOutsideBoundary)
     );
-    let blocked = narrow.client.read_proposal(&current).await.unwrap().value;
+    // The boundary belongs to the applying caller, not to the Proposal: the
+    // refusal persists no block and no revision change.
+    let after = narrow.client.read_proposal(&current).await.unwrap().value;
     assert_eq!(
-        blocked.status(),
-        Some(registry_breg_client::BRegProposalStatus::AwaitingParty)
+        serde_json::to_value(&after).unwrap(),
+        serde_json::to_value(&current).unwrap()
     );
+    let wide = client.read_proposal(&submitted).await.unwrap().value;
+    let wide_value = serde_json::to_value(&wide).unwrap();
+    assert!(wide_value["applicationStatus"].get("recovery").is_none());
     assert_eq!(
-        serde_json::to_value(&blocked).unwrap()["applicationStatus"]["recovery"],
-        "revise"
+        wide_value["links"]["apply"]["availability"]["available"], true,
+        "{wide_value}"
     );
-    let revised = narrow
-        .client
+    let applied = client
         .execute_proposal(
-            &narrow
-                .client
+            &client
                 .prepare_proposal(
-                    &blocked,
-                    "revise",
-                    json!({"input":{"target":blocked.input().unwrap()["target"],"value":"zone-a"}}),
-                    &key("boundary-revise"),
+                    &wide,
+                    "apply",
+                    json!({"submissionVersion":wide.submission_version(),"effectDigest":wide.effect_digest().unwrap()}),
+                    &key("boundary-wide-apply"),
                 )
                 .unwrap(),
         )
         .await
         .unwrap()
         .value;
-    assert_eq!(revised.state(), BRegProposalState::Draft);
-    assert!(revised.application_status().is_none());
+    assert_eq!(applied.state(), BRegProposalState::Applied);
     drop(narrow);
     fixture.finish().await;
 }

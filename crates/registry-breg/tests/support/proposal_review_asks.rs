@@ -100,7 +100,7 @@ async fn fix_announcement_before_acceptance_is_recovered_after_binding_without_a
     worker(&fixture, &authority).await.unwrap();
     accept(&fixture, id, &binding).await;
     worker(&fixture, &authority).await.unwrap();
-    let document = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+    let document = read_applicant(&fixture, &format!("/v1/proposals/{id}")).await;
     assert_eq!(document["asks"][0]["id"], ask.to_string());
     assert_eq!(document["status"], "awaiting-party");
     fixture.finish().await;
@@ -189,7 +189,7 @@ async fn fix_ask_read_credentials_back_off_without_committing_the_page() {
         tokio::time::sleep(Duration::from_millis(1100)).await;
         worker(&fixture, &authority).await.unwrap();
         assert_eq!(
-            read_raw(&fixture, &format!("/v1/proposals/{id}")).await["asks"][0]["id"],
+            read_applicant(&fixture, &format!("/v1/proposals/{id}")).await["asks"][0]["id"],
             ask.to_string()
         );
         fixture.finish().await;
@@ -208,7 +208,7 @@ async fn fix_mirror_caps_distinct_asks_and_counts_excess_announcements() {
     }
     worker(&fixture, &authority).await.unwrap();
     assert_eq!(
-        read_raw(&fixture, &format!("/v1/proposals/{id}")).await["asks"]
+        read_applicant(&fixture, &format!("/v1/proposals/{id}")).await["asks"]
             .as_array()
             .unwrap()
             .len(),
@@ -289,7 +289,7 @@ async fn fix_terminal_ask_feed_changes_the_etag_once_without_reopening() {
             feed.entries.push(json!({"eventId":Uuid::new_v4(),"requestId":binding.request_id,"askId":ask,"changedAt":chrono::Utc::now()}));
         }
         worker(&fixture, &authority).await.unwrap();
-        let replay = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+        let replay = read_applicant(&fixture, &format!("/v1/proposals/{id}")).await;
         assert_eq!(replay["revision"], after["revision"]);
         assert_eq!(replay["asks"][0]["state"], terminal);
         fixture.finish().await;
@@ -518,6 +518,31 @@ async fn request(
     key: Option<&str>,
     body: Value,
 ) -> (StatusCode, HeaderMap, Value) {
+    request_as(fixture, applicant(), method, path, etag, key, body).await
+}
+
+/// A read by the applicant, who may answer and so receives its asks.
+async fn read_applicant(fixture: &client_http::ClientFixture, path: &str) -> Value {
+    let (status, _, value) = request(fixture, "GET", path, None, None, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{path}: {value}");
+    value
+}
+
+/// The applicant as bearer admission reports a person: the same principal as
+/// `claims()`, verified as human, so it may answer and read its asks.
+fn applicant() -> VerifiedRequestClaims {
+    caller_claims("author-canary", registry_platform_oidc::ActorKind::Human)
+}
+
+async fn request_as(
+    fixture: &client_http::ClientFixture,
+    caller: VerifiedRequestClaims,
+    method: &str,
+    path: &str,
+    etag: Option<&str>,
+    key: Option<&str>,
+    body: Value,
+) -> (StatusCode, HeaderMap, Value) {
     use tower::ServiceExt;
     let mut req = axum::http::Request::builder()
         .method(method)
@@ -530,7 +555,7 @@ async fn request(
         req = req.header("idempotency-key", key);
     }
     let response = registry_breg::api::router(fixture.service())
-        .layer(axum::Extension(claims()))
+        .layer(axum::Extension(caller))
         .oneshot(
             req.body(if method == "GET" {
                 axum::body::Body::empty()
@@ -744,7 +769,7 @@ async fn cursor_expiry_resets_then_replays_without_duplicating_the_ask_or_revisi
     accept(&fixture, id, &binding).await;
     announce(&authority, &binding);
     worker(&fixture, &authority).await.unwrap();
-    let before = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+    let before = read_applicant(&fixture, &format!("/v1/proposals/{id}")).await;
     authority.state.asks.lock().unwrap().gone_once = true;
     worker(&fixture, &authority).await.unwrap();
     let cursor: Option<Uuid> = fixture
@@ -759,7 +784,7 @@ async fn cursor_expiry_resets_then_replays_without_duplicating_the_ask_or_revisi
         .get(0);
     assert!(cursor.is_none());
     worker(&fixture, &authority).await.unwrap();
-    let after = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+    let after = read_applicant(&fixture, &format!("/v1/proposals/{id}")).await;
     assert_eq!(after["revision"], before["revision"]);
     assert_eq!(after["asks"].as_array().unwrap().len(), 1);
     assert!(authority
@@ -1802,8 +1827,53 @@ async fn agent_answer_fixture(
     standing["permissions"] = json!({"proposals":standing["permissions"]["proposals"].clone()});
     let mut task = standing.clone();
     task["taskGrant"] = json!({"sourceIssuer":"https://casework.example"});
+    let mut task_answerer = task.clone();
+    task_answerer["permissions"]["proposals"][0]["operations"] = json!(["get", "answer"]);
     source["accessProfiles"]["agent-reader"] = standing;
     source["accessProfiles"]["task-reader"] = task;
+    source["accessProfiles"]["task-answerer"] = task_answerer;
+    // Get holders that may not answer, a service that holds `answer`, and a
+    // human reviewer who also holds Get.
+    let clerk = source["accessProfiles"]["clerk"].clone();
+    for (id, operations, inputs, kind) in [
+        (
+            "staff",
+            json!(["get", "list", "cancel"]),
+            json!(["target", "value"]),
+            None,
+        ),
+        (
+            "status",
+            json!(["get", "list", "get-review-status"]),
+            json!([]),
+            None,
+        ),
+        (
+            "service",
+            json!(["get", "list", "answer"]),
+            json!(["target", "value"]),
+            Some("service"),
+        ),
+    ] {
+        let mut profile = clerk.clone();
+        profile["default"] = json!(false);
+        if let Some(kind) = kind {
+            profile["actorKind"] = json!(kind);
+            profile["requesterClients"] = json!(["agent-client"]);
+        }
+        let grant = &mut profile["permissions"]["proposals"][0];
+        grant.as_object_mut().unwrap().remove("ownership");
+        grant["operations"] = operations;
+        grant["readableInputs"] = inputs;
+        grant["readableContextFields"] = json!([]);
+        grant["readableAttachments"] = json!([]);
+        grant["writableAttachments"] = json!([]);
+        source["accessProfiles"][id] = profile;
+    }
+    let mut review_staff = source["accessProfiles"]["reviewer"].clone();
+    review_staff["permissions"]["proposals"][0]["operations"] =
+        json!(["get-review-context", "get", "list"]);
+    source["accessProfiles"]["review-staff"] = review_staff;
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let bindings = authority.registry.clone();
@@ -2143,5 +2213,265 @@ async fn a_human_reviewer_under_a_stale_binding_is_refused_the_previous_rounds_c
         "old-version cited file was served"
     );
     assert!(!String::from_utf8_lossy(&bytes).contains("cited bytes"));
+    fixture.finish().await;
+}
+
+fn caller_claims(
+    principal: &str,
+    kind: registry_platform_oidc::ActorKind,
+) -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated_with_actor_kind(
+        "sub",
+        principal,
+        BTreeSet::from(["proposal:manage".into()]),
+        Some("registry-administration".into()),
+        BTreeMap::from([(
+            "jurisdiction".into(),
+            VerifiedClaimValue::direct_string("zone-a").unwrap(),
+        )]),
+        kind,
+    )
+    .unwrap()
+}
+
+/// Neither the question text nor an `asks` member reached this caller.
+fn assert_no_asks(value: &Value, who: &str) {
+    assert!(value.get("asks").is_none(), "{who} received asks: {value}");
+    assert!(
+        !value.to_string().contains("Synthetic question"),
+        "{who} received the question text"
+    );
+}
+
+#[tokio::test]
+async fn asks_reach_only_a_human_caller_who_may_answer_this_proposal() {
+    use registry_platform_oidc::ActorKind;
+    let authority = Authority::start(false, true).await;
+    let (fixture, idp, auth) = agent_answer_fixture(&authority).await;
+    let id = submitted(&fixture, "ask-holders").await;
+    let binding = retained_binding(&fixture, id).await;
+    accept(&fixture, id, &binding).await;
+    let (ask, _) = announce(&authority, &binding);
+    worker(&fixture, &authority).await.unwrap();
+    let owner = request(
+        &fixture,
+        "GET",
+        &format!("/v1/proposals/{id}"),
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(owner.2["asks"][0]["id"], ask.to_string(), "{}", owner.2);
+
+    let mut service_token = agent_token(&idp.issuer(), 5, None);
+    let fields = service_token.as_object_mut().unwrap();
+    fields.remove("act");
+    fields.insert("sub".into(), json!("service-caller"));
+    fields.insert("registry_actor_kind".into(), json!("service"));
+    fields.insert("scope".into(), json!("proposal:manage"));
+    let service = auth
+        .authenticate(&idp.mint_token(service_token))
+        .await
+        .unwrap();
+    for (profile, claims) in [
+        ("staff", caller_claims("staff-caller", ActorKind::Human)),
+        ("status", caller_claims("status-caller", ActorKind::Human)),
+        ("service", service.clone()),
+    ] {
+        let caller = || claims.clone();
+        let get = request_as(
+            &fixture,
+            caller(),
+            "GET",
+            &format!("/v1/proposals/{id}?accessProfile={profile}"),
+            None,
+            None,
+            Value::Null,
+        )
+        .await;
+        assert_eq!(get.0, StatusCode::OK, "{profile}: {}", get.2);
+        assert_no_asks(&get.2, profile);
+        let list = request_as(
+            &fixture,
+            caller(),
+            "GET",
+            &format!("/v1/proposals?accessProfile={profile}"),
+            None,
+            None,
+            Value::Null,
+        )
+        .await;
+        assert_eq!(list.0, StatusCode::OK, "{profile}: {}", list.2);
+        assert_eq!(list.2["items"].as_array().unwrap().len(), 1, "{profile}");
+        assert_no_asks(&list.2["items"][0], profile);
+    }
+    let (_, headers, _) = request_as(
+        &fixture,
+        service.clone(),
+        "GET",
+        &format!("/v1/proposals/{id}?accessProfile=service"),
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    let refused = request_as(
+        &fixture,
+        service,
+        "POST",
+        &format!("/v1/proposals/{id}/asks/{ask}/answer?accessProfile=service"),
+        Some(headers["etag"].to_str().unwrap()),
+        Some("service-answer"),
+        json!({"text":"service answer"}),
+    )
+    .await;
+    assert_ne!(
+        refused.0,
+        StatusCode::OK,
+        "a service answered: {}",
+        refused.2
+    );
+
+    let standing = fixture
+        .client_for(
+            auth.authenticate(&idp.mint_token(agent_token(&idp.issuer(), 3, None)))
+                .await
+                .unwrap(),
+        )
+        .await;
+    let (status, bytes) = agent_get(
+        &standing,
+        &format!("/v1/proposals/{id}?accessProfile=agent-reader"),
+    )
+    .await;
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("Synthetic question"),
+        "standing agent: {status}"
+    );
+    if status == StatusCode::OK {
+        assert_no_asks(&serde_json::from_slice(&bytes).unwrap(), "standing agent");
+    }
+    let mut token = agent_token(&idp.issuer(), 4, Some(id));
+    token["registry_grant_bounds"] = json!({"type":"breg","permissions":[
+        {"collection":format!("proposal:{id}"),"operations":["get","answer"]}]});
+    let task = fixture
+        .client_for(auth.authenticate(&idp.mint_token(token)).await.unwrap())
+        .await;
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/proposals/{id}?accessProfile=task-answerer",
+            task.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let etag = response.headers()["etag"].to_str().unwrap().to_owned();
+    assert_no_asks(&response.json().await.unwrap(), "task agent");
+    let answered = reqwest::Client::new()
+        .post(format!(
+            "{}/v1/proposals/{id}/asks/{ask}/answer?accessProfile=task-answerer",
+            task.base_url
+        ))
+        .header("content-type", "application/json")
+        .header("if-match", etag)
+        .header("idempotency-key", "task-agent-answer")
+        .body(r#"{"text":"agent answer"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        answered.status().as_u16(),
+        200,
+        "a task-granted agent answered"
+    );
+
+    let (_, headers, _) = request_as(
+        &fixture,
+        caller_claims("staff-caller", ActorKind::Human),
+        "GET",
+        &format!("/v1/proposals/{id}?accessProfile=staff"),
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    let cancelled = request_as(
+        &fixture,
+        caller_claims("staff-caller", ActorKind::Human),
+        "POST",
+        &format!("/v1/proposals/{id}/cancel?accessProfile=staff"),
+        Some(headers["etag"].to_str().unwrap()),
+        Some("staff-cancel"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(cancelled.0, StatusCode::OK, "{}", cancelled.2);
+    assert_no_asks(&cancelled.2, "staff command response");
+    let owner = request(
+        &fixture,
+        "GET",
+        &format!("/v1/proposals/{id}"),
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(owner.2["asks"][0]["id"], ask.to_string());
+    assert!(
+        owner.2["asks"][0].get("answer").is_none(),
+        "a refused caller's answer was kept"
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_human_reviewer_without_answer_reads_answers_only_through_the_review_context() {
+    let authority = Authority::start(false, true).await;
+    let (fixture, _idp, _auth) = agent_answer_fixture(&authority).await;
+    let id = submitted(&fixture, "reviewer-get").await;
+    let (ask, _, path) = cited_answer(&fixture, &authority, id).await;
+    let (status, _, bytes) = reviewer_get(
+        &fixture,
+        &format!("/v1/proposals/{id}/review-context?accessProfile=review-staff"),
+        "zone-a",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let context: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(context["context"]["asks"][0]["id"], ask.to_string());
+    assert_eq!(
+        context["context"]["asks"][0]["answer"]["text"],
+        "The requested statement"
+    );
+    let download = reviewer_get(
+        &fixture,
+        &format!("{path}&accessProfile=review-staff"),
+        "zone-a",
+    )
+    .await;
+    assert_eq!(download.0, StatusCode::OK);
+    assert_eq!(download.2, b"cited bytes");
+    let (status, _, bytes) = reviewer_get(
+        &fixture,
+        &format!("/v1/proposals/{id}?accessProfile=review-staff"),
+        "zone-a",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let document: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(document.get("asks").is_none(), "{document}");
+    assert!(!String::from_utf8_lossy(&bytes).contains("The requested statement"));
     fixture.finish().await;
 }

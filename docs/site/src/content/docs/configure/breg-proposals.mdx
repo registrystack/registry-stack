@@ -323,14 +323,15 @@ Under required Review it reads `awaiting-review` until an approved result exists
 Its `application-refused` reason means an executor refused the frozen effects; a review outcome never appears there.
 
 {/* Evidence: crates/registry-breg/src/mutation.rs ApplicationRefusal;
-    crates/registry-breg/tests/postgres_proposal.rs manual_apply_unique_conflict_and_stale_revision_offer_party_recovery, admitted_apply_write_boundary_conflict_offers_revise;
+    crates/registry-breg/tests/postgres_proposal.rs manual_apply_unique_conflict_and_stale_revision_offer_party_recovery, admitted_apply_outside_the_callers_write_boundary_persists_nothing;
     crates/registry-breg/tests/postgres_proposal_guard_failure.rs apply_names_a_failed_field_guard_and_keeps_stale_revisions_generic. */}
 
 A unique-constraint failure during manual Apply returns `409 mutation.conflict` without retaining any Record effects.
 Subsequent reads report `applicationStatus.state: blocked`, `reason: application-refused`, and `recovery: revise`.
 Apply is unavailable. Revise can correct the input, and Rebase can inspect the current target and prepare a fresh submission.
 A stale Record revision returns `412 precondition.failed` and records the same application block with `recovery: rebase`.
-A failed frozen field guard also needs Rebase. A frozen write that would leave the caller's row boundary needs Revise.
+A failed frozen field guard also needs Rebase. A frozen write that would leave the applying caller's row boundary answers `403 write.outside-boundary` and records nothing.
+The boundary belongs to that caller, so the Proposal stays as it was and a caller whose boundary covers the result can still Apply.
 Read the current Proposal before choosing the next authorised operation.
 
 Submit and Apply check the Action's field commit guards against the current target Record.
@@ -509,7 +510,8 @@ Each response that serves a public reason, a read, a command or a replay, record
 Revise and Rebase of a submitted Proposal are available only at `awaiting-party` or `in-review`, subject to their other authority and package checks.
 At `approved` or `processing`, both links are unavailable with `application-pending` and recovery `refresh`, and both commands answer 412.
 Apply the current submission or Cancel it. If an admitted Apply fails because the target revision changed or a frozen field guard failed, BReg records a blocked application with recovery `rebase`.
-A unique constraint or row boundary conflict records recovery `revise`, so the party can correct its inputs.
+A unique constraint conflict records recovery `revise`, so the party can correct its inputs.
+A result outside the applying caller's row boundary records nothing: that caller is refused and the Proposal stays approved for a caller whose boundary covers it.
 These blocks return the Proposal to `awaiting-party`, where Revise and Rebase can open a draft for a new submission.
 An expired approval also returns the turn to the party and allows a new draft.
 Deleted targets and targets outside the caller's current row boundary stay concealed. They do not create a recovery block or make the Proposal visible.
@@ -802,11 +804,14 @@ The Proposal's `asks` array shows the current submission's questions newest firs
 Each submission version retains at most 50 asks. BReg skips and counts further distinct announcements.
 An announcement that arrives before BReg records acceptance waits as value-free identifiers and time until BReg can match the review request.
 It expires within the submission recovery window without retaining question text.
-Get authority controls question and answer disclosure, including on list items and command responses.
+The `asks` member, on Get, list items and command responses, goes only to a caller who may answer on this Proposal: the selected profile holds Get and `answer` for it, and the caller passes the same human test as review answers below.
+Every other caller gets no `asks` member at all: another Get holder, a status profile, a standing or task-granted agent, a delegated actor and a service.
+Status and turn still show them that an ask is open.
 An open, unanswered ask changes the same derived status and turn to `awaiting-party` and `party`.
 After the local answer commits, they return to `in-review` and `official` when review remains pending.
 
 Grant `answer` in the applicant profile's Proposal operations.
+Only a verified human caller acting for no one else, under no task grant, on a profile written for humans or for any kind, may answer. Any other caller is refused, whatever its grant says.
 If the ask wants documents, also grant `add` with the additions slot in `writableAttachments`, as described above.
 Follow the ask's promoted `links.answer` with the current `If-Match` and a caller-chosen `Idempotency-Key`:
 
@@ -835,7 +840,8 @@ Answering discloses the answer and its cited files to reviewers of this review e
 BReg serves them live in the reserved `context.asks` sibling beside authored `context.fields`.
 Casework joins validated answers onto its own asks by ask ID and does not store their text or file descriptors.
 Only human reviewers receive answers. A reviewer uses their own review-context authority and token.
-Agents, standing or task-granted, delegated reads and services receive neither asks nor answers, even with a `get-review-context` grant, and cannot download cited files.
+Agents, standing or task-granted, delegated reads and services receive neither asks nor answers, even with a `get-review-context` grant, and get no ask-bound download.
+A file they can reach through an authored additions context field follows that field's grant as before.
 The batch review-context read used for inboxes carries no asks. Read a single Proposal's review context to see them.
 A cited file is not limited by the reviewer's readable context fields, because it is admitted in place of an authored additions field.
 A cited file's download remains bound to the current review request, submission version, frozen effect and context schema, and its bytes must pass verification.
@@ -859,7 +865,9 @@ The `asked` and `answered` hook transitions carry value-free lifecycle events.
 Question disclosure and ask-bound downloads are audited, and the answer audit records only cited file IDs.
 Answers and added files follow the Action's `retention` mode and are erased per submission version by operator erasure.
 
-{/* Evidence: crates/registry-breg/tests/support/proposal_review_asks.rs;
+{/* Evidence: crates/registry-breg/tests/support/proposal_review_asks.rs
+    asks_reach_only_a_human_caller_who_may_answer_this_proposal,
+    a_human_reviewer_without_answer_reads_answers_only_through_the_review_context;
     crates/registry-breg/src/review_store/asks.rs answer_time;
     crates/registry-breg/src/review_store/asks/delivery.rs;
     crates/registry-casework/src/review/source_answers.rs. */}
