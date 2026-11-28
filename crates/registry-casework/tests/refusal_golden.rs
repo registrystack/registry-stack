@@ -126,9 +126,15 @@ fn cases(idp: &MockIdp) -> Vec<Case> {
         claims("casework:staff", Some("human")),
         json!({"registry_grant_id": "grant"}),
     ));
+    // The first signature character carries six signature bits, so changing it
+    // always changes the signature. The last one also carries padding bits.
+    let start = staff.rfind('.').expect("a token has a signature") + 1;
+    let first = staff[start..]
+        .chars()
+        .next()
+        .expect("a signature is not empty");
     let mut bad_signature = staff.clone();
-    let last = bad_signature.pop().expect("a token is not empty");
-    bad_signature.push(if last == 'A' { 'B' } else { 'A' });
+    bad_signature.replace_range(start..=start, if first == 'A' { "B" } else { "A" });
 
     let list = "/v1/review-tasks";
     let as_staff = |token: &str| {

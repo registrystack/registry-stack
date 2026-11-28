@@ -32,8 +32,8 @@ Messaging needs no broker or cache, and connects to no database but its own.
 
 ## Install the binaries
 
-Each release publishes `messaging` and `messagingctl` for Linux amd64, Linux arm64, and macOS
-arm64, with an installer. Choose a tag, normally the
+From v0.44.0, each release publishes `messaging` and `messagingctl` for Linux amd64, Linux arm64,
+and macOS arm64, with an installer. Choose a tag, normally the
 [latest release](https://github.com/registrystack/registry-stack/releases/latest), and
 authenticate the assets with
 [Verify a release](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
@@ -41,14 +41,16 @@ Linux assets are executables named `<binary>-<tag>-linux-<arch>`. macOS assets a
 bundles that carry the executable, its AWS-LC-FIPS libraries, and notices.
 Install the pair from one tag with the release-pinned installer:
 
-```sh
-bash messaging-<tag>-install.sh
-messaging --version
-messagingctl --version
+```sh test-skip="installs release assets; the runner serves the binaries under test"
+tag="vX.Y.Z"
+bash "messaging-${tag:?set tag to the release tag}-install.sh"
+"${MESSAGING_INSTALL_DIR:-$HOME/.local/bin}/messaging" --version
+"${MESSAGING_INSTALL_DIR:-$HOME/.local/bin}/messagingctl" --version
 ```
 
 The installer puts both binaries in `~/.local/bin`. Set `MESSAGING_INSTALL_DIR` to change that.
-Neither path needs a Rust toolchain.
+The version checks run the binaries by that path, so they work before the directory is on your
+`PATH`. Neither path needs a Rust toolchain.
 
 {/* Evidence: release/scripts/release_roster.py ADDITIONAL_PLATFORM_BUILDS and ADDITIONAL_INSTALLERS;
     crates/registry-messaging/install.sh MESSAGING_INSTALL_DIR. */}

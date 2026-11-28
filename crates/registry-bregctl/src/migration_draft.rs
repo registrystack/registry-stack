@@ -230,7 +230,8 @@ fn checked_identifiers(request: &DraftRequest<'_>) -> Result<(String, String), F
 /// The changes the descriptor covers, or the reason they cannot be drafted.
 /// A draft has no steps, no assertions, and no backup binding, so it can only
 /// review access and disclosure changes that alter no table, column, or
-/// index.
+/// index. Compatible-additive changes may sit beside them: BReg applies those
+/// through its own additive plan, so a reviewed migration never covers them.
 fn plan_covers(
     changes: &[CompiledRegistryChange],
 ) -> Result<Vec<ReviewedChangeCover>, CoverRefusal> {
@@ -289,7 +290,7 @@ fn cover_failure(refusal: &CoverRefusal) -> FailureReport {
             "migration.draft.sql-required",
             "candidate",
             &format!(
-                "this change needs a migration written by hand, with authored SQL, a backup binding, or a descriptor of its own class: {change}. A draft only covers access and disclosure changes that alter no table, column, or index"
+                "this change needs a migration written by hand, with authored SQL, a backup binding, or a descriptor of its own class: {change}. A draft only covers access and disclosure changes that alter no table, column, or index, beside any compatible-additive changes"
             ),
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::ReviewCompiledDiff,
@@ -526,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn covers_are_the_sorted_changes_that_are_not_compatible_additive() {
+    fn covers_are_the_sorted_access_changes_and_skip_compatible_additive_ones() {
         let additive = change(
             CompiledRegistryChangeClass::CompatibleAdditive,
             CompiledRegistryChangeCode::FieldAddedOptional,

@@ -118,6 +118,8 @@ row, so a concurrent update is never overwritten.
 ```yaml
 approve-application:
   execution: {mode: immediate, concurrency: current-revision}
+  inputs:
+    - {id: application, apiName: applicationId, type: reference, target: application, required: true, classification: internal}
   commitGuards:
     targets:
       - {input: application, field: status, equals: submitted, reason: not-submitted}
@@ -125,7 +127,7 @@ approve-application:
     type: fixed
     effects:
       - id: approve
-        target: {recordType: application, input: application}
+        target: {fromInput: application}
         operation: patch
         set:
           status: {value: approved}

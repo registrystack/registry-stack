@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       arm64_images:
-        description: Also build native Linux arm64 image layouts, retained for inspection and not published
+        description: Also build native Linux arm64 image layouts, retained for inspection and not published. Builds only when no nightly has published this commit yet, and only from the canonical repository's protected main.
         type: boolean
         required: false
         default: false

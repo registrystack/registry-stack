@@ -920,9 +920,13 @@ impl schemars::JsonSchema for RowBoundarySetSource {
     }
 }
 
-/// Replaces every `rowBoundaries: {rowBoundarySet: <id>}` with the boundaries
-/// the file's set lists, and reports whether it replaced any. A reference to a
-/// set the file does not declare, or one that carries another member, is
+/// Replaces every `rowBoundaries: {rowBoundarySet: <id>}` written where a row
+/// reach is authored with the boundaries the file's set lists, and reports
+/// whether it replaced any. Those places are a profile's record permissions,
+/// its Action and Proposal targets, a Record type's access requirements, and
+/// a module profile. A mapping of that shape anywhere else, such as inside a
+/// structured field schema, is ordinary data and stays as written. A reference
+/// to a set the file does not declare, or one that carries another member, is
 /// refused: an empty list means every row, so no reference may fall through
 /// to one. Sets are read before this runs, so each holds at least one
 /// boundary.
@@ -932,78 +936,125 @@ fn resolve_row_boundary_sets(value: &mut Value) -> Result<bool, (String, &'stati
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let Some(root) = value.as_object_mut() else {
-        return Ok(false);
-    };
     let mut replaced = false;
-    for (key, member) in root.iter_mut() {
-        if key == "rowBoundarySets" {
-            continue;
+    for (pointer, profile) in entries_mut(value, "accessProfiles", "") {
+        replaced |= resolve_in_project_profile(profile, &pointer, &sets)?;
+    }
+    for collection in ["recordTypes", "extendRecordTypes"] {
+        for (pointer, record_type) in entries_mut(value, collection, "") {
+            replaced |= resolve_at(record_type, "accessRequirements", &pointer, &sets)?;
+            for (pointer, profile) in entries_mut(record_type, "accessProfiles", &pointer) {
+                replaced |= resolve_at(profile, "rowBoundaries", &pointer, &sets)?;
+            }
         }
-        let pointer = format!("/{}", key.replace('~', "~0").replace('/', "~1"));
-        replaced |= resolve_row_boundary_set_references(member, &pointer, &sets)?;
     }
     Ok(replaced)
 }
 
-fn resolve_row_boundary_set_references(
-    node: &mut Value,
+/// The members of `parent[member]`, a mapping keyed by id or a list, with the
+/// JSON pointer of each.
+fn entries_mut<'a>(
+    parent: &'a mut Value,
+    member: &str,
+    parent_pointer: &str,
+) -> Vec<(String, &'a mut Value)> {
+    let base = format!("{parent_pointer}/{member}");
+    match parent.get_mut(member) {
+        Some(Value::Object(items)) => items
+            .iter_mut()
+            .map(|(key, item)| {
+                (
+                    format!("{base}/{}", key.replace('~', "~0").replace('/', "~1")),
+                    item,
+                )
+            })
+            .collect(),
+        Some(Value::Array(items)) => items
+            .iter_mut()
+            .enumerate()
+            .map(|(index, item)| (format!("{base}/{index}"), item))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn resolve_in_project_profile(
+    profile: &mut Value,
     pointer: &str,
     sets: &serde_json::Map<String, Value>,
 ) -> Result<bool, (String, &'static str)> {
+    let Some(permissions) = profile.get_mut("permissions") else {
+        return Ok(false);
+    };
+    let permissions_pointer = format!("{pointer}/permissions");
     let mut replaced = false;
-    match node {
-        Value::Object(members) => {
-            for (key, child) in members.iter_mut() {
-                let child_pointer =
-                    format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
-                let is_reference = key == "rowBoundaries"
-                    && child
-                        .as_object()
-                        .is_some_and(|object| object.contains_key("rowBoundarySet"));
-                if !is_reference {
-                    replaced |= resolve_row_boundary_set_references(child, &child_pointer, sets)?;
-                    continue;
-                }
-                let site = format!("{child_pointer}/rowBoundarySet");
-                let Some(object) = child.as_object().filter(|object| object.len() == 1) else {
-                    return Err((
-                        site,
-                        "a row boundary set reference is a mapping with only a rowBoundarySet member",
-                    ));
-                };
-                let Some(name) = object.get("rowBoundarySet").and_then(Value::as_str) else {
-                    return Err((
-                        site,
-                        "rowBoundarySet must be a local row boundary set identifier",
-                    ));
-                };
-                let Some(boundaries) = sets
-                    .get(name)
-                    .and_then(Value::as_array)
-                    .filter(|boundaries| !boundaries.is_empty())
-                else {
-                    return Err((
-                        site,
-                        "rowBoundarySet must name a row boundary set declared in this file",
-                    ));
-                };
-                *child = Value::Array(boundaries.clone());
-                replaced = true;
+    for (pointer, permission) in entries_mut(permissions, "records", &permissions_pointer) {
+        replaced |= resolve_at(permission, "rowBoundaries", &pointer, sets)?;
+    }
+    for kind in ["actions", "proposals"] {
+        for (pointer, permission) in entries_mut(permissions, kind, &permissions_pointer) {
+            for (pointer, target) in entries_mut(permission, "targets", &pointer) {
+                replaced |= resolve_at(target, "rowBoundaries", &pointer, sets)?;
             }
         }
-        Value::Array(items) => {
-            for (index, child) in items.iter_mut().enumerate() {
-                replaced |= resolve_row_boundary_set_references(
-                    child,
-                    &format!("{pointer}/{index}"),
-                    sets,
-                )?;
-            }
-        }
-        _ => {}
     }
     Ok(replaced)
+}
+
+/// Resolves a reference at `owner[member]`, where `member` is `rowBoundaries`,
+/// or inside `owner[accessRequirements]`.
+fn resolve_at(
+    owner: &mut Value,
+    member: &str,
+    pointer: &str,
+    sets: &serde_json::Map<String, Value>,
+) -> Result<bool, (String, &'static str)> {
+    let (owner, member, pointer) = if member == "accessRequirements" {
+        match owner.get_mut(member) {
+            Some(requirements) => (
+                requirements,
+                "rowBoundaries",
+                format!("{pointer}/accessRequirements"),
+            ),
+            None => return Ok(false),
+        }
+    } else {
+        (owner, member, pointer.to_owned())
+    };
+    let Some(child) = owner.get_mut(member) else {
+        return Ok(false);
+    };
+    let is_reference = child
+        .as_object()
+        .is_some_and(|object| object.contains_key("rowBoundarySet"));
+    if !is_reference {
+        return Ok(false);
+    }
+    let site = format!("{pointer}/{member}/rowBoundarySet");
+    let Some(object) = child.as_object().filter(|object| object.len() == 1) else {
+        return Err((
+            site,
+            "a row boundary set reference is a mapping with only a rowBoundarySet member",
+        ));
+    };
+    let Some(name) = object.get("rowBoundarySet").and_then(Value::as_str) else {
+        return Err((
+            site,
+            "rowBoundarySet must be a local row boundary set identifier",
+        ));
+    };
+    let Some(boundaries) = sets
+        .get(name)
+        .and_then(Value::as_array)
+        .filter(|boundaries| !boundaries.is_empty())
+    else {
+        return Err((
+            site,
+            "rowBoundarySet must name a row boundary set declared in this file",
+        ));
+    };
+    *child = Value::Array(boundaries.clone());
+    Ok(true)
 }
 
 fn resolve_local_value_types(value: &mut Value) -> Result<(), (String, &'static str)> {

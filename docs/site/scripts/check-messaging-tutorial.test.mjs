@@ -118,7 +118,8 @@ test('the Author page replays in the tutorial project, after the tutorial', asyn
 
 // The local first run is fully executable with the supplied source binaries.
 // Hosted operation remains outside this gate, and every omitted fence is
-// named so that the report does not overstate its coverage.
+// named so that the report does not overstate its coverage. The installer
+// fence carries its own test-skip reason on the page, so it is not counted.
 test('the gate executes the local journey and names the hosted fences it omits', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
@@ -133,7 +134,6 @@ test('the gate executes the local journey and names the hosted fences it omits',
   assert.deepEqual(
     [...new Set(hostedUnexecuted)],
     [
-      'Install the binaries',
       'Check the runtime file',
       'Provision PostgreSQL',
       'Record and serve the package',
