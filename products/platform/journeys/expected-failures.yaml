@@ -55,7 +55,7 @@ expectedFailures:
     product: breg
     step: database.provision
     code: journey.needs.certificate
-    removedBy: rstack-dev-products
+    removedBy: posture
     basis: observed
     observedOn: "PR #2798, journey run 20261128120405-7e2e"
     reason: "prepare and issuer pass (bregctl check accepts the loopback Keycloak issuer with RS256 and JWT access tokens). bregctl provision (added in PR #2798 and updated to allow provisioning before package.root exists) requires verified TLS for the administrator connection (platform.provision.admin-connect-failed), which cannot connect to the reader's plain PostgreSQL server without a certificate."
