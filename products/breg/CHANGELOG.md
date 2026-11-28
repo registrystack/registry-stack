@@ -1,6 +1,7 @@
 # Base Registry Engine changelog
 
 ## Unreleased
+- `bregctl provision` no longer requires `package.root` to exist on disk, so operators can provision the database before building the package.
 - BReg examples recover exact pending requests after a kept development run restarts on a new loopback port.
 - Run-backed `bregctl examples` and `bregctl prepare-source` refuse an explicit production posture before reading run state.
 - `breg-review` refuses repeated `--posture` flags, including flags on both sides of `serve`.
