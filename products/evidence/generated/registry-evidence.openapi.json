@@ -4703,7 +4703,7 @@
                 }
               },
               "Access-Control-Allow-Origin": {
-                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "description": "Any origin may read the response. The route never permits credentials.",
                 "schema": {
                   "enum": [
                     "*"
@@ -4766,7 +4766,7 @@
             "description": "The presented document number and check code match exactly one record",
             "headers": {
               "Access-Control-Allow-Origin": {
-                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "description": "Any origin may read the response. The route never permits credentials.",
                 "schema": {
                   "enum": [
                     "*"
@@ -4888,7 +4888,7 @@
             "description": "Wrong content type, malformed or oversized body, malformed check code, or a document number outside the activated selector profile",
             "headers": {
               "Access-Control-Allow-Origin": {
-                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "description": "Any origin may read the response. The route never permits credentials.",
                 "schema": {
                   "enum": [
                     "*"
@@ -4964,7 +4964,7 @@
             "description": "No record matches the presented pair. Every miss is one identical response. Without an activated public check the path is not served and answers as an unknown route instead.",
             "headers": {
               "Access-Control-Allow-Origin": {
-                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "description": "Any origin may read the response. The route never permits credentials.",
                 "schema": {
                   "enum": [
                     "*"
@@ -5086,7 +5086,7 @@
             "description": "Admission, Source, evaluation, serialization, or audit failure; nothing is released",
             "headers": {
               "Access-Control-Allow-Origin": {
-                "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+                "description": "Any origin may read the response. The route never permits credentials.",
                 "schema": {
                   "enum": [
                     "*"

@@ -60,12 +60,7 @@ call, including page methods, Actions and byte transfers, accepts an
 `AbortSignal` in `signal`. For a JSON or text call, the 10-second default
 deadline covers the exchange including token acquisition and reading the
 response. The default response cap is 8 MiB and can be set with
-`maxResponseBytes` on the client or on one call. Cross-origin deployments must expose
-`Retry-After`, `ETag`, `Location`, and Messaging's `traceparent` through
-`Access-Control-Expose-Headers` when the browser needs to read them. The client
-sends `Registry-Client: page` on every call, so a browser sends a CORS preflight
-for each cross-origin call. The registry must list that header in
-`Access-Control-Allow-Headers`.
+`maxResponseBytes` on the client or on one call.
 
 ## Byte transfers
 
@@ -94,11 +89,15 @@ A page whose session part signs its calls leaves `token` out:
 const client = createRegistryClient({ baseUrl: '/registry' })
 ```
 
+Page mode works only on the page's own origin. The page calls its own origin's
+session part, which forwards the call to the registry with the bearer token. No
+registry answers a cross-origin page call, and the browser refuses one.
+
 - The client sends no `Authorization` header.
 - Fetch sends cookies with `credentials: 'same-origin'`, so they go to the
   page's own origin only. With a token provider, it sends `'omit'`.
 - The client sends `Registry-Client: page` on every call, in both modes. The
-  session part requires it on every route. The exported `pageRequestHeader`
+  session part requires it on every route. The exported `registryClientHeader`
   constant holds the name and value, and a header of that name in a call's
   options is replaced.
 - In page mode any 401 has `reason: 'sign-in-expired'` and

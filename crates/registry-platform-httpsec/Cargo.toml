@@ -18,7 +18,6 @@ server = [
     "dep:tower",
     "dep:tower-http",
     "dep:ulid",
-    "dep:url",
 ]
 
 # Implements authcommon's `RefusalTraceId` for `TraceId`, so a service passes
@@ -43,7 +42,6 @@ tokio = { workspace = true, optional = true }
 tower = { workspace = true, optional = true }
 tower-http = { workspace = true, optional = true }
 ulid = { workspace = true, optional = true }
-url = { workspace = true, optional = true }
 
 [dev-dependencies]
 registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }

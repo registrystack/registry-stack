@@ -350,3 +350,40 @@ fn an_unknown_member_inside_an_alternative_is_refused() {
         .expect_err("unknown members are refused");
     assert_eq!(failure.diagnostics()[0].code, "config.unknown-key");
 }
+
+fn list_query_profiles(registry: &CompiledRegistry) -> Value {
+    let openapi = registry
+        .artifacts()
+        .get("generated/openapi.json")
+        .expect("OpenAPI is generated");
+    let document: Value = serde_json::from_slice(&openapi.bytes).expect("OpenAPI is JSON");
+    document["paths"]["/v1/records/people"]["get"]["x-registry-queryProfiles"]["registrar"].clone()
+}
+
+#[test]
+fn the_query_profile_publishes_required_filters_as_api_property_alternatives() {
+    let mut value = source(
+        json!([{"fields":["national-id"]},{"fields":["family-name","birth-date"]}]),
+        json!(["get", "list"]),
+    );
+    value["recordTypes"]["person"]
+        .as_object_mut()
+        .unwrap()
+        .remove("temporal");
+    let profile = list_query_profiles(&compile(&value).expect("valid alternatives compile"));
+    assert_eq!(
+        profile["requiredFilters"],
+        json!([["nationalId"], ["birthDate", "familyName"]])
+    );
+}
+
+#[test]
+fn the_query_profile_publishes_an_empty_list_without_required_filters() {
+    let mut value = source(json!([]), json!(["get", "list"]));
+    value["accessProfiles"]["registrar"]["permissions"]["records"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredFilters");
+    let profile = list_query_profiles(&compile(&value).expect("grant compiles"));
+    assert_eq!(profile["requiredFilters"], json!([]));
+}

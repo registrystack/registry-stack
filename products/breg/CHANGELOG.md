@@ -383,6 +383,10 @@
   a non-empty string naming the derived relation the registry uses to work the
   field out when the record is read. `bregctl explain model` already emitted
   it. Stored fields still omit it.
+- Each OpenAPI query profile (`x-registry-queryProfile` and
+  `x-registry-queryProfiles`) now carries `requiredFilters`: the alternatives
+  a list by that profile must satisfy, each a list of API property names. It is
+  an empty list when the grant requires none.
 
 ## 0.48.0 - 2026-11-23
 

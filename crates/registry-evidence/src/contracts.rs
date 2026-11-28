@@ -1169,7 +1169,7 @@ fn public_check_response_headers() -> Value {
     let mut headers = response_headers(Some((
         "Access-Control-Allow-Origin",
         json!({
-            "description": "Any origin may read the response. Access-Control-Allow-Credentials is never sent.",
+            "description": "Any origin may read the response. The route never permits credentials.",
             "schema": {"type": "string", "enum": ["*"]}
         }),
     )));

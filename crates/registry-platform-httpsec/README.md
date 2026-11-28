@@ -4,7 +4,6 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
 
 ## What It Provides
 
-- `CorsPolicy` with explicit origin validation.
 - Restrictive CSP header generation through `CspBuilder`, including a
   `deny_by_default` policy (`default-src 'none'`) and an optional
   `form-action` directive for server-rendered forms.
@@ -52,33 +51,21 @@ Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
 ## Typical Use
 
 ```rust
-use axum::{http::Method, Router};
+use axum::Router;
 use registry_platform_httpsec::{
-    corp_conditional, request_body_limit, security_headers, CorsPolicy, CspBuilder,
+    corp_conditional, request_body_limit, security_headers, CspBuilder,
 };
 use registry_platform_posture::Posture;
-
-let cors = CorsPolicy {
-    allowed_origins: vec!["https://app.example.test".to_string()],
-    allowed_methods: vec![Method::GET, Method::POST, Method::OPTIONS],
-    allowed_headers: Vec::new(),
-    allow_credentials: false,
-};
 
 let app = Router::new()
     .layer(corp_conditional())
     .layer(security_headers(CspBuilder::restrictive(), Posture::Production))
-    .layer(cors.layer())
     .layer(request_body_limit(1024 * 1024));
 let _ = app;
 ```
 
 ## Behavior
 
-- Wildcard CORS origins are rejected.
-- Credentialed CORS requires explicit allowed headers.
-- HTTPS origins are accepted. HTTP origins are accepted only for loopback
-  development origins.
 - Existing security headers are preserved when `security_headers` is applied.
   The development posture mark is the exception: it overwrites.
 - Invalid, duplicate, or absent inbound `traceparent` values receive a fresh
@@ -87,7 +74,10 @@ let _ = app;
 
 ## Security Notes
 
-- Keep CORS allowlists environment-specific and as narrow as possible.
+- The crate builds no CORS layer. Only the Evidence public check route answers
+  cross-origin requests, from its own layer.
+  `corp_conditional` marks a response `cross-origin` only when another layer
+  has already set `Access-Control-Allow-Origin` on it.
 - `CspBuilder::restrictive` is the safe baseline. Extend it in application code
   only for concrete frontend needs.
 - `CspBuilder::deny_by_default` loads nothing; add only the directives a page

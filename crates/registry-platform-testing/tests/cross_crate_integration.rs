@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{to_bytes, Body};
-use axum::http::{header, HeaderValue, Method, Request, StatusCode};
+use axum::http::{HeaderValue, Method, Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
@@ -11,7 +11,7 @@ use registry_platform_audit::{
 };
 use registry_platform_httpsec::{
     body_limit_problem_response, corp_conditional, request_body_limit,
-    security_headers_without_posture, CorsPolicy, CspBuilder, Problem,
+    security_headers_without_posture, CspBuilder, Problem,
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
@@ -37,16 +37,6 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
         .fallback(|| async {
             Problem::new("about:blank", "Not Found", StatusCode::NOT_FOUND).into_response()
         })
-        .layer(
-            CorsPolicy {
-                allowed_origins: vec!["https://app.example.test".to_string()],
-                allowed_methods: vec![Method::GET, Method::POST, Method::OPTIONS],
-                allowed_headers: Vec::new(),
-                allow_credentials: false,
-            }
-            .try_layer()
-            .expect("valid CORS policy"),
-        )
         .layer(corp_conditional())
         .layer(request_body_limit(4));
 
@@ -56,7 +46,6 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
             Request::builder()
                 .method(Method::GET)
                 .uri("/ok")
-                .header(header::ORIGIN, "https://app.example.test")
                 .body(Body::empty())
                 .expect("request builds"),
         )
@@ -65,7 +54,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers().get("cross-origin-resource-policy"),
-        Some(&HeaderValue::from_static("cross-origin"))
+        Some(&HeaderValue::from_static("same-origin"))
     );
 
     let security_service = security_headers_without_posture(CspBuilder::restrictive()).layer(

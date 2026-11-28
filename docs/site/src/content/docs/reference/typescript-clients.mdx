@@ -173,6 +173,10 @@ import { createRegistryClient } from './generated/breg-minimal.ts'
 const client = createRegistryClient({ baseUrl: '/registry' })
 ```
 
+Page mode works only on the page's own origin.
+The page calls its own origin's session part, which forwards the call to the registry with the bearer token.
+No registry answers a cross-origin page call, and the browser refuses one.
+
 In page mode:
 
 - The client sends no `Authorization` header.
@@ -186,8 +190,7 @@ In both modes:
 
 - The client sends one fixed header, `Registry-Client: page`, on every call.
   The session part requires it on every route.
-  The exported constant `pageRequestHeader` holds its name and value, and a header of that name in a call's options is replaced.
-  A browser sends a CORS preflight for each cross-origin call, so a registry on another origin must list the header in `Access-Control-Allow-Headers`.
+  The exported constant `registryClientHeader` holds its name and value, and a header of that name in a call's options is replaced.
 - A `412` has the reason `stale`.
   Reload the item and try again.
   BReg also answers a refused guard with `412`, so that is `stale` too, and `describeError` still shows the guard's label.
@@ -195,8 +198,8 @@ In both modes:
 Both reasons sit on the existing error kinds, so code that already handles a refusal keeps working.
 Operations authenticated by a signature never send cookies.
 
-{/* Evidence: clients/typescript/core.ts pageRequestHeader, ClientOptions, Transport;
-    clients/typescript/tests/page.test.ts. */}
+{/* Evidence: clients/typescript/core.ts registryClientHeader, ClientOptions, Transport;
+    clients/typescript/tests/page.test.ts; products/platform/scripts/check-no-cross-origin.sh. */}
 
 ## Errors
 
