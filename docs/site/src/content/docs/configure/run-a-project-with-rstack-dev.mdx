@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 persona:
   - operator
@@ -16,7 +16,7 @@ standards_referenced: []
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 
 If you are writing a registry project, `rstack dev` runs it on your machine. It starts the products
-the project lists, runs short scenarios against them, and removes everything when you stop. One
+the project lists, runs short scenarios against them, and keeps managed PostgreSQL data between runs. One
 product is enough: you do not need the others to try yours. This page starts with one product on its
 own, then runs several together, and ends with the reference for the plan, applications, issuer
 binding, isolation and recovery.
@@ -175,8 +175,8 @@ Use the BReg URL from your own report. The response lists the contact the scenar
 rstack dev stop "$RUN"
 ```
 
-Success is `Run RUN_ID stopped`. Stop, and TTL expiry, terminate the services and remove the run's
-databases, roles, keys, files and containers.
+Success is `Run RUN_ID stopped`. Stop and TTL expiry remove run-scoped resources.
+Add `--clean` to stop and delete the managed volume and project state.
 
 ### Other products on their own
 
@@ -334,8 +334,8 @@ To adapt a plan to your own project, change these parts and leave the structure 
 
 <ConfigurationFormatChecks product="rstack" />
 
-A BReg project with encrypted fields runs without extra setup: each run gets its own development
-data key, removed when the run ends, so encrypted data does not outlive its run. A step in the
+A BReg project with encrypted fields runs without extra setup. The runner keeps the development
+data key for managed PostgreSQL and generates a new one for each run using an attached server. A step in the
 project's `tests/journeys.yaml` that touches an encrypted Record type fails the pre-activation
 test, because that test has no key. Exercise those Record types in an authored Stack scenario
 file instead.
@@ -389,7 +389,7 @@ rstack dev stop RUN_ID --recover
 
 If the supervisor is still running, use plain `stop`. For a lost supervisor, its process guards
 stop the products and any product tools still running. Recovery waits for the guards, drops the
-databases and roles, removes the run's containers, and removes the run directory, including its
+run-scoped databases and roles, removes the run's containers, and removes the run directory, including its
 development key file. When you supplied the server by address, use the original PostgreSQL cluster
 and maintenance database for `--recover`. If a cleanup step fails, the report explains what to
 inspect before retrying. [Recover a run](#recover-a-run) lists the manual steps and the recovery
@@ -414,7 +414,7 @@ Adapter unless you supply a database address. Evidence, Render and Discovery nee
   `stop`, TTL expiry, a failed start and `stop --recover` remove it, and any Mailpit container of the run, by that label.
 - The administrator is a superuser with a generated password.
   Anyone who can run `docker inspect` on the container can read that password.
-  Docker access already grants root on the host, so the throwaway server adds no new exposure.
+  Docker access already grants root on the host.
   The least-privilege administrator described below protects a shared or hosted server.
 - If Docker is missing or its daemon does not answer, `start` fails with an operational error that names both ways out: install Docker, or supply a server by address.
 - Recovering a managed run needs Docker, not an administrator URL.
@@ -732,7 +732,7 @@ The child receives only the declared configuration-file environment variable and
 The ready report adds `issuer` and `application` URLs.
 `status` repeats them, and `stop`, expiry, or a crashed child stops the issuer and app alongside the products.
 Configuration commands and built hosts are trusted local code supplied by the operator; the runner does not fetch or build them.
-A later `start` creates a fresh disposable run and databases; it does not restore unfinished application work.
+A later `start` creates a fresh application run. Product data on managed PostgreSQL remains available.
 
 {/* Evidence: crates/registry-rstack-dev/src/plan.rs prepareVersion;
     crates/registry-rstack-dev/src/lib.rs application-root;
@@ -857,12 +857,15 @@ The Casework and Messaging listeners and Mailpit SMTP connection use `loopback-p
 
 The run builds an ordinary package, and its generated runtime files and database contain development settings that production refuses.
 
-Each run listens on loopback, creates separate databases and migration and runtime logins, and pins its own public signing key in the runtime files.
+Each run listens on loopback and pins its own public signing key in the runtime files. Managed PostgreSQL databases and logins belong to the project.
 The local issuer signs under the project's issuer name with a key unique to the run.
 Use synthetic test people and keep the issuer's private directory under your user account.
 
-Stop and TTL expiry terminate the services and remove the databases, roles, keys, containers, and run files.
-A spatial BReg run also creates a `NOLOGIN` role whose name starts with `breg_bbox_`; cleanup removes it with the others.
+Stop and TTL expiry terminate the services and remove the containers and run files.
+Managed runs keep the PostgreSQL volume, project keys and audit journals. The next start skips unchanged scenarios that previously passed.
+Use `rstack dev stop RUN_ID --clean` to delete the managed volume and project state after stopping, or `rstack dev start PROJECT --clean` to delete them before starting.
+Both commands permanently delete the project's local development data.
+When you supply a PostgreSQL server, stop and TTL expiry also drop the run's databases and roles, including the `breg_bbox_` role of a spatial BReg run.
 
 {/* Evidence: crates/registry-rstack-dev/src/database.rs breg_bbox_. */}
 {/* TODO[evidence]: the NOLOGIN attribute of the breg_bbox_ role was not individually anchored. */}
@@ -870,11 +873,11 @@ A spatial BReg run also creates a `NOLOGIN` role whose name starts with `breg_bb
 ### Encrypted fields
 
 A BReg project with encrypted fields runs without extra setup.
-`start` draws a development data key for the run from the operating system's random source and writes it as `field-key` in the run directory, readable only by your user.
+`start` draws a development data key from the operating system's random source when it needs one and writes a copy as `field-key` in the run directory, readable only by your user.
 BReg reads it through its `local-file` key custody, which it accepts only in the development posture.
 The key is never printed, never written to the checkout, and is removed with the run directory on stop, TTL expiry, and a failed start.
 When a run needs recovery, the report names the key file under `recovery.field_encryption_key` until `stop --recover` removes it.
-Every run gets a new key, so encrypted data does not outlive its run.
+Managed runs keep the key with the project state so the next run can read existing encrypted data. Runs using a supplied PostgreSQL server draw a new key each time.
 
 The schema test that `start` runs before activation has no field-encryption key.
 A step in `tests/journeys.yaml` that touches a Record type with an encrypted field fails it, and `start` reports `breg test failed (test.step.failed)`.
@@ -888,8 +891,9 @@ A deployment supplies its key as [Encrypt a field](../breg-field-encryption/) de
 
 ### State directory
 
-The state directory holds one directory per run.
-It defaults to `rstack-dev-UID` in the system temporary directory.
+The owner-only state directory holds run directories and managed project state.
+It defaults to `$XDG_STATE_HOME/registry-stack/rstack-dev` when `XDG_STATE_HOME` is absolute,
+`~/.local/state/registry-stack/rstack-dev` on Linux, or `~/Library/Application Support/registry-stack/rstack-dev` on macOS.
 Set `RSTACK_DEV_STATE_DIR` to use another location.
 A run directory is renamed to `.<run_id>.removing` before it is deleted, and `status` and `stop` ignore that name.
 If the deletion is interrupted, delete that directory yourself; the run's field-encryption key is deleted before the rename, so it holds no key material.

@@ -28674,7 +28674,7 @@
                 },
                 {
                   "display": "--clean",
-                  "description": "Clear this project's managed development data before starting",
+                  "description": "Remove this project's managed PostgreSQL volume and state before starting",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -28844,6 +28844,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--clean",
+                  "description": "Remove the project's managed PostgreSQL volume and state after stopping",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--database-url <URL>",
                   "description": "TLS PostgreSQL administrator URL for --recover. Defaults to RSTACK_DEV_DATABASE_URL; a run that started its own server needs none",
                   "always_required": false,
@@ -28881,6 +28890,14 @@
                   "kind": "requires-all",
                   "when": "--database-url <URL>",
                   "arguments": [
+                    "--recover"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--clean",
                     "--recover"
                   ]
                 }

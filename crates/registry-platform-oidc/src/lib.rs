@@ -15,6 +15,8 @@ mod static_jwks;
 pub use static_jwks::{public_jwks_document, StaticJwksError};
 pub mod task_grant;
 
+pub use registry_platform_httputil::PeerPolicy;
+
 pub use access_token_algorithm::AccessTokenAlgorithm;
 pub use authorization_claims::{
     actor_kind, grant_claims, refuses_development_assertion, ActorKind, BregPermission, ClaimError,

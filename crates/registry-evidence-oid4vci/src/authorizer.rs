@@ -19,11 +19,11 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use registry_platform_authcommon::{DeclaredScope, FailedCheck};
-use registry_platform_config::{Posture, DEVELOPMENT};
+use registry_platform_config::Posture;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    grant_claims, ClaimNames, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError,
-    TokenVerifier, TokenVerifierConfig,
+    grant_claims, refuses_development_assertion, ClaimNames, IssuerNetworkPolicy, JwksFetcher,
+    JwksFetcherConfig, OidcError, PeerPolicy, TokenVerifier, TokenVerifierConfig,
 };
 
 use crate::config::OfferAuthorizationConfig;
@@ -219,12 +219,7 @@ impl OfferAuthorizer for MintResourceServer {
         match self.verifier.verify(credential).await {
             Ok(verified) => {
                 if self.posture == Posture::Production
-                    && verified
-                        .claims
-                        .extra
-                        .get(registry_platform_oidc::POSTURE_CLAIM)
-                        .and_then(serde_json::Value::as_str)
-                        == Some(DEVELOPMENT)
+                    && refuses_development_assertion(&verified, PeerPolicy::RefuseDevelopmentPeer)
                 {
                     return Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims));
                 }

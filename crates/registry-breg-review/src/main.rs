@@ -73,6 +73,13 @@ async fn main() -> ExitCode {
         }
         ExitCode::from(2)
     };
+    if registry_platform_config::has_repeated_posture_flag() {
+        return usage_error(
+            "platform.posture.conflict",
+            "--posture was declared more than once",
+            "Declare --posture only once.",
+        );
+    }
     if production && flag == Some("development") {
         return usage_error(
             "platform.posture.conflict",

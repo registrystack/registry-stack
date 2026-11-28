@@ -54,11 +54,11 @@ recorded. A seed that stops early may leave open requests that no pool
 accounts for, so a later `seed.py` refuses to run; run `down.sh` and start a
 fresh environment.
 
-`up.sh` refuses any existing `.run` path and does not clear it. `down.sh` first
-validates the launcher's ownership marker, then calls `rstack dev stop` for
-that exact run, with the run state kept under `.run/state`. It retains the load evidence and synthetic
-seed files. Move the stopped `.run` directory aside before starting another
-environment.
+`down.sh` validates the launcher's ownership marker and calls
+`rstack dev stop RUN --clean` to remove the managed volume and project state.
+A plain stop keeps the managed data. The next `up.sh` archives a cleaned
+`.run` directory, preserving its load evidence and synthetic seed files.
+`up.sh` requires an active run to be stopped before starting another.
 
 ## Operations are not HTTP requests
 

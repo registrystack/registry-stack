@@ -12,10 +12,11 @@ use std::{sync::Arc, time::Duration};
 use registry_platform_authcommon::{
     parse_bearer_token, BearerParseError, DeclaredScope, FailedCheck,
 };
-use registry_platform_config::{JwksSource, Posture, SecretResolver, DEVELOPMENT};
+use registry_platform_config::{JwksSource, Posture, SecretResolver};
 use registry_platform_oidc::{
-    parse_static_jwks, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
-    OidcError, TokenVerifier, TokenVerifierConfig,
+    parse_static_jwks, refuses_development_assertion, IssuerNetworkPolicy, JwksFetcher,
+    JwksFetcherConfig, OidcDiscoveryConfig, OidcError, PeerPolicy, TokenVerifier,
+    TokenVerifierConfig,
 };
 
 use crate::{config::TokenIssuerConfig, session::Principal};
@@ -173,12 +174,7 @@ impl TokenAuthenticator {
             Err(error) => return Err(AuthError::Refused(error.failed_check())),
         };
         if self.posture == Posture::Production
-            && verified
-                .claims
-                .extra
-                .get(registry_platform_oidc::POSTURE_CLAIM)
-                .and_then(serde_json::Value::as_str)
-                == Some(DEVELOPMENT)
+            && refuses_development_assertion(&verified, PeerPolicy::RefuseDevelopmentPeer)
         {
             return Err(AuthError::Refused(FailedCheck::TaskGrantClaims));
         }

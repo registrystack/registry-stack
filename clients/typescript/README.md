@@ -650,6 +650,10 @@ application.
 
 ## Receive a delivery in a function
 
+The Registry delivery helpers refuse a signed envelope with a top-level
+`posture` member. For generic Standard Webhooks payloads, use
+`verifyStandardDelivery` or `verifyStandardRequest` with the same options.
+
 `verifyRequest` takes the incoming `Request` and the key. It checks the headers
 and the content type first, so a refused delivery is never read. It then reads
 the body stream once, up to 1 MiB, so the function does not clone the request.

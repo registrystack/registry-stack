@@ -129,7 +129,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128035909-a07d"
+    observedOn: "68a24502f8, journey run 20261128035909-a07d"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: casework
@@ -137,7 +137,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128035838-f991"
+    observedOn: "68a24502f8, journey run 20261128035838-f991"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: messaging
@@ -145,7 +145,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128040034-0116"
+    observedOn: "68a24502f8, journey run 20261128040034-0116"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: scheduling
@@ -153,7 +153,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128035900-3bec"
+    observedOn: "68a24502f8, journey run 20261128035900-3bec"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: documents
@@ -161,7 +161,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128035908-2c40"
+    observedOn: "68a24502f8, journey run 20261128035908-2c40"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: coordinator
@@ -169,7 +169,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128040126-31dd"
+    observedOn: "68a24502f8, journey run 20261128040126-31dd"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
   - journey: rstack-dev
     product: adapter
@@ -177,7 +177,7 @@ expectedFailures:
     code: journey.needs.certificate
     removedBy: posture
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128035921-56a4"
+    observedOn: "68a24502f8, journey run 20261128035921-56a4"
     reason: "The managed run passed through keep. The reader's plain PostgreSQL server could not establish the required TLS connection."
 
   - journey: promote
@@ -394,12 +394,12 @@ passes:
   - journey: rstack-dev
     product: evidence
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128035856-afe8"
+    observedOn: "68a24502f8, journey run 20261128035856-afe8"
   - journey: rstack-dev
     product: render
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128035150-fad4"
+    observedOn: "68a24502f8, journey run 20261128035150-fad4"
   - journey: rstack-dev
     product: discovery
     basis: observed
-    observedOn: "m4b checkout, journey run 20261128035152-674a"
+    observedOn: "68a24502f8, journey run 20261128035152-674a"

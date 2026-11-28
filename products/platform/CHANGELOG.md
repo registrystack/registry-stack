@@ -1,9 +1,15 @@
 # Changelog
 
 ## Unreleased
+- Runtime configuration ownership refusals name the runtime account when it resolves and explain that changing ownership may require `sudo`.
+- The TypeScript Registry delivery verifier refuses a signed top-level `posture` member. Use the Standard Webhooks entry points for generic payloads.
 - Runtime checks and startup logs report loopback HTTP issuer and JWKS endpoints as explicit production settings.
 - Development allows group-writable runtime configuration paths. Ownership and permission refusals identify the first failing path and how to fix it.
 - Loopback plaintext database transport reports a bracketed-host diagnostic when it refuses a bracketed IP literal.
+
+- Managed runs skip previously successful scenarios until the authored scenario changes. A restart reports skipped scenarios and names `--clean` when a changed scenario fails against kept data.
+- Managed development volumes are bound to a private per-user project state directory. A missing volume starts fresh. Use `rstack dev stop RUN_ID --clean` to remove the managed volume and state after stopping.
+- Managed restarts validate retained files before opening them and refresh run-specific PostgreSQL TLS and Messaging gateway credentials. Only Coordinator projects with authenticated workflow connections retain their local issuer port.
 
 - Managed Coordinator runs reuse their local connection issuer address so workflows already waiting can resume after a restart.
 

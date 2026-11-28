@@ -1,6 +1,7 @@
 # Registry Scheduling changelog
 
 ## Unreleased
+- `scheduling` refuses repeated `--posture` flags, including flags on both sides of `serve`.
 - Production rejects verified bearer tokens marked as development with a 401, `platform.task-grant.development-assertion`, and a Bearer challenge.
 
 - The Node and Python clients accept development peers by default and offer a configuration option to reject them.

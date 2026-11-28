@@ -41,7 +41,7 @@ contracts. `rstack dev` runs the project with its own PostgreSQL server and a lo
 issuer, from a plan file. The
 [standalone decision example](examples/standalone-decision/dev.yaml) has the plan and a scenario
 for this starter. `rstack dev token RUN --as staff` writes an owner-only header file for a person the
-plan names, and `rstack dev stop RUN` removes the run with its database. See
+plan names. Managed development data survives a stop. Use `rstack dev stop RUN --clean` to remove it or `rstack dev start PROJECT --clean` to start fresh. See
 [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#the-managed-postgresql-server) for the database image and recovery.
 
 Policy, stage, routing-rule, queue, team, and outcome labels are presentation

@@ -1106,11 +1106,12 @@ fn require_trusted_entry(
     };
     let entry = path.display();
     if owner != 0 && owner != effective_user {
+        let runtime_user = ownership_target(effective_user);
         return Err(RuntimeConfigError::file_level(
             CODE_UNSAFE_FILE,
             format!("`{entry}` is owned by another user"),
             format!(
-                "Run `chown {effective_user} {entry}`, or move the file under a directory that root or the runtime user owns."
+                "Run `chown {runtime_user} {entry}` (you may need `sudo`), or move the file under a directory that root or the runtime user owns."
             ),
         ));
     }
@@ -1132,6 +1133,34 @@ fn require_trusted_entry(
         ));
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn ownership_target(uid: u32) -> String {
+    let uid = uid.to_string();
+    // Resolve the account only for the refusal, using the system tool rather
+    // than consulting PATH or trusting a username from the environment.
+    let Ok(output) = std::process::Command::new("/usr/bin/id")
+        .args(["-nu", uid.as_str()])
+        .output()
+    else {
+        return uid;
+    };
+    let Ok(name) = std::str::from_utf8(&output.stdout) else {
+        return uid;
+    };
+    let name = name.trim_end_matches('\n');
+    if output.status.success()
+        && !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+    {
+        name.to_owned()
+    } else {
+        uid
+    }
 }
 
 #[cfg(not(unix))]

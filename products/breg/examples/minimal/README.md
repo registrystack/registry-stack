@@ -18,12 +18,13 @@ rstack dev check .
 rstack dev start . --ttl 4h
 ```
 
-`rstack dev start` checks and packages the project, starts a disposable PostgreSQL and a local
+`rstack dev start` checks and packages the project, starts a managed PostgreSQL and a local
 issuer, runs the authored journeys, starts the registry, and sends the scenario in
 `dev/scenarios.yaml`: it creates a contact as `editor` and reads it back. The scenario file sits in
 `dev/` because `bregctl check` reads every YAML file under `tests/` as one of its own checks.
 `dev.yaml` names the products, the two callers and that file. Stopping the run with
-`rstack dev stop RUN` removes its data, and a run that is not stopped ends after its time to live.
+`rstack dev stop RUN` keeps its managed data. Use `rstack dev stop RUN --clean` to remove it or
+`rstack dev start . --clean` to start fresh. A run that is not stopped ends after its time to live.
 [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)
 describes tokens and the rest of the report.
 

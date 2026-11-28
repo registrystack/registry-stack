@@ -97,7 +97,7 @@ function checkHeaders(headers: Iterable<readonly [string, string]>, options: Del
 }
 
 async function checkBody(
-  checked: CheckedHeaders, body: Uint8Array, options: DeliveryOptions,
+  checked: CheckedHeaders, body: Uint8Array, options: DeliveryOptions, registryProfile: boolean,
 ): Promise<Record<string, unknown>> {
   if (body.length > maximumBodyBytes) throw new DeliveryError('body-too-large')
   const raw = Uint8Array.from(body)
@@ -114,6 +114,7 @@ async function checkBody(
     throw new DeliveryError('invalid-envelope')
   }
   const record = envelope as Record<string, unknown>
+  if (registryProfile && Object.hasOwn(record, 'posture')) throw new DeliveryError('invalid-envelope')
   if (options.eventIdMember !== null) {
     const member = options.eventIdMember ?? 'id'
     if (!Object.hasOwn(record, member) || record[member] !== checked.id) throw new DeliveryError('id-mismatch')
@@ -124,8 +125,20 @@ async function checkBody(
 export async function verifyDelivery(
   headers: Iterable<readonly [string, string]>, body: Uint8Array, options: DeliveryOptions,
 ): Promise<Record<string, unknown>> {
+  return verifyDeliveryWithProfile(headers, body, options, true)
+}
+
+export async function verifyStandardDelivery(
+  headers: Iterable<readonly [string, string]>, body: Uint8Array, options: DeliveryOptions,
+): Promise<Record<string, unknown>> {
+  return verifyDeliveryWithProfile(headers, body, options, false)
+}
+
+async function verifyDeliveryWithProfile(
+  headers: Iterable<readonly [string, string]>, body: Uint8Array, options: DeliveryOptions, registryProfile: boolean,
+): Promise<Record<string, unknown>> {
   if (!(body instanceof Uint8Array)) throw new DeliveryError('invalid-body')
-  return checkBody(checkHeaders(headers, options), body, options)
+  return checkBody(checkHeaders(headers, options), body, options, registryProfile)
 }
 
 async function readBody(request: Request): Promise<Uint8Array> {
@@ -167,10 +180,22 @@ async function readBody(request: Request): Promise<Uint8Array> {
 export async function verifyRequest(
   request: Request, options: DeliveryOptions,
 ): Promise<Record<string, unknown>> {
+  return verifyRequestWithProfile(request, options, true)
+}
+
+export async function verifyStandardRequest(
+  request: Request, options: DeliveryOptions,
+): Promise<Record<string, unknown>> {
+  return verifyRequestWithProfile(request, options, false)
+}
+
+async function verifyRequestWithProfile(
+  request: Request, options: DeliveryOptions, registryProfile: boolean,
+): Promise<Record<string, unknown>> {
   const checked = checkHeaders(request.headers, options)
   const length = request.headers.get('content-length')
   if (length !== null && /^[0-9]+$/u.test(length) && Number(length) > maximumBodyBytes) {
     throw new DeliveryError('body-too-large')
   }
-  return checkBody(checked, await readBody(request), options)
+  return checkBody(checked, await readBody(request), options, registryProfile)
 }

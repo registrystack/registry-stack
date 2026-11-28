@@ -58,17 +58,20 @@ volume)
     create)
         volume="${*: -1}"
         if [[ ! -f "$state/volumes/$volume" ]]; then
-            printf '%s\n' "$3" >"$state/volumes/$volume"
+            printf '%s\n' "$3" "$5" >"$state/volumes/$volume"
         fi
         printf '%s\n' "$volume"
         ;;
     ls)
         filter="${*: -1}"
         for record in "$state/volumes"/*; do
-            if [[ -f "$record" && "$(cat "$record")" == "${filter#label=}" ]]; then
+            if [[ -f "$record" && "$(head -n 1 "$record")" == "${filter#label=}" ]]; then
                 basename "$record"
             fi
         done
+        ;;
+    inspect)
+        tail -n 1 "$state/volumes/${*: -1}" | cut -d= -f2-
         ;;
     rm)
         rm "$state/volumes/$2"
@@ -138,7 +141,11 @@ exec)
 		if [[ "$script" == *"SHOW hba_file"* ]]; then
 			printf '/var/lib/postgresql/18/docker/pg_hba.conf\n'
 		elif [[ "$script" == *"SHOW ssl"* ]]; then
-			printf 'on\n'
+			cat "$state/tls"
+		elif [[ "$script" == *"SET ssl = 'off'"* ]]; then
+			printf 'off\n' >"$state/tls"
+		elif [[ "$script" == *"SET ssl = 'on'"* ]]; then
+			printf 'on\n' >"$state/tls"
 		fi
 		;;
 	esac
@@ -161,6 +168,10 @@ ps)
 			;;
 		esac
 	done
+	if [[ "$filter" == volume=* && -f "$state/volume-holder" ]]; then
+		cat "$state/volume-holder"
+		exit 0
+	fi
 	for record in "$state/containers"/*; do
 		if [[ -f "$record" && "$(cat "$record")" == "$filter" ]]; then
 			basename "$record"

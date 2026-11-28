@@ -146,6 +146,8 @@ enum Entry {
     Stop {
         #[arg(long)]
         recover: bool,
+        #[arg(long, conflicts_with = "recover")]
+        clean: bool,
         #[arg(long)]
         json: bool,
         run_id: String,
@@ -343,9 +345,9 @@ fn recovery_message(run_id: &str, facts: &Value) -> String {
     text
 }
 
-/// Everything a lost supervisor leaves behind: the processes it recorded and
-/// every database and role its plan provisions, or, when the run started its
-/// own server, the container that holds them all.
+/// Recovery facts include the guarded processes and either the attached
+/// database objects or the managed container name. The managed volume
+/// belongs to the project and survives the run.
 fn lost_supervisor_facts(root: &Path, run_id: &str) -> Value {
     let mut facts = json!({
         "kind": "lost-supervisor",
@@ -627,12 +629,13 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
         Entry::Stop {
             run_id,
             recover,
+            clean,
             json,
         } => {
             let outcome = if recover {
                 recover_run(&run_id)
             } else {
-                stop(&run_id)
+                stop_with_clean(&run_id, clean)
             };
             (json, outcome.map(|value| (value, 0)))
         }
@@ -733,6 +736,12 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
             )?;
         }
     }
+    if report["database"]["replacedMissingVolume"] == true {
+        writeln!(
+            output,
+            "  The development volume was missing. Started with fresh project state."
+        )?;
+    }
     if let Some(retention) = report["database"]["retention"].as_str() {
         writeln!(output, "  {retention}")?;
     }
@@ -785,6 +794,9 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
             "  Scenario {} {result}",
             journey["id"].as_str().expect("journey ID")
         )?;
+        if let Some(action) = journey["action"].as_str() {
+            writeln!(output, "    {action}")?;
+        }
         if let Some(steps) = journey["steps"].as_array() {
             for step in steps.iter().filter(|step| step["result"] == "failed") {
                 writeln!(
@@ -932,8 +944,12 @@ fn write_check_json(stdout: &mut dyn Write, mut payload: Value) -> Result<()> {
     Ok(())
 }
 
-fn project_key(canonical_project: &Path) -> String {
-    let digest = Sha256::digest(canonical_project.as_os_str().as_encoded_bytes());
+fn project_key(canonical_project: &Path, canonical_state_root: &Path) -> String {
+    let mut hash = Sha256::new();
+    hash.update(canonical_project.as_os_str().as_encoded_bytes());
+    hash.update([0]);
+    hash.update(canonical_state_root.as_os_str().as_encoded_bytes());
+    let digest = hash.finalize();
     digest[..16]
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -1007,7 +1023,6 @@ fn start(
         !clean || managed_database,
         "--clean requires a project using managed development PostgreSQL"
     );
-    let project_key = managed_database.then(|| project_key(&project));
     if managed_database {
         ensure!(
             !named(CA_FILE),
@@ -1031,8 +1046,13 @@ fn start(
         .collect::<Result<_>>()?;
     let run_id = Uuid::new_v4().simple().to_string();
     let base = state_dir();
+    if let Some(parent) = base.parent().filter(|path| !path.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
     ensure_private(&base, true)?;
-    let root = base.canonicalize()?.join(&run_id);
+    let base = base.canonicalize()?;
+    let project_key = managed_database.then(|| project_key(&project, &base));
+    let root = base.join(&run_id);
     private_directory(&root)?;
     let input = RunInput {
         run_id,
@@ -1218,7 +1238,12 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     );
     if let Some(key) = &restored.project_key {
         ensure!(
-            restored.managed_database && *key == project_key(&restored.project),
+            restored.managed_database
+                && *key
+                    == project_key(
+                        &restored.project,
+                        root.parent().context("missing development state root")?
+                    ),
             "captured development plan has an invalid project key"
         );
     }
@@ -1252,6 +1277,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let mut expiry = None;
     let mut browser = None;
     let image = Image::for_plan(input.requires_postgis());
+    let mut replaced_missing_volume = false;
+    let mut retained_volume = false;
+    let mut fresh_generation = None;
     let prepared = catch_startup(|| {
         products.check()?;
         let issuer = Arc::new(Issuer::create(root)?);
@@ -1268,19 +1296,50 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                     .context("missing development project state")?;
                 let engine = docker.insert(Docker::connect()?);
                 engine.require_free_volume(key)?;
+                let state_exists = match fs::symlink_metadata(state) {
+                    Ok(_) => {
+                        ensure_private(state, false)?;
+                        true
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                    Err(error) => return Err(error.into()),
+                };
+                let volume_exists = engine.has_project_volume(key)?;
+                retained_volume = !input.clean && volume_exists;
                 if input.clean {
                     engine.remove_project_volume(key)?;
-                    if state.exists() {
-                        ensure_private(state, false)?;
-                        fs::remove_dir_all(state)?;
-                    }
                 }
-                ensure!(
-                    state.exists() || !engine.has_project_volume(key)?,
-                    "the project's development volume exists without its local state; restore that state directory or start with --clean"
-                );
+                replaced_missing_volume = !input.clean && state_exists && !volume_exists;
+                if state_exists && (input.clean || replaced_missing_volume) {
+                    fs::remove_dir_all(state)?;
+                }
+                if retained_volume {
+                    ensure!(
+                        state_exists,
+                        "volume {} has no development state directory {}. Start with --clean",
+                        docker::volume_name(key),
+                        state.display()
+                    );
+                }
                 ensure_private(state, true)?;
-                let server = engine.start_server(root, &input.run_id, image, key)?;
+                let generation_path = state.join("generation");
+                let generation = if retained_volume {
+                    let saved = read_private(&generation_path)?;
+                    let generation = engine.volume_generation(key)?;
+                    ensure!(
+                        !generation.is_empty() && saved.as_deref() == Some(generation.as_bytes()),
+                        "volume {} and development state directory {} have different generations. Start with --clean",
+                        docker::volume_name(key),
+                        state.display()
+                    );
+                    generation
+                } else {
+                    let generation = Uuid::new_v4().simple().to_string();
+                    write_private(&generation_path, generation.as_bytes())?;
+                    fresh_generation = Some(generation.clone());
+                    generation
+                };
+                let server = engine.start_server(root, &input.run_id, image, key, &generation)?;
                 write_private(&root.join("postgres-ca"), &server.ca_pem)?;
                 (server.admin_url, Some(server.ca_pem))
             } else {
@@ -1318,11 +1377,44 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             &mut docker,
             issuer.clone(),
         )?;
-        let journey_reports = input
-            .scenarios
-            .iter()
-            .map(|journey| products.journey(&issuer, &urls, journey))
-            .collect::<Result<Vec<_>>>()?;
+        let scenario_state = project_state
+            .as_ref()
+            .map(|state| state.join("scenarios.json"));
+        let mut applied: BTreeMap<String, String> = match scenario_state.as_deref() {
+            Some(path) => read_private(path)?
+                .map(|bytes| serde_json::from_slice(&bytes))
+                .transpose()
+                .context("cannot read retained scenarios. Start with --clean")?
+                .unwrap_or_default(),
+            None => BTreeMap::new(),
+        };
+        let mut journey_reports = Vec::new();
+        for journey in &input.scenarios {
+            let digest = registry_platform_config::sha256_uri(&serde_json::to_vec(journey)?);
+            if applied.get(&journey.id) == Some(&digest) {
+                journey_reports.push(json!({"id": journey.id, "result": "skipped", "steps": []}));
+                continue;
+            }
+            let mut report = serde_json::to_value(
+                products.journey(&issuer, &urls, journey).with_context(|| {
+                    if retained_volume {
+                        "cannot run the scenario against kept data. Start with --clean"
+                    } else {
+                        "cannot run the scenario"
+                    }
+                })?,
+            )?;
+            if report["result"] == "passed" {
+                if let Some(path) = &scenario_state {
+                    applied.insert(journey.id.clone(), digest);
+                    write_private(path, &serde_json::to_vec(&applied)?)?;
+                }
+            } else if retained_volume {
+                report["action"] =
+                    json!("Start with --clean to clear kept data before running this scenario.");
+            }
+            journey_reports.push(report);
+        }
         ensure!(
             products.services_alive()?,
             "a product exited during the journey"
@@ -1357,6 +1449,7 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             json!({
                 "mode": "managed", "image": image.reference,
                 "developmentState": project_state,
+                "replacedMissingVolume": replaced_missing_volume,
                 "volume": docker::volume_name(input.project_key.as_deref().expect("managed key")),
                 "retention": format!("Development data is kept after stop in {}; start this project with --clean to clear it.", project_state.as_ref().expect("managed state").display())
             })
@@ -1431,9 +1524,26 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             products.stop().and_then(|()| {
                 database.as_mut().map_or(Ok(()), Database::cleanup)?;
                 drop(database.take());
-                docker
-                    .as_ref()
-                    .map_or(Ok(()), |docker| docker.remove(&input.run_id).map(drop))
+                if let Some(engine) = &docker {
+                    engine.remove(&input.run_id)?;
+                    // An unsuccessful first start has no run ID the caller can
+                    // use for stop --clean. Discard only the generation it made.
+                    if let (Some(_), Some(generation), Some(state), Some(key)) = (
+                        &failure,
+                        &fresh_generation,
+                        &project_state,
+                        &input.project_key,
+                    ) {
+                        ensure_private(state, false)?;
+                        if engine.has_project_volume(key)?
+                            && engine.volume_generation(key)? == *generation
+                        {
+                            engine.remove_project_volume(key)?;
+                        }
+                        fs::remove_dir_all(state)?;
+                    }
+                }
+                Ok(())
             })
         },
         || {
@@ -1564,6 +1674,51 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         "schema_version": SCHEMA, "run_id": run_id, "status": "token",
         "alias": person, "credentials": credentials, "expires_at": expires,
     }))
+}
+
+fn stop_with_clean(run_id: &str, clean: bool) -> Result<Value> {
+    if !clean {
+        return stop(run_id);
+    }
+    let root = run_dir(run_id)?;
+    ensure_private(&root, false).with_context(|| {
+        format!("cannot identify the project of run {run_id}. Start the project with --clean")
+    })?;
+    let input = captured_input(&root)?;
+    let key = input
+        .project_key
+        .as_deref()
+        .context("--clean requires a run using managed development PostgreSQL")?;
+    let state = input.project_state(&root).expect("managed project state");
+    ensure_private(&state, false)?;
+    let generation_path = state.join("generation");
+    let generation = read_private(&generation_path)?
+        .context("missing project generation. Start with --clean")?;
+    let worker_lock = File::open(root.join("worker.lock"))?;
+    let mut report = stop(run_id)?;
+    // The worker removes the run directory before releasing its project lock.
+    flock(&worker_lock, FlockOperation::LockShared)?;
+    let _project_lock = lock_project(&root, key)?;
+    ensure_private(&state, false)?;
+    ensure!(
+        read_private(&generation_path)?.as_deref() == Some(generation.as_slice()),
+        "development state directory {} changed while stopping. Start with --clean",
+        state.display()
+    );
+    let engine = Docker::connect()?;
+    engine.require_free_volume(key)?;
+    if engine.has_project_volume(key)? {
+        ensure!(
+            engine.volume_generation(key)?.as_bytes() == generation,
+            "volume {} and development state directory {} have different generations. Start with --clean",
+            docker::volume_name(key),
+            state.display()
+        );
+        engine.remove_project_volume(key)?;
+    }
+    fs::remove_dir_all(state)?;
+    report["cleaned"] = json!(true);
+    Ok(report)
 }
 
 fn stop(run_id: &str) -> Result<Value> {
@@ -1844,10 +1999,32 @@ fn parse_ttl(value: &str) -> Result<u64> {
 }
 
 fn state_dir() -> PathBuf {
-    env::var_os("RSTACK_DEV_STATE_DIR").map_or_else(
-        || env::temp_dir().join(format!("rstack-dev-{}", rustix::process::getuid().as_raw())),
-        PathBuf::from,
+    select_state_dir(
+        env::var_os("RSTACK_DEV_STATE_DIR").map(PathBuf::from),
+        env::var_os("XDG_STATE_HOME").map(PathBuf::from),
+        env::home_dir(),
+        cfg!(target_os = "macos"),
     )
+}
+
+fn select_state_dir(
+    override_dir: Option<PathBuf>,
+    xdg: Option<PathBuf>,
+    home: Option<PathBuf>,
+    macos: bool,
+) -> PathBuf {
+    if let Some(path) = override_dir {
+        return path;
+    }
+    let home = home.unwrap_or_default();
+    let base = xdg.filter(|path| path.is_absolute()).unwrap_or_else(|| {
+        if macos {
+            home.join("Library/Application Support")
+        } else {
+            home.join(".local/state")
+        }
+    });
+    base.join("registry-stack/rstack-dev")
 }
 
 fn run_dir_name(run_id: &str) -> bool {
@@ -1881,13 +2058,22 @@ fn ensure_private(path: &Path, create: bool) -> Result<()> {
             }
         }
     }
-    let info =
-        fs::symlink_metadata(path).context("cannot inspect the development state directory")?;
+    let info = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "cannot inspect the development state directory {}",
+            path.display()
+        )
+    })?;
     ensure!(
-        info.is_dir()
-            && info.uid() == rustix::process::getuid().as_raw()
-            && info.mode() & 0o077 == 0,
-        "the development state directory must be owner-only and must not be a symlink"
+        info.is_dir() && info.uid() == rustix::process::geteuid().as_raw(),
+        "development state path {} must be a directory you own. Move the existing entry aside",
+        path.display()
+    );
+    ensure!(
+        info.mode() & 0o077 == 0,
+        "development state directory {} allows group or other access. Run chmod 700 {}",
+        path.display(),
+        quote_shell_path(path)
     );
     Ok(())
 }
@@ -2042,6 +2228,52 @@ pub fn write_starter(directory: &Path, files: &[(&str, &[u8])]) -> Result<()> {
     Ok(())
 }
 
+fn quote_shell_path(path: &Path) -> String {
+    let path = path.display().to_string();
+    if path
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"/._-".contains(&byte))
+    {
+        path
+    } else {
+        format!("'{}'", path.replace('\'', "'\"'\"'"))
+    }
+}
+
+fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
+    let fix = || {
+        format!(
+            "cannot read retained file {}. Start with --clean",
+            path.display()
+        )
+    };
+    let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(flags.bits() as i32)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(fix),
+    };
+    let metadata = file.metadata().with_context(fix)?;
+    ensure!(
+        metadata.is_file() && metadata.uid() == rustix::process::geteuid().as_raw(),
+        "{}",
+        fix()
+    );
+    ensure!(
+        metadata.mode() & 0o077 == 0,
+        "retained file {} allows group or other access. Run chmod 600 {}",
+        path.display(),
+        quote_shell_path(path)
+    );
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).with_context(fix)?;
+    Ok(Some(bytes))
+}
+
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file =
         tempfile::NamedTempFile::new_in(path.parent().context("file has no directory")?)?;
@@ -2057,6 +2289,45 @@ fn clock() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_directory_defaults_and_override() {
+        let home = Some(PathBuf::from("/home/developer"));
+        assert_eq!(
+            select_state_dir(None, None, home.clone(), false),
+            Path::new("/home/developer/.local/state/registry-stack/rstack-dev")
+        );
+        assert_eq!(
+            select_state_dir(None, None, home.clone(), true),
+            Path::new("/home/developer/Library/Application Support/registry-stack/rstack-dev")
+        );
+        assert_eq!(
+            select_state_dir(None, Some("/state".into()), home.clone(), false),
+            Path::new("/state/registry-stack/rstack-dev")
+        );
+        assert_eq!(
+            select_state_dir(Some("/override".into()), Some("/state".into()), home, true),
+            Path::new("/override")
+        );
+    }
+
+    #[test]
+    fn retained_file_requires_private_regular_file() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let temp = tempfile::tempdir().unwrap();
+        let key = temp.path().join("key");
+        write_private(&key, b"fixture").unwrap();
+        assert_eq!(read_private(&key).unwrap().unwrap(), b"fixture");
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        let error = read_private(&key).unwrap_err().to_string();
+        assert!(error.contains(&format!("chmod 600 {}", key.display())));
+        assert!(!error.contains("--clean"), "{error}");
+        let link = temp.path().join("link");
+        symlink(&key, &link).unwrap();
+        let error = read_private(&link).unwrap_err().to_string();
+        assert!(error.contains(&link.display().to_string()) && error.contains("--clean"));
+        assert!(!error.contains("chmod"), "{error}");
+    }
 
     #[test]
     fn dev_accepts_unset_and_development_and_refuses_other_declarations() {
@@ -2372,9 +2643,16 @@ mod tests {
         let second = scratch.path().join("other");
         fs::create_dir(&first).unwrap();
         fs::create_dir(&second).unwrap();
-        let key = project_key(&first.canonicalize().unwrap());
-        assert_eq!(key, project_key(&first.join(".").canonicalize().unwrap()));
-        assert_ne!(key, project_key(&second.canonicalize().unwrap()));
+        let key = project_key(&first.canonicalize().unwrap(), scratch.path());
+        assert_eq!(
+            key,
+            project_key(&first.join(".").canonicalize().unwrap(), scratch.path())
+        );
+        assert_ne!(
+            key,
+            project_key(&second.canonicalize().unwrap(), scratch.path())
+        );
+        assert_ne!(key, project_key(&first, &second));
         let names = database::run_object_names(&key, "coordinator", false).unwrap();
         assert!(names
             .iter()
@@ -2385,7 +2663,7 @@ mod tests {
     fn cleaning_cannot_acquire_a_held_project() {
         let scratch = tempfile::tempdir().unwrap();
         let root = scratch.path().join("run");
-        let key = project_key(scratch.path());
+        let key = project_key(scratch.path(), scratch.path());
         let held = lock_project(&root, &key).unwrap();
         assert!(lock_project(&root, &key)
             .unwrap_err()
