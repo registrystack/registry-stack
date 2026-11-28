@@ -902,6 +902,7 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'operate/breg-webhooks',
     'reference/breg-client-capabilities',
     'reference/client-api',
+    'reference/typescript-clients',
     'reference/breg-api',
     'reference/breg-task-grants',
     'reference/breg-odrl-export',

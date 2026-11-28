@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Registry TypeScript client smoke test</title>
+<p id="status" role="status">Running browser smoke test</p>
+<script type="module">
+  import { bregMinimal, allPages } from './dist/browser.js'
+  const status = document.querySelector('#status')
+  try {
+    const client = bregMinimal.createRegistryClient({
+      baseUrl: location.origin,
+      token: () => 'browser-fixture',
+      fetch: async (url, options) => {
+        if (url.pathname !== '/v1/records/contacts' ||
+            options.redirect !== 'manual' || options.credentials !== 'omit' ||
+            options.headers.get('authorization') !== 'Bearer browser-fixture') {
+          throw new Error('Unexpected request')
+        }
+        return Response.json({
+          items: [],
+          meta: {
+            registryIdentifier: 'local-directory',
+            datasetIdentifier: 'directory',
+            recordTypeIdentifier: 'contact',
+          },
+          pageInfo: { nextCursor: null },
+        })
+      },
+    })
+    const contacts = await allPages(cursor => client.records_contact_listPage({}, cursor))
+    if (contacts.length !== 0) throw new Error('Unexpected page')
+    status.textContent = 'Passed'
+  } catch (error) {
+    status.textContent = 'Failed'
+    throw error
+  }
+</script>
+</html>

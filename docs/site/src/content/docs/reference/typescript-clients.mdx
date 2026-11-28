@@ -1,0 +1,480 @@
+---
+title: TypeScript clients
+description: Construct a generated TypeScript client, read its errors, pages, preconditions and idempotency keys, and verify signed deliveries in a function.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-11-27"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+The TypeScript clients call Registry Stack products over HTTP from screens and functions.
+They use Fetch and WebCrypto, so they run in browsers, Deno, edge functions and Node 24.
+They have no runtime dependencies.
+The native Rust, Node and Python clients stay the choice for servers.
+See the [client API reference](../client-api/).
+
+The package is source in the Registry Stack repository under `clients/typescript`.
+You import its modules by path or build them with `npm run build`.
+It is not published to npm.
+
+{/* Evidence: clients/typescript/package.json; clients/typescript/README.md;
+    clients/typescript/browser.ts. */}
+
+## Which products have a client
+
+Each generated module exports one `Client` for one product contract.
+
+| Product | Generated module |
+| --- | --- |
+| Base Registry Engine (BReg), minimal example | `generated/breg-minimal.ts` |
+| BReg, facility example | `generated/breg-facility.ts` |
+| Registry Casework | `generated/casework.ts` |
+| Registry Coordinator | `generated/coordinator.ts` |
+| Registry Document Store | `generated/documents.ts` |
+| Registry Evidence | `generated/evidence.ts` |
+| Registry Messaging | `generated/messaging.ts` |
+| Registry Scheduling | `generated/scheduling.ts` |
+
+Every module exports `createRegistryClient`.
+`browser.ts` re-exports each module as a namespace: `bregMinimal`, `bregFacility`, `casework`,
+`coordinator`, `documents`, `evidence`, `messaging` and `scheduling`.
+It also exports `RegistryError`, `describeError`, `pages`, `allPages`, `DeliveryError`, `verifyDelivery` and `verifyRequest`.
+A function that only receives deliveries imports `webhook.ts` instead, so it does not load every client.
+
+The two BReg modules come from example projects.
+Your project has its own Records, Actions and access profiles, so generate a client for it.
+
+{/* Evidence: clients/typescript/generate-all.ts; clients/typescript/browser.ts. */}
+
+## Generate a client for your BReg project
+
+Use Node 24 to generate a module from the `generated/openapi.json` that `bregctl` writes for your project.
+
+```sh test-skip="needs your own BReg project and the Registry Stack checkout"
+node clients/typescript/generate.ts --breg \
+  /path/to/project/generated/openapi.json clients/typescript/generated/my-registry.ts
+```
+
+The module imports the shared runtime by a path relative to its output location.
+Write it inside `clients/typescript/generated/`.
+
+- Pass `--check` to compare the output with the file on disk without writing it.
+- The generator refuses a schema construct it cannot type and prints the JSON pointer.
+- For a schema you deliberately leave unconstrained, review it and pass `--allow-unconstrained=/pointer` for that exact site.
+- The output records the SHA-256 of the source document and the sites it mapped to `JsonValue`.
+
+{/* Evidence: clients/typescript/README.md;
+    clients/typescript/generate.ts; clients/typescript/tests/generator.test.ts. */}
+
+## Construct a client
+
+A client needs a base URL and a token source.
+
+```ts
+import { createRegistryClient } from './generated/breg-minimal.ts'
+
+const client = createRegistryClient({
+  baseUrl: 'https://registry.example.org',
+  token: () => session.currentAccessToken(),
+})
+
+const answer = await client.call('records.contact.list', {
+  query: { accessProfile: 'directory-editor', $top: 25 },
+})
+```
+
+The client is typed to that module's operations.
+Code that talks to two registries renames one import, for example
+`import { createRegistryClient as createFacilityClient } from './generated/breg-facility.ts'`.
+
+The `token` function runs on every call.
+It can return a string, `undefined` or a promise of either.
+Return `undefined` to send a call without a bearer credential.
+A token that changes between calls needs no new client.
+
+Other options:
+
+| Option | Behaviour |
+| --- | --- |
+| `allowInsecureHttp` | Allows `http:` for a host that cannot be on the public internet: a private or link-local IP address, or a host name without a dot. Loopback hosts accept `http:` without it. |
+| `timeoutMs` | Deadline for the whole call. Default 10 seconds. |
+| `maxResponseBytes` | Largest response body read. Default 8 MiB. |
+| `fetch` | The Fetch function to use. Default `globalThis.fetch`. |
+
+The base URL must use HTTPS, with two exceptions for plain HTTP:
+
+- A loopback host: `localhost`, `127.0.0.0/8` or `[::1]`.
+- With `allowInsecureHttp: true`, a host that cannot be on the public internet.
+  That is an IP address in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `fc00::/7` or `fe80::/10`, or a host name without a dot, such as a container name on a compose network.
+
+Plain HTTP to any other host is refused when the client is built, before the `token` function runs, with or without the option.
+
+The base URL must not carry credentials, a query, a fragment, or a `.` or `..` segment, plain or percent-encoded.
+A path prefix is kept.
+In a browser the base URL can be a path such as `/registry`.
+The client resolves it against the page origin (`globalThis.location`), then applies the same rule.
+Where there is no page origin, such as Node or Deno without `location`, a path is refused.
+A refused base throws `TypeError` with the message `Invalid registry base URL` and nothing else.
+Each call also accepts an `AbortSignal` in `signal`.
+Calls omit ambient credentials and do not follow redirects.
+A successful call returns `data`, `status` and `headers`, plus `idempotencyKey` when the operation sends one.
+
+{/* Evidence: clients/typescript/core.ts ClientOptions, Transport, baseAddress, Answer;
+    clients/typescript/tests/core.test.ts; clients/typescript/tests/screens.test.ts. */}
+
+## Errors
+
+A call that cannot be built throws a `TypeError` before anything is sent.
+Examples are a bad path value, an undeclared media type, or a receipt lookup without its original key.
+Every other failure throws one class, `RegistryError`.
+
+| Member | Meaning |
+| --- | --- |
+| `kind` | `refused` for a validated product refusal, `unreachable` for a failed exchange, `unexpected` for a response the contract does not describe. |
+| `reason` | `token`, `input`, `network`, `timeout`, `aborted`, `too-large`, `media`, `schema`, `unsafe-integer` or `status`. |
+| `status` | The HTTP status, when a response arrived. |
+| `code`, `detail`, `traceId` | Members of a validated problem response, when there was one. |
+| `problem` | The validated problem object. |
+| `outcomeUnknown` | `true` when a mutation was sent and its result could not be established. |
+| `retryAfterSeconds` | Set for a validated Messaging `429` that carries a delay of 1 to 86,400 seconds. |
+| `idempotencyKey` | The key the call used or would have sent, for an operation that sends one. |
+| `raw` | A copy of the response body. It can reflect request data. |
+
+`describeError(error)` returns one fixed sentence a person can read, chosen by the failure's `reason` and `status`.
+It never repeats text from the answer, so it never contains request values, tokens, headers or the trace id.
+Read `traceId` from the error when you need it for support.
+
+- When `outcomeUnknown` is `true`, the sentence says the change may or may not have been made, and to check before trying again.
+- For a refused Action guard, the sentence is the label your project declares for that guard, if you pass it.
+  Those are the `label` beside each `reason` in the Action's `commitGuards`.
+  Pass them keyed by `reason` as `describeError(error, { guardLabels })`.
+  The OpenAPI document does not carry guard labels, so the client never takes one from the answer.
+  Without a label for that guard, the sentence is a fixed one.
+- Otherwise there is one sentence for each failure class.
+  The classes are the reasons `token`, `input`, `timeout`, `aborted` and `network`, then the statuses.
+  The statuses give refused credentials, not allowed, not found, a conflict and too many requests.
+  They also give a request not valid, a server failure, an unreadable answer and an unexpected answer.
+- A `TypeError` gives the sentence for a request that could not be built.
+
+```ts
+import { describeError } from './browser.ts'
+import { createRegistryClient } from './generated/breg-facility.ts'
+
+const client = createRegistryClient({ baseUrl: 'https://registry.example.org', token: () => session.currentAccessToken() })
+const guardLabels = { 'operator-inactive': 'Only an active operator can register a facility.' }
+
+try {
+  await client.invoke('register-facility', input, { accessProfile: 'facility-registrar' })
+} catch (error) {
+  showMessage(describeError(error, { guardLabels }))
+}
+```
+
+Each call makes one exchange.
+The client never retries.
+
+{/* Evidence: clients/typescript/core.ts RegistryError, ErrorKind, ErrorReason, Transport, describeError;
+    clients/typescript/tests/core.test.ts; clients/typescript/tests/screens.test.ts. */}
+
+## Pages
+
+List operations have a generated `…Page` method that returns `{ items, nextCursor }`.
+Two helpers walk the cursor.
+
+```ts
+import { allPages, pages } from './browser.ts'
+
+const contacts = await allPages(cursor => client.records_contact_listPage({
+  query: { accessProfile: 'directory-editor', $top: 25 },
+}, cursor))
+
+for await (const page of pages(cursor => client.records_contact_listPage({}, cursor))) {
+  render(page.items)
+}
+```
+
+Page methods exist only for read operations.
+The `load` function you pass to `pages` or `allPages` must only read a page, because a retry runs it again.
+
+`pages` yields each page.
+`allPages` collects every item.
+Both stop after 100 pages by default and take a second argument to change that.
+Both throw a `RangeError` if a cursor repeats or if a next cursor remains at the cap.
+Treat cursor values as opaque.
+
+A page that fails to load rejects that one `next()` call and leaves the walk where it was.
+The next call loads the same cursor again, and a failed load does not count toward the cap.
+A "Next" control can therefore call `next()` on one `pages` walk and retry after a failure.
+`pages` never retries by itself, so each attempt is one the caller asked for.
+
+```ts
+const walk = pages(cursor => client.records_contact_listPage({}, cursor))
+
+async function showNext() {
+  try {
+    const { done, value } = await walk.next()
+    if (!done) render(value.items)
+  } catch (error) {
+    showMessage(describeError(error))
+  }
+}
+```
+
+{/* Evidence: clients/typescript/core.ts pages, allPages; clients/typescript/tests/breg.test.ts;
+    clients/typescript/tests/screens.test.ts. */}
+
+## Action availability and input metadata
+
+A BReg client for a project whose Action declares an availability route exposes it as the typed operation `actions.<id>.availability`.
+Its answer is a union on `availability.available`:
+
+- `true`.
+- `false` with `reason` and `recovery`, and an optional `guardReason` with an optional `guardLabel` beside it.
+- `null` with `missingInputs` for inputs the Action still needs.
+- `null` when the caller may not know.
+Every answer carries `observedRevision`, except the one that is not disclosed.
+
+```ts
+const { data } = await client.call('actions.register-facility.availability', {
+  body: { input: { operatorId }, targetInput: 'operatorId' },
+})
+if (data.availability.available === null && 'missingInputs' in data.availability) {
+  highlight(data.availability.missingInputs)
+}
+```
+
+Each BReg module also exports `actionInputs`, a constant keyed by Action ID.
+It is empty for a project without Actions that declare inputs.
+Each entry holds the Action's `display` text, its `inputMode` and its `inputs`, copied from the `x-registry-action` member of the OpenAPI document without change.
+Each input has the members the document declares, such as `apiName`, `label`, `fieldType`, `required`, `nullable`, `classification` and `schema`.
+Build a form from it directly.
+
+```ts
+import { actionInputs } from './generated/breg-facility.ts'
+
+for (const input of actionInputs['register-facility'].inputs) {
+  addField(input.apiName, input.label, input.required)
+}
+```
+
+{/* Evidence: clients/typescript/generate.ts; clients/typescript/tests/screens.test.ts;
+    products/breg/generated/facility/generated/openapi.json x-registry-action. */}
+
+## Preconditions
+
+A BReg Action that changes a target needs that target's current `ifMatch`.
+Ask for the conditions first, then send them with the call.
+
+```ts
+const preconditions = await client.targetConditions('update-contact-email', { contactId })
+const receipt = await client.invoke('update-contact-email', { contactId, email }, { preconditions })
+```
+
+`targetConditions` returns the `ifMatch` for each target the Action names.
+The generated types require `preconditions` for an Action that declares them.
+They refuse `preconditions` for an Action that does not.
+
+{/* Evidence: clients/typescript/generate.ts targetConditions;
+    clients/typescript/tests/breg.test.ts. */}
+
+## Idempotency keys
+
+Operations that declare an `Idempotency-Key` header send one.
+The client generates a UUID when you pass none.
+The key comes back as `idempotencyKey` on the answer and on a `RegistryError`.
+
+The client does not remember keys.
+Each call without a key generates a new one.
+To retry a write, pass the key from the first attempt as `idempotencyKey`.
+BReg then replays the retained receipt for the same request.
+It refuses a changed request under the same key with `409` and the code `idempotency.key-reused`.
+
+```ts
+const first = await client.invoke('update-contact-email', input, { preconditions })
+const again = await client.invoke('update-contact-email', input, {
+  preconditions,
+  idempotencyKey: first.idempotencyKey,
+})
+```
+
+A caller that restarts loses the key and sends a new one.
+If a write must survive a restart, generate a key yourself, store it before the first attempt, and pass it on every attempt.
+
+The receipt lookups are the only calls that require the original key: Messaging `readMessageReceipt` and Scheduling `readAppointmentReceipt`.
+Without it they throw a `TypeError` and send nothing.
+The generator lists them by contract and route, not by operation name.
+It stops with an error when a keyed operation that looks like a read is not on that list.
+
+{/* Evidence: clients/typescript/core.ts Transport requiresExistingKey;
+    clients/typescript/generate.ts receiptLookups;
+    clients/typescript/tests/breg.test.ts; clients/typescript/tests/media.test.ts;
+    clients/typescript/tests/generator.test.ts. */}
+
+## Operations authenticated by a signature
+
+Some operations are authenticated by a Standard Webhooks signature rather than a bearer token.
+Examples are Coordinator `admitEvent` and the `receiveReviewCompletion` routes.
+The generator finds them from the document's security schemes.
+They take the exact signed body as a `Uint8Array`, and the client sends those bytes unchanged.
+The client does not call `token` for them and sends no `Authorization` header.
+
+{/* Evidence: clients/typescript/generate.ts signatureOnly; clients/typescript/core.ts Transport signed;
+    clients/typescript/tests/media.test.ts; clients/typescript/tests/generator.test.ts. */}
+
+## Verify a signed delivery
+
+`verifyRequest` takes a Fetch `Request` and the options, and returns the parsed event.
+
+```ts
+import { DeliveryError, verifyRequest } from './webhook.ts'
+
+const event = await verifyRequest(request, { currentKey, previousKey })
+```
+
+It checks the headers first, so a refused delivery is never read.
+It then reads the body stream once, so do not clone the request.
+It reads at most 1 MiB (1,048,576 bytes), the bound every Registry Stack verifier shares, and refuses a larger body.
+A body that cannot be read gives `invalid-body`, with nothing from the read error.
+`verifyDelivery(headers, body, options)` does the same from header pairs and body bytes.
+Pass the original bytes, and keep duplicate header instances.
+The headers must hold exactly one each of `webhook-id`, `webhook-timestamp`, `webhook-signature` and `content-type`.
+The content type must be exactly `application/json`.
+
+Options:
+
+| Option | Behaviour |
+| --- | --- |
+| `currentKey` | Required. 32 to 64 bytes that do not start with `whsec_`. |
+| `previousKey` | Optional. A delivery signed with either key verifies. Use it while you rotate. |
+| `eventIdMember` | Member of the body that must equal `webhook-id`. Default `id`. Pass `'eventId'` for Casework completion wakes, or `null` to skip the check. |
+| `now` | A function that returns Unix seconds. Default is the system clock. |
+
+A delivery whose timestamp is more than 300 seconds from the clock is refused.
+The function checks the headers, the content type and the timestamp, then the body size, the signature and the body.
+A repeated delivery verifies again.
+Handle repeats as [Duplicates](../delivery-signing/#duplicates) describes: store `webhook-id` with a digest of the body, and refuse a different body under a stored ID.
+
+A failed check throws `DeliveryError`.
+Its `code` is one of these:
+
+- `missing-header`
+- `duplicate-header`
+- `invalid-content-type`
+- `invalid-id`
+- `invalid-timestamp`
+- `stale-delivery`
+- `invalid-key`
+- `unsupported-version`
+- `malformed-signature`
+- `signature-mismatch`
+- `id-mismatch`
+- `invalid-envelope`
+- `invalid-body`
+- `body-too-large`
+
+The signing contract, key rules and rotation steps are in
+[Receive signed deliveries](../delivery-signing/).
+
+{/* Evidence: clients/typescript/webhook.ts verifyDelivery, verifyRequest, DeliveryError,
+    DeliveryOptions; clients/typescript/tests/webhook.test.ts. */}
+
+## Example: a function that receives a BReg hook
+
+A Deno function receives events from a BReg hook destination.
+The same function runs on Supabase Edge Functions.
+
+On the BReg side, bind the destination in the runtime file.
+The key reference points at a file in the runtime's secret directory.
+
+```yaml title="runtime.yaml"
+destinations:
+  hooks:
+    contact-events:
+      origin: https://receiver.example.org
+      path: /events
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/contact-events-key
+      classificationCeiling: internal
+```
+
+Create the key file with 64 hexadecimal characters and no trailing newline.
+
+```sh test-skip="writes into the deployment host's secret directory"
+(umask 077; openssl rand -hex 32 | tr -d '\n' > /var/lib/breg/secrets/contact-events-key)
+```
+
+On the function side, set `REGISTRY_WEBHOOK_KEY` to those same 64 characters.
+BReg signs with the file's bytes exactly as written, so the function must use the same bytes.
+It must not decode them.
+
+```ts
+import { DeliveryError, verifyRequest } from './webhook.ts'
+
+const keyText = Deno.env.get('REGISTRY_WEBHOOK_KEY')
+const currentKey = new TextEncoder().encode(keyText ?? '')
+if (currentKey.length < 32 || currentKey.length > 64) {
+  throw new Error('Set REGISTRY_WEBHOOK_KEY to the 32 to 64 byte delivery key.')
+}
+
+Deno.serve(async request => {
+  let event: Record<string, unknown>
+  try {
+    event = await verifyRequest(request, { currentKey })
+  } catch (error) {
+    if (error instanceof DeliveryError) return new Response(null, { status: 400 })
+    throw error
+  }
+  // Act only after verification. Log the delivery ID and event type, nothing else.
+  console.log('verified delivery', request.headers.get('webhook-id'), event.type)
+  return new Response(null, { status: 204 })
+})
+```
+
+The function stops at startup unless the key is 32 to 64 bytes.
+So it never runs with a key it cannot use.
+Both sides must hold the same key bytes.
+A key that differs by one byte fails with `signature-mismatch`.
+The 64 characters followed by a newline make 65 bytes.
+BReg refuses that key file at startup, and the function above stops at startup with it.
+The log line holds the delivery ID and event type only, because the body can carry personal data.
+Use a separate key for each destination.
+
+See [Bind webhook receivers](../../operate/breg-webhooks/#bind-each-destination) for the destination
+settings and [Receive signed deliveries](../delivery-signing/) for key rotation.
+
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs DELIVERY_TOLERANCE;
+    docs/site/src/content/docs/operate/breg-webhooks.mdx hmacSha256KeyRef. */}
+
+{/* Evidence: clients/typescript/README.md;
+    clients/typescript/tests/deno/webhook.deno.test.ts; clients/typescript/webhook.ts verifyRequest;
+    docs/site/src/content/docs/operate/breg-webhooks.mdx hmacSha256KeyRef. */}
+
+## Regenerate and check
+
+Run these from the repository root.
+
+```sh test-skip="runs in a Registry Stack checkout"
+npm --prefix clients/typescript ci
+npm --prefix clients/typescript run generate
+npm --prefix clients/typescript run check:generated
+npm --prefix clients/typescript run check:types
+npm --prefix clients/typescript test
+npm --prefix clients/typescript run test:deno
+npm --prefix clients/typescript run build
+```
+
+- `generate` rewrites every committed client from the product OpenAPI documents under `products/`.
+- `check:generated` regenerates each client in memory and fails when a committed file differs.
+  A changed product contract therefore fails the check until you run `generate` and commit the result.
+- `check:types` type-checks the sources and the browser build.
+- `test` runs the Node tests, including the Standard Webhooks vectors.
+- `test:deno` runs the transport and delivery tests under Deno. It needs Deno installed.
+- `build` emits the browser ES modules and declarations to `dist/`.
+
+{/* Evidence: clients/typescript/package.json scripts; clients/typescript/generate-all.ts. */}

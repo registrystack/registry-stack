@@ -842,6 +842,7 @@ export default defineConfig({
               items: [
                 { label: 'Client reference', slug: 'reference/breg-client-capabilities' },
                 { label: 'Client API reference', slug: 'reference/client-api' },
+                { label: 'TypeScript clients', slug: 'reference/typescript-clients' },
                 { label: 'API reference', slug: 'reference/breg-api' },
                 { label: 'Task grants and standing agents', slug: 'reference/breg-task-grants' },
                 { label: 'Access profiles as ODRL', slug: 'reference/breg-odrl-export' },
@@ -1056,6 +1057,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'reference' },
             { label: 'Errors and status codes', slug: 'reference/errors' },
             { label: 'Receive signed deliveries', slug: 'reference/delivery-signing' },
+            { label: 'TypeScript clients', slug: 'reference/typescript-clients' },
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Configuration files', slug: 'reference/configuration-files' },
             { label: 'API overview', slug: 'reference/apis' },

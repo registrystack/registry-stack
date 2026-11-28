@@ -456,6 +456,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-tutorials",
             "docs",
             "client-bindings",
+            "typescript-clients",
             "release-linux-node-clients",
             "deployment",
         }
@@ -472,8 +473,8 @@ class CiChangesTest(unittest.TestCase):
         # jobs, so the pool trades extra directly-eligible slots for the
         # shorter critical path.
         # The deployment job is one short runner.
-        self.assertLessEqual(slots, 19)
-        self.assertEqual(19, slots)
+        self.assertLessEqual(slots, 20)
+        self.assertEqual(20, slots)
 
     def test_deferred_ci_work_keeps_its_selector_and_explicit_status_guard(
         self,
@@ -669,6 +670,7 @@ class CiChangesTest(unittest.TestCase):
             "docs-required",
             "docs-archives",
             "client-bindings",
+            "typescript-clients",
             "release-linux-node-clients",
             "deployment",
             "ci-result",
@@ -747,6 +749,7 @@ class CiChangesTest(unittest.TestCase):
                 "evidence-anchors",
                 "docs",
                 "client-bindings",
+                "typescript-clients",
                 "release-linux-node-clients",
                 "deployment",
             ),
@@ -790,6 +793,7 @@ class CiChangesTest(unittest.TestCase):
             "evidence-anchors",
             "docs",
             "client-bindings",
+            "typescript-clients",
             "release-linux-node-clients",
             "deployment",
         }
@@ -797,7 +801,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(44, len(final_needs))
+        self.assertEqual(45, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -3145,6 +3149,40 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertTrue(outputs["client_bindings"])
         self.assertTrue(outputs["evidence_tutorial"])
+
+    def test_typescript_clients_run_for_their_sources_and_generation_inputs(
+        self,
+    ) -> None:
+        for path in (
+            "clients/typescript/core.ts",
+            "clients/typescript/package-lock.json",
+            "clients/typescript/tests/webhook.test.ts",
+            "products/casework/generated/registry-casework.openapi.json",
+            "products/coordinator/generated/openapi/coordinator.openapi.json",
+            "products/documents/generated/registry-documents.openapi.json",
+            "products/evidence/generated/registry-evidence.openapi.json",
+            "products/messaging/generated/registry-messaging.openapi.json",
+            "products/scheduling/generated/registry-scheduling.openapi.json",
+            "products/breg/generated/minimal/generated/openapi.json",
+            "products/breg/generated/facility/generated/openapi.json",
+            "crates/registry-platform-crypto/tests/fixtures/standard-webhooks.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["typescript_clients"])
+
+    def test_typescript_clients_ignore_unrelated_changes(self) -> None:
+        self.assertFalse(
+            classify(self.workspace, ("docs/site/README.md",))["typescript_clients"]
+        )
+
+    def test_typescript_clients_run_in_every_complete_sweep(self) -> None:
+        self.assertTrue(classify(self.workspace, (), run_all=True)["typescript_clients"])
+        self.assertTrue(
+            classify(self.workspace, (), full_sweep=True)["typescript_clients"]
+        )
+        self.assertTrue(
+            classify(self.workspace, (".github/workflows/ci.yml",))["typescript_clients"]
+        )
 
     def test_python_composition_and_release_client_example_run_native_clients(self) -> None:
         for path in (
