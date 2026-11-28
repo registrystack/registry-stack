@@ -48,6 +48,15 @@ pub fn report_documents() -> Result<BTreeMap<&'static str, String>, serde_json::
 /// must remain optional so the same command variant can describe a failure.
 /// Require the payload's non-optional members only for successful reports.
 fn require_success_payloads(schema: &mut Value) {
+    let posture = serde_json::json!({
+        "type": "object",
+        "required": ["value", "source"],
+        "properties": {
+            "value": {"enum": ["development", "production"]},
+            "source": {"enum": ["flag", "environment", "default"]},
+        },
+        "additionalProperties": false
+    });
     let variants = schema["oneOf"]
         .as_array_mut()
         .expect("the report schema is a command union");
@@ -79,6 +88,24 @@ fn require_success_payloads(schema: &mut Value) {
                 "properties":{"ok":{"const":false},"status":{"const":status}},
                 "required":["ok","status"]
             }));
+        }
+        if matches!(
+            command,
+            "check"
+                | "generate-identity-facts"
+                | "doctor"
+                | "plan"
+                | "apply"
+                | "status"
+                | "provider-add"
+                | "init"
+                | "explain"
+                | "test"
+                | "types"
+                | "package"
+                | "provider-pair"
+        ) {
+            variant["properties"]["posture"] = posture.clone();
         }
         variant["allOf"] = Value::Array(constraints);
     }

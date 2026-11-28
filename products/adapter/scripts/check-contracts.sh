@@ -29,6 +29,8 @@ PATH="$HOME/.cargo/bin:$PATH" cargo fmt --all --check
 clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl -p registry-payment-protocol -p registry-payment-client -p registry-payment-simulator-connector -p registry-payment-mifos-connector --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl -p registry-payment-protocol -p registry-payment-client -p registry-payment-simulator-connector -p registry-payment-mifos-connector --no-fail-fast
+# Hold the file-to-Coordinator fixture's CLI posture report to the same contract.
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-file,signed-coordinator-event --test posture
 # The BReg connector is default-off. Compile every connector target with its
 # feature and execute its scripted suites here; the real-runtime scenarios
 # remain isolated under test-connector-native.py because they provision BReg
@@ -101,6 +103,9 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --feat
 clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-job --features signed-coordinator-event --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features signed-coordinator-event --lib
+# The file host's integration suite runs the real job check against the
+# signed destination, so the shared source-origin rule is held at runtime.
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features signed-coordinator-event,job-file --test job_file_host
 
 # The generated schemas are held to their generator (CFG-SCHEMA-2), and the
 # adapter formats are held to the configuration-format convention

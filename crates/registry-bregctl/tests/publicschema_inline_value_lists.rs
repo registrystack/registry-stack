@@ -42,6 +42,7 @@ fn derived_publicschema_inline_value_lists_roundtrip_through_the_runtime() {
     let project = ProjectFixture::write(&database, &idp);
 
     let init = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
@@ -66,6 +67,7 @@ fn derived_publicschema_inline_value_lists_roundtrip_through_the_runtime() {
     set_private(&project.credentials);
 
     let tested = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
@@ -575,7 +577,7 @@ identity:
   environment: local
   instanceId: inline-value-list-test-instance
   databaseId: inline-value-list-test-database
-  databaseInitializationEnvironment: local
+
 secretProviders:
   file: {{root: {}}}
 database:
@@ -593,23 +595,25 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: {}
-    audience: {AUDIENCE}
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksSource: {{type: static, documentRef: secret:file/oidc-jwks}}
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {}
+        audience: {AUDIENCE}
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksSource: {{type: static, documentRef: secret:file/oidc-jwks}}
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

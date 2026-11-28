@@ -1,7 +1,7 @@
 # Registry Casework Node binding
 
 This internal napi-rs binding supplies the `casework` module assembled into
-`@registrystack/client`. Applications should use that unified package.
+`@registrystack/client-node`. Applications should use that unified package.
 
 Producer, human-review, and Directory calls take a bearer token and an explicit
 Casework profile. Current-source context operations also take the caller's source
@@ -80,7 +80,7 @@ idempotency key. `submissionDigest` validates and hashes locally through the
 same Rust implementation as admission; it performs no network or token work.
 
 ```js
-const { casework } = require('@registrystack/client');
+const { casework } = require('@registrystack/client-node');
 const client = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' });
 
 async function submitReview(token, producerId, policyBinding, subject, key) {
@@ -113,3 +113,5 @@ reference, queue, ownership, and `sort` (`due`, `subject`, or `reference`).
 returns a bounded page. Caseload and clock preview/apply calls apply only the
 revision-fenced preview ID. Keep filters and caller profiles unchanged across
 snapshot cursors; after `410 review.result-expired`, start again without one.
+
+The client accepts development-marked responses by default. Set `refuseDevelopmentPeer: true` when constructing the client to reject them.

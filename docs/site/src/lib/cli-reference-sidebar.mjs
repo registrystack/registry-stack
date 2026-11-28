@@ -25,6 +25,8 @@ const binaries = [
   'documentsctl',
   'evidence',
   'evidencectl',
+  'discovery',
+  'discoveryctl',
   'mint',
   'evidence-oid4vci',
   'evidence-oid4vp',

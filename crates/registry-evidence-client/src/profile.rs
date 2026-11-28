@@ -152,6 +152,8 @@ impl EvidenceClientProfile {
             return Err(profile_error());
         }
         let origin_only = self.base_url == base_url.origin().ascii_serialization();
+        // Exactly `127.0.0.1`, the address a supervised development service
+        // binds, so a profile names the origin it will reach.
         let local_loopback = base_url.scheme() == "http"
             && base_url.host_str() == Some("127.0.0.1")
             && base_url.port().is_some_and(|port| port != 0);

@@ -36,6 +36,8 @@ pub fn command() -> clap::Command {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Scaffold a working starter bundle.
     Init {
         /// Target directory (created if absent).
@@ -62,6 +64,12 @@ pub enum Command {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime: Option<PathBuf>,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
+        /// Check under the production posture.
+        #[arg(long)]
+        production: bool,
         /// Fill `${NAME}` expressions in the runtime file from the process
         /// environment and check the values they produce, reading each seal's
         /// certificate chain file too (never its key). Without it, each
@@ -84,6 +92,7 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = crate::check::OutputFormat::Human)]
         format: crate::check::OutputFormat,
         /// Exit 1 when a warning is reported.
+        /// Development posture listings do not count.
         #[arg(long)]
         deny_warnings: bool,
     },
@@ -204,6 +213,10 @@ pub enum Command {
     },
     /// Create a locally test-signed PDF and its public test CA certificate.
     TestSeal {
+        /// Declared posture: development or production. Unset means production,
+        /// which refuses test signing.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// Authored bundle or verified package containing a document with a declared seal.
         #[arg(long)]
         bundle: PathBuf,
@@ -293,21 +306,58 @@ pub enum Command {
         )]
         signer_name: Option<String>,
     },
+    /// Generate files from a deployment's own configuration.
+    #[command(subcommand)]
+    Generate(GenerateCommand),
     /// Serve the HTTP rendering API (see the runtime YAML).
     Serve {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
         runtime: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
     },
     /// Probe a running server's /health.
     Healthcheck {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
         runtime: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
     },
     /// Hidden: one supervised render (used by `registry-render serve`).
     #[command(hide = true, name = "__worker")]
     Worker,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GenerateCommand {
+    /// Write the identity facts the deployment states about its issuer: the
+    /// issuer, the audience, the admitted clients, and the scope each route
+    /// requires, with the requester clients of its seals.
+    ///
+    /// Reads the runtime file as `serve` does and the package it serves. The
+    /// output file must not exist, and the facts are read back through the
+    /// facts reader before they are written.
+    IdentityFacts {
+        /// The package directory the runtime serves.
+        package: PathBuf,
+        /// Runtime configuration file.
+        #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
+        runtime: PathBuf,
+        /// New facts file.
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+        /// The id under `authentication.oidc.issuers` to describe. Required
+        /// when the runtime declares more than one issuer.
+        #[arg(long, value_name = "ISSUER_ID")]
+        issuer: Option<String>,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
+    },
 }
 
 /// The `--require-audit-under` directory: the proof compares resolved
@@ -435,11 +485,14 @@ fn wants_json(cli: &Cli) -> bool {
 
 fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
     match cli.command {
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Init { dir, labels } => crate::init::scaffold(&dir, &labels),
         Command::Check {
             bundle,
             seal,
             runtime,
+            posture,
+            production,
             environment,
             require_audit_under,
             format,
@@ -451,7 +504,24 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                     "`check --seal` was the old way to build a package: run `registry-render check`, then build a deployment package with `registry-render package --bundle <source> --output <directory>`. To seal documents with a PAdES signature, declare `signing.seals` in the runtime file and call `POST /v1/seal/{type}`.",
                 ));
             }
+            let declaration = if production && posture.as_deref() == Some("development") {
+                Err(registry_platform_yaml::Diagnostic::error(
+                    "platform.posture.conflict", "", "--production and --posture development contradict each other", "Use one of them."
+                ))
+            } else {
+                registry_platform_config::declared_with_production_alias(posture.as_deref(), production)
+                    .map_err(posture_diagnostic)
+            };
+            let declared = match declaration {
+                Ok(declared) => declared,
+                Err(diagnostic) => return Ok(crate::check::usage_error(
+                    diagnostic, format,
+                    &mut std::io::stdout().lock(),
+                    &mut std::io::stderr().lock(),
+                )),
+            };
             let request = crate::check::CheckRequest {
+                declared,
                 bundle: bundle.as_deref(),
                 runtime: runtime.as_deref(),
                 require_audit_under: require_audit_under.as_deref(),
@@ -574,13 +644,29 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             Ok(0)
         }
         Command::TestSeal {
-            bundle, document, data, output, locale, issued_at, assets, format,
+            bundle, document, data, output, locale, issued_at, assets, format, posture,
         } => {
+            let declared = registry_platform_config::declared(posture.as_deref()).map_err(|error| {
+                RenderProblem::new(crate::problem::ProblemKind::InvalidArgument, error.message())
+                    .with_diagnostics(vec![posture_diagnostic(error)])
+            })?;
+            if declared.posture != registry_platform_config::Posture::Development {
+                return Err(RenderProblem::new(
+                    crate::problem::ProblemKind::RuntimeInvalid,
+                    "test-seal requires development",
+                )
+                .with_diagnostics(vec![registry_platform_yaml::Diagnostic::error(
+                    "render.posture.test-signing",
+                    "",
+                    "Test signing is refused unless development is declared.",
+                    "Set REGISTRY_STACK_POSTURE=development or pass --posture development.",
+                )]));
+            }
             let now = issued_at.is_none();
             let issued = parse_issued_at(issued_at, now)?;
             let limit = crate::runtime::LimitsRuntime::default().request_bytes();
             let request = read_request_files(&data, &locale, &assets, Some(issued), Some(limit))?;
-            let report = crate::test_seal::run(&bundle, &document, &request, &output)?;
+            let report = crate::test_seal::run(&bundle, &document, &request, &output, declared)?;
             if matches!(format, crate::check::OutputFormat::Json) {
                 println!("{report}");
             } else {
@@ -724,16 +810,53 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             }
             Ok(0)
         }
-        Command::Serve { runtime } => {
-            let code = crate::server::serve(&runtime)?;
+        Command::Serve { runtime, posture } => {
+            let declared = registry_platform_config::declared(posture.as_deref()).map_err(|error| {
+                crate::problem::RenderProblem::new(crate::problem::ProblemKind::InvalidArgument, error.message())
+                    .with_diagnostics(vec![posture_diagnostic(error)])
+            })?;
+            let code = crate::server::serve(&runtime, declared)?;
             Ok(code)
         }
-        Command::Healthcheck { runtime } => {
-            let code = crate::server::healthcheck(&runtime)?;
+        Command::Generate(GenerateCommand::IdentityFacts {
+            package,
+            runtime,
+            output,
+            issuer,
+            posture,
+        }) => {
+            let declared = registry_platform_config::declared(posture.as_deref()).map_err(|error| {
+                crate::problem::RenderProblem::new(crate::problem::ProblemKind::InvalidArgument, error.message())
+                    .with_diagnostics(vec![posture_diagnostic(error)])
+            })?;
+            let (loaded, _) = crate::runtime::load_with_positions(&runtime, declared)?;
+            let bundle = Bundle::load_for_preview(&package)?;
+            let facts = crate::identity_facts::facts(&loaded.config, &bundle, issuer.as_deref())?;
+            crate::identity_facts::write(&facts, &output)?;
+            println!("wrote {}", output.display());
+            Ok(0)
+        }
+        Command::Healthcheck { runtime, posture } => {
+            let declared = registry_platform_config::declared(posture.as_deref()).map_err(|error| {
+                crate::problem::RenderProblem::new(crate::problem::ProblemKind::InvalidArgument, error.message())
+                    .with_diagnostics(vec![posture_diagnostic(error)])
+            })?;
+            let code = crate::server::healthcheck(&runtime, declared)?;
             Ok(code)
         }
         Command::Worker => Ok(crate::worker::worker_main()),
     }
+}
+
+fn posture_diagnostic(
+    error: registry_platform_config::PostureError,
+) -> registry_platform_yaml::Diagnostic {
+    registry_platform_yaml::Diagnostic::error(
+        error.code(),
+        "",
+        error.message(),
+        error.suggested_action(),
+    )
 }
 
 pub(crate) fn parse_issued_at(

@@ -86,3 +86,10 @@ paths = [
 ]
 regexTarget = "line"
 regexes = ['''^(\s*"presentation": ")?eyJhbGciOiAiRVMyNTYiLCAidHlwIjogI(mV4YW1wbGUrc2Qtand0In0\.|mRjK3NkLWp3dCIsICJraWQiOiAi)''']
+
+[[allowlists]]
+description = "Allow the synthetic HMAC keys in the Standard Webhooks test vectors. They are random test bytes and the official library's published example key, not credentials."
+condition = "AND"
+paths = ['''^crates/registry-platform-crypto/tests/fixtures/standard-webhooks\.json$''']
+regexTarget = "line"
+regexes = ['''^\s*"(keyHex|previousKeyHex)": "[0-9a-f]{48,128}",$''']

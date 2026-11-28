@@ -12,6 +12,7 @@ use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use registry_platform_canonical_json::parse_json_strict;
+use registry_platform_config::PostureReport;
 use registry_platform_httpsec::{security_headers, CspBuilder};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -31,7 +32,6 @@ use crate::query::{parse_service_filters, Directory};
 const JSON: &str = "application/json";
 const OPENAPI_JSON: &str = "application/vnd.oai.openapi+json;version=3.1";
 const HEALTH_BYTES: &[u8] = br#"{"status":"ok"}"#;
-const READY_BYTES: &[u8] = br#"{"status":"ready"}"#;
 const BLOCKING_QUERY_CAPACITY: usize = 4;
 const BUFFERED_BODY_CAPACITY: usize = 4;
 
@@ -39,6 +39,7 @@ pub struct DiscoveryService {
     directory: Directory,
     maximum_response_bytes: usize,
     blocking_queries: BlockingQueryExecutor,
+    posture: PostureReport,
 }
 
 #[derive(Clone)]
@@ -80,6 +81,22 @@ impl DiscoveryService {
         directory: Directory,
         maximum_response_bytes: usize,
     ) -> Result<Self, ServiceConfigError> {
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+        Self::new_with_posture(
+            directory,
+            maximum_response_bytes,
+            PostureReport::new(DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            }),
+        )
+    }
+
+    pub fn new_with_posture(
+        directory: Directory,
+        maximum_response_bytes: usize,
+        posture: PostureReport,
+    ) -> Result<Self, ServiceConfigError> {
         if !(MINIMUM_HTTP_RESPONSE_BYTES..=MAXIMUM_HTTP_BODY_BYTES)
             .contains(&maximum_response_bytes)
         {
@@ -88,6 +105,7 @@ impl DiscoveryService {
         Ok(Self {
             directory,
             maximum_response_bytes,
+            posture,
             blocking_queries: BlockingQueryExecutor::new(BLOCKING_QUERY_CAPACITY),
         })
     }
@@ -141,6 +159,7 @@ pub fn router(
     {
         return Err(ServiceConfigError);
     }
+    let posture = service.posture.posture();
     Ok(Router::new()
         .route(HEALTH_ROUTE, get(health).head(not_found))
         .route(READY_ROUTE, get(ready).head(not_found))
@@ -179,7 +198,7 @@ pub fn router(
                     },
                 ),
         )
-        .layer(security_headers(CspBuilder::restrictive())))
+        .layer(security_headers(CspBuilder::restrictive(), posture)))
 }
 
 async fn enforce_http_limits(
@@ -213,8 +232,11 @@ async fn health() -> Response<Body> {
     static_json(HEALTH_BYTES, JSON)
 }
 
-async fn ready() -> Response<Body> {
-    static_json(READY_BYTES, JSON)
+async fn ready(State(service): State<Arc<DiscoveryService>>) -> Response<Body> {
+    let mut members = service.posture.ready_member();
+    members.insert("status".to_owned(), "ready".into());
+    let bytes = serde_json::to_vec(&members).expect("readiness serializes");
+    static_json(&bytes, JSON)
 }
 
 async fn openapi() -> Response<Body> {

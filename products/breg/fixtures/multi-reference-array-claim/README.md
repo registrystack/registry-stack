@@ -19,5 +19,5 @@ rstack dev start . --ttl 1h
 
 `rstack dev start` runs `tests/journeys.yaml` before serving the package, then sends the one
 read in `dev/scenarios.yaml`. Stop the run with
-`rstack dev stop RUN`, which removes its data. The claim variants bind to their exact refusal steps
+`rstack dev stop RUN`, which keeps its managed data. Add `--clean` to remove the data. The claim variants bind to their exact refusal steps
 through the people the fixture's `dev.yaml` names for each journey step.

@@ -1,0 +1,66 @@
+[package]
+name = "registry-platform-provision"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Product-free PostgreSQL provisioning plans: roles, database, schemas and extensions for Registry Stack runtimes."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Runs tests/postgres.rs against the disposable PostgreSQL superuser named by
+# PROVISION_TEST_DATABASE_URL, over TLS verified with PROVISION_TEST_DATABASE_CA.
+# It also needs PROVISION_TEST_OLD_DATABASE_URL, a server older than the floor.
+# With the feature on, a missing variable fails the suite. With `cli` on too,
+# src/cli.rs also runs the `provision` command against the first server.
+postgres-test = []
+# Test helpers for the provision tests of the products that use this crate:
+# a verified-TLS superuser session and the two PROVISION_TEST_DATABASE_*
+# variables. Dev-dependencies only, never a runtime build.
+test-support = []
+
+# The shared `provision` command: clap arguments, the runner and the report.
+cli = [
+    "dep:clap",
+    "dep:registry-cli-report",
+    "dep:registry-platform-yaml",
+    "dep:serde",
+    "dep:serde_json",
+]
+# Renders the report's JSON Schema from its Rust type.
+schema = ["cli", "dep:schemars", "registry-platform-yaml/schema"]
+
+[[test]]
+name = "postgres"
+required-features = ["postgres-test"]
+
+[[example]]
+name = "provision-report-schema"
+required-features = ["schema"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+postgres-protocol.workspace = true
+registry-cli-report = { workspace = true, optional = true }
+registry-platform-activation.workspace = true
+registry-platform-yaml = { workspace = true, optional = true }
+rustls.workspace = true
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+getrandom.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

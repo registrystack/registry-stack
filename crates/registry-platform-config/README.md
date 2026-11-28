@@ -8,9 +8,22 @@ owns and validates the rest of its configuration contract.
 Secret consumers use `SecretResolver::resolve_reference` for bounded values
 without NUL bytes. Cryptographic consumers use `resolve_binary_reference` for
 opaque key files, which preserves every byte, including zero bytes. Both paths
-apply the same provider allowlist, owner-only regular-file checks, size bounds,
-redacted diagnostics, and zeroization. The consumer validates its key format and
+apply the same provider allowlist, regular-file checks, size bounds, redacted
+diagnostics, and zeroization. The consumer validates its key format and
 length; the resolver does not decode, trim, or reinterpret file contents.
+
+A secret file is read through one rule. The name may be a relative link that
+stays below `secretProviders.file.root` (downward steps only, at most 8 links,
+no `..`, no absolute target). The file it reaches must be a regular file with
+one hard link and no write access for others, and either owned by the runtime
+user with mode 0400 or 0600, or owned by root with no bit outside 0640 when the
+runtime is not root. A process that declared development loads a file whose
+read or mode bits are too loose and logs one warning per check. Every other
+refusal holds in both postures. A refusal is a `SecretError::UnsafeFile`
+carrying a `SecretFileCheck`, whose `code()` is `platform.secret-file.<check>`,
+and `SecretError::suggested_action()` gives the fix for any failure.
+`SecretResolver::inspect_reference` runs the same checks without reading the
+bytes.
 
 ## Loader
 
@@ -36,8 +49,9 @@ absolute path, through the shared configuration reader in
   out instead.
 
 A product may also require trusted ownership: every ancestor directory and
-the file owned by root or the runtime user and not writable by group or
-others, except a root-owned sticky directory.
+the file must be owned by root or the runtime user. Production refuses group
+and other write permission. Development allows group write permission. Both
+postures allow a root-owned sticky ancestor.
 
 Every refusal names the file, the field, and the fix, and never repeats a
 configured value. A `RuntimeConfigError` carries the reader's diagnostics
@@ -100,12 +114,26 @@ accepted reference through the explicitly enabled environment or file provider.
   and a reference to an undeclared provider is refused.
 - `DatabaseConfig`: `runtimeUrlRef`, `migrationUrlRef`, and an optional
   `caBundleRef`.
+- `DestinationTransport`: `verified-tls`, `loopback-plaintext` or
+  `private-network-plaintext`. Only the last is an explicit production setting.
+- `PrivateRanges`: the `allowedPrivateCidrs` list of `PrivateRange` values from
+  `registry-platform-loopback`, canonical, private, unrepeated, at most 16. A
+  repeated range is refused at decode. Every other refusal is a
+  `platform.destination.*` diagnostic from `check` or `check_file`, and
+  `ranges` returns the ranges only when none is refused.
 - `JwksSource`: `type: discovery` (the default) with no other member,
   `type: uri` with checked `Url` member `uri`, or `type: static` with `documentRef`.
 - `OidcIssuerConfig`: a checked `Url` issuer, audience, and `JwksSource`.
   The issuer text stays exactly as written for token comparison. Rust callers
   constructing either URL field use `registry_platform_yaml::Url::new`; the
   product's HTTPS and supervised loopback rules still apply afterward.
+- `CallerIssuers`: the `issuers` map from an issuer id to an entry that holds a
+  `CallerIssuerCore` (issuer, audience, key source, `accessTokenType`,
+  `scopeClaim`, `allowedClients`, an optional `actorKind` or
+  `clientActorKinds`). The members that relax something are `Stated` values:
+  they never refuse, and the loader hands each one to the posture report with
+  its pointer and position. `CallerIssuers::check` reports the problems of the
+  set, such as two entries naming one issuer or a client admitted by two.
 - `PackageConfig`: an absolute `root` and an optional `expectedDigest` pin.
 - `ListenerConfig` and `PrivateListenerConfig`: `bind` as `host:port` with an
   IP address host, and for private listeners the declared TLS termination and
@@ -129,11 +157,19 @@ accepted reference through the explicitly enabled environment or file provider.
   has no default; a product that makes verification optional states its own
   disabled form beside it.
 - `UrlHookDestinationConfig`: one signed URL hook destination: a checked
-  `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (default 5000, from
+  `url`, an optional `transport`, `allowedPrivateCidrs`, `hmacSha256KeyRef`,
+  optional `previousHmacSha256KeyRef` for rotation,
+  `attemptTimeoutMilliseconds` (default 5000, from
   100 to 10000), and `maximumAttempts` (default 8, from 1 to 20). A product
   holds them as a map of at most 128 entries keyed by a local identifier
   through `url_hook_destinations`. `registry-platform-hooks` activates the
-  block under a fixed outbound policy: https, or http on a loopback host.
+  block through the shared destination selector: https, http on a loopback
+  host, or http inside the declared ranges under
+  `transport: private-network-plaintext`.
+  Keep `hmacSha256KeyRef` stable during rotation because the binding digest
+  includes it. The digest excludes `previousHmacSha256KeyRef`. Omit that
+  member when there is no previous key. Activation resolves both references
+  as exact binary keys when both are configured and refuses reused key bytes.
 
 ## Project check acceptances
 

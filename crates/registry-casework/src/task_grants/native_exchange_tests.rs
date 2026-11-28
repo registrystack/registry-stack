@@ -218,9 +218,15 @@ async fn start_evidence(root: &Path, issuer: &Issuer) -> EvidenceDeployment {
     drop(listener);
     let prepared = prepare_evidence(root, &source.uri(), &issuer.url(), port);
     let runtime = Arc::new(
-        EvidenceRuntime::initialize(&prepared.runtime_path)
-            .await
-            .unwrap(),
+        EvidenceRuntime::initialize(
+            &prepared.runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .await
+        .unwrap(),
     );
     let served = Arc::clone(&runtime);
     let server =
@@ -357,7 +363,14 @@ fn the_rewritten_evidence_deployment_loads_through_the_evidence_loader() {
         "http://127.0.0.1:10",
         8080,
     );
-    registry_evidence::bundle::DeploymentInputs::load(&prepared.runtime_path).unwrap();
+    registry_evidence::bundle::DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .unwrap();
 }
 
 /// The runtime configuration loaders refuse a path through a symbolic link,
@@ -485,7 +498,7 @@ fn unseal(root: &Path) {
     }
 }
 #[allow(clippy::too_many_arguments)]
-fn start_issuer(
+fn prepare_issuer(
     root: &Path,
     casework_port: u16,
     human: &registry_platform_crypto::PrivateJwk,
@@ -495,7 +508,7 @@ fn start_issuer(
     status: &registry_platform_crypto::PrivateJwk,
     seed: &registry_platform_crypto::PrivateJwk,
     other_seed: &registry_platform_crypto::PrivateJwk,
-) -> Issuer {
+) -> IssuerDescription {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
@@ -671,14 +684,23 @@ fn start_issuer(
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
     render::render(&description).unwrap();
-    let pin = registry_thunderid_tooling::version::ThunderIdPin::load().unwrap();
-    let mut issuer = Issuer {
-        description,
-        image: pin.image,
-        jwks: Value::Null,
-    };
-    issuer.jwks = local::start(&issuer.session(), Path::new("docker"), &mut || false).unwrap();
-    issuer
+    description
+}
+
+#[test]
+fn stock_institutional_issuer_fixture_renders() {
+    let root = canonical_tempdir();
+    prepare_issuer(
+        root.path(),
+        12345,
+        &key("human"),
+        &key("agent"),
+        &key("evidence-agent"),
+        &key("other-agent"),
+        &key("status"),
+        &key("seed"),
+        &key("other-seed"),
+    );
 }
 
 struct DockerNetwork {
@@ -862,11 +884,11 @@ fn configured_private_thunderid_is_discovered_on_an_owned_docker_network() {
             "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1",
             "kind":"BRegRuntimeConfig",
             "listener":{"bind":"127.0.0.1:0"},
-            "identity":{"environment":"test","instanceId":"private-issuer-proof","databaseId":"private-issuer-proof","databaseInitializationEnvironment":"test"},
+            "identity":{"environment":"test","instanceId":"private-issuer-proof","databaseId":"private-issuer-proof"},
             "secretProviders":{"file":{"root":"/probe/secrets"}},
             "database":{"runtimeUrlRef":"secret:file/runtime-database-url","migrationUrlRef":"secret:file/migration-database-url","pool":{"maximumConnections":1,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
             "package":{"root":"/probe/package"},
-            "authentication":{"oidc":{"issuer":"http://thunderid:8090","allowInsecureHttp":true,"audience":"urn:private-network-proof","allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["private-network-client"],"maximumTokenLifetimeSeconds":3600,"leewayMilliseconds":60000,"jwksSource":{"type":"discovery"}},"authorityClaims":{"principal":"sub","purpose":"registry_purpose"}},
+            "authentication":{"oidc":{"issuers":{"primary":{"issuer":"http://thunderid:8090","allowInsecureHttp":true,"audience":"urn:private-network-proof","allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":["private-network-client"],"maximumTokenLifetimeSeconds":3600,"leewayMilliseconds":60000,"jwksSource":{"type":"discovery"}}}},"authorityClaims":{"principal":"sub","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key","path":"/probe/audit.jsonl"},
             "cursor":{"secretRef":"secret:file/cursor-key"}
         }))
@@ -1080,6 +1102,7 @@ fn prove_scheduling_authentication(token: &str, issuer: &Issuer) {
 }
 struct Fixture {
     app: Router,
+    development_app: Router,
     review_task: Uuid,
     admin: tokio_postgres::Client,
     schema: String,
@@ -1114,8 +1137,9 @@ async fn fixture(
         migration_url_ref: format!("secret:env/{name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
-    let store = PostgresStore::connect_migration(&db_config, &secrets)
+    let store = PostgresStore::connect_migration(&db_config, &secrets, None)
         .unwrap()
         .with_audit(crate::CaseworkAudit::capture().0);
     store.migrate().await.unwrap();
@@ -1243,16 +1267,14 @@ async fn fixture(
             "kind": crate::RUNTIME_CONFIG_KIND,
             "identity": {"databaseId": "native-task-grant"},
             "package": {"root": package_root},
-            "listener": {"bind": "127.0.0.1:0", "tlsTermination": "development-loopback", "networkExposure": "private-address"},
+            "listener": {"bind": "127.0.0.1:0", "tlsTermination": "loopback-plaintext", "networkExposure": "private-address"},
             "secretProviders": {"file": {"root": secret_root}},
             "database": {"runtimeUrlRef": "secret:file/runtime-url", "migrationUrlRef": "secret:file/migration-url"},
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": issuer.url(),
                 "audience": CASEWORK_RESOURCE,
-                "allowedClients": ["human-client", "task-agent", "evidence-task-agent", "breg-status"],
-                "scopeClaim": "scope",
-                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}
-            }},
+                "allowedClients": ["human-client", "task-agent", "evidence-task-agent", "breg-status"]
+            }}}},
             "audit": {"path": runtime_root.join("audit.jsonl"), "hashKeyRef": "secret:file/audit-key"},
             "taskAuthority": {
                 "issuer": AUTHORITY,
@@ -1265,13 +1287,29 @@ async fn fixture(
     )
     .unwrap();
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o600)).unwrap();
-    let runtime = crate::RuntimeConfig::load(&runtime_path).unwrap();
+    let loaded = crate::RuntimeConfig::load(
+        &runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .unwrap();
+    let runtime = loaded.config;
     let project = runtime.load_package().unwrap().project().clone();
     let secrets = crate::runtime::secret_resolver(&runtime).unwrap();
     let authority = TaskAuthority::load(
         runtime.task_authority.as_ref().unwrap(),
         &secrets,
         registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
+        registry_platform_config::Posture::Production,
+    )
+    .unwrap();
+    let development_authority = TaskAuthority::load(
+        runtime.task_authority.as_ref().unwrap(),
+        &secrets,
+        registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
+        registry_platform_config::Posture::Development,
     )
     .unwrap();
     let service = crate::CaseworkService::new(
@@ -1279,21 +1317,35 @@ async fn fixture(
         project.clone(),
         [Arc::new(Source) as Arc<dyn ReviewContextProvider>],
     )
-    .unwrap()
-    .with_task_authority(Some(authority));
-    let (verifier, keys) = runtime.oidc_verifier(&secrets).await.unwrap();
-    let auth = crate::CaseworkAuthenticator::new(
-        &project,
-        verifier,
-        keys,
-        runtime.authentication.oidc.human_identity.clone(),
-    );
-    Fixture {
-        app: crate::router(crate::HttpState {
+    .unwrap();
+    let verifiers = runtime
+        .issuer_verifiers(&secrets, loaded.development.as_ref())
+        .await
+        .unwrap();
+    let auth = crate::CaseworkAuthenticator::new(&project, verifiers).unwrap();
+    let auth = Arc::new(auth);
+    let router = |posture, service| {
+        crate::router(crate::HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            ),
             service,
-            authenticator: Arc::new(auth),
-            project: Arc::new(project),
-        }),
+            authenticator: Arc::clone(&auth),
+            project: Arc::new(project.clone()),
+        })
+    };
+    Fixture {
+        app: router(
+            registry_platform_config::Posture::Production,
+            service.clone().with_task_authority(Some(authority)),
+        ),
+        development_app: router(
+            registry_platform_config::Posture::Development,
+            service.with_task_authority(Some(development_authority)),
+        ),
         review_task,
         admin,
         schema,
@@ -1336,6 +1388,49 @@ async fn request(
     )
 }
 
+async fn assert_development_grant_refused(issuer: &Issuer, bearer: &str, grant_id: &str) {
+    use registry_platform_httputil::PeerPolicy;
+    use registry_platform_oidc::{
+        grant_claims, parse_static_jwks, ClaimNames, GrantContextError, JwksFetcher,
+        JwksFetcherConfig, TokenVerifier, TokenVerifierConfig,
+    };
+
+    let keys = parse_static_jwks(&serde_json::to_vec(&issuer.jwks).unwrap()).unwrap();
+    let profile = TokenVerifierConfig::access_token_profile(
+        issuer.url(),
+        vec![BREG_RESOURCE.into()],
+        vec![jsonwebtoken::Algorithm::RS256],
+        vec!["JWT".into(), "at+jwt".into(), "application/at+jwt".into()],
+    )
+    .with_allowed_clients(vec!["task-agent".into()]);
+    let verifier = TokenVerifier::new(
+        profile,
+        Arc::new(JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())),
+    );
+    let verified = verifier.verify(bearer).await.unwrap();
+    let grant = grant_claims(
+        &verified.claims,
+        &ClaimNames::default(),
+        now_seconds().unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(grant.id(), grant_id);
+    assert_eq!(grant.source_issuer(), AUTHORITY);
+    let refusal = grant
+        .verify_context(&verified, BREG_RESOURCE, PeerPolicy::RefuseDevelopmentPeer)
+        .unwrap_err();
+    assert_eq!(refusal, GrantContextError::DevelopmentAssertion);
+    assert_eq!(
+        refusal.code(),
+        Some("platform.task-grant.development-assertion")
+    );
+    assert_eq!(
+        grant.verify_context(&verified, BREG_RESOURCE, PeerPolicy::AcceptDevelopmentPeer),
+        Ok(())
+    );
+}
+
 #[ignore = "requires Docker, disposable CASEWORK_ASSIGNMENT_TEST_DATABASE_URL and BREG_TEST_DATABASE_URL, and absolute SCHEDULING_AUTH_PROBE_BIN"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid() {
@@ -1359,7 +1454,7 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         key("seed"),
         key("other-seed"),
     );
-    let (h, a, e, o, s, d, x) = (
+    let (human, agent, evidence_agent, other_agent, status, seed, other_seed) = (
         human_key.clone(),
         agent_key.clone(),
         evidence_agent_key.clone(),
@@ -1370,7 +1465,25 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     );
     let path = root.path().to_path_buf();
     let issuer = tokio::task::spawn_blocking(move || {
-        start_issuer(&path, casework_port, &h, &a, &e, &o, &s, &d, &x)
+        let description = prepare_issuer(
+            &path,
+            casework_port,
+            &human,
+            &agent,
+            &evidence_agent,
+            &other_agent,
+            &status,
+            &seed,
+            &other_seed,
+        );
+        let pin = registry_thunderid_tooling::version::ThunderIdPin::load().unwrap();
+        let mut issuer = Issuer {
+            description,
+            image: pin.image,
+            jwks: Value::Null,
+        };
+        issuer.jwks = local::start(&issuer.session(), Path::new("docker"), &mut || false).unwrap();
+        issuer
     })
     .await
     .unwrap();
@@ -1465,6 +1578,29 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         BREG_RESOURCE,
         "records:get",
     );
+    let (status, development_assertion) = request(
+        &f.development_app,
+        "POST",
+        &format!("/v1/task-grants/{grant_id}/assertion"),
+        &bootstrap,
+        false,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let development_token = bearer(
+        &exchange
+            .exchange(development_assertion["assertion"].as_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        payload(&development_token)[registry_platform_oidc::POSTURE_CLAIM],
+        "development"
+    );
+    assert_development_grant_refused(&issuer, &development_token, grant_id).await;
+
     let connection_file = write_task_connection(
         root.path(),
         "breg-task",
@@ -1517,6 +1653,7 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     assert_eq!(acquired_again.header_file, acquired.header_file);
     assert_eq!(acquired_again.grant_expires_at, acquired.grant_expires_at);
     let claims = payload(&token);
+    assert!(claims.get(registry_platform_oidc::POSTURE_CLAIM).is_none());
     assert_eq!(claims["registry_grant_id"], grant_id);
     assert_eq!(claims["registry_grant_source_issuer"], AUTHORITY);
     assert!(claims.get("registry_grant_authority").is_none());
@@ -1848,6 +1985,24 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         StatusCode::OK,
         "{}",
         permitted_read.body
+    );
+    let development_read = resource::send(
+        &app,
+        axum::http::Method::GET,
+        &format!(
+            "/v1/records/sites/{}?accessProfile=submitter",
+            resource::id(&old)
+        ),
+        &development_token,
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(development_read.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        development_read.body["code"],
+        "platform.task-grant.development-assertion"
     );
     let adjacent_read = resource::send(
         &app,

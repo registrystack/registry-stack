@@ -61,6 +61,7 @@ pub use registry_platform_httputil::client::{
     BearerToken, PrivateKeyJwt, PrivateKeyJwtConfig, StaticToken, TokenError, TokenProvider,
     MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
 };
+pub use registry_platform_httputil::PeerPolicy;
 pub use registry_record::{
     RegistryRecord, RegistryRecordCollectionResponse, RegistryRecordDecodeError,
     RegistryRecordJsonLdContext, RegistryRecordMeta, RegistryRecordPageInfo,

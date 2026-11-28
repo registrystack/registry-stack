@@ -11,10 +11,13 @@
 //! that product's own CLI and runtime binaries.
 
 mod bindings;
+mod breg_run;
+pub use breg_run::BregRun;
 mod browser;
 mod database;
 mod docker;
 mod explain;
+mod external_breg;
 pub(crate) mod guard;
 mod issuer;
 mod journey;
@@ -26,10 +29,14 @@ pub mod schema;
 mod sinks;
 
 use anyhow::{ensure, Context, Result};
+use registry_platform_config::{
+    declared, DeclaredPosture, Posture, PostureError, PostureSource, DEVELOPMENT, POSTURE_ENV,
+};
 use registry_platform_yaml::{Diagnostic, Report};
 use rustix::fs::{flock, FlockOperation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -109,6 +116,7 @@ pub struct Args {
 #[derive(clap::Subcommand, Debug)]
 enum Entry {
     Check {
+        /// Refuse unaccepted warnings. Development posture listings do not count.
         #[arg(long)]
         deny_warnings: bool,
         #[arg(long)]
@@ -120,6 +128,8 @@ enum Entry {
         application_root: Option<PathBuf>,
         #[arg(long)]
         ttl: Option<String>,
+        #[arg(long)]
+        clean: bool,
         #[arg(long)]
         json: bool,
         project: PathBuf,
@@ -139,6 +149,8 @@ enum Entry {
     Stop {
         #[arg(long)]
         recover: bool,
+        #[arg(long, conflicts_with = "recover")]
+        clean: bool,
         #[arg(long)]
         json: bool,
         run_id: String,
@@ -172,9 +184,19 @@ struct RunInput {
     /// when the run ends.
     #[serde(default)]
     managed_database: bool,
+    #[serde(default)]
+    project_key: Option<String>,
+    #[serde(default)]
+    clean: bool,
 }
 
 impl RunInput {
+    fn project_state(&self, root: &Path) -> Option<PathBuf> {
+        self.project_key
+            .as_ref()
+            .map(|key| root.with_file_name(format!("development-project-{key}")))
+    }
+
     /// Whether any product in the plan keeps its data in PostgreSQL. Evidence
     /// holds no database, so a plan of Evidence alone needs neither a server
     /// nor Docker.
@@ -182,7 +204,7 @@ impl RunInput {
         self.plan
             .products
             .iter()
-            .any(|entry| entry.product != Product::Evidence)
+            .any(|entry| entry.product.needs_database())
     }
 
     fn requires_postgis(&self) -> bool {
@@ -226,7 +248,7 @@ enum WorkerReply {
 
 impl WorkerReply {
     fn failed(error: &anyhow::Error) -> Self {
-        Self::failure(format!("{error:#}"), error.is::<Operational>())
+        Self::failure(format!("{error:#}"), is_operational(error))
     }
 
     fn failure(error: String, operational: bool) -> Self {
@@ -258,7 +280,7 @@ fn recovery_message(run_id: &str, facts: &Value) -> String {
         format!("run {run_id} could not be recovered: {reason}; release these resources by hand")
     } else if let Some(detail) = facts["detail"].as_str() {
         format!(
-            "run {run_id} gave up cleanup after {} seconds ({detail}); run rstack dev stop {run_id} --recover or release these resources by hand",
+            "run {run_id} gave up cleanup after {} seconds ({detail}). Run rstack dev stop {run_id} --recover, or release these resources by hand. To clear managed project state after recovery, run rstack dev stop {run_id} --clean.",
             CLEANUP_BUDGET.as_secs()
         )
     } else {
@@ -326,9 +348,9 @@ fn recovery_message(run_id: &str, facts: &Value) -> String {
     text
 }
 
-/// Everything a lost supervisor leaves behind: the processes it recorded and
-/// every database and role its plan provisions, or, when the run started its
-/// own server, the container that holds them all.
+/// Recovery facts include the guarded processes and either the attached
+/// database objects or the managed container name. The managed volume
+/// belongs to the project and survives the run.
 fn lost_supervisor_facts(root: &Path, run_id: &str) -> Value {
     let mut facts = json!({
         "kind": "lost-supervisor",
@@ -382,9 +404,8 @@ fn provisioned_labels(root: &Path) -> Result<Vec<(&'static str, bool)>> {
                 labels.push(("breg_test", spatial));
                 labels.push(("breg", spatial));
             }
-            Product::Casework => labels.push(("casework", false)),
-            Product::Messaging => labels.push(("messaging", false)),
-            Product::Evidence => {}
+            product if product.needs_database() => labels.push((product.name(), false)),
+            _ => {}
         }
     }
     Ok(labels)
@@ -524,6 +545,27 @@ fn startup_error(root: &Path, run_id: &str, error: anyhow::Error) -> anyhow::Err
     }
 }
 
+fn require_development(
+    declaration: Result<DeclaredPosture, PostureError>,
+) -> std::result::Result<(), (&'static str, &'static str, &'static str)> {
+    match declaration {
+        Err(error) => Err((
+            error.code(),
+            error.message(),
+            "Unset REGISTRY_STACK_POSTURE, or set it to development.",
+        )),
+        Ok(DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Environment,
+        }) => Err((
+            "platform.posture.conflict",
+            "rstack dev runs development processes",
+            "Unset REGISTRY_STACK_POSTURE, or set it to development.",
+        )),
+        Ok(_) => Ok(()),
+    }
+}
+
 /// Run one `rstack-dev` entry inside its hosting product CLI.
 pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
     let (machine, outcome) = match args.entry {
@@ -549,18 +591,31 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
             deny_warnings,
             json,
         } => {
+            if let Err((code, message, action)) = require_development(declared(None)) {
+                let report = Report::new(vec![Diagnostic::error(code, "", message, action)]);
+                return ExitCode::from(write_check_report(
+                    report, USAGE_EXIT, json, stdout, stderr,
+                ));
+            }
             return ExitCode::from(check(&project, deny_warnings, json, stdout, stderr));
         }
         Entry::Start {
             project,
             application_root,
             ttl,
+            clean,
             json,
         } => {
-            if let Some(notice) = live_run_notice(&live_run_ids(&state_dir())) {
-                let _ = writeln!(stderr, "{notice}");
-            }
-            let outcome = start(&project, application_root.as_deref(), ttl.as_deref());
+            let outcome = require_development(declared(None))
+                .map_err(|(code, message, action)| {
+                    Usage(format!("{code}: {message}. {action}")).into()
+                })
+                .and_then(|()| {
+                    if let Some(notice) = live_run_notice(&live_run_ids(&state_dir()?)) {
+                        let _ = writeln!(stderr, "{notice}");
+                    }
+                    start(&project, application_root.as_deref(), ttl.as_deref(), clean)
+                });
             let failed = outcome.as_ref().is_ok_and(|value| {
                 value["scenarios"].as_array().is_some_and(|scenarios| {
                     scenarios.iter().any(|item| item["result"] == "failed")
@@ -577,12 +632,13 @@ pub fn run(args: Args, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCo
         Entry::Stop {
             run_id,
             recover,
+            clean,
             json,
         } => {
             let outcome = if recover {
                 recover_run(&run_id)
             } else {
-                stop(&run_id)
+                stop_with_clean(&run_id, clean)
             };
             (json, outcome.map(|value| (value, 0)))
         }
@@ -626,11 +682,17 @@ struct Usage(String);
 /// The error envelope and exit code for a failed command. It is the launcher's
 /// `registry.rstack.error.v1` object, plus `run_id` and `recovery` when a run
 /// still has resources to release.
-fn error_report(error: &anyhow::Error) -> (Value, u8) {
-    let operational = error.is::<Operational>()
+fn is_operational(error: &anyhow::Error) -> bool {
+    error.is::<Operational>()
         || error.is::<RecoveryNeeded>()
-        || error.is::<products::InspectionUnavailable>();
-    let (class, code) = if operational {
+        || error.is::<products::InspectionUnavailable>()
+        || error
+            .downcast_ref::<products::LoggedToolFailure>()
+            .is_some_and(products::LoggedToolFailure::operational)
+}
+
+fn error_report(error: &anyhow::Error) -> (Value, u8) {
+    let (class, code) = if is_operational(error) {
         ("operational", OPERATIONAL_FAILURE_EXIT)
     } else if error.is::<Usage>() {
         ("usage", USAGE_EXIT)
@@ -656,6 +718,9 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     let run = report["run_id"].as_str().expect("run report");
     let status = report["status"].as_str().expect("run status");
     writeln!(output, "Run {run} {status}")?;
+    if let Some(message) = report["message"].as_str() {
+        writeln!(output, "  {message}")?;
+    }
     if let Some(recovered) = report.get("recovered") {
         for group in recovered["stopped_process_groups"]
             .as_array()
@@ -675,6 +740,16 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
                 name.as_str().unwrap_or("?")
             )?;
         }
+        for name in recovered["notDropped"].as_array().into_iter().flatten() {
+            writeln!(
+                output,
+                "  could not release database or role {}",
+                name.as_str().unwrap_or("?")
+            )?;
+        }
+        if let Some(action) = recovered["action"].as_str() {
+            writeln!(output, "  {action}")?;
+        }
         for container in recovered["containers"].as_array().into_iter().flatten() {
             writeln!(
                 output,
@@ -683,9 +758,23 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
             )?;
         }
     }
+    if let Some(path) = report["database"]["orphanedState"].as_str() {
+        writeln!(
+            output,
+            "  The development volume was missing. Previous project state moved to {path}."
+        )?;
+    }
+    if let Some(retention) = report["database"]["retention"].as_str() {
+        writeln!(output, "  {retention}")?;
+    }
     if let Some(products) = report["products"].as_object() {
         for (product, url) in products {
             writeln!(output, "  {product} {}", url.as_str().expect("product URL"))?;
+        }
+    }
+    for path in report["createdKeptKeys"].as_array().into_iter().flatten() {
+        if let Some(path) = path.as_str() {
+            writeln!(output, "  Created kept key {path}")?;
         }
     }
     if let Some(configs) = report["runtimeConfigs"].as_object() {
@@ -714,6 +803,9 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
             }
         }
     }
+    if let Some(received) = report["bregHookSink"]["receivedUrl"].as_str() {
+        writeln!(output, "  BReg hook deliveries at {received}")?;
+    }
     if let Some(issuer) = report["issuer"].as_str() {
         writeln!(output, "  Issuer {issuer}")?;
     }
@@ -729,6 +821,9 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
             "  Scenario {} {result}",
             journey["id"].as_str().expect("journey ID")
         )?;
+        if let Some(action) = journey["action"].as_str() {
+            writeln!(output, "    {action}")?;
+        }
         if let Some(steps) = journey["steps"].as_array() {
             for step in steps.iter().filter(|step| step["result"] == "failed") {
                 writeln!(
@@ -785,7 +880,9 @@ fn check(
         .and_then(|project| plan::check(&project));
     let (report, exit) = match outcome {
         Ok(report) => {
-            let refused = report.has_errors() || (deny_warnings && report.warning_count() > 0);
+            let refused = report.has_errors()
+                || (deny_warnings
+                    && registry_platform_config::has_denied_warnings(report.diagnostics()));
             (report, u8::from(refused))
         }
         Err(error) => match error.downcast::<Report>() {
@@ -874,8 +971,42 @@ fn write_check_json(stdout: &mut dyn Write, mut payload: Value) -> Result<()> {
     Ok(())
 }
 
-fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> Result<Value> {
-    let ttl_seconds = parse_ttl(ttl.unwrap_or("30m"))?;
+fn project_key(canonical_project: &Path, canonical_state_root: &Path) -> String {
+    let mut hash = Sha256::new();
+    hash.update(canonical_project.as_os_str().as_encoded_bytes());
+    hash.update([0]);
+    hash.update(canonical_state_root.as_os_str().as_encoded_bytes());
+    let digest = hash.finalize();
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn lock_project(root: &Path, key: &str) -> Result<File> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(root.with_file_name(format!("development-project-{key}.lock")))?;
+    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => Ok(file),
+        Err(rustix::io::Errno::WOULDBLOCK) => {
+            anyhow::bail!("a live development run holds this project; stop that run first")
+        }
+        Err(error) => Err(error).context("cannot acquire the development project lock"),
+    }
+}
+
+fn start(
+    project: &Path,
+    application_root: Option<&Path>,
+    ttl: Option<&str>,
+    clean: bool,
+) -> Result<Value> {
+    let ttl_seconds = parse_ttl(ttl.unwrap_or(DEFAULT_TTL))?;
     let project = project.canonicalize().with_context(|| {
         format!(
             "cannot open the development project directory {}",
@@ -884,6 +1015,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     })?;
     let loaded = plan::load(&project)?;
     let mut plan = loaded.plan;
+    products::require_canonical_review_pair(&project, &plan)?;
     ensure!(
         plan.application.is_some() == application_root.is_some(),
         "supply --application-root exactly when dev.yaml declares application"
@@ -912,8 +1044,12 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     let needs_database = plan
         .products
         .iter()
-        .any(|entry| entry.product != Product::Evidence);
+        .any(|entry| entry.product.needs_database());
     let managed_database = needs_database && !named(DATABASE_URL);
+    ensure!(
+        !clean || managed_database,
+        "--clean requires a project using managed development PostgreSQL"
+    );
     if managed_database {
         ensure!(
             !named(CA_FILE),
@@ -936,9 +1072,14 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         .map(|entry| Ok((entry.product, binaries(entry.product)?)))
         .collect::<Result<_>>()?;
     let run_id = Uuid::new_v4().simple().to_string();
-    let base = state_dir();
+    let base = state_dir()?;
+    if let Some(parent) = base.parent().filter(|path| !path.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
     ensure_private(&base, true)?;
-    let root = base.canonicalize()?.join(&run_id);
+    let base = base.canonicalize()?;
+    let project_key = managed_database.then(|| project_key(&project, &base));
+    let root = base.join(&run_id);
     private_directory(&root)?;
     let input = RunInput {
         run_id,
@@ -954,6 +1095,8 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         casework_principals: inspection.casework_principals,
         binaries,
         managed_database,
+        project_key,
+        clean,
     };
     let preparation = (|| {
         write_private(&root.join("input.json"), &capture_input(&input)?)?;
@@ -961,6 +1104,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
         write_private(&root.join(POSTGRES_IDENTITY), b"null")?;
         let supervisor_log = open_supervisor_log(&root)?;
         Command::new(env::current_exe()?)
+            .env(POSTURE_ENV, DEVELOPMENT)
             .arg(COMMAND)
             .arg("supervisor")
             .arg(&root)
@@ -1062,6 +1206,21 @@ fn start_abandoned(signals: &AtomicBool, deadline: Instant) -> Option<anyhow::Er
 
 /// Runs the supervisor's startup, turning a panic into an operational failure
 /// that carries no panic payload.
+fn kept_scenario_conflict(report: &Value) -> bool {
+    report["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|step| {
+            step["result"] == "failed"
+                && step["status"] == 409
+                && matches!(
+                    step["problem"]["code"].as_str(),
+                    Some("mutation.conflict" | "idempotency.key-reused")
+                )
+        })
+}
+
 fn catch_startup<T>(startup: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(startup)).unwrap_or_else(|_| {
         Err(operational(anyhow::anyhow!(
@@ -1074,7 +1233,7 @@ fn add_run_addresses(report: &mut Value, plan: &plan::Plan, application: Option<
     if let Some((url, issuer)) = application {
         report["issuer"] = json!(issuer);
         report["application"] = json!(url);
-    } else if plan.paired_run_binding() {
+    } else if plan.paired_run_binding() || plan.jwks_uri().is_some() {
         report["issuer"] = json!(plan.issuer);
     }
 }
@@ -1101,6 +1260,51 @@ fn reserve_run_issuer(plan: &mut plan::Plan) -> Result<Option<TcpListener>> {
     Ok(Some(listener))
 }
 
+fn check_daemon(state: &Path, daemon: &str) -> Result<()> {
+    if daemon.is_empty() {
+        return Ok(());
+    }
+    if let Some(saved) = read_private(&state.join("docker-daemon"))? {
+        let saved = std::str::from_utf8(&saved)
+            .context("cannot read the retained Docker daemon ID. Start with --clean")?;
+        ensure!(
+            saved == daemon,
+            "Development state belongs to Docker daemon {saved}, but the current daemon is {daemon}. Switch back to {saved} or start with --clean"
+        );
+    }
+    Ok(())
+}
+
+fn orphan_project_state(state: &Path) -> Result<PathBuf> {
+    let now = time::OffsetDateTime::now_utc();
+    let timestamp = format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}.{:09}Z",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+        now.nanosecond()
+    );
+    let mut orphan = state.as_os_str().to_owned();
+    orphan.push(format!(".orphaned-{timestamp}"));
+    let orphan = PathBuf::from(orphan);
+    ensure!(
+        !orphan.exists(),
+        "orphaned development state already exists at {}",
+        orphan.display()
+    );
+    fs::rename(state, &orphan).with_context(|| {
+        format!(
+            "cannot move development state {} to {}",
+            state.display(),
+            orphan.display()
+        )
+    })?;
+    Ok(orphan)
+}
+
 fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let name = root
         .file_name()
@@ -1119,10 +1323,32 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         restored.run_id == name,
         "captured development plan has a different run ID"
     );
+    if let Some(key) = &restored.project_key {
+        ensure!(
+            restored.managed_database
+                && *key
+                    == project_key(
+                        &restored.project,
+                        root.parent().context("missing development state root")?
+                    ),
+            "captured development plan has an invalid project key"
+        );
+    }
+    let project_state = restored.project_state(root);
+    let project_lock = restored
+        .project_key
+        .as_deref()
+        .map(|key| lock_project(root, key))
+        .transpose()?;
     let mut issuer_listener = reserve_run_issuer(&mut restored.plan)?;
     let input = Arc::new(restored);
     let signals = signals()?;
     let mut products = ProductRunner::new(input.clone(), root, &signals)?;
+    let clean_gate = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(root.join(CLEAN_GATE))?;
     let lock = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1143,6 +1369,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let mut expiry = None;
     let mut browser = None;
     let image = Image::for_plan(input.requires_postgis());
+    let mut orphaned_state = None;
+    let mut retained_volume = false;
+    let mut fresh_generation = None;
     let prepared = catch_startup(|| {
         products.check()?;
         let issuer = Arc::new(Issuer::create(root)?);
@@ -1150,10 +1379,76 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             let (admin, ca) = if input.managed_database {
                 // The run's own server hands the by-address path its URL and the
                 // CA the run drew, as an operator's server would.
-                let server =
-                    docker
-                        .insert(Docker::connect()?)
-                        .start_server(root, &input.run_id, image)?;
+                let key = input
+                    .project_key
+                    .as_deref()
+                    .context("missing development project key")?;
+                let state = project_state
+                    .as_deref()
+                    .context("missing development project state")?;
+                let engine = docker.insert(Docker::connect()?);
+                let daemon = engine.daemon_id()?;
+                let state_exists = match fs::symlink_metadata(state) {
+                    Ok(_) => {
+                        ensure_private(state, false)?;
+                        true
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                    Err(error) => return Err(error.into()),
+                };
+                if state_exists && !input.clean {
+                    check_daemon(state, &daemon)?;
+                }
+                engine.require_free_volume(key)?;
+                let volume_exists = engine.has_project_volume(key)?;
+                retained_volume = !input.clean && volume_exists;
+                if input.clean {
+                    engine.remove_project_volume(key)?;
+                }
+                if state_exists && input.clean {
+                    fs::remove_dir_all(state).with_context(|| {
+                        format!("cannot remove development state {}", state.display())
+                    })?;
+                } else if state_exists && !volume_exists {
+                    orphaned_state = Some(orphan_project_state(state)?);
+                }
+                if retained_volume {
+                    ensure!(
+                        state_exists,
+                        "volume {} has no development state directory {}. Start with --clean",
+                        docker::volume_name(key),
+                        state.display()
+                    );
+                }
+                ensure_private(state, true)?;
+                let generation_path = state.join("generation");
+                let generation = if retained_volume {
+                    let saved = read_private(&generation_path)?;
+                    let generation = engine.volume_generation(key)?;
+                    ensure!(
+                        !generation.is_empty() && saved.as_deref() == Some(generation.as_bytes()),
+                        "volume {} and development state directory {} have different generations. Start with --clean",
+                        docker::volume_name(key),
+                        state.display()
+                    );
+                    generation
+                } else {
+                    let generation = Uuid::new_v4().simple().to_string();
+                    write_private(&generation_path, generation.as_bytes())?;
+                    fresh_generation = Some(generation.clone());
+                    generation
+                };
+                if !daemon.is_empty() {
+                    write_private(&state.join("docker-daemon"), daemon.as_bytes())?;
+                }
+                let server = engine.start_server(
+                    root,
+                    &input.project,
+                    &input.run_id,
+                    image,
+                    key,
+                    &generation,
+                )?;
                 write_private(&root.join("postgres-ca"), &server.ca_pem)?;
                 (server.admin_url, Some(server.ca_pem))
             } else {
@@ -1172,8 +1467,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                 );
                 (admin, ca)
             };
-            let connected =
+            let mut connected =
                 Database::connect(&admin, ca.as_deref(), &input.run_id).map_err(with_ca_hint)?;
+            connected.set_project_key(input.project_key.clone());
             // The cluster identity must be recorded before anything can create a database or role.
             write_private(
                 &root.join(POSTGRES_IDENTITY),
@@ -1190,11 +1486,40 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
             &mut docker,
             issuer.clone(),
         )?;
-        let journey_reports = input
-            .scenarios
-            .iter()
-            .map(|journey| products.journey(&issuer, &urls, journey))
-            .collect::<Result<Vec<_>>>()?;
+        let scenario_state = project_state
+            .as_ref()
+            .map(|state| state.join("scenarios.json"));
+        let mut applied: BTreeMap<String, String> = match scenario_state.as_deref() {
+            Some(path) => read_private(path)?
+                .map(|bytes| serde_json::from_slice(&bytes))
+                .transpose()
+                .context("cannot read retained scenarios. Start with --clean")?
+                .unwrap_or_default(),
+            None => BTreeMap::new(),
+        };
+        let mut journey_reports = Vec::new();
+        for journey in &input.scenarios {
+            let digest = registry_platform_config::sha256_uri(&serde_json::to_vec(journey)?);
+            if applied.get(&journey.id) == Some(&digest) {
+                journey_reports.push(json!({"id": journey.id, "result": "skipped", "steps": []}));
+                continue;
+            }
+            let mut report = serde_json::to_value(
+                products
+                    .journey(&issuer, &urls, journey)
+                    .context("cannot run the scenario")?,
+            )?;
+            if report["result"] == "passed" {
+                if let Some(path) = &scenario_state {
+                    applied.insert(journey.id.clone(), digest);
+                    write_private(path, &serde_json::to_vec(&applied)?)?;
+                }
+            } else if retained_volume && kept_scenario_conflict(&report) {
+                report["action"] =
+                    json!("Start with --clean to clear kept data before running this scenario.");
+            }
+            journey_reports.push(report);
+        }
         ensure!(
             products.services_alive()?,
             "a product exited during the journey"
@@ -1226,13 +1551,27 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         report["database"] = if !input.needs_database() {
             json!({"mode": "none"})
         } else if input.managed_database {
-            json!({"mode": "managed", "image": image.reference})
+            json!({
+                "mode": "managed", "image": image.reference,
+                "developmentState": project_state,
+                "replacedMissingVolume": orphaned_state.is_some(),
+                "orphanedState": orphaned_state,
+                "volume": docker::volume_name(input.project_key.as_deref().expect("managed key")),
+                "retention": format!("Development data is kept after stop in {}; start this project with --clean to clear it.", project_state.as_ref().expect("managed state").display())
+            })
         } else {
-            json!({"mode": "address"})
+            json!({"mode": "address", "retention": "Databases and roles on the supplied PostgreSQL server are run-scoped and dropped at stop."})
         };
         let sinks = products.sinks();
         if sinks.as_object().is_some_and(|sinks| !sinks.is_empty()) {
             report["sinks"] = sinks;
+        }
+        if let Some(hook_sink) = products.breg_hook_report() {
+            report["bregHookSink"] = hook_sink;
+        }
+        let created_keys = products.created_kept_keys();
+        if !created_keys.is_empty() {
+            report["createdKeptKeys"] = json!(created_keys.as_slice());
         }
         report["runtimeConfigs"] = products.runtime_configs();
         report["scenarios"] = json!(journey_reports);
@@ -1249,6 +1588,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         });
         add_run_addresses(&mut report, &input.plan, application);
 
+        if let (Some(state), Some(key)) = (&project_state, &input.project_key) {
+            write_private(&state.join(format!("run-{}", input.run_id)), key.as_bytes())?;
+        }
         write_private(&root.join(REPORT), &capture_report(&report)?)?;
         Ok::<_, anyhow::Error>(report)
     });
@@ -1285,22 +1627,38 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     let mark_stopping = write_private(&root.join(REPORT), &serde_json::to_vec(&stopped)?);
     let mut told_parent = false;
     // Keep the exact ownership list until both the supervised processes and
-    // their database resources have been released. A run's own server goes
-    // with its container, so nothing in it is dropped first. The run's
-    // containers, its server and any Mailpit, are removed by label.
+    // their database resources have been released. Drop the run-scoped
+    // objects before removing any managed server. Docker keeps named volumes
+    // when the run's containers are removed by label.
     let cleanup = retry_cleanup(
         CLEANUP_BUDGET,
         CLEANUP_PAUSE,
         || {
             products.stop().and_then(|()| {
-                if input.managed_database {
-                    drop(database.take());
-                } else {
-                    database.as_mut().map_or(Ok(()), Database::cleanup)?;
+                database.as_mut().map_or(Ok(()), Database::cleanup)?;
+                drop(database.take());
+                if let Some(engine) = &docker {
+                    engine.remove(&input.run_id)?;
+                    // An unsuccessful first start has no run ID the caller can
+                    // use for stop --clean. Discard only the generation it made.
+                    if let (Some(_), Some(generation), Some(state), Some(key)) = (
+                        &failure,
+                        &fresh_generation,
+                        &project_state,
+                        &input.project_key,
+                    ) {
+                        ensure_private(state, false)?;
+                        if engine.has_project_volume(key)?
+                            && engine.volume_generation(key)? == *generation
+                        {
+                            engine.remove_project_volume(key)?;
+                        }
+                        fs::remove_dir_all(state).with_context(|| {
+                            format!("cannot remove development state {}", state.display())
+                        })?;
+                    }
                 }
-                docker
-                    .as_ref()
-                    .map_or(Ok(()), |docker| docker.remove(&input.run_id).map(drop))
+                Ok(())
             })
         },
         || {
@@ -1312,6 +1670,27 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     );
     if let Err(error) = cleanup {
         return Err(cleanup_gave_up(root, &input.run_id, &error).into());
+    }
+    // On acceptance the supervisor owns cleaning through directory removal.
+    // A caller that arrives after removal uses the ended run's project record.
+    flock(&clean_gate, FlockOperation::LockExclusive)?;
+    let request = root.join(CLEAN_REQUEST);
+    if request.exists() {
+        let clean = (|| -> Result<()> {
+            let state = project_state
+                .as_deref()
+                .context("missing development project state")?;
+            let key = input
+                .project_key
+                .as_deref()
+                .context("missing development project key")?;
+            let engine = docker
+                .as_ref()
+                .context("missing managed Docker connection")?;
+            clean_project(engine, state, key)
+        })();
+        let failure = clean.err().map(|error| format!("{error:#}"));
+        fs::write(&request, serde_json::to_vec(&failure)?)?;
     }
     // A failed run keeps its logs outside the run directory.
     let removed = if failure.is_some() {
@@ -1332,6 +1711,10 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
     drop(issuer_listener);
     // If the root is gone, no stale ready report could have survived.
     mark_stopping?;
+    drop(products);
+    drop(clean_gate);
+    drop(lock);
+    drop(project_lock);
     Ok(())
 }
 
@@ -1347,7 +1730,7 @@ fn status(run_id: &str) -> Result<Value> {
     if !root.exists() {
         return Err(Usage(format!(
             "no development run {run_id} in {}; it never started, or it has stopped and been cleaned up",
-            state_dir().display()
+            root.parent().expect("run directory has a state root").display()
         ))
         .into());
     }
@@ -1392,13 +1775,20 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         ))
     );
     let report = status(run_id)?;
+    token_from_report(&run_dir(run_id)?, run_id, person, &report)
+}
+
+fn token_from_report(root: &Path, run_id: &str, person: &str, report: &Value) -> Result<Value> {
     ensure!(
         report["status"] == "ready",
         "development run {run_id} is not ready"
     );
-    let root = run_dir(run_id)?;
     let input: RunInput = read_json(&root.join("input.json"), MAXIMUM_CAPTURED_INPUT_BYTES)?;
-    let signer = Issuer::load(&root)?;
+    ensure!(
+        input.plan.jwks_uri().is_none(),
+        "This run uses an external issuer. Obtain tokens from that issuer."
+    );
+    let signer = Issuer::load(root)?;
     let run_expires = report["expires_at"]
         .as_u64()
         .context("run expiry is missing")?;
@@ -1419,11 +1809,9 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         ));
         let headers = match product {
             Product::Breg => format!("Authorization: Bearer {}\n", &*token),
-            Product::Evidence | Product::Messaging => {
-                format!("Authorization: Bearer {}\n", &*token)
-            }
             Product::Casework => format!("Authorization: Bearer {}\nRegistry-Casework-Profile: {}\nRegistry-Review-Profile: {}\n",
                 &*token, grant.profile, grant.profile),
+            _ => format!("Authorization: Bearer {}\n", &*token),
         };
         write_private(&path, Zeroizing::new(headers).as_bytes())?;
         credentials
@@ -1433,6 +1821,143 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         "schema_version": SCHEMA, "run_id": run_id, "status": "token",
         "alias": person, "credentials": credentials, "expires_at": expires,
     }))
+}
+
+const CLEAN_GATE: &str = "stop-clean.lock";
+const CLEAN_REQUEST: &str = "stop-clean.request";
+
+fn clean_project(engine: &Docker, state: &Path, key: &str) -> Result<()> {
+    ensure_private(state, false)?;
+    let generation = read_private(&state.join("generation"))?
+        .context("missing project generation. Start with --clean")?;
+    check_daemon(state, &engine.daemon_id()?)?;
+    engine.require_free_volume(key)?;
+    if engine.has_project_volume(key)? {
+        ensure!(
+            engine.volume_generation(key)?.as_bytes() == generation,
+            "volume {} and development state directory {} have different generations. Start with --clean",
+            docker::volume_name(key),
+            state.display()
+        );
+        engine.remove_project_volume(key)?;
+    }
+    fs::remove_dir_all(state)
+        .with_context(|| format!("cannot remove development state {}", state.display()))
+}
+
+fn request_clean(root: &Path, run_id: &str) -> Result<Option<File>> {
+    let gate = match File::open(root.join(CLEAN_GATE)) {
+        Ok(gate) => gate,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if !root.exists() {
+                return Ok(None);
+            }
+            return Err(Operational(format!(
+                "run {run_id} is still starting. Retry when it reports ready, or run rstack dev stop {run_id} without --clean."
+            )).into());
+        }
+        Err(error) => return Err(error).context("cannot open the supervisor's stop --clean lock"),
+    };
+    flock(&gate, FlockOperation::LockExclusive)?;
+    if !root.exists() {
+        return Ok(None);
+    }
+    ensure!(
+        captured_input(root)?.project_key.is_some(),
+        "--clean requires a run using managed development PostgreSQL"
+    );
+    let result = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(root.join(CLEAN_REQUEST))?;
+    Ok(Some(result))
+}
+
+fn project_for_ended_run(root: &Path, run_id: &str) -> Result<Option<(String, PathBuf)>> {
+    let Some(base) = root.parent().filter(|base| base.exists()) else {
+        return Ok(None);
+    };
+    for entry in fs::read_dir(base)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(key) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("development-project-"))
+            .filter(|key| run_dir_name(key))
+        else {
+            continue;
+        };
+        if entry.file_type()?.is_dir() && entry.path().join(format!("run-{run_id}")).is_file() {
+            return Ok(Some((key.to_owned(), entry.path())));
+        }
+    }
+    Ok(None)
+}
+
+fn stop_with_clean(run_id: &str, clean: bool) -> Result<Value> {
+    if !clean {
+        return stop(run_id);
+    }
+    let root = run_dir(run_id)?;
+    if root.exists() {
+        match ensure_private(&root, false) {
+            Ok(()) => {}
+            Err(error) if root.exists() => return Err(error),
+            Err(_) => {}
+        }
+        if let Some(mut result) = request_clean(&root, run_id)? {
+            let recovery = || {
+                format!(
+                "Run rstack dev stop {run_id} --recover, then rstack dev stop {run_id} --clean."
+            )
+            };
+            let mut report = stop(run_id).map_err(|error| {
+                if error.is::<RecoveryNeeded>() {
+                    error.context(recovery())
+                } else {
+                    error
+                }
+            })?;
+            let mut bytes = Vec::new();
+            result.read_to_end(&mut bytes)?;
+            let failure: Option<String> = serde_json::from_slice(&bytes).with_context(|| {
+                format!(
+                    "The supervisor did not report the clean result. {}",
+                    recovery()
+                )
+            })?;
+            if let Some(failure) = failure {
+                return Err(anyhow::anyhow!("{failure}"));
+            }
+            report["cleaned"] = json!(true);
+            return Ok(report);
+        }
+    }
+    let nothing_to_clean = || {
+        let mut report = simple_report(run_id, "stopped");
+        report["message"] = json!("Nothing left to clean for this run ID.");
+        report
+    };
+    let Some((key, state)) = project_for_ended_run(&root, run_id)? else {
+        return Ok(nothing_to_clean());
+    };
+    let _project_lock = lock_project(&root, &key)?;
+    if !state.exists() {
+        return Ok(nothing_to_clean());
+    }
+    ensure_private(&state, false)?;
+    ensure!(
+        read_private(&state.join(format!("run-{run_id}")))?.as_deref() == Some(key.as_bytes()),
+        "development state for run {run_id} changed. Start the project with --clean"
+    );
+    clean_project(&Docker::connect()?, &state, &key)?;
+    let mut report = simple_report(run_id, "stopped");
+    report["cleaned"] = json!(true);
+    Ok(report)
 }
 
 fn stop(run_id: &str) -> Result<Value> {
@@ -1515,7 +2040,7 @@ fn recover_run(run_id: &str) -> Result<Value> {
         }
         .into()
     };
-    let (stopped_groups, dropped, containers) = (|| -> Result<_> {
+    let (stopped_groups, dropped, containers, not_dropped, project) = (|| -> Result<_> {
         // Status can read the last report while recovery holds the worker lock.
         write_private(
             &root.join(REPORT),
@@ -1523,15 +2048,32 @@ fn recover_run(run_id: &str) -> Result<Value> {
         )
         .context("cannot mark the run as stopping")?;
         let mailpit = root.join(MAILPIT_MARKER).exists();
-        if captured_input(&root)?.managed_database {
-            // The run's own server holds every database and role it made, so
-            // removing its container releases them without an administrator
-            // URL. The same label removes the run's Mailpit.
+        let input = captured_input(&root)?;
+        if input.managed_database {
+            // The container's local administrator socket needs no supplied
+            // URL. Release only the lost run's rehearsal objects, then remove
+            // its containers by label.
             let docker = Docker::connect()?;
             let stopped_groups = recovery::wait_for_guards(&root)?;
+            let provisioned = input.project_key.is_some()
+                && read_json::<Option<RecoveryIdentity>>(&root.join(POSTGRES_IDENTITY), 1024)?
+                    .is_some();
+            let (dropped, not_dropped) = if provisioned {
+                let names = provisioned_labels(&root)?
+                    .into_iter()
+                    .filter(|(label, _)| *label == "breg_test")
+                    .map(|(label, spatial)| database::run_object_names(run_id, label, spatial))
+                    .collect::<Result<Vec<_>>>()?;
+                match docker.drop_rehearsals(run_id, names)? {
+                    docker::RehearsalCleanup::Dropped(names) => (names, Vec::new()),
+                    docker::RehearsalCleanup::NotDropped(names) => (Vec::new(), names),
+                }
+            } else {
+                (Vec::new(), Vec::new())
+            };
             let containers = docker.remove(run_id)?;
             remove_run_dir(&root)?;
-            return Ok((stopped_groups, Vec::new(), containers));
+            return Ok((stopped_groups, dropped, containers, not_dropped, Some(input.project)));
         }
         // A null identity means the worker never began provisioning. Missing
         // or invalid metadata cannot prove that there is nothing to release.
@@ -1565,7 +2107,7 @@ fn recover_run(run_id: &str) -> Result<Value> {
             Vec::new()
         };
         remove_run_dir(&root)?;
-        Ok((stopped_groups, dropped, containers))
+        Ok((stopped_groups, dropped, containers, Vec::new(), None))
     })()
     .map_err(|error| unrecovered(format!("{error:#}")))?;
     let mut report = simple_report(run_id, "stopped");
@@ -1574,6 +2116,13 @@ fn recover_run(run_id: &str) -> Result<Value> {
         "databases_and_roles": dropped,
         "containers": containers,
     });
+    if let Some(project) = project.filter(|_| !not_dropped.is_empty()) {
+        report["recovered"]["notDropped"] = json!(not_dropped);
+        report["recovered"]["action"] = json!(format!(
+            "Run rstack dev start {} --clean to clear the remaining rehearsal objects.",
+            project.display()
+        ));
+    }
     Ok(report)
 }
 
@@ -1620,7 +2169,9 @@ fn signals() -> Result<Arc<AtomicBool>> {
 }
 
 fn stopping(root: &Path, signals: &AtomicBool) -> bool {
-    signals.load(Ordering::Relaxed) || root.join("stop").exists()
+    signals.load(Ordering::Relaxed)
+        || root.join("stop").exists()
+        || root.join(CLEAN_REQUEST).exists()
 }
 
 fn binary(product: Product, name: &str) -> Result<PathBuf> {
@@ -1638,37 +2189,42 @@ fn binary(product: Product, name: &str) -> Result<PathBuf> {
 }
 
 fn product_tool(product: Product) -> Result<PathBuf> {
-    binary(
-        product,
-        match product {
-            Product::Breg => "RSTACK_BREGCTL_BIN",
-            Product::Casework => "RSTACK_CASEWORKCTL_BIN",
-            Product::Evidence => "RSTACK_EVIDENCECTL_BIN",
-            Product::Messaging => "RSTACK_MESSAGINGCTL_BIN",
-        },
-    )
+    binary(product, product_tool_info(product).1)
+}
+
+fn product_tool_info(product: Product) -> (&'static str, &'static str) {
+    match product {
+        Product::Breg => ("bregctl", "RSTACK_BREGCTL_BIN"),
+        Product::Casework => ("caseworkctl", "RSTACK_CASEWORKCTL_BIN"),
+        Product::Evidence => ("evidencectl", "RSTACK_EVIDENCECTL_BIN"),
+        Product::Messaging => ("messagingctl", "RSTACK_MESSAGINGCTL_BIN"),
+        Product::Scheduling => ("schedulingctl", "RSTACK_SCHEDULINGCTL_BIN"),
+        Product::Documents => ("documentsctl", "RSTACK_DOCUMENTSCTL_BIN"),
+        Product::Coordinator => ("coordinatorctl", "RSTACK_COORDINATORCTL_BIN"),
+        Product::Adapter => ("adapterctl", "RSTACK_ADAPTERCTL_BIN"),
+        Product::Render => ("registry-render", "RSTACK_RENDER_BIN"),
+        Product::Discovery => ("discoveryctl", "RSTACK_DISCOVERYCTL_BIN"),
+    }
 }
 
 fn binaries(product: Product) -> Result<Binaries> {
-    Ok(match product {
-        Product::Breg => Binaries {
-            tool: product_tool(product)?,
-            runtime: binary(product, "RSTACK_BREG_BIN")?,
-        },
-        Product::Casework => Binaries {
-            tool: product_tool(product)?,
-            runtime: binary(product, "RSTACK_CASEWORK_BIN")?,
-        },
-        Product::Evidence => Binaries {
-            tool: product_tool(product)?,
-            runtime: binary(product, "RSTACK_EVIDENCE_BIN")?,
-        },
-        Product::Messaging => Binaries {
-            tool: product_tool(product)?,
-            runtime: binary(product, "RSTACK_MESSAGING_BIN")?,
-        },
-    })
+    let tool = product_tool(product)?;
+    let runtime = match product {
+        Product::Breg => binary(product, "RSTACK_BREG_BIN")?,
+        Product::Casework => binary(product, "RSTACK_CASEWORK_BIN")?,
+        Product::Evidence => binary(product, "RSTACK_EVIDENCE_BIN")?,
+        Product::Messaging => binary(product, "RSTACK_MESSAGING_BIN")?,
+        Product::Scheduling => binary(product, "RSTACK_SCHEDULING_BIN")?,
+        Product::Documents => binary(product, "RSTACK_DOCUMENTS_BIN")?,
+        Product::Coordinator => binary(product, "RSTACK_COORDINATOR_BIN")?,
+        Product::Adapter => binary(product, "RSTACK_ADAPTER_BIN")?,
+        Product::Discovery => binary(product, "RSTACK_DISCOVERY_BIN")?,
+        Product::Render => tool.clone(),
+    };
+    Ok(Binaries { tool, runtime })
 }
+
+const DEFAULT_TTL: &str = "8h";
 
 fn parse_ttl(value: &str) -> Result<u64> {
     let error = || {
@@ -1693,11 +2249,37 @@ fn parse_ttl(value: &str) -> Result<u64> {
         .ok_or_else(error)
 }
 
-fn state_dir() -> PathBuf {
-    env::var_os("RSTACK_DEV_STATE_DIR").map_or_else(
-        || env::temp_dir().join(format!("rstack-dev-{}", rustix::process::getuid().as_raw())),
-        PathBuf::from,
+fn state_dir() -> Result<PathBuf> {
+    select_state_dir(
+        env::var_os("RSTACK_DEV_STATE_DIR").map(PathBuf::from),
+        env::var_os("XDG_STATE_HOME").map(PathBuf::from),
+        env::home_dir(),
+        cfg!(target_os = "macos"),
     )
+}
+
+fn select_state_dir(
+    override_dir: Option<PathBuf>,
+    xdg: Option<PathBuf>,
+    home: Option<PathBuf>,
+    macos: bool,
+) -> Result<PathBuf> {
+    let path = override_dir.unwrap_or_else(|| {
+        let home = home.unwrap_or_default();
+        let base = xdg.filter(|path| path.is_absolute()).unwrap_or_else(|| {
+            if macos {
+                home.join("Library/Application Support")
+            } else {
+                home.join(".local/state")
+            }
+        });
+        base.join("registry-stack/rstack-dev")
+    });
+    ensure!(
+        path.is_absolute(),
+        Usage("development state requires an absolute path. Set RSTACK_DEV_STATE_DIR to an absolute directory".to_owned())
+    );
+    Ok(path)
 }
 
 fn run_dir_name(run_id: &str) -> bool {
@@ -1714,7 +2296,7 @@ fn run_dir(run_id: &str) -> Result<PathBuf> {
             "invalid run ID \"{run_id}\"; use the 32-character ID printed by rstack dev start"
         ))
     );
-    Ok(state_dir().join(run_id))
+    Ok(state_dir()?.join(run_id))
 }
 
 fn private_directory(path: &Path) -> std::io::Result<()> {
@@ -1731,13 +2313,22 @@ fn ensure_private(path: &Path, create: bool) -> Result<()> {
             }
         }
     }
-    let info =
-        fs::symlink_metadata(path).context("cannot inspect the development state directory")?;
+    let info = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "cannot inspect the development state directory {}",
+            path.display()
+        )
+    })?;
     ensure!(
-        info.is_dir()
-            && info.uid() == rustix::process::getuid().as_raw()
-            && info.mode() & 0o077 == 0,
-        "the development state directory must be owner-only and must not be a symlink"
+        info.is_dir() && info.uid() == rustix::process::geteuid().as_raw(),
+        "development state path {} must be a directory you own. Move the existing entry aside",
+        path.display()
+    );
+    ensure!(
+        info.mode() & 0o077 == 0,
+        "development state directory {} allows group or other access. Run chmod 700 {}",
+        path.display(),
+        quote_shell_path(path)
     );
     Ok(())
 }
@@ -1859,6 +2450,85 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> Result<
     Ok(serde_json::from_slice(&plan::read(path, limit)?)?)
 }
 
+/// Whether an authored document is a runner companion. Product checkers use
+/// this to leave plan and scenario validation to `rstack dev check`.
+pub fn is_development_companion(document: &registry_platform_yaml::Node) -> bool {
+    let text = |name| match &document.get(name)?.value.value {
+        registry_platform_yaml::NodeValue::String(value) => Some(value.text.as_str()),
+        _ => None,
+    };
+    matches!(
+        (text("apiVersion"), text("kind")),
+        (Some(plan::API_VERSION), Some(plan::KIND))
+            | (
+                Some(plan::SCENARIOS_API_VERSION),
+                Some(plan::SCENARIOS_KIND)
+            )
+    )
+}
+
+/// Create a fresh project from a host's embedded starter assets.
+pub fn write_starter(directory: &Path, files: &[(&str, &[u8])]) -> Result<()> {
+    let mut private = fs::DirBuilder::new();
+    private.mode(0o700);
+    private
+        .create(directory)
+        .context("choose a new starter directory under an existing parent")?;
+    private.recursive(true);
+    for (relative, bytes) in files {
+        let path = directory.join(relative);
+        private.create(path.parent().expect("embedded starter file has a parent"))?;
+        write_private(&path, bytes)?;
+    }
+    Ok(())
+}
+
+fn quote_shell_path(path: &Path) -> String {
+    let path = path.display().to_string();
+    if path
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"/._-".contains(&byte))
+    {
+        path
+    } else {
+        format!("'{}'", path.replace('\'', "'\"'\"'"))
+    }
+}
+
+fn read_private(path: &Path) -> Result<Option<Vec<u8>>> {
+    let fix = || {
+        format!(
+            "cannot read retained file {}. Start with --clean",
+            path.display()
+        )
+    };
+    let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(flags.bits() as i32)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(fix),
+    };
+    let metadata = file.metadata().with_context(fix)?;
+    ensure!(
+        metadata.is_file() && metadata.uid() == rustix::process::geteuid().as_raw(),
+        "{}",
+        fix()
+    );
+    ensure!(
+        metadata.mode() & 0o077 == 0,
+        "retained file {} allows group or other access. Run chmod 600 {}",
+        path.display(),
+        quote_shell_path(path)
+    );
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).with_context(fix)?;
+    Ok(Some(bytes))
+}
+
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file =
         tempfile::NamedTempFile::new_in(path.parent().context("file has no directory")?)?;
@@ -1874,6 +2544,147 @@ fn clock() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_directory_defaults_and_override() {
+        let home = Some(PathBuf::from("/home/developer"));
+        assert_eq!(
+            select_state_dir(None, None, home.clone(), false).unwrap(),
+            Path::new("/home/developer/.local/state/registry-stack/rstack-dev")
+        );
+        assert_eq!(
+            select_state_dir(None, None, home.clone(), true).unwrap(),
+            Path::new("/home/developer/Library/Application Support/registry-stack/rstack-dev")
+        );
+        assert_eq!(
+            select_state_dir(None, Some("/state".into()), home.clone(), false).unwrap(),
+            Path::new("/state/registry-stack/rstack-dev")
+        );
+        assert_eq!(
+            select_state_dir(Some("/override".into()), Some("/state".into()), home, true).unwrap(),
+            Path::new("/override")
+        );
+    }
+
+    #[test]
+    fn only_a_failed_kept_data_conflict_suggests_clearing_scenario_state() {
+        let report = |status, result, code| {
+            json!({
+                "steps": [{"status": status, "result": result, "problem": {"code": code}}]
+            })
+        };
+        assert!(kept_scenario_conflict(&report(
+            409,
+            "failed",
+            "mutation.conflict"
+        )));
+        assert!(!kept_scenario_conflict(&report(
+            409,
+            "passed",
+            "mutation.conflict"
+        )));
+        assert!(!kept_scenario_conflict(&report(
+            403,
+            "failed",
+            "access.denied"
+        )));
+    }
+
+    #[test]
+    fn missing_volume_preserves_owner_only_state_at_a_timestamped_path() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("development-project");
+        ensure_private(&state, true).unwrap();
+        write_private(&state.join("audit"), b"fixture").unwrap();
+        let orphan = orphan_project_state(&state).unwrap();
+        assert!(!state.exists());
+        assert!(orphan
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("development-project.orphaned-"));
+        ensure_private(&orphan, false).unwrap();
+        assert_eq!(fs::read(orphan.join("audit")).unwrap(), b"fixture");
+    }
+
+    #[test]
+    fn clean_before_the_supervisor_gate_names_both_options() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join(RUN_ID);
+        private_directory(&root).unwrap();
+        let error = request_clean(&root, RUN_ID).unwrap_err().to_string();
+        assert!(error.contains("still starting"), "{error}");
+        assert!(error.contains("Retry when it reports ready"), "{error}");
+        assert!(
+            error.contains(&format!("rstack dev stop {RUN_ID}")),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn docker_daemon_mismatch_names_both_engines_and_remedies() {
+        let root = tempfile::tempdir().unwrap();
+        write_private(&root.path().join("docker-daemon"), b"engine-one").unwrap();
+        check_daemon(root.path(), "engine-one").unwrap();
+        check_daemon(root.path(), "").unwrap();
+        let error = check_daemon(root.path(), "engine-two")
+            .unwrap_err()
+            .to_string();
+        for expected in ["engine-one", "engine-two", "Switch back", "--clean"] {
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn relative_state_directory_names_the_absolute_override() {
+        for path in [None, Some(PathBuf::from("relative"))] {
+            let error = select_state_dir(path, None, None, false)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("absolute") && error.contains("RSTACK_DEV_STATE_DIR"));
+        }
+    }
+
+    #[test]
+    fn retained_file_requires_private_regular_file() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let temp = tempfile::tempdir().unwrap();
+        let key = temp.path().join("key");
+        write_private(&key, b"fixture").unwrap();
+        assert_eq!(read_private(&key).unwrap().unwrap(), b"fixture");
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+        let error = read_private(&key).unwrap_err().to_string();
+        assert!(error.contains(&format!("chmod 600 {}", key.display())));
+        assert!(!error.contains("--clean"), "{error}");
+        let link = temp.path().join("link");
+        symlink(&key, &link).unwrap();
+        let error = read_private(&link).unwrap_err().to_string();
+        assert!(error.contains(&link.display().to_string()) && error.contains("--clean"));
+        assert!(!error.contains("chmod"), "{error}");
+    }
+
+    #[test]
+    fn dev_accepts_unset_and_development_and_refuses_other_declarations() {
+        use registry_platform_config::declared_from;
+        use std::ffi::OsStr;
+
+        let posture =
+            |value: Option<&str>| require_development(declared_from(None, value.map(OsStr::new)));
+        assert_eq!(posture(None), Ok(()));
+        assert_eq!(posture(Some(DEVELOPMENT)), Ok(()));
+        assert_eq!(
+            posture(Some("production")).unwrap_err().0,
+            "platform.posture.conflict"
+        );
+        assert_eq!(
+            posture(Some("staging")).unwrap_err().0,
+            "platform.posture.invalid-value"
+        );
+        assert_eq!(
+            posture(Some("staging")).unwrap_err().2,
+            "Unset REGISTRY_STACK_POSTURE, or set it to development."
+        );
+    }
 
     const RUN_ID: &str = "0123456789abcdef0123456789abcdef";
 
@@ -2040,6 +2851,7 @@ mod tests {
     fn ttl_is_bounded_and_requires_a_unit() {
         assert_eq!(parse_ttl("1s").unwrap(), 1);
         assert_eq!(parse_ttl("30m").unwrap(), 1800);
+        assert_eq!(parse_ttl(DEFAULT_TTL).unwrap(), 8 * 3600);
         assert_eq!(parse_ttl("24h").unwrap(), 86400);
         for invalid in ["", "0s", "3600", "25h", "18446744073709551615h", "é"] {
             assert!(parse_ttl(invalid).is_err(), "{invalid}");
@@ -2104,6 +2916,10 @@ mod tests {
             message.contains(&format!("rstack dev stop {RUN_ID} --recover")),
             "{message}"
         );
+        assert!(
+            message.contains(&format!("rstack dev stop {RUN_ID} --clean")),
+            "{message}"
+        );
         assert!(message.contains("database unreachable"), "{message}");
         assert!(!message.contains("30 minutes"), "{message}");
         assert_eq!(
@@ -2139,7 +2955,7 @@ mod tests {
         assert!(error.contains("\"Bad Name\""), "{error}");
 
         let missing = Path::new("/definitely/missing/project");
-        let error = format!("{:#}", start(missing, None, None).unwrap_err());
+        let error = format!("{:#}", start(missing, None, None, false).unwrap_err());
         assert!(error.contains("/definitely/missing/project"), "{error}");
         let (mut out, mut err) = (Vec::new(), Vec::new());
         assert_ne!(check(missing, false, false, &mut out, &mut err), 0);
@@ -2156,6 +2972,43 @@ mod tests {
         let error = unknown_person("reviewer", &plan.people).to_string();
         assert!(error.contains("\"reviewer\""), "{error}");
         assert!(error.contains("operator"), "{error}");
+    }
+
+    #[test]
+    fn project_keys_follow_canonical_paths_and_fit_postgresql_names() {
+        let scratch = tempfile::tempdir().unwrap();
+        let first = scratch.path().join("project");
+        let second = scratch.path().join("other");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        let key = project_key(&first.canonicalize().unwrap(), scratch.path());
+        assert_eq!(
+            key,
+            project_key(&first.join(".").canonicalize().unwrap(), scratch.path())
+        );
+        assert_ne!(
+            key,
+            project_key(&second.canonicalize().unwrap(), scratch.path())
+        );
+        assert_ne!(key, project_key(&first, &second));
+        let names = database::run_object_names(&key, "coordinator", false).unwrap();
+        assert!(names
+            .iter()
+            .all(|name| name.contains(&key) && name.len() <= 63));
+    }
+
+    #[test]
+    fn cleaning_cannot_acquire_a_held_project() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("run");
+        let key = project_key(scratch.path(), scratch.path());
+        let held = lock_project(&root, &key).unwrap();
+        assert!(lock_project(&root, &key)
+            .unwrap_err()
+            .to_string()
+            .contains("live development run"));
+        drop(held);
+        assert!(lock_project(&root, &key).is_ok());
     }
 
     #[test]

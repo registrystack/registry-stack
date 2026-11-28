@@ -41,6 +41,7 @@ fn check(path: &Path, extra: &[&str]) -> Output {
         .arg("--runtime-config")
         .arg(path)
         .args(extra)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("EVIDENCE_OID4VCI_CONFIG")
         .env_remove("EVIDENCE_OID4VCI_RUNTIME_CONFIG")
         .output()
@@ -87,6 +88,61 @@ fn the_committed_example_passes_in_both_formats() {
         String::from_utf8(output.stderr).unwrap(),
         "0 errors, 0 warnings in 1 file\n"
     );
+}
+
+#[test]
+fn production_check_lists_the_loopback_offer_token_issuer() {
+    let text = example().replace(
+        "issuer: https://mint.example.org",
+        "issuer: http://127.0.0.1:8082",
+    );
+    let (_root, path) = write(&text);
+    let output = check(
+        &path,
+        &[
+            "--format",
+            "json",
+            "--posture",
+            "production",
+            "--deny-warnings",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let report = json(&output);
+    let settings = report["explicitProductionSettings"].as_array().unwrap();
+    assert_eq!(settings.len(), 1);
+    assert_eq!(
+        settings[0]["code"],
+        "platform.posture.issuer-loopback-plaintext"
+    );
+    assert_eq!(settings[0]["pointer"], "/offers/issuer");
+}
+
+#[test]
+fn supervised_validation_listing_does_not_fail_deny_warnings() {
+    let text = example().replace(
+        "credentialIssuer: https://wallet.example.org",
+        "credentialIssuer: http://127.0.0.1:8090\nvalidationMode: supervised-local-development",
+    );
+    let (_root, path) = write(&text);
+    let output = check(
+        &path,
+        &[
+            "--posture",
+            "development",
+            "--deny-warnings",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(codes(&json(&output))
+        .iter()
+        .any(|code| code == "evidence.posture.supervised-validation"));
 }
 
 #[test]

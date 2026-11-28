@@ -96,7 +96,7 @@ pub(crate) fn scenarios_schema() -> schemars::Schema {
 }
 
 #[cfg(feature = "schema")]
-fn keyed_schema<K: schemars::JsonSchema, V: schemars::JsonSchema>(
+pub(super) fn keyed_schema<K: schemars::JsonSchema, V: schemars::JsonSchema>(
     generator: &mut schemars::SchemaGenerator,
 ) -> schemars::Schema {
     schemars::json_schema!({
@@ -224,6 +224,12 @@ pub(super) enum Product {
     Casework,
     Evidence,
     Messaging,
+    Scheduling,
+    Documents,
+    Coordinator,
+    Adapter,
+    Render,
+    Discovery,
 }
 
 impl Product {
@@ -233,7 +239,35 @@ impl Product {
             Self::Casework => "casework",
             Self::Evidence => "evidence",
             Self::Messaging => "messaging",
+            Self::Scheduling => "scheduling",
+            Self::Documents => "documents",
+            Self::Coordinator => "coordinator",
+            Self::Adapter => "adapter",
+            Self::Render => "render",
+            Self::Discovery => "discovery",
         }
+    }
+    pub(super) fn manifest(self) -> &'static str {
+        match self {
+            Self::Breg => "registry.yaml",
+            Self::Casework => "casework.yaml",
+            Self::Evidence => "evidence.yaml",
+            Self::Messaging => "messaging.yaml",
+            Self::Scheduling => "scheduling.yaml",
+            Self::Documents => "documents.yaml",
+            Self::Coordinator => "workflow.yaml",
+            Self::Adapter => "project.yaml",
+            Self::Render => "manifest.yaml",
+            Self::Discovery => "origins.yaml",
+        }
+    }
+
+    pub(super) fn needs_database(self) -> bool {
+        !matches!(self, Self::Evidence | Self::Render | Self::Discovery)
+    }
+
+    pub(super) fn verifies_tokens(self) -> bool {
+        self != Self::Discovery
     }
 }
 
@@ -249,9 +283,17 @@ pub(super) struct Plan {
     /// The issuer name written into every test token. Use an HTTPS URL that the products' trusted issuers and producers name. Set `run` instead only when the plan declares an `application` or a paired BReg and Casework `runIssuerBinding`: each of those requires `run`, and `run` requires one of them.
     #[cfg_attr(feature = "schema", schemars(schema_with = "issuer_schema"))]
     pub issuer: String,
+    /// JWKS endpoint for an externally managed issuer. When set, the runner
+    /// delegates authentication to that issuer and does not mint person tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<PlatformUrl>"))]
+    pub external_jwks_uri: Option<String>,
+    /// Explicit connections from a development BReg to external fixture services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_breg: Option<super::external_breg::ExternalBreg>,
     /// The products to start, each with its project directory and token audience. List each product at most once.
     pub products: Vec<ProductPlan>,
-    /// The test people, keyed by a lowercase local identifier. Define 1 to 256, and give at least one grant to every started product.
+    /// The test people, keyed by a lowercase local identifier. Define up to 256, and give at least one grant to every started product that verifies tokens.
     #[cfg_attr(
         feature = "schema",
         schemars(schema_with = "keyed_schema::<LocalId, TestPerson>")
@@ -318,7 +360,7 @@ pub(super) struct ApplicationPlan {
 pub(super) struct ProductPlan {
     /// Which product to start.
     pub product: Product,
-    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework, evidence.yaml for Evidence or messaging.yaml for Messaging.
+    /// Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain the product’s project manifest.
     pub project: PathBuf,
     /// Token audience this product accepts: 1 to 256 characters without whitespace or control characters, distinct from the other products' audiences.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
@@ -344,8 +386,9 @@ pub(super) struct TestPerson {
     /// Client identifier of this person's tokens: 1 to 256 characters without whitespace or control characters.
     #[cfg_attr(feature = "schema", schemars(with = "ExternalId"))]
     pub client: String,
-    /// The authority this person holds in each product, keyed by `breg`, `casework`, `evidence` or `messaging`. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`.
+    /// The authority this person holds in each product, keyed by its product identifier. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`.
     #[serde(deserialize_with = "deserialize_grants")]
+    #[cfg_attr(feature = "schema", schemars(with = "GrantsDocument"))]
     pub grants: BTreeMap<Product, Grant>,
     /// Forward the same authority to both products. Both grants must declare the same scopes and additional claims.
     #[serde(default, rename = "caseworkContext")]
@@ -357,7 +400,7 @@ pub(super) struct TestPerson {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub(super) struct Grant {
-    /// Local identifier of the product profile this grant uses.
+    /// Local identifier of the product profile, the Coordinator caller policy, or a local label for a product without profiles.
     #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
     pub profile: String,
     /// Distinct scopes written into the token, at most 32, each an OAuth scope-token of 1 to 256 bytes: printable ASCII without spaces, double quotes or backslashes.
@@ -371,12 +414,18 @@ pub(super) struct Grant {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 struct GrantsDocument {
     breg: Option<Grant>,
     casework: Option<Grant>,
     evidence: Option<Grant>,
     messaging: Option<Grant>,
+    scheduling: Option<Grant>,
+    documents: Option<Grant>,
+    coordinator: Option<Grant>,
+    adapter: Option<Grant>,
+    render: Option<Grant>,
 }
 
 fn deserialize_grants<'de, D>(
@@ -391,6 +440,13 @@ where
         grants.casework.map(|grant| (Product::Casework, grant)),
         grants.evidence.map(|grant| (Product::Evidence, grant)),
         grants.messaging.map(|grant| (Product::Messaging, grant)),
+        grants.scheduling.map(|grant| (Product::Scheduling, grant)),
+        grants.documents.map(|grant| (Product::Documents, grant)),
+        grants
+            .coordinator
+            .map(|grant| (Product::Coordinator, grant)),
+        grants.adapter.map(|grant| (Product::Adapter, grant)),
+        grants.render.map(|grant| (Product::Render, grant)),
     ]
     .into_iter()
     .flatten()
@@ -457,13 +513,13 @@ pub(super) struct Step {
     pub id: String,
     /// The product that receives the request.
     pub product: Product,
-    /// The test person who sends the request. The person needs a grant for this step's product.
+    /// The test person who sends the request. Omit for a public Discovery request.
     #[serde(rename = "as")]
-    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
-    pub person: String,
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
+    pub person: Option<String>,
     /// The HTTP method.
     pub method: Method,
-    /// Request path, starting with `/v1/`, at most 2048 characters, without whitespace, control characters, backslashes or fragments. It may contain `{{name}}` references to earlier captures.
+    /// Request path, starting with `/v1/` or using the Adapter effective-contract path, at most 2048 characters, without whitespace, control characters, backslashes or fragments. It may contain `{{name}}` references to earlier captures.
     pub path: String,
     /// JSON request body, at most 1 MiB once encoded. String values may contain `{{name}}` references to earlier captures. Do not combine with `raw`.
     pub body: Option<Value>,
@@ -997,6 +1053,10 @@ impl Plan {
             .expect("validated product")
     }
 
+    pub(super) fn jwks_uri(&self) -> Option<&str> {
+        self.external_jwks_uri.as_deref()
+    }
+
     fn validate(&self, root: &Path) -> SemanticResult<()> {
         let path = &self.scenario_file;
         require(
@@ -1011,19 +1071,34 @@ impl Plan {
         )?;
         require_file_inside(root, path, "/scenarioFile", "authored scenario file")?;
         require(
-            self.issuer == "run" || ParsedUrl::parse(&self.issuer).is_ok_and(|url| {
-                url.scheme() == "https"
-                    && url.host().is_some()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-                    && url.query().is_none()
-                    && url.fragment().is_none()
-                    && self.issuer.len() <= 512
-            }),
+            self.issuer == "run"
+                || if self.jwks_uri().is_some() {
+                    crate::products::is_loopback_run_issuer(&self.issuer)
+                } else {
+                    issuer_url(&self.issuer)
+                },
             "/issuer",
-            "The issuer must be `run` or a bounded HTTPS URL without credentials, query, or fragment.",
-            "Set issuer to `run` for an application or exact paired run issuer binding, or to an HTTPS URL with a host and no credentials, query, or fragment.",
+            "An issuer with externalJwksUri must use a numeric loopback HTTP origin. Other issuers must be `run` or HTTPS without credentials, query, or fragment.",
+            "Set issuer to the exact numeric loopback HTTP origin for an external key endpoint, or use `run` or a fixed HTTPS issuer for runner-managed keys.",
         )?;
+        if let Some(bindings) = &self.external_breg {
+            require(
+                self.jwks_uri().is_some()
+                    && self.products.iter().any(|p| p.product == Product::Breg),
+                "/externalBreg",
+                "External BReg connections require BReg and an external issuer.",
+                "Add BReg and externalJwksUri to this plan, or remove externalBreg.",
+            )?;
+            bindings.validate(root)?;
+        }
+        if let Some(uri) = self.jwks_uri() {
+            require(
+                self.issuer != "run" && numeric_loopback_endpoint(uri),
+                "/externalJwksUri",
+                "An external key endpoint needs a fixed issuer and a numeric loopback HTTP URL.",
+                "Set issuer to the exact external issuer and externalJwksUri to its key endpoint.",
+            )?;
+        }
         require(
             (self.issuer != "run"
                 || self.application.is_some()
@@ -1035,10 +1110,12 @@ impl Plan {
             "Use issuer `run` with application, the exact paired runIssuerBinding, or Evidence; otherwise remove them and set an HTTPS issuer.",
         )?;
         require(
-            !self.runs_evidence() || (self.issuer == "run" && self.application.is_none()),
+            !self.runs_evidence()
+                || (self.issuer == "run" && self.application.is_none())
+                || self.jwks_uri().is_some(),
             "/issuer",
-            "An Evidence target accepts only the run's own loopback issuer, and a browser application already owns that issuer.",
-            "Set issuer to `run` and remove the application when the plan starts Evidence.",
+            "An Evidence target needs the run's loopback issuer or an external key endpoint.",
+            "Set issuer to `run` and remove the application, or configure externalJwksUri.",
         )?;
         if let Some(application) = &self.application {
             if let Some(roles) = &application.casework_source_credential_roles {
@@ -1121,7 +1198,7 @@ impl Plan {
             !self.products.is_empty(),
             "/products",
             "The plan must name at least one product.",
-            "Add a BReg, Casework, Evidence or Messaging product to products.",
+            "Add a supported product to products.",
         )?;
         let mut products = BTreeSet::new();
         let mut audiences = BTreeSet::new();
@@ -1150,12 +1227,7 @@ impl Plan {
                 "The product project must be a relative path inside the development project directory.",
                 "Set project to `.` or a relative path made only of normal path components.",
             )?;
-            let manifest = match entry.product {
-                Product::Breg => "registry.yaml",
-                Product::Casework => "casework.yaml",
-                Product::Evidence => "evidence.yaml",
-                Product::Messaging => "messaging.yaml",
-            };
+            let manifest = entry.product.manifest();
             require_file_inside(
                 root,
                 &entry.project.join(manifest),
@@ -1172,11 +1244,18 @@ impl Plan {
             )?;
         }
         require(
-            (1..=MAXIMUM_PEOPLE).contains(&self.people.len()),
+            self.people.len() <= MAXIMUM_PEOPLE,
             "/people",
-            "The plan must define 1 to 256 test people.",
-            "Add or remove test people until people contains between 1 and 256 entries.",
+            "The plan may define at most 256 test people.",
+            "Remove test people until people contains at most 256 entries.",
         )?;
+        require(
+            !self.people.is_empty() || products.iter().all(|product| !product.verifies_tokens()),
+            "/people",
+            "The plan must define test people for products that verify tokens.",
+            "Add a test person with a grant for each product that verifies tokens.",
+        )?;
+        let mut coordinator_scopes = BTreeMap::new();
         for (name, person) in &self.people {
             require(
                 identifier(name),
@@ -1211,7 +1290,7 @@ impl Plan {
                 !person.grants.is_empty(),
                 &format!("{field}/grants"),
                 "The test person must have at least one product grant.",
-                "Add a BReg, Casework, Evidence or Messaging grant for this test person.",
+                "Add a grant for a started product that verifies tokens.",
             )?;
             for (product, grant) in &person.grants {
                 let field = format!("{field}/grants/{}", product.name());
@@ -1237,6 +1316,24 @@ impl Plan {
                     "The grant must contain at most 32 scopes, each an OAuth scope-token.",
                     "Remove excess scopes, and keep each scope within 256 bytes of printable ASCII without spaces, double quotes or backslashes.",
                 )?;
+                if *product == Product::Coordinator {
+                    require(
+                        grant.profile == person.client,
+                        &format!("{field}/profile"),
+                        "The Coordinator grant's profile must match its client policy ID.",
+                        "Set profile to the person's client.",
+                    )?;
+                    let scopes = grant.scopes.iter().collect::<BTreeSet<_>>();
+                    let expected = coordinator_scopes
+                        .entry(&person.client)
+                        .or_insert_with(|| scopes.clone());
+                    require(
+                        *expected == scopes,
+                        &format!("{field}/scopes"),
+                        "Coordinator grants for the same client must have the same scopes.",
+                        "Align the scopes for every Coordinator grant using this client.",
+                    )?;
+                }
                 for claim in grant.claims.keys() {
                     if self.application.is_some() && browser_host_claim(claim) {
                         return refuse(
@@ -1299,7 +1396,10 @@ impl Plan {
                 )?;
             }
         }
-        for product in products {
+        for product in products
+            .into_iter()
+            .filter(|product| product.verifies_tokens())
+        {
             require(
                 self.people
                     .values()
@@ -1344,28 +1444,34 @@ impl Journey {
                 "Set id to a lowercase local identifier or dotted sequence of local identifiers.",
             )?;
             require(
-                plan.people
-                    .get(&step.person)
-                    .is_some_and(|person| person.grants.contains_key(&step.product)),
+                if step.product.verifies_tokens() {
+                    step.person
+                        .as_ref()
+                        .and_then(|name| plan.people.get(name))
+                        .is_some_and(|person| person.grants.contains_key(&step.product))
+                } else {
+                    step.person.is_none() && plan.products.iter().any(|p| p.product == step.product)
+                },
                 &format!("{field}/as"),
                 "The step must name a test person with a grant for its product.",
                 "Set as to a test person that has a grant for this step's product.",
             )?;
             require(
-                valid_path(&step.path),
+                valid_path(&step.path) && (step.path != ADAPTER_CONTRACT_PATH || step.product == Product::Adapter),
                 &format!("{field}/path"),
                 "The request path must be a relative product API path starting with /v1/.",
                 "Set path to a bounded /v1/ path without whitespace, control characters, backslashes, or fragments.",
             )?;
             if step.product == Product::Breg {
-                let grant_profile = &plan.people[&step.person].grants[&Product::Breg].profile;
+                let person = step.person.as_ref().expect("validated BReg step");
+                let grant_profile = &plan.people[person].grants[&Product::Breg].profile;
                 if let Some(named) = path_access_profile(&step.path) {
                     require(
                         named == *grant_profile || named.contains("{{"),
                         &format!("{field}/path"),
                         format!(
                             "Step `{}` names the BReg access profile `{named}`, but its test person `{}` has a grant for `{grant_profile}`.",
-                            step.id, step.person
+                            step.id, person
                         ),
                         format!(
                             "Remove `accessProfile={named}` from the path (the scenario takes the profile from the test person's grant), or run the step as a test person whose BReg grant selects `{named}`."
@@ -1598,6 +1704,14 @@ impl Journey {
 
 impl ScenarioFile {
     fn validate(&self, plan: &Plan) -> SemanticResult<()> {
+        if plan.jwks_uri().is_some() {
+            return require(
+                self.scenarios.is_empty(),
+                "/scenarios",
+                "An external issuer run cannot mint tokens for authored scenarios.",
+                "Set scenarios to an empty list and run the scenario using externally acquired tokens.",
+            );
+        }
         require(
             (1..=16).contains(&self.scenarios.len()),
             "/scenarios",
@@ -1619,6 +1733,28 @@ impl ScenarioFile {
         }
         Ok(())
     }
+}
+
+fn issuer_url(value: &str) -> bool {
+    value.len() <= 512
+        && ParsedUrl::parse(value).is_ok_and(|url| {
+            url.scheme() == "https"
+                && url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        })
+}
+
+pub(super) fn numeric_loopback_endpoint(value: &str) -> bool {
+    value.len() <= 512
+        && !value.contains(['\\', '?', '#'])
+        && !value.chars().any(char::is_whitespace)
+        && value.strip_prefix("http://").is_some_and(|rest| {
+            let authority = rest.split('/').next().unwrap_or_default();
+            crate::products::is_loopback_run_issuer(&format!("http://{authority}"))
+        })
 }
 
 fn step_identifier(value: &str) -> bool {
@@ -1676,9 +1812,11 @@ fn require_file_inside(
     }
 }
 
+pub(super) const ADAPTER_CONTRACT_PATH: &str = "/.well-known/registry-adapter/effective-contract";
+
 pub(super) fn valid_path(value: &str) -> bool {
     value.len() <= 2048
-        && value.starts_with("/v1/")
+        && (value.starts_with("/v1/") || value == ADAPTER_CONTRACT_PATH)
         && !value.contains(['\\', '#'])
         && !value.chars().any(|c| c.is_control() || c.is_whitespace())
 }
@@ -1741,6 +1879,93 @@ mod tests {
     }
 
     #[test]
+    fn an_external_issuer_accepts_loopback_keys_and_requires_an_empty_scenario_pack() {
+        let (root, mut plan) = plan(json!({"id": "read", "product": "breg",
+            "as": "operator", "method": "GET", "path": "/v1/records", "expect": {"status": 200}}));
+        plan.issuer = "http://127.0.0.1:41000".to_owned();
+        assert!(plan.validate(root.path()).is_err());
+        plan.external_jwks_uri = Some(format!("{}/keys", plan.issuer));
+        plan.validate(root.path()).unwrap();
+        assert!(scenario_file(root.path(), &plan).validate(&plan).is_err());
+        let empty = ScenarioFile {
+            scenarios: Vec::new(),
+        };
+        empty.validate(&plan).unwrap();
+
+        for uri in [
+            "http://identity.example.test/keys",
+            "https://user@127.0.0.1/keys",
+        ] {
+            plan.external_jwks_uri = Some(uri.to_owned());
+            assert!(plan.validate(root.path()).is_err());
+        }
+    }
+
+    #[test]
+    fn external_authentication_urls_require_numeric_loopback_http() {
+        let (root, mut plan) = plan(json!({"id": "read", "product": "breg",
+            "as": "operator", "method": "GET", "path": "/v1/records", "expect": {"status": 200}}));
+        for invalid in [
+            "https://127.0.0.1:41000",
+            "http://localhost:41000",
+            "http://192.0.2.1:41000",
+        ] {
+            plan.issuer = invalid.to_owned();
+            plan.external_jwks_uri = Some("http://127.0.0.1:41000/keys".to_owned());
+            let error = plan.validate(root.path()).unwrap_err();
+            assert_eq!(error.field, "/issuer");
+            assert!(error.reason.contains("numeric loopback HTTP"));
+
+            plan.issuer = "http://[::1]:41000".to_owned();
+            plan.external_jwks_uri = Some(format!("{invalid}/keys"));
+            let error = plan.validate(root.path()).unwrap_err();
+            assert_eq!(error.field, "/externalJwksUri");
+            assert!(error.reason.contains("numeric loopback HTTP"));
+        }
+    }
+
+    #[test]
+    fn external_breg_peers_require_numeric_loopback_http() {
+        for pointer in [
+            "/reviewAuthority/endpoint",
+            "/reviewAuthority/tokenEndpoint",
+            "/taskGrant/sourceIssuer",
+            "/taskGrant/statusUrl",
+            "/taskGrant/tokenEndpoint",
+        ] {
+            for invalid in [
+                "https://127.0.0.1:41000",
+                "http://localhost:41000",
+                "http://192.0.2.1:41000",
+            ] {
+                let url = "http://127.0.0.1:41000";
+                let root = tempfile::tempdir().unwrap();
+                fs::create_dir(root.path().join("fixture")).unwrap();
+                crate::write_private(&root.path().join("fixture/key"), b"synthetic").unwrap();
+                let mut input = json!({
+                    "reviewAuthority": {
+                        "id": "review", "endpoint": url, "profile": "review",
+                        "producerId": "producer", "recoveryDays": 1, "tokenEndpoint": url,
+                        "clientId": "client", "assertionKeyRef": "secret:file/key",
+                        "resource": "casework", "scopes": []
+                    },
+                    "taskGrant": {
+                        "sourceIssuer": url, "assertionClient": "assertion", "statusUrl": url,
+                        "tokenEndpoint": url, "statusClient": "status",
+                        "statusKeyRef": "secret:file/key", "statusResource": "casework"
+                    }
+                });
+                *input.pointer_mut(pointer).unwrap() = json!(invalid);
+                let peers: crate::external_breg::ExternalBreg =
+                    serde_json::from_value(input).unwrap();
+                let error = peers.validate(root.path()).unwrap_err();
+                assert_eq!(error.field, format!("/externalBreg{pointer}"));
+                assert!(error.reason.contains("numeric loopback HTTP"));
+            }
+        }
+    }
+
+    #[test]
     fn a_plan_takes_up_to_256_test_people() {
         let step = json!({"id": "list", "product": "breg", "as": "operator",
             "method": "GET", "path": "/v1/records", "expect": {"status": 200}});
@@ -1756,7 +1981,7 @@ mod tests {
         plan.people.insert("person-256".to_owned(), copy());
         let refusal = plan.validate(root.path()).unwrap_err().to_string();
         assert!(refusal.contains("/people"), "{refusal}");
-        assert!(refusal.contains("1 to 256 test people"), "{refusal}");
+        assert!(refusal.contains("at most 256 test people"), "{refusal}");
     }
 
     /// Writes `tests/scenarios.yaml` holding one scenario.
@@ -2726,5 +2951,123 @@ mod tests {
         .unwrap();
         let error = read_plan(root.path()).err().unwrap().to_string();
         assert!(error.contains("profile"), "{error}");
+    }
+    #[test]
+    fn new_products_have_closed_grants_and_discovery_needs_none() {
+        for (name, manifest) in [
+            ("scheduling", "scheduling.yaml"),
+            ("documents", "documents.yaml"),
+            ("coordinator", "workflow.yaml"),
+            ("adapter", "project.yaml"),
+            ("render", "manifest.yaml"),
+            ("discovery", "origins.yaml"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            fs::write(root.path().join(manifest), "fixture").unwrap();
+            fs::create_dir(root.path().join("tests")).unwrap();
+            fs::write(root.path().join("tests/scenarios.yaml"), "fixture").unwrap();
+            let plan = |people: Value| {
+                json!({
+                    "apiVersion": API_VERSION,
+                    "kind": KIND,
+                    "issuer": "https://issuer.example.invalid",
+                    "products": [{"product": name, "project": ".", "audience": name}],
+                    "people": people,
+                    "scenarioFile": "tests/scenarios.yaml",
+                })
+            };
+            let people = if name == "discovery" {
+                json!({})
+            } else {
+                json!({"operator": {"subject": "operator", "client": "console",
+                    "grants": {name: {"profile": "console", "scopes": []}}}})
+            };
+            let file = root.path().join("dev.yaml");
+            fs::write(&file, plan(people).to_string()).unwrap();
+            let decoded =
+                read_plan(root.path()).unwrap_or_else(|error| panic!("{name}: {error:#}"));
+            validate_plan(root.path(), &decoded)
+                .unwrap_or_else(|error| panic!("{name}: {error:#}"));
+            assert_eq!(decoded.value.products[0].product.name(), name);
+
+            if name != "discovery" {
+                fs::write(root.path().join("messaging.yaml"), "fixture").unwrap();
+                let mut missing_grant = plan(json!({
+                    "operator": {"subject": "operator", "client": "console",
+                        "grants": {"messaging": {"profile": "operator", "scopes": []}}}
+                }));
+                missing_grant["products"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
+                        "product": "messaging", "project": ".", "audience": "messaging"
+                    }));
+                fs::write(&file, missing_grant.to_string()).unwrap();
+                let decoded = read_plan(root.path()).unwrap();
+                let error = validate_plan(root.path(), &decoded).unwrap_err();
+                assert!(format!("{error:#}").contains(&format!(
+                    "The plan must define at least one grant for {name}."
+                )));
+            }
+        }
+    }
+    #[test]
+    fn coordinator_grant_conflicts_are_reported_at_the_grant() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("workflow.yaml"), "fixture").unwrap();
+        fs::write(root.path().join("scenarios.yaml"), "fixture").unwrap();
+        let mut plan = json!({
+            "apiVersion": API_VERSION, "kind": KIND,
+            "issuer": "https://issuer.example.invalid",
+            "products": [{"product": "coordinator", "project": ".", "audience": "coordinator"}],
+            "people": {
+                "first": {"subject": "first", "client": "console",
+                    "grants": {"coordinator": {"profile": "console", "scopes": ["status"]}}},
+                "second": {"subject": "second", "client": "console",
+                    "grants": {"coordinator": {"profile": "reader", "scopes": ["start"]}}},
+            },
+            "scenarioFile": "scenarios.yaml",
+        });
+        for (field, fix) in [("profile", json!("console")), ("scopes", json!(["status"]))] {
+            let pointer = format!("/people/second/grants/coordinator/{field}");
+            fs::write(root.path().join("dev.yaml"), plan.to_string()).unwrap();
+            let decoded = read_plan(root.path()).unwrap();
+            let error = validate_plan(root.path(), &decoded).unwrap_err();
+            assert!(format!("{error:#}").contains(&pointer), "{error:#}");
+            *plan.pointer_mut(&pointer).unwrap() = fix;
+        }
+        fs::write(root.path().join("dev.yaml"), plan.to_string()).unwrap();
+        validate_plan(root.path(), &read_plan(root.path()).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn plan_does_not_accept_authentication_overrides_or_unknown_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let valid = json!({
+            "apiVersion": API_VERSION,
+            "kind": KIND,
+            "issuer": "https://issuer.example.invalid",
+            "products": [{"product": "scheduling", "project": ".", "audience": "urn:scheduling"}],
+            "people": {"reader": {"subject": "reader", "client": "console",
+                "grants": {"scheduling": {"profile": "reader", "scopes": []}}}},
+            "scenarioFile": "scenarios.yaml",
+        });
+        for (pointer, field) in [
+            ("", "issuerUrl"),
+            ("/products/0", "jwksUri"),
+            ("/people/reader/grants", "unknown"),
+            ("/people/reader/grants/scheduling", "role"),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.pointer_mut(pointer).unwrap()[field] = json!("unexpected");
+            fs::write(root.path().join("dev.yaml"), invalid.to_string()).unwrap();
+            let error = read_plan(root.path())
+                .err()
+                .expect("unknown member refused");
+            assert!(
+                error.to_string().contains(&format!("{pointer}/{field}")),
+                "{error:#}"
+            );
+        }
     }
 }

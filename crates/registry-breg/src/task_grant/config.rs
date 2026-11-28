@@ -28,11 +28,13 @@ impl TaskGrantStatusRegistry {
         configs: &[TaskGrantStatusConfig],
         resource: &str,
         secrets: &SecretResolver,
+        peer_policy: registry_platform_httputil::PeerPolicy,
     ) -> Result<Self, TaskGrantError> {
         registry_platform_oidc::task_grant::TaskGrantStatusRegistry::activate(
             &endpoints(configs),
             resource,
             secrets,
+            peer_policy,
         )
         .map(Self)
     }
@@ -134,6 +136,7 @@ mod tests {
             std::slice::from_ref(&config),
             "urn:breg:test",
             &secrets,
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
         )
         .unwrap();
         assert!(status.contains(&config.source_issuer));
@@ -143,7 +146,8 @@ mod tests {
         assert!(TaskGrantStatusRegistry::activate(
             &[config.clone(), duplicate],
             "urn:breg:test",
-            &secrets
+            &secrets,
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
         )
         .is_err());
         assert!(Url::new("https://user@casework.test").is_err());
@@ -151,13 +155,25 @@ mod tests {
             let mut invalid = config.clone();
             invalid.base_url = Url::new(url).unwrap();
             assert!(
-                TaskGrantStatusRegistry::activate(&[invalid], "urn:breg:test", &secrets).is_err(),
+                TaskGrantStatusRegistry::activate(
+                    &[invalid],
+                    "urn:breg:test",
+                    &secrets,
+                    registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+                )
+                .is_err(),
                 "{url}"
             );
         }
         let mut invalid = config.clone();
         invalid.status_resource = ExternalId::new("not-an-absolute-resource").unwrap();
-        assert!(TaskGrantStatusRegistry::activate(&[invalid], "urn:breg:test", &secrets).is_err());
+        assert!(TaskGrantStatusRegistry::activate(
+            &[invalid],
+            "urn:breg:test",
+            &secrets,
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+        )
+        .is_err());
         let mut retired = serde_json::to_value(config.clone()).unwrap();
         retired["authority"] = serde_json::json!("casework-v1");
         assert!(serde_json::from_value::<TaskGrantStatusConfig>(retired).is_err());

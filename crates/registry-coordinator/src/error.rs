@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_yaml::{Diagnostic, Report, Severity};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A category, authored location and repair action, without run payload
 /// values. A restore refusal's operator message names the run id or package
@@ -10,11 +11,23 @@ use std::path::{Path, PathBuf};
 pub struct CoordinatorError {
     pub code: String,
     pub message: String,
-    pub file: Option<Box<Path>>,
+    pub file: Option<Box<PathBuf>>,
     pub field: Option<Box<str>>,
     pub suggested_action: Option<Box<str>>,
     pub diagnostics: Box<[Diagnostic]>,
     pub exit_code: u8,
+    /// The check that refused a caller, set by the constructors of the
+    /// authentication, authorization and event-delivery refusals and read
+    /// where the refusal is answered. A fixed member, never a caller value.
+    pub check: Option<FailedCheck>,
+    /// Operator log detail for a refusal.
+    pub(crate) refusal_detail: Option<Box<RefusalDetail>>,
+}
+
+#[derive(Debug)]
+pub(crate) enum RefusalDetail {
+    Scope(DeclaredScope),
+    Remedy(&'static str),
 }
 
 impl CoordinatorError {
@@ -30,6 +43,8 @@ impl CoordinatorError {
                 "service-unavailable" | "output-unavailable" | "definition.read" => 3,
                 _ => 1,
             },
+            check: None,
+            refusal_detail: None,
         }
     }
     /// Preserve all shared-reader findings and their authored positions.
@@ -50,7 +65,7 @@ impl CoordinatorError {
             file: deciding
                 .source
                 .as_ref()
-                .map(|source| PathBuf::from(&source.file).into_boxed_path()),
+                .map(|source| Box::new(PathBuf::from(&source.file))),
             field: Some(deciding.path.clone().into_boxed_str()),
             suggested_action: Some(deciding.suggested_action.clone().into_boxed_str()),
             diagnostics: diagnostics.into(),
@@ -62,8 +77,34 @@ impl CoordinatorError {
             } else {
                 1
             },
+            check: None,
+            refusal_detail: None,
         }
     }
+    /// Name the check that refused the caller.
+    #[must_use]
+    pub(crate) fn failing(mut self, check: FailedCheck) -> Self {
+        self.check = Some(check);
+        self
+    }
+    /// Attach the declared values of a scope refusal.
+    #[must_use]
+    pub(crate) fn declaring(mut self, declared: DeclaredScope) -> Self {
+        self.refusal_detail = Some(Box::new(RefusalDetail::Scope(declared)));
+        self
+    }
+    pub fn declared_scope(&self) -> Option<&DeclaredScope> {
+        match self.refusal_detail.as_deref() {
+            Some(RefusalDetail::Scope(scope)) => Some(scope),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn with_remedy(mut self, remedy: Option<&'static str>) -> Self {
+        self.refusal_detail = remedy.map(|remedy| Box::new(RefusalDetail::Remedy(remedy)));
+        self
+    }
+
     pub(crate) fn with_exit(mut self, exit_code: u8) -> Self {
         self.exit_code = exit_code;
         self
@@ -116,7 +157,7 @@ impl CoordinatorError {
         Report::new(vec![diagnostic])
     }
     pub fn at(mut self, file: impl Into<PathBuf>, field: impl Into<String>) -> Self {
-        self.file = Some(file.into().into_boxed_path());
+        self.file = Some(Box::new(file.into()));
         self.field = Some(field.into().into_boxed_str());
         self
     }

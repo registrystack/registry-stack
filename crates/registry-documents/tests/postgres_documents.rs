@@ -43,9 +43,10 @@ async fn deployment() -> Deployment {
 }
 
 async fn start(deployment: &Deployment, verifier: &Arc<FakeVerifier>) -> (Prepared, Api) {
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares");
+    let prepared =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares");
     let api = Api::new(&prepared);
     (prepared, api)
 }
@@ -504,7 +505,7 @@ async fn the_storage_binding_is_pinned_at_the_first_write() {
 
     // A start whose storage is not the pinned one is refused.
     drop((prepared, api));
-    let error = prepare_with_verifier(&deployment.runtime, verifier.clone())
+    let error = prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
         .await
         .expect_err("startup is refused");
     assert!(
@@ -975,7 +976,7 @@ async fn a_start_refused_at_its_listener_does_not_suspend_verified_versions() {
     )
     .unwrap();
     let candidate = FakeVerifier::new("binding-b", APPROVE);
-    let error = prepare_with_verifier(&candidate_runtime, candidate.clone())
+    let error = prepare_with_verifier(&candidate_runtime, candidate.clone(), support::TEST_POSTURE)
         .await
         .expect_err("the candidate cannot bind its listener");
     assert!(matches!(error, RuntimeError::Listen(_)), "{error}");
@@ -1024,7 +1025,7 @@ async fn a_worker_under_another_binding_leaves_the_job_pending_for_its_own() {
     )
     .unwrap();
     let new = FakeVerifier::new("binding-b", APPROVE);
-    let new_instance = prepare_with_verifier(&second_runtime, new.clone())
+    let new_instance = prepare_with_verifier(&second_runtime, new.clone(), support::TEST_POSTURE)
         .await
         .expect("the second instance prepares");
     let new_api = Api::new(&new_instance);
@@ -1118,7 +1119,7 @@ async fn a_verdict_that_records_nothing_under_the_current_binding_is_retried() {
         schema: deployment.schema.clone(),
         tampered: AtomicBool::new(false),
     });
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier)
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier, support::TEST_POSTURE)
         .await
         .expect("the runtime prepares");
     let api = Api::new(&prepared);
@@ -1174,13 +1175,14 @@ async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict()
     let (_prepared, api) = start(&deployment, &verifier).await;
     let (document, _) = upload(&api, &pdf(300, 34)).await;
 
-    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let config =
+        RuntimeConfig::load_with_posture(&deployment.runtime, support::TEST_POSTURE).unwrap();
     let secrets = Arc::new(config.secret_resolver().unwrap());
     let store = registry_documents::runtime::activated_store_for_test(&config)
         .await
         .unwrap();
     let audit = DocumentsAudit::new(
-        AuditWriter::from_line_sink(Box::new(FailingSink)),
+        AuditWriter::from_line_sink(Box::new(FailingSink), support::TEST_POSTURE.posture),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))
@@ -1188,9 +1190,14 @@ async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict()
         .key_hasher(),
     );
     let storage = Arc::new(
-        ContentStorage::activate(&config.storage, "registry-documents-test", secrets)
-            .await
-            .unwrap(),
+        ContentStorage::activate(
+            &config.storage,
+            "registry-documents-test",
+            secrets,
+            config.peer_policy(),
+        )
+        .await
+        .unwrap(),
     );
     let failing = dispatcher(VerificationStore::new(
         store.clone(),
@@ -1558,6 +1565,117 @@ async fn custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_o
         .scalar("SELECT count(*) FROM documents_documents")
         .await;
     assert_eq!(reserved, 1);
+}
+
+/// A person that omits the custodian member holds the document itself,
+/// exactly as if it had named its own subject. A service must still say
+/// whom it places a document for, and a body that names a custodian is
+/// judged as ever.
+#[tokio::test]
+async fn a_person_omitting_the_custodian_holds_the_document_and_a_service_may_not_omit_it() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(512, 44);
+    let named = reservation_body("named-share", CITIZEN.subject, &sha256(&content), 512, PDF);
+    let mut omitted = named.clone();
+    omitted.as_object_mut().unwrap().remove("custodian");
+
+    let by_name = api.reserve_body(CITIZEN, "named", &named).await;
+    assert_eq!(
+        by_name.status,
+        201,
+        "{}",
+        String::from_utf8_lossy(&by_name.body)
+    );
+    let by_default = api.reserve_body(CITIZEN, "omitted", &omitted).await;
+    assert_eq!(
+        by_default.status,
+        201,
+        "{}",
+        String::from_utf8_lossy(&by_default.body)
+    );
+    let (named_document, _, _) = reservation(&by_name);
+    let (default_document, _, _) = reservation(&by_default);
+    assert_eq!(
+        api.read(CITIZEN, &default_document).await.json()["custodian"],
+        api.read(CITIZEN, &named_document).await.json()["custodian"]
+    );
+    let (documents, custodies): (i64, i64) = (
+        deployment
+            .scalar("SELECT count(*) FROM documents_documents")
+            .await,
+        deployment
+            .scalar(
+                "SELECT count(DISTINCT (custodian_issuer, custodian_kind, custodian_subject,
+                                        represented_principal_subject))
+                   FROM documents_documents",
+            )
+            .await,
+    );
+    assert_eq!((documents, custodies), (2, 1));
+
+    // The replay of the omitted-member body answers the first reservation.
+    let again = api.reserve_body(CITIZEN, "omitted", &omitted).await;
+    assert_eq!(again.status, 201);
+    assert_eq!(again.json()["document"]["id"], default_document.as_str());
+
+    // A person naming another subject is refused as before.
+    let mut other = named.clone();
+    other["custodian"] = json!({"subject": OTHER_CITIZEN.subject});
+    api.reserve_body(CITIZEN, "other", &other)
+        .await
+        .assert_problem(ProblemCode::CustodyNotPermitted);
+
+    // A service naming a subject is unchanged under citizen-delivery, the only
+    // policy these steps use.
+    let service_named = reservation_body(
+        "citizen-delivery",
+        CITIZEN.subject,
+        &sha256(&content),
+        512,
+        PDF,
+    );
+    assert_eq!(
+        api.reserve_body(APP, "service-named", &service_named)
+            .await
+            .status,
+        201
+    );
+    // A service omitting it is refused under citizen-delivery.
+    let mut service_omitted = service_named;
+    service_omitted.as_object_mut().unwrap().remove("custodian");
+    api.reserve_body(APP, "service-omitted", &service_omitted)
+        .await
+        .assert_problem(ProblemCode::RequestUnprocessable);
+
+    let reserved: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_documents")
+        .await;
+    assert_eq!(reserved, 3);
+}
+
+/// A released download is never sniffed into another type: it carries
+/// `X-Content-Type-Options: nosniff` and is an attachment.
+#[tokio::test]
+async fn a_released_download_is_an_attachment_that_browsers_may_not_sniff() {
+    let deployment = access_deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(600, 45);
+    let (document, version) = ready_under(
+        &prepared,
+        &api,
+        "citizen-delivery",
+        CITIZEN.subject,
+        &content,
+    )
+    .await;
+    let released = api.download(CITIZEN, &document, &version).await;
+    assert_eq!(released.status, 200);
+    assert_eq!(released.body, content);
+    assert_eq!(released.headers["x-content-type-options"], "nosniff");
+    assert_eq!(released.headers["content-disposition"], "attachment");
 }
 
 /// A deployment of [`access_project`], migrated.
@@ -2516,10 +2634,11 @@ async fn a_request_audit_failure_refuses_the_upload_and_the_download() {
         (document, version, path)
     };
 
-    let failing = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares again")
-        .with_audit(failing_audit());
+    let failing =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares again")
+            .with_audit(failing_audit());
     let refused = Api::new(&failing);
     refused
         .download(CITIZEN, &document, &version)
@@ -2537,7 +2656,7 @@ async fn a_request_audit_failure_refuses_the_upload_and_the_download() {
 
 fn failing_audit() -> DocumentsAudit {
     DocumentsAudit::new(
-        AuditWriter::from_line_sink(Box::new(FailingSink)),
+        AuditWriter::from_line_sink(Box::new(FailingSink), support::TEST_POSTURE.posture),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))
@@ -2748,17 +2867,21 @@ async fn a_response_audit_failure_after_commit_answers_unavailable_and_the_retry
         PDF,
     );
     let kept = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let failing = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares")
-        .with_audit(DocumentsAudit::new(
-            AuditWriter::from_line_sink(Box::new(FirstLineSink { kept: kept.clone() })),
-            AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
-                b"documents-test-audit-key-not-a-secret".to_vec(),
-            ))
-            .unwrap()
-            .key_hasher(),
-        ));
+    let failing =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares")
+            .with_audit(DocumentsAudit::new(
+                AuditWriter::from_line_sink(
+                    Box::new(FirstLineSink { kept: kept.clone() }),
+                    support::TEST_POSTURE.posture,
+                ),
+                AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+                    b"documents-test-audit-key-not-a-secret".to_vec(),
+                ))
+                .unwrap()
+                .key_hasher(),
+            ));
     Api::new(&failing)
         .reserve_body(APP, "committed-before-the-journal-failed", &body)
         .await
@@ -2808,15 +2931,21 @@ async fn a_verification_attempt_waits_for_transfer_budget_only_within_its_attemp
 
     let deployment = deployment().await;
     let verifier = FakeVerifier::new("binding-a", APPROVE);
-    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let config =
+        RuntimeConfig::load_with_posture(&deployment.runtime, support::TEST_POSTURE).unwrap();
     let secrets = Arc::new(config.secret_resolver().unwrap());
     let store = registry_documents::runtime::activated_store_for_test(&config)
         .await
         .unwrap();
     let storage = Arc::new(
-        ContentStorage::activate(&config.storage, "registry-documents-test", secrets)
-            .await
-            .unwrap(),
+        ContentStorage::activate(
+            &config.storage,
+            "registry-documents-test",
+            secrets,
+            config.peer_policy(),
+        )
+        .await
+        .unwrap(),
     );
     let budget = TransferBudget::new(1_048_576);
     let held = budget
@@ -3316,7 +3445,8 @@ async fn the_erasure_status_counts_grace_due_and_dead_lettered() {
             documents[2],
         ))
         .await;
-    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let config =
+        RuntimeConfig::load_with_posture(&deployment.runtime, support::TEST_POSTURE).unwrap();
     let secrets = Arc::new(config.secret_resolver().unwrap());
     let store = PostgresStore::connect_runtime(&config.database, &secrets).unwrap();
     assert_eq!(
@@ -3725,7 +3855,7 @@ async fn an_approval_after_a_removal_request_releases_nothing() {
         client,
         schema: deployment.schema.clone(),
     });
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier)
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier, support::TEST_POSTURE)
         .await
         .expect("the runtime prepares");
     let api = Api::new(&prepared);
@@ -3796,9 +3926,13 @@ async fn a_verification_job_leased_across_a_removal_is_set_aside() {
         schema: deployment.schema.clone(),
         calls: std::sync::atomic::AtomicUsize::new(0),
     });
-    let prepared = prepare_with_verifier(&deployment.runtime, Arc::clone(&verifier) as _)
-        .await
-        .expect("the runtime prepares");
+    let prepared = prepare_with_verifier(
+        &deployment.runtime,
+        Arc::clone(&verifier) as _,
+        support::TEST_POSTURE,
+    )
+    .await
+    .expect("the runtime prepares");
     let api = Api::new(&prepared);
     upload(&api, &pdf(300, 77)).await;
     prepared.verify_due().await;
@@ -3883,15 +4017,16 @@ async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
         "{}",
         String::from_utf8_lossy(&ready.body)
     );
-    assert!(ready.body.is_empty());
+    assert_eq!(ready.json()["posture"], "development");
+    assert_eq!(ready.json()["status"], "ready");
 
     deployment
         .execute(&format!(
             "INSERT INTO documents_activations \
                (activation_id, apply_order, package_digest, predecessor_package_digest, \
-                database_id, plan_kind, applied_at, role_mode) \
+                database_id, plan_kind, applied_at, role_mode, posture) \
              SELECT gen_random_uuid(), apply_order + 1, 'sha256:{}', package_digest, \
-                    database_id, 'successor', now(), role_mode \
+                    database_id, 'successor', now(), role_mode, posture \
                FROM documents_activations ORDER BY apply_order DESC LIMIT 1",
             "0".repeat(64)
         ))

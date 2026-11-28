@@ -49,6 +49,7 @@ fn project_lock_preserves_registry_when_module_rhai_refuses_compilation() {
 
 fn bregctl(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(arguments)
         .output()
         .expect("bregctl starts")

@@ -1091,9 +1091,19 @@ store:
         let directory = tempfile::tempdir_in(base).expect("a temporary deployment directory");
         let path = directory.path().join("oid4vci.yaml");
         std::fs::write(&path, SERVICE_CONFIG).expect("write the test deployment");
-        let config = DeliveryConfig::load(&path).expect("the test deployment loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the test deployment loads");
         let audit = DeliveryAudit::with_writer(
-            AuditWriter::from_line_sink(Box::new(io::sink())),
+            AuditWriter::from_line_sink(
+                Box::new(io::sink()),
+                registry_platform_config::Posture::Production,
+            ),
             b"0123456789abcdef0123456789abcdef".to_vec(),
         )
         .expect("the test audit profile is valid");

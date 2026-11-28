@@ -5,7 +5,7 @@
 //! environment bindings of one deployment: endpoint base URLs and TLS, credential
 //! secret references, and the private-CIDR allowlist. The facade's
 //! configuration carries those bindings beside its own members (secret
-//! providers, listener, database, OIDC issuer, admitted clients, audit,
+//! providers, listener, database, OIDC issuer set, audit,
 //! idempotency, cursor custody); a job's runtime document
 //! (`AdapterJobRuntimeConfig`) carries
 //! the bindings beside its own `sources`, `store`, `destinations`,
@@ -16,8 +16,8 @@
 use crate::auth::{CredentialPlacement, MtlsIdentity, RuntimeCredential};
 use crate::job::MAXIMUM_JOB_RESPONSE_BYTES;
 use registry_platform_config::{
-    DatabaseConfig, ListenerConfig, MetricsListenerConfig, OidcIssuerConfig, RemovedKey,
-    SecretProvidersConfig,
+    CallerIssuerCore, CallerIssuerEntry, CallerIssuers, ClientList, DatabaseConfig, ListenerConfig,
+    MetricsListenerConfig, RemovedKey, SecretProvidersConfig,
 };
 use registry_platform_yaml::{
     BoundedU64, ExternalId, LocalId, SecretReference, UniqueIdList, UniqueList, Url,
@@ -279,14 +279,70 @@ pub struct TrustProfile {
     pub ca_bundle_file: String,
 }
 
-/// The keys the runtime configuration no longer accepts, each with what
-/// replaced it (CFG-CHANGE-2).
-pub const ADAPTER_REMOVED_KEYS: &[RemovedKey] = &[RemovedKey {
+const REMOVED_ENDPOINT_CA_BUNDLE: RemovedKey = RemovedKey {
     path: "endpoints.*.caBundleRef",
     replacement: "Write tlsTrustProfile on the endpoint binding, naming a \
                   profile declared under outboundTls.trustProfiles whose \
                   caBundleFile is the absolute path of the bundle file.",
-}];
+};
+
+/// The keys the runtime configuration no longer accepts, each with what
+/// replaced it (CFG-CHANGE-2).
+pub const ADAPTER_REMOVED_KEYS: &[RemovedKey] = &[REMOVED_ENDPOINT_CA_BUNDLE];
+
+/// The moved runtime members and their issuer entry locations.
+pub const ADAPTER_FACADE_REMOVED_KEYS: &[RemovedKey] = &[
+    REMOVED_ENDPOINT_CA_BUNDLE,
+    RemovedKey {
+        path: "oidc.issuer",
+        replacement: "Declare it under oidc.issuers.ISSUER_ID.",
+    },
+    RemovedKey {
+        path: "oidc.audience",
+        replacement: "Declare it under oidc.issuers.ISSUER_ID.",
+    },
+    RemovedKey {
+        path: "oidc.jwksSource",
+        replacement: "Declare it under oidc.issuers.ISSUER_ID.",
+    },
+    RemovedKey {
+        path: "oidc.allowInsecureHttp",
+        replacement: "Declare it under oidc.issuers.ISSUER_ID.",
+    },
+    RemovedKey {
+        path: "allowedClients",
+        replacement: "Declare it under oidc.issuers.ISSUER_ID.allowedClients.",
+    },
+];
+
+/// The issuer set that authenticates Adapter callers.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterOidc {
+    /// Each issuer has its own trust settings and client list.
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuers"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    pub set: CallerIssuers<AdapterCallerIssuer>,
+}
+
+/// The trust and caller rules of one issuer.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterCallerIssuer {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer-core"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    pub core: CallerIssuerCore<ClientList>,
+}
+
+impl CallerIssuerEntry for AdapterCallerIssuer {
+    type Clients = ClientList;
+
+    fn core(&self) -> &CallerIssuerCore<ClientList> {
+        &self.core
+    }
+}
 
 /// The audit journal's retention, bounded by the platform access-log window.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -313,7 +369,7 @@ pub struct IdempotencyRetention {
 /// states these members beside its own `sources`, `store`,
 /// `destinations`, `secretProviders`, and `hookIngress` members; the
 /// facade's document states them beside the facade-only members
-/// (`secretProviders`, `listener`, `database`, `oidc`, `allowedClients`,
+/// (`secretProviders`, `listener`, `database`, `oidc`,
 /// `audit`, `idempotency`, and the cursor custody), which
 /// [`AdapterRuntimeConfig::endpoint_bindings`] sets aside.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -376,18 +432,9 @@ pub struct AdapterRuntimeConfig {
     pub metrics_listener: Option<MetricsListenerConfig>,
     /// The PostgreSQL connections, from the platform shared block.
     pub database: DatabaseConfig,
-    /// The OIDC issuer that authenticates facade callers, from the
-    /// platform shared block.
-    pub oidc: OidcIssuerConfig,
-    /// The OAuth clients whose access tokens the facade admits, matched
-    /// against the token's client claim. At least one: a list that admits
-    /// every client the issuer verifies is an omission, not a policy.
-    #[serde(deserialize_with = "at_least_one_client")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "at_least_one_client_schema")
-    )]
-    pub allowed_clients: UniqueList<ExternalId>,
+    /// The OIDC issuer set that authenticates facade and payment callers.
+    /// All entries name the audience the effective contract publishes.
+    pub oidc: AdapterOidc,
     /// The journal retention.
     pub audit: AuditRetention,
     /// Exact write-response custody. A read-only deployment may omit this;
@@ -539,29 +586,71 @@ fn at_least_one_cidr_schema(generator: &mut schemars::SchemaGenerator) -> schema
     })
 }
 
-/// The client list cannot be empty: a deployment that names no client
-/// admits none.
-fn at_least_one_client<'de, D>(deserializer: D) -> Result<UniqueList<ExternalId>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let list = UniqueList::<ExternalId>::deserialize(deserializer)?;
-    if list.is_empty() {
-        return Err(serde::de::Error::custom(
-            "allowedClients carries at least one client identifier",
-        ));
+/// Record each explicitly approved credential-free HTTPS endpoint.
+pub fn record_endpoint_posture(
+    endpoints: &UniqueIdList<EndpointBinding>,
+    report: &mut registry_platform_config::PostureReport,
+) {
+    use registry_platform_config::{
+        ExplicitProductionSetting, FoundExplicitSetting, SettingOrigin,
+    };
+    static ANONYMOUS_HTTPS: ExplicitProductionSetting = ExplicitProductionSetting {
+        code: "adapter.posture.anonymous-https",
+        key: "anonymousHttps",
+        summary: "a fixed HTTPS source is reached without an application credential",
+    };
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        if endpoint.anonymous_https.is_some() {
+            report.record_explicit(FoundExplicitSetting {
+                setting: &ANONYMOUS_HTTPS,
+                pointer: Some(format!("/endpoints/{index}/anonymousHttps")),
+                position: None,
+                origin: SettingOrigin::RuntimeFile,
+            });
+        }
     }
-    Ok(list)
 }
 
-#[cfg(feature = "schema")]
-fn at_least_one_client_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({
-        "type": "array",
-        "minItems": 1,
-        "uniqueItems": true,
-        "items": generator.subschema_for::<ExternalId>(),
-    })
+#[test]
+fn the_facade_removed_keys_include_the_job_and_facade_only_keys() {
+    for removed in ADAPTER_REMOVED_KEYS {
+        assert!(ADAPTER_FACADE_REMOVED_KEYS.contains(removed), "{removed:?}");
+    }
+    let facade_only: Vec<_> = ADAPTER_FACADE_REMOVED_KEYS
+        .iter()
+        .filter(|key| !ADAPTER_REMOVED_KEYS.contains(key))
+        .map(|key| key.path)
+        .collect();
+    assert_eq!(
+        facade_only,
+        [
+            "oidc.issuer",
+            "oidc.audience",
+            "oidc.jwksSource",
+            "oidc.allowInsecureHttp",
+            "allowedClients",
+        ]
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn test_oidc(issuer: &str) -> AdapterOidc {
+    serde_json::from_value(serde_json::json!({
+        "registry-platform-yaml/shared-block/oidc-issuers": {
+            "issuers": {
+                "primary": {
+                    "registry-platform-yaml/shared-block/oidc-issuer-core": {
+                        "registry-platform-yaml/shared-block/oidc-issuer": {
+                            "issuer": issuer,
+                            "audience": "case-api"
+                        },
+                        "allowedClients": ["case-portal"]
+                    }
+                }
+            }
+        }
+    }))
+    .expect("oidc")
 }
 
 #[cfg(test)]
@@ -745,15 +834,7 @@ mod tests {
                 }"#,
             )
             .expect("database"),
-            oidc: serde_json::from_str(
-                r#"{
-                    "issuer": "https://issuer.example.invalid",
-                    "audience": "case-api"
-                }"#,
-            )
-            .expect("oidc"),
-            allowed_clients: UniqueList::new(vec![ExternalId::new("case-portal").expect("id")])
-                .expect("unique"),
+            oidc: test_oidc("https://issuer.example.invalid"),
             audit: AuditRetention {
                 retention_days: registry_platform_yaml::BoundedU32::<1, 3_650>::new(90)
                     .expect("retention"),
@@ -790,11 +871,7 @@ mod tests {
                     "runtimeUrlRef": "secret:env/DB_RUNTIME",
                     "migrationUrlRef": "secret:env/DB_MIGRATION"
                 }},
-                "oidc": {{
-                    "issuer": "https://issuer.example.invalid",
-                    "audience": "case-api"
-                }},
-                "allowedClients": ["case-portal"],
+                "oidc": {{"registry-platform-yaml/shared-block/oidc-issuers": {{"issuers": {{"primary": {{"registry-platform-yaml/shared-block/oidc-issuer-core": {{"registry-platform-yaml/shared-block/oidc-issuer": {{"issuer": "https://issuer.example.invalid", "audience": "case-api"}}, "allowedClients": ["case-portal"]}}}}}}}}}},
                 "audit": {{ "retentionDays": 90 }},
                 "idempotency": {{ "responseRetentionSeconds": 86400 }}
             }}"#,
@@ -824,11 +901,7 @@ mod tests {
                 "runtimeUrlRef": "secret:env/DB_RUNTIME",
                 "migrationUrlRef": "secret:env/DB_MIGRATION"
             },
-            "oidc": {
-                "issuer": "https://issuer.example.invalid",
-                "audience": "case-api"
-            },
-            "allowedClients": ["case-portal"],
+            "oidc": {"registry-platform-yaml/shared-block/oidc-issuers": {"issuers": {"primary": {"registry-platform-yaml/shared-block/oidc-issuer-core": {"registry-platform-yaml/shared-block/oidc-issuer": {"issuer": "https://issuer.example.invalid", "audience": "case-api"}, "allowedClients": ["case-portal"]}}}}},
             "audit": { "retentionDays": 90 }
         });
 
@@ -858,11 +931,7 @@ mod tests {
                 "runtimeUrlRef": "secret:env/DB_RUNTIME",
                 "migrationUrlRef": "secret:env/DB_MIGRATION"
             },
-            "oidc": {
-                "issuer": "https://issuer.example.invalid",
-                "audience": "case-api"
-            },
-            "allowedClients": ["case-portal"],
+            "oidc": {"registry-platform-yaml/shared-block/oidc-issuers": {"issuers": {"primary": {"registry-platform-yaml/shared-block/oidc-issuer-core": {"registry-platform-yaml/shared-block/oidc-issuer": {"issuer": "https://issuer.example.invalid", "audience": "case-api"}, "allowedClients": ["case-portal"]}}}}},
             "audit": { "retentionDays": 90 }
         }"#;
         let read = serde_json::from_str::<AdapterRuntimeConfig>(base).expect("read-only config");
@@ -897,11 +966,7 @@ mod tests {
                     "runtimeUrlRef": "secret:env/DB_RUNTIME",
                     "migrationUrlRef": "secret:env/DB_MIGRATION"
                 },
-                "oidc": {
-                    "issuer": "https://issuer.example.invalid",
-                    "audience": "case-api"
-                },
-                "allowedClients": ["case-portal"],
+                "oidc": {"registry-platform-yaml/shared-block/oidc-issuers": {"issuers": {"primary": {"registry-platform-yaml/shared-block/oidc-issuer-core": {"registry-platform-yaml/shared-block/oidc-issuer": {"issuer": "https://issuer.example.invalid", "audience": "case-api"}, "allowedClients": ["case-portal"]}}}}},
                 "audit": { "retentionDays": 90 }
             }"#;
         assert!(serde_json::from_str::<AdapterRuntimeConfig>(json).is_err());
@@ -927,11 +992,7 @@ mod tests {
                     "runtimeUrlRef": "secret:env/DB_RUNTIME",
                     "migrationUrlRef": "secret:env/DB_MIGRATION"
                 },
-                "oidc": {
-                    "issuer": "https://issuer.example.invalid",
-                    "audience": "case-api"
-                },
-                "allowedClients": ["case-portal"],
+                "oidc": {"registry-platform-yaml/shared-block/oidc-issuers": {"issuers": {"primary": {"registry-platform-yaml/shared-block/oidc-issuer-core": {"registry-platform-yaml/shared-block/oidc-issuer": {"issuer": "https://issuer.example.invalid", "audience": "case-api"}, "allowedClients": ["case-portal"]}}}}},
                 "audit": { "retentionDays": 90 }
             }"#;
         let json = |cidrs: &str| {
@@ -951,32 +1012,12 @@ mod tests {
     /// explicit empty list are both refused.
     #[test]
     fn the_allowed_clients_carry_at_least_one_client() {
-        let head = r#"{
-                "id": "case-deployment",
-                "endpoints": [],
-                "allowedPrivateCidrs": ["10.0.0.0/8"],
-                "listener": { "bind": "127.0.0.1:8080" },
-                "database": {
-                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
-                    "migrationUrlRef": "secret:env/DB_MIGRATION"
-                },
-                "oidc": {
-                    "issuer": "https://issuer.example.invalid",
-                    "audience": "case-api"
-                },
-                "audit": { "retentionDays": 90 }
-            }"#;
-        let json = |clients: &str| {
-            head.replace(
-                r#""endpoints": [],"#,
-                &format!(r#""endpoints": [], "allowedClients": {clients},"#),
-            )
-        };
-        assert!(serde_json::from_str::<AdapterRuntimeConfig>(head).is_err());
-        assert!(serde_json::from_str::<AdapterRuntimeConfig>(&json("[]")).is_err());
-        let read = serde_json::from_str::<AdapterRuntimeConfig>(&json(r#"["case-portal"]"#))
-            .expect("read");
-        assert_eq!(read.allowed_clients.len(), 1);
+        let mut oidc = serde_json::to_value(serde_json::json!({"registry-platform-yaml/shared-block/oidc-issuers": {"issuers": {"primary": {"registry-platform-yaml/shared-block/oidc-issuer-core": {"registry-platform-yaml/shared-block/oidc-issuer": {"issuer": "https://issuer.example.invalid", "audience": "case-api"}, "allowedClients": ["case-portal"]}}}}})).expect("issuer map");
+        assert!(serde_json::from_value::<AdapterOidc>(oidc.clone()).is_ok());
+        let clients = &mut oidc["registry-platform-yaml/shared-block/oidc-issuers"]["issuers"]
+            ["primary"]["registry-platform-yaml/shared-block/oidc-issuer-core"]["allowedClients"];
+        *clients = serde_json::json!([]);
+        assert!(serde_json::from_value::<AdapterOidc>(oidc).is_err());
     }
 
     /// Duplicate endpoint bindings are refused at the reader (CFG-ID-5).
@@ -994,7 +1035,7 @@ mod tests {
     }
 
     /// A runtime document with the endpoint bindings alone reads: no
-    /// listener, database, OIDC issuer, admitted clients, audit,
+    /// listener, database, OIDC issuer set, audit,
     /// idempotency, or cursor custody is stated.
     #[test]
     fn endpoint_bindings_read_a_document_without_facade_members() {
@@ -1064,11 +1105,7 @@ mod tests {
                     "runtimeUrlRef": "secret:env/DB_RUNTIME",
                     "migrationUrlRef": "secret:env/DB_MIGRATION"
                 },
-                "oidc": {
-                    "issuer": "https://issuer.example.invalid",
-                    "audience": "case-api"
-                },
-                "allowedClients": ["case-portal"],
+                "oidc": {"registry-platform-yaml/shared-block/oidc-issuers": {"issuers": {"primary": {"registry-platform-yaml/shared-block/oidc-issuer-core": {"registry-platform-yaml/shared-block/oidc-issuer": {"issuer": "https://issuer.example.invalid", "audience": "case-api"}, "allowedClients": ["case-portal"]}}}}},
                 "audit": { "retentionDays": 90 }
             }"#;
         let alone = r#"{
@@ -1176,11 +1213,7 @@ mod tests {
                         "runtimeUrlRef": "secret:env/DB_RUNTIME",
                         "migrationUrlRef": "secret:env/DB_MIGRATION"
                     }},
-                    "oidc": {{
-                        "issuer": "https://issuer.example.invalid",
-                        "audience": "case-api"
-                    }},
-                    "allowedClients": ["case-portal"],
+                    "oidc": {{"registry-platform-yaml/shared-block/oidc-issuers": {{"issuers": {{"primary": {{"registry-platform-yaml/shared-block/oidc-issuer-core": {{"registry-platform-yaml/shared-block/oidc-issuer": {{"issuer": "https://issuer.example.invalid", "audience": "case-api"}}, "allowedClients": ["case-portal"]}}}}}}}}}},
                     "audit": {{ "retentionDays": 90 }}
                 }}"#
             )

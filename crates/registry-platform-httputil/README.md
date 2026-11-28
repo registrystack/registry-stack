@@ -13,6 +13,13 @@ Outbound HTTP utilities for registry services.
   `FetchUrlPolicy` for user-controlled destinations.
 - `read_bounded` for response bodies with content-length and streaming byte
   limits.
+- `validate_response_headers(headers, PeerPolicy)` for response header bounds
+  and the peer posture check: `PeerPolicy::RefuseDevelopmentPeer` returns
+  `ResponseHeaderError::DevelopmentPeer` for a response whose
+  `Registry-Posture` field is exactly `development`. Every client construction
+  site chooses the policy. `is_loopback_host` is the one loopback host rule
+  (a loopback address literal or the exact name `localhost`), valid in every
+  posture.
 - `ServiceBaseUrl`, bearer token providers, and `PrivateKeyJwt` for hardened
   credential-bearing clients without product semantics. The private-key-JWT
   provider uses a closed `client_credentials` request shape. Its `exchange`
@@ -127,19 +134,102 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 }
 ```
 
+## Destination selection
+
+`select::select_destination(url, transport, ranges)` decides every outbound
+destination's transport in one place. https selects verified TLS, http to a
+loopback host selects loopback plain text, and http to any other host is
+refused until the configuration declares `private-network-plaintext` with its
+`allowedPrivateCidrs`. Each refusal has a `platform.destination.*` code and a
+fix that repeat no configured value. Three outbound families consume a
+selection:
+
+- `FixedDestinationPolicy::from_selected` freezes a fixed-destination policy
+  from it. The credential slot is refused over private plain text, and so is a
+  send in any slot that carries an authorization value, an AWS signature or a
+  script API key, before anything is resolved. For an event delivery
+  destination only, an https selection whose host is a loopback literal or the
+  exact name `localhost` freezes as `DestinationProfile::LoopbackHttps`, which
+  admits loopback answers only, as `LoopbackHttp` does, so `localhost` is sent
+  to only when every answer is loopback. A data or credential policy refuses
+  that profile with `LoopbackHttpsRequiresEventDelivery`, and any other https
+  selection keeps the production address rule: `localhost` is refused when
+  the policy is built and a loopback answer is refused at send.
+- `OutboundClientBuilder::destination` confines a client's name resolution.
+  The client resolves only the selected host name. Every answer must be one
+  the selection admits: never a cloud metadata or always-denied address over
+  https, and loopback only for loopback plain text. Over https the rule
+  judges the IPv4 address that an IPv4-mapped, IPv4-compatible (`::/96`),
+  6to4 (`2002::/16`) or well-known NAT64 (`64:ff9b::/96`) address carries.
+  Other translation prefixes, such as local-use NAT64 (`64:ff9b:1::/48`), are
+  not decoded. Over https a private answer needs no range, so the selection's
+  ranges have no effect on a client. An address literal is checked when the
+  client is built, where an explicit loopback literal is admitted over https.
+  A client built for an https selection is https-only: a plain-http request
+  fails before anything is resolved or dialled, whatever its host. The
+  builder returns a `DestinationClientBuilder`, which builds a
+  `DestinationClient` and never a raw client. `DestinationClient::execute`
+  sends a request only when its URL has the selection's own scheme, host and
+  port, checked with `SelectedDestination::admits_url` before anything is
+  resolved or dialled. That covers an address literal or `localhost`, which
+  no resolver sees, so a credential the caller adds reaches no other origin.
+  A `Host` header the caller sets must name that same authority, and a
+  request with more than one is refused. The value is read with a bounded
+  grammar, never through a URL parser: a name is compared as written without
+  case, root dot included, and a name whose last label (ignoring one root
+  dot) is a number, decimal or `0x` hex, is read as an IPv4 address, which
+  must be dotted decimal with no leading zeros and no root dot. An IPv6
+  address must be bracketed with no zone and is compared as an address, and a
+  written port is compared as a number, leading zeros included, an elided one
+  being the scheme's default. An empty port, a port of zero or above 65535, a
+  percent-encoded byte, an empty last label after one root dot
+  (`objects.example..`), or an IPv4 address in any other spelling (`127.1`,
+  `0x7f.0.0.1`, `2130706433`) is refused. So a credential cannot reach
+  another virtual host behind the selected peer either. A refused `Host`
+  fails with `DestinationClientError::HostNotSelected` before anything is
+  dialled.
+  A private plain-text selection never builds a client, since a client
+  carries whatever credential its caller adds.
+- `ServiceBaseUrl::selected` refuses a private plain-text selection for the
+  same reason.
+
+A destination that carries a credential selects with
+`select::select_credential_destination`, which refuses private plain text
+with `platform.destination.credential-requires-protected-transport`.
+`SelectedDestination::admits_credentials` is the one predicate behind every
+credential refusal. A credential-free fetch validates a selection with
+`select::validate_selected_fetch`, which resolves once, admits each answer,
+and returns a `SelectedFetch` pinned to the admitted addresses. Over https it
+admits each answer as a fixed https destination does: a private address,
+CGNAT (`100.64.0.0/10`) included, only inside the selection's
+`allowedPrivateCidrs`, and never a cloud metadata, always-denied or other
+non-global address. An explicit loopback literal and `localhost`, pinned to
+the loopback addresses, are admitted, as a selected client admits them.
+`SelectedFetch::get` sends one GET with the caller's `Accept` and timeout and
+nothing else, so no credential can be added to it.
+
+Names resolve differently in the two families. A fixed destination queries
+its host as an absolute name, without the hosts file or the search domains.
+A selected client and a selected fetch resolve through the operating system,
+which reads the hosts file and appends the search domains to a single-label
+name. A single-label host such as `http://hooks:8080/` can therefore resolve
+for a client and fail for a fixed destination, for example under Kubernetes
+search domains. Write the fully qualified name, such as
+`hooks.registry.svc.cluster.local`, in every destination URL.
+
 ## URL Policy
 
 - Data destinations using `DestinationProfile::ProductionHttps` or
   `DestinationProfile::PrivateServiceHttp` refuse `localhost` and every
   `*.localhost` name when the binding is constructed, including trailing-dot
   absolute names and regardless of allowed private CIDRs. Local receivers
-  require `DestinationProfile::LoopbackDevelopmentHttp`.
+  require `DestinationProfile::LoopbackHttp`.
 - `FetchUrlPolicy::strict` allows HTTPS only and denies localhost, private
   ranges, link-local ranges, and cloud metadata endpoints.
 - Known metadata endpoints include link-local metadata services and public-IP
   metadata services such as `100.100.100.200`; IPv4-mapped IPv6 literals are
   normalized before classification.
-- `FetchUrlPolicy::dev` allows HTTP and HTTPS, but plain HTTP is allowed only
+- `FetchUrlPolicy::https_or_loopback` allows HTTP and HTTPS, but plain HTTP is allowed only
   for loopback hosts. Non-loopback private ranges stay denied.
 - `FetchUrlPolicy::validate` is deprecated compatibility. It resolves the host
   but discards DNS evidence, so it is not sufficient protection for a later
@@ -167,6 +257,8 @@ async fn fetch_document() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 ## Features
 
 - Default: `rustls`.
+- `test-support`: test-only profiles such as `DestinationProfile::PinnedLoopbackHttpsTest`
+  and `DestinationProfile::LocalPrivateDevelopmentHttp`.
 
 ## Testing
 

@@ -95,7 +95,7 @@ pub struct SignedCoordinatorEventDestination {
 
 impl SignedCoordinatorEventDestination {
     /// Bind the primary trigger and an optional revised trigger under one
-    /// shared destination authority, source, and signing key.
+    /// shared destination authority and source, with keys on each trigger.
     #[must_use]
     pub fn new(
         connector: Arc<CoordinatorEventConnector>,
@@ -341,7 +341,7 @@ mod tests {
             registry_platform_httputil::destination::EventDestinationPolicy::new(
                 "coordinator-test",
                 "http://127.0.0.1:9/",
-                registry_platform_httputil::destination::DestinationProfile::LoopbackDevelopmentHttp,
+                registry_platform_httputil::destination::DestinationProfile::LoopbackHttp,
                 &[],
             )
             .expect("the inert destination policy freezes"),
@@ -350,7 +350,6 @@ mod tests {
             CoordinatorEventConnector::new(
                 policy,
                 "urn:registry-adapter:job:case-daily",
-                vec![0x55; 32],
                 std::time::Duration::from_secs(1),
             )
             .expect("the inert connector freezes"),
@@ -361,6 +360,12 @@ mod tests {
                 "submitted",
                 "org.example.case-submitted.v1",
                 "urn:example:schema:case-submitted:v1",
+                registry_platform_crypto::delivery_signature::DeliveryKeys::new(
+                    registry_platform_crypto::delivery_signature::DeliveryKey::new(&[0x55; 32])
+                        .unwrap(),
+                    None,
+                )
+                .unwrap(),
             )
             .expect("the primary receiver freezes"),
             [0x11; 32],

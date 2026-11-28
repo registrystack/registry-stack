@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import client_registry  # noqa: E402
 import release_roster  # noqa: E402
 import rstack_components  # noqa: E402
 import release_units  # noqa: E402
@@ -80,6 +81,7 @@ IMAGE_OPERATOR_TOOLS = {
     "scheduling": "schedulingctl",
     "messaging": "messagingctl",
     "coordinator": "coordinatorctl",
+    "adapter": "adapterctl",
 }
 # Registry Messaging joins the release set from the release that
 # release_roster.MESSAGING_FIRST_RELEASE names.
@@ -95,6 +97,9 @@ EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES = {"evidence-oid4vci"}
 # Registry Coordinator joins the release set from the release that
 # release_roster.COORDINATOR_FIRST_RELEASE names.
 COORDINATOR_RUNTIME_IMAGE_NAMES = {"coordinator"}
+# The Registry Adapter facade image joins the release set from the release that
+# release_roster.ADAPTER_IMAGE_FIRST_RELEASE names.
+ADAPTER_RUNTIME_IMAGE_NAMES = {"adapter"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -142,6 +147,7 @@ SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
         | RENDER_RUNTIME_IMAGE_NAMES
         | EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
         | COORDINATOR_RUNTIME_IMAGE_NAMES
+        | ADAPTER_RUNTIME_IMAGE_NAMES
     )
     for directory, suffix in (
         ("image-sbom", "spdx"),
@@ -185,6 +191,8 @@ def _candidate_image_names(version: str) -> set[str]:
         image_names = image_names | EVIDENCE_OID4VCI_RUNTIME_IMAGE_NAMES
     if release_roster.coordinator_in_release(parsed):
         image_names = image_names | COORDINATOR_RUNTIME_IMAGE_NAMES
+    if release_roster.adapter_image_in_release(parsed):
+        image_names = image_names | ADAPTER_RUNTIME_IMAGE_NAMES
     if not release_roster.relay_in_release(parsed):
         image_names = image_names - {"relay"}
     return image_names
@@ -472,15 +480,14 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
                 f"registrystack-discovery-client-{platform}-{version}.tgz"
             ] = "client-package"
     if unified_client:
-        inventory[f"registrystack-client-{version}.tgz"] = "client-package"
-        for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
-            inventory[f"registrystack-client-{platform}-{version}.tgz"] = (
-                "client-package"
-            )
+        for path in client_registry.npm_tarballs(Path(), version, "stack"):
+            inventory[path.name] = "client-package"
         for platform in wheel_platforms:
             inventory[
                 f"registry_stack_client-{version}-{wheel_abi_tag}-{platform}.whl"
             ] = "client-package"
+    if web_package := client_registry.web_npm_tarball(version):
+        inventory[web_package] = "client-package"
     if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
         inventory[f"discovery-{tag}-linux-amd64"] = "binary"
     if release_roster.discoveryctl_in_release(version_tuple):
@@ -563,10 +570,11 @@ def stack_payload_inventory(
     component_units = {component["unit"] for component in validated}
     if "discovery" in component_units:
         registry = release_units.load_registry()
+        web_package = client_registry.web_npm_tarball(version)
         inventory = {
             name: kind
             for name, kind in inventory.items()
-            if registry.artifact_owner(name) != "discovery"
+            if name == web_package or registry.artifact_owner(name) != "discovery"
         }
     inventory[distribution_lock_name(version)] = "distribution"
     return inventory

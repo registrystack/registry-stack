@@ -74,6 +74,8 @@ pub fn config(
         scopes: vec![scope.to_owned()],
     };
     RuntimeConfig {
+        posture: None,
+        development: None,
         minimum_observation_interval_seconds: registry_platform_yaml::BoundedU32::new(30).unwrap(),
         event_sources: BTreeMap::new(),
         deployment: None,
@@ -88,6 +90,7 @@ pub fn config(
             migration_url_ref: "secret:env/COORDINATOR_TEST_DATABASE_URL".into(),
             ca_bundle_ref: None,
             test_only_plaintext: false,
+            transport: None,
         },
         namespace: format!("coordinator_{}", uuid::Uuid::new_v4().simple()),
         connections: BTreeMap::from([

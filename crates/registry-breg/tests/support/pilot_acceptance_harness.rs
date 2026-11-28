@@ -188,12 +188,16 @@ impl PilotHarness {
                 request_timeout: Duration::from_secs(5),
                 outage_tolerance: Duration::ZERO,
             },
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
         let prepared = prepare_with_connection_and_key_source_for_test(
             &config_path,
             database.runtime_config.clone(),
             key_source,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Default,
+            },
         )
         .await
         .expect("existing startup seam accepts the exact package, database, audit, and MockIdp");
@@ -501,9 +505,9 @@ impl PublishedPackage {
         Self { root }
     }
 
-    fn context() -> PackageLoadContext<'static> {
+    fn context() -> PackageLoadContext {
         PackageLoadContext {
-            database_initialization_environment: PILOT_ENVIRONMENT,
+            posture: registry_platform_config::Posture::Production,
         }
     }
 }
@@ -636,7 +640,6 @@ identity:
   environment: {PILOT_ENVIRONMENT}
   instanceId: {PILOT_INSTANCE_ID}
   databaseId: {database_id}
-  databaseInitializationEnvironment: {PILOT_ENVIRONMENT}
 secretProviders:
   file:
     root: {}
@@ -655,22 +658,25 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: {}
-    audience: {AUDIENCE}
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {}
+        audience: {AUDIENCE}
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        actorKind: service
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
     purpose: purpose

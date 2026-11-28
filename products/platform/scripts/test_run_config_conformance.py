@@ -858,6 +858,17 @@ class ReportTest(unittest.TestCase):
             [],
         )
 
+    def test_cfg_diag_1_warning_acceptance_metadata(self) -> None:
+        warning = diagnostic(
+            severity="warning", scope={"file": "runtime.yaml", "path": "/setting"},
+            acceptedReason="Accepted for this project.",
+        )
+        self.assertEqual(runner.shape_problems(warning, None), [])
+        self.assertIn(
+            "scope.file is not a project-relative path",
+            runner.shape_problems(dict(warning, scope={"file": "../runtime.yaml", "path": "/setting"}), None),
+        )
+
     def test_cfg_diag_1_shape_problems(self) -> None:
         cases = [
             (diagnostic(severity="fatal"), "severity is not error or warning"),
@@ -1609,6 +1620,27 @@ class EndToEndTest(unittest.TestCase):
             os.environ.clear()
             os.environ.update(saved)
         return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_development_check_rows_allow_only_posture_listing_warnings(self) -> None:
+        registry = self.root / "products/platform/config-formats.yaml"
+        fake = self.bin / "fakectl"
+        for posture, severity, code, status in [
+            ("development", "warning", "adapter.posture.payment-simulator", "pass"),
+            ("development", "warning", "platform.posture.insecure-issuer-http", "pass"),
+            (None, "warning", "adapter.posture.payment-simulator", "fail"),
+            ("production", "warning", "adapter.posture.payment-simulator", "fail"),
+            ("development", "warning", "adapter.config.other-warning", "fail"),
+            ("development", "error", "adapter.posture.payment-simulator", "fail"),
+        ]:
+            with self.subTest(posture=posture, severity=severity, code=code):
+                argv = "fakectl check {project}"
+                if posture:
+                    argv += " --posture " + posture
+                registry.write_text(REGISTRY_TEXT.replace("fakectl check {project}", argv), encoding="utf-8")
+                report = {"diagnostics": [diagnostic(severity=severity, code=code)]}
+                fake.write_text(f"#!{sys.executable}\nprint({json.dumps(json.dumps(report))})\n", encoding="utf-8")
+                _, stdout, _ = self.run_runner("--matrix", "--only-format", "demo/project", "--only-case", "baseline")
+                self.assertIn(f"demo/project\tbaseline\t{status}", stdout)
 
     def test_the_default_bin_dir_follows_cargo_target_dir(self) -> None:
         root = Path("/work/tree")

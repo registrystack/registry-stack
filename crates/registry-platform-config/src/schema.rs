@@ -4,9 +4,14 @@ use serde_json::{Map, Value};
 
 use crate::blocks::{
     AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig, JwksSource, ListenerConfig,
-    MetricsListenerConfig, ObjectStorageConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
-    PrivateListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig, UrlHookDestinationConfig,
+    MetricsListenerConfig, ObjectStorageConfig, OidcClientsConfig, OidcIssuerConfig,
+    OidcPackageClientsConfig, PackageConfig, PrivateListenerConfig, SecretProvidersConfig,
+    TaskGrantStatusConfig, UrlHookDestinationConfig,
 };
+use crate::caller_issuers::{
+    AllowedClients, CallerIssuerCore, CallerIssuers, ClientList, PolicyClients,
+};
+use crate::PackageClients;
 
 /// File name the shared-blocks generator writes.
 pub const SHARED_BLOCKS_SCHEMA_FILE: &str = "runtime-config-blocks.schema.json";
@@ -26,10 +31,16 @@ struct SharedBlocks {
     audit_key: AuditKeyConfig,
     oidc_issuer: OidcIssuerConfig,
     oidc_clients: OidcClientsConfig,
+    oidc_package_clients: OidcPackageClientsConfig,
     task_grant_status: TaskGrantStatusConfig,
     object_storage: ObjectStorageConfig,
     attachment_verifier: AttachmentVerifierConfig,
     url_hook_destination: UrlHookDestinationConfig,
+    caller_issuer_core: CallerIssuerCore<AllowedClients>,
+    caller_issuer_core_from_package: CallerIssuerCore<PackageClients>,
+    caller_issuer_core_from_policies: CallerIssuerCore<PolicyClients>,
+    caller_issuer_core_listed: CallerIssuerCore<ClientList>,
+    caller_issuers: CallerIssuers<CallerIssuerCore<AllowedClients>>,
 }
 
 /// The pretty-printed shared-blocks document, newline terminated.
@@ -52,8 +63,9 @@ pub fn shared_blocks_document() -> Result<String, serde_json::Error> {
 }
 
 /// Root `allOf` members stating that a static JWKS document at
-/// `authentication.oidc.jwksSource.documentRef` names a secret provider by
-/// its prefix, so a configuration carrying one must enable that provider.
+/// `authentication.oidc.issuers.<id>.jwksSource.documentRef` names a secret
+/// provider by its prefix, so a configuration where any issuer entry carries
+/// one must enable that provider.
 pub fn jwks_document_provider_requirements() -> Value {
     serde_json::json!([
         secret_provider_requirement(
@@ -66,6 +78,15 @@ pub fn jwks_document_provider_requirements() -> Value {
 }
 
 fn secret_provider_requirement(reference_pattern: &str, provider: &str, definition: &str) -> Value {
+    let entry_names_the_provider = serde_json::json!({
+        "properties": {
+            "jwksSource": {
+                "properties": {"documentRef": {"pattern": reference_pattern}},
+                "required": ["documentRef"]
+            }
+        },
+        "required": ["jwksSource"]
+    });
     serde_json::json!({
         "if": {
             "properties": {
@@ -73,14 +94,13 @@ fn secret_provider_requirement(reference_pattern: &str, provider: &str, definiti
                     "properties": {
                         "oidc": {
                             "properties": {
-                                "jwksSource": {
-                                    "properties": {
-                                        "documentRef": {"pattern": reference_pattern}
-                                    },
-                                    "required": ["documentRef"]
+                                // Some entry names the provider: not every
+                                // entry fails to.
+                                "issuers": {
+                                    "not": {"additionalProperties": {"not": entry_names_the_provider}}
                                 }
                             },
-                            "required": ["jwksSource"]
+                            "required": ["issuers"]
                         }
                     },
                     "required": ["oidc"]
@@ -96,7 +116,8 @@ fn secret_provider_requirement(reference_pattern: &str, provider: &str, definiti
                     },
                     "required": [provider]
                 }
-            }
+            },
+            "required": ["secretProviders"]
         }
     })
 }
@@ -165,8 +186,41 @@ mod tests {
     }
 
     #[test]
+    fn the_issuer_set_schema_requires_one_issuer_as_the_reader_does() {
+        let document: Value = serde_json::from_str(&shared_blocks_document().unwrap()).unwrap();
+        let issuers = &document["$defs"]["CallerIssuers_CallerIssuerCore_OidcAllowedClients"]
+            ["properties"]["issuers"];
+        assert_eq!(issuers["minProperties"], 1, "{issuers:#}");
+    }
+
+    #[test]
+    fn the_issuer_set_schema_types_its_keys_as_local_ids() {
+        let document: Value = serde_json::from_str(&shared_blocks_document().unwrap()).unwrap();
+        let issuers = &document["$defs"]["CallerIssuers_CallerIssuerCore_OidcAllowedClients"]
+            ["properties"]["issuers"];
+        assert_eq!(
+            issuers["propertyNames"]["$ref"], "#/$defs/LocalId",
+            "{issuers:#}"
+        );
+        assert_eq!(
+            issuers["additionalProperties"]["$ref"], "#/$defs/CallerIssuerCore_OidcAllowedClients",
+            "{issuers:#}"
+        );
+        assert!(issuers.get("patternProperties").is_none(), "{issuers:#}");
+    }
+
+    #[test]
     fn a_static_jwks_document_requires_the_provider_its_reference_names() {
         let requirement = |pattern: &str, provider: &str, definition: &str| {
+            let entry = serde_json::json!({
+                "properties": {
+                    "jwksSource": {
+                        "properties": {"documentRef": {"pattern": pattern}},
+                        "required": ["documentRef"]
+                    }
+                },
+                "required": ["jwksSource"]
+            });
             serde_json::json!({
                 "if": {
                     "properties": {
@@ -174,12 +228,9 @@ mod tests {
                             "properties": {
                                 "oidc": {
                                     "properties": {
-                                        "jwksSource": {
-                                            "properties": {"documentRef": {"pattern": pattern}},
-                                            "required": ["documentRef"]
-                                        }
+                                        "issuers": {"not": {"additionalProperties": {"not": entry}}}
                                     },
-                                    "required": ["jwksSource"]
+                                    "required": ["issuers"]
                                 }
                             },
                             "required": ["oidc"]
@@ -193,7 +244,8 @@ mod tests {
                             "properties": {provider: {"$ref": format!("#/$defs/{definition}")}},
                             "required": [provider]
                         }
-                    }
+                    },
+                    "required": ["secretProviders"]
                 }
             })
         };

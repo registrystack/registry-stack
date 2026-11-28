@@ -34,6 +34,8 @@
 
 use std::sync::Arc;
 
+use registry_platform_config::{Posture, PostureReport};
+
 use axum::extract::rejection::PathRejection;
 use axum::extract::{FromRequest, Path, Request, State};
 use axum::http::header::{
@@ -50,8 +52,11 @@ use registry_messaging_core::{
     MESSAGE_CANCEL_PATH, MESSAGE_PATH, MESSAGE_RECEIPT_PATH, METRICS_PATH, PROVIDER_CALLBACK_PATH,
     PROVIDER_CALLBACK_TOKEN_PATH, READY_PATH, TEMPLATE_PREVIEW_PATH,
 };
-use registry_platform_authcommon::parse_bearer_token;
+use registry_platform_authcommon::{
+    parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
+};
 use registry_platform_canonical_json::parse_json_strict;
+use registry_platform_httpsec::refusal_detail::name_failed_check;
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
     FrameworkRejection, ProblemBody, TraceContext,
@@ -93,7 +98,7 @@ pub enum Readiness {
 }
 
 impl Readiness {
-    async fn is_ready(&self) -> bool {
+    async fn is_ready(&self, posture: Posture) -> bool {
         match self {
             Self::Store {
                 store,
@@ -105,7 +110,9 @@ impl Readiness {
                     tracing::warn!("the Messaging audit destination is not ready");
                     return false;
                 }
-                match crate::activation::check_runtime(store, database_id, package_digest).await {
+                match crate::activation::check_runtime(store, database_id, package_digest, posture)
+                    .await
+                {
                     Ok(_) => true,
                     Err(error) => {
                         tracing::warn!(error = %error, "the Messaging store is not ready");
@@ -121,6 +128,7 @@ impl Readiness {
 
 #[derive(Clone)]
 pub struct HttpState {
+    pub posture: PostureReport,
     pub authenticator: Arc<MessagingAuthenticator>,
     pub readiness: Readiness,
     pub metrics: Arc<Metrics>,
@@ -206,7 +214,7 @@ pub const OPERATIONS: &[Operation] = &[
         success_status: 200,
         idempotency_key: false,
         request_body: RequestBody::None,
-        response_body: None,
+        response_body: Some("ReadyStatus"),
         problems: &EDGE_PROBLEMS,
     },
     Operation {
@@ -381,7 +389,9 @@ const CALLBACK_PROBLEMS: [ProblemCode; 7] = [
 ];
 
 pub fn router(state: HttpState) -> Router {
+    let posture = state.posture.posture();
     let metrics = Arc::clone(&state.metrics);
+    let refusals = Arc::clone(&state.metrics);
     http_edge(
         Router::new()
             .route(HEALTH_PATH, get(health))
@@ -397,27 +407,35 @@ pub fn router(state: HttpState) -> Router {
                 post(callbacks::receive_with_token),
             )
             .with_state(state)
+            .layer(middleware::from_fn_with_state(refusals, record_refusals))
+            .layer(name_failed_check(posture))
             .layer(middleware::from_fn_with_state(metrics, count_requests)),
+        posture,
     )
 }
 
 /// The operator-private router the metrics listener serves: the counters,
 /// and the dispatch queue sampled from `store` when there is one.
-pub fn metrics_router(metrics: Arc<Metrics>, store: Option<PostgresStore>) -> Router {
+pub fn metrics_router(
+    metrics: Arc<Metrics>,
+    store: Option<PostgresStore>,
+    posture: Posture,
+) -> Router {
     http_edge(
         Router::new()
             .route(METRICS_PATH, get(serve_metrics))
             .with_state(MetricsState { metrics, store }),
+        posture,
     )
 }
 
-fn http_edge(router: Router) -> Router {
+fn http_edge(router: Router, posture: Posture) -> Router {
     router
         .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(request_body_limit_default())
         .layer(middleware::from_fn(http_boundary))
-        .layer(security_headers(CspBuilder::restrictive()).without_hsts())
+        .layer(security_headers(CspBuilder::restrictive(), posture).without_hsts())
 }
 
 async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {
@@ -461,11 +479,13 @@ async fn health() -> StatusCode {
     StatusCode::OK
 }
 
-async fn ready(State(state): State<HttpState>) -> Result<StatusCode, HttpError> {
-    if state.readiness.is_ready().await {
-        Ok(StatusCode::OK)
+async fn ready(State(state): State<HttpState>) -> Result<Json<serde_json::Value>, HttpError> {
+    if state.readiness.is_ready(state.posture.posture()).await {
+        let mut body = state.posture.ready_member();
+        body.insert("status".to_owned(), serde_json::Value::from("ready"));
+        Ok(Json(serde_json::Value::Object(body)))
     } else {
-        Err(HttpError(ProblemCode::ServiceUnavailable))
+        Err(HttpError::problem(ProblemCode::ServiceUnavailable))
     }
 }
 
@@ -478,17 +498,17 @@ async fn submit_message(
     let mut audit = state
         .audit
         .begin(serde_json::to_value(requested).map_err(|_| {
-            HttpError(ProblemCode::ServiceUnavailable)
+            HttpError::problem(ProblemCode::ServiceUnavailable)
         })?)
         .await
         .map_err(|error| {
             tracing::error!(error = %error, "the Messaging audit destination refused a submission request");
-            HttpError(ProblemCode::ServiceUnavailable)
+            HttpError::problem(ProblemCode::ServiceUnavailable)
         })?;
     let result = match admit_submission(&state, &caller, request.headers()).await {
         Ok(key) => match read_request_body(request).await {
             Ok(body) => accept_submission(&state, &caller, &key, &body).await,
-            Err(HttpError(problem)) => Err(problem.into()),
+            Err(error) => Err(error.code().into()),
         },
         Err(refusal) => Err(refusal),
     };
@@ -496,9 +516,9 @@ async fn submit_message(
         Ok(answer) if !answer.replayed => answer
             .audit_record
             .clone()
-            .ok_or(HttpError(ProblemCode::ServiceUnavailable))?,
+            .ok_or(HttpError::problem(ProblemCode::ServiceUnavailable))?,
         Ok(answer) => serde_json::to_value(SubmissionRecord::replayed(&state, &caller, answer)?)
-            .map_err(|_| HttpError(ProblemCode::ServiceUnavailable))?,
+            .map_err(|_| HttpError::problem(ProblemCode::ServiceUnavailable))?,
         Err(refusal) if refusal.problem == ProblemCode::ServiceUnavailable => {
             count_limit_refusal(&state.metrics, refusal.problem);
             return Ok(refusal_response(*refusal));
@@ -506,12 +526,12 @@ async fn submit_message(
         Err(refusal) => {
             count_limit_refusal(&state.metrics, refusal.problem);
             serde_json::to_value(SubmissionRecord::refused(&state, &caller, refusal.problem)?)
-                .map_err(|_| HttpError(ProblemCode::ServiceUnavailable))?
+                .map_err(|_| HttpError::problem(ProblemCode::ServiceUnavailable))?
         }
     };
     audit.respond(record).await.map_err(|error| {
         tracing::error!(error = %error, "the Messaging audit destination refused a submission response");
-        HttpError(ProblemCode::ServiceUnavailable)
+        HttpError::problem(ProblemCode::ServiceUnavailable)
     })?;
     let answer = match result {
         Ok(answer) => answer,
@@ -519,7 +539,7 @@ async fn submit_message(
     };
     let status = StatusCode::from_u16(answer.status).map_err(|_| {
         tracing::error!("a stored Messaging receipt carries an invalid status");
-        HttpError(ProblemCode::ServiceUnavailable)
+        HttpError::problem(ProblemCode::ServiceUnavailable)
     })?;
     Ok((status, Json(answer.receipt)).into_response())
 }
@@ -618,7 +638,7 @@ impl SubmissionRecord {
                 .principal_pseudonym(&caller.identity)
                 .map_err(|error| {
                     tracing::error!(error = %error, "a Messaging principal pseudonym failed");
-                    HttpError(ProblemCode::ServiceUnavailable)
+                    HttpError::problem(ProblemCode::ServiceUnavailable)
                 })?;
         Ok(Self {
             event,
@@ -662,7 +682,7 @@ async fn get_message(
     let message = service
         .visible_message(&caller, &message_id)
         .await
-        .map_err(HttpError)?;
+        .map_err(HttpError::problem)?;
     Ok(Json(message.view))
 }
 
@@ -674,25 +694,25 @@ async fn message_receipt(
     // Observation neither renders nor submits. Keep the original receipt
     // available even when the caller has spent its submission budget.
     if !is_json(request.headers()) {
-        return Err(HttpError(ProblemCode::RequestUnsupportedMediaType));
+        return Err(HttpError::problem(ProblemCode::RequestUnsupportedMediaType));
     }
     let key = request
         .headers()
         .get(IDEMPOTENCY_KEY_HEADER)
         .filter(|key| valid_idempotency_key(key.as_bytes()))
         .and_then(|key| key.to_str().ok())
-        .ok_or(HttpError(ProblemCode::RequestInvalid))?
+        .ok_or(HttpError::problem(ProblemCode::RequestInvalid))?
         .to_owned();
     let body = read_request_body(request).await?;
     let service = state
         .messages
         .as_ref()
-        .ok_or(HttpError(ProblemCode::ServiceUnavailable))?;
+        .ok_or(HttpError::problem(ProblemCode::ServiceUnavailable))?;
     Ok(Json(
         service
             .message_receipt(&caller, &key, &body)
             .await
-            .map_err(HttpError)?,
+            .map_err(HttpError::problem)?,
     )
     .into_response())
 }
@@ -708,7 +728,7 @@ async fn cancel_message(
     let view = service
         .cancel(&caller, &message_id)
         .await
-        .map_err(HttpError)?;
+        .map_err(HttpError::problem)?;
     Ok(Json(view))
 }
 
@@ -719,7 +739,7 @@ async fn cancel_message(
 fn message_path(extracted: Result<Path<String>, PathRejection>) -> Result<String, HttpError> {
     extracted
         .map(|Path(message_id)| message_id)
-        .map_err(|_| HttpError(ProblemCode::MessageNotVisible))
+        .map_err(|_| HttpError::problem(ProblemCode::MessageNotVisible))
 }
 
 /// The message service for a route naming `message_id`. An identifier no
@@ -729,9 +749,9 @@ fn visible_service<'a>(
     message_id: &str,
 ) -> Result<&'a MessageService, HttpError> {
     if uuid::Uuid::parse_str(message_id).is_err() {
-        return Err(HttpError(ProblemCode::MessageNotVisible));
+        return Err(HttpError::problem(ProblemCode::MessageNotVisible));
     }
-    message_service(state).map_err(HttpError)
+    message_service(state).map_err(HttpError::problem)
 }
 
 fn message_service(state: &HttpState) -> Result<&MessageService, ProblemCode> {
@@ -781,7 +801,7 @@ async fn preview_template(
         .await
         .map_err(|error| {
             tracing::error!(error = %error, "the Messaging audit destination refused a preview request");
-            HttpError(ProblemCode::ServiceUnavailable)
+            HttpError::problem(ProblemCode::ServiceUnavailable)
         })?;
     let headers = request.headers().clone();
     let outcome = match read_request_body(request).await {
@@ -793,25 +813,25 @@ async fn preview_template(
             &headers,
             &body,
         ),
-        Err(HttpError(problem)) => PreviewOutcome {
+        Err(error) => PreviewOutcome {
             locale: None,
-            result: Err(problem),
+            result: Err(error.code()),
         },
     };
     let record = PreviewRecord::new(&state, &caller, &template_id, &version, &outcome)?;
     audit
         .respond(serde_json::to_value(record).map_err(|_| {
-            HttpError(ProblemCode::ServiceUnavailable)
+            HttpError::problem(ProblemCode::ServiceUnavailable)
         })?)
         .await
         .map_err(|error| {
             tracing::error!(error = %error, "the Messaging audit destination refused a preview response");
-            HttpError(ProblemCode::ServiceUnavailable)
+            HttpError::problem(ProblemCode::ServiceUnavailable)
         })?;
-    let preview = outcome.result.map_err(HttpError)?;
+    let preview = outcome.result.map_err(HttpError::problem)?;
     let body = preview_json(&preview).map_err(|error| {
         tracing::error!(error = %error, "a Messaging preview could not be serialized");
-        HttpError(ProblemCode::ServiceUnavailable)
+        HttpError::problem(ProblemCode::ServiceUnavailable)
     })?;
     Ok((StatusCode::OK, [(CONTENT_TYPE, "application/json")], body).into_response())
 }
@@ -827,7 +847,7 @@ pub(crate) async fn read_request_body(request: Request) -> Result<axum::body::By
                 StatusCode::PAYLOAD_TOO_LARGE => ProblemCode::RequestBodyTooLarge,
                 _ => ProblemCode::RequestInvalid,
             };
-            HttpError(problem)
+            HttpError::problem(problem)
         })
 }
 
@@ -917,7 +937,7 @@ impl PreviewRecord {
                 .principal_pseudonym(&caller.identity)
                 .map_err(|error| {
                     tracing::error!(error = %error, "a Messaging principal pseudonym failed");
-                    HttpError(ProblemCode::ServiceUnavailable)
+                    HttpError::problem(ProblemCode::ServiceUnavailable)
                 })?;
         let template =
             state
@@ -950,37 +970,198 @@ impl PreviewRecord {
 
 async fn authenticate(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
     let result = match bearer_token(headers) {
-        Some(token) => state.authenticator.authenticate(token).await,
-        None => {
-            state.authenticator.record_header_refusal();
-            Err(AuthenticationError::Refused)
-        }
+        Ok(token) => state.authenticator.authenticate_declaring(token).await,
+        Err(check) => Err(AuthenticationError::Refused(check).into()),
     };
-    result.map_err(|error| {
-        state.metrics.record_authentication_refusal(error);
-        authentication_problem(error)
+    result.map_err(|refusal| {
+        state.metrics.record_authentication_refusal(refusal.error);
+        authentication_problem(refusal.error)
+            .with_declared(refusal.declared)
+            .with_remedy(refusal.remedy)
     })
 }
 
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let authorization = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    parse_bearer_token(authorization).ok()
+/// The bearer credential an `Authorization` header carries, or the check that
+/// refuses it: no header, or not the Bearer scheme, is a missing credential. An
+/// unreadable or misshapen header is a malformed one.
+fn bearer_token(headers: &HeaderMap) -> Result<&str, FailedCheck> {
+    let authorization = headers
+        .get(AUTHORIZATION)
+        .ok_or(FailedCheck::CredentialMissing)?
+        .to_str()
+        .map_err(|_| FailedCheck::CredentialMalformed)?;
+    parse_bearer_token(authorization).map_err(|error| match error {
+        BearerParseError::InvalidScheme => FailedCheck::CredentialMissing,
+        _ => FailedCheck::CredentialMalformed,
+    })
 }
 
 fn authentication_problem(error: AuthenticationError) -> HttpError {
     match error {
-        AuthenticationError::Refused | AuthenticationError::Claims => {
-            HttpError(ProblemCode::AuthenticationRefused)
+        AuthenticationError::Refused(check) | AuthenticationError::Claims(check) => {
+            HttpError::refused(ProblemCode::AuthenticationRefused, check)
         }
-        AuthenticationError::Profile => HttpError(ProblemCode::ProfileNotAuthorized),
+        AuthenticationError::Profile(check) => {
+            HttpError::refused(ProblemCode::ProfileNotAuthorized, check)
+        }
         // The verifier reached no verdict, so the credential is not what is
         // wrong. `service.unavailable` carries `Retry-After` instead of a
-        // challenge that would send the caller rotating a good token.
-        AuthenticationError::Unavailable => HttpError(ProblemCode::ServiceUnavailable),
+        // challenge that would send the caller rotating a good token. The
+        // answer counts under the key source it could not use.
+        AuthenticationError::Unavailable => HttpError::refused(
+            ProblemCode::ServiceUnavailable,
+            FailedCheck::KeySourceUnavailable,
+        ),
     }
 }
 
-pub struct HttpError(pub ProblemCode);
+/// A problem answer, and the check that failed when the problem refuses the
+/// caller. The check travels with the answer to the one layer that records
+/// it; it is never written to the response.
+pub struct HttpError {
+    problem: ProblemCode,
+    check: Option<FailedCheck>,
+    /// What the deployment declared about a scope refusal. It rides with the
+    /// check to the recording layer and is never written to the response.
+    declared: Option<DeclaredScope>,
+    /// The sentence the verifier gave for the log line when it refused the
+    /// credential. It replaces the fixed advice for the check and is never
+    /// written to the response.
+    remedy: Option<&'static str>,
+}
+
+impl HttpError {
+    /// An answer whose check the producer names: a refusal, or an answer that
+    /// counts under a check although it is not one.
+    pub(crate) fn refused(problem: ProblemCode, check: FailedCheck) -> Self {
+        Self {
+            problem,
+            check: Some(check),
+            declared: None,
+            remedy: None,
+        }
+    }
+
+    /// Attach the values a scope refusal's log line may name.
+    #[must_use]
+    pub(crate) fn with_declared(self, declared: Option<DeclaredScope>) -> Self {
+        Self { declared, ..self }
+    }
+
+    /// Attach the verifier's sentence for the refusal's log line.
+    #[must_use]
+    pub(crate) fn with_remedy(self, remedy: Option<&'static str>) -> Self {
+        Self { remedy, ..self }
+    }
+
+    /// An answer whose check follows from its problem code alone: the
+    /// problems the service answers once a caller is resolved.
+    /// [`attribution`] sorts every problem code, so a code added to the
+    /// vocabulary does not compile until it says which side it is on.
+    pub(crate) fn problem(problem: ProblemCode) -> Self {
+        let check = match attribution(problem) {
+            Attribution::Plain => None,
+            Attribution::Service(check) => Some(check),
+            Attribution::Named => {
+                tracing::error!("a refusal that names its failed check was answered without one");
+                None
+            }
+        };
+        Self {
+            problem,
+            check,
+            declared: None,
+            remedy: None,
+        }
+    }
+
+    /// The problem this answer carries.
+    pub(crate) fn code(&self) -> ProblemCode {
+        self.problem
+    }
+}
+
+/// How a problem code relates to the failed-check record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Attribution {
+    /// The problem does not refuse the caller.
+    Plain,
+    /// The problem refuses the caller, and every producer past
+    /// authentication means this one check.
+    Service(FailedCheck),
+    /// The problem refuses the caller, and its producer (authentication or
+    /// the callback verifier) names the check itself.
+    Named,
+}
+
+/// Sort every problem code. No wildcard arm: a new code must pick a side.
+#[deny(clippy::wildcard_enum_match_arm)]
+const fn attribution(problem: ProblemCode) -> Attribution {
+    match problem {
+        ProblemCode::AuthenticationRefused | ProblemCode::CallbackUnverified => Attribution::Named,
+        // Past authentication, the sender role, the sender profile, the
+        // template and direct content are what the profile does not allow.
+        ProblemCode::OperationNotAuthorized | ProblemCode::ProfileNotAuthorized => {
+            Attribution::Service(FailedCheck::Operation)
+        }
+        ProblemCode::MessageNotVisible => Attribution::Service(FailedCheck::Visibility),
+        ProblemCode::RateLimitExceeded => Attribution::Service(FailedCheck::RateLimit),
+        ProblemCode::CallbackUnreadable
+        | ProblemCode::ContentInvalid
+        | ProblemCode::ContentTooLarge
+        | ProblemCode::ContentTooManySegments
+        | ProblemCode::IdempotencyExpired
+        | ProblemCode::IdempotencyKeyReused
+        | ProblemCode::MessageDispatchStarted
+        | ProblemCode::MessageTerminal
+        | ProblemCode::QuotaExceeded
+        | ProblemCode::ReceiptUnresolved
+        | ProblemCode::RequestBodyTooLarge
+        | ProblemCode::RequestInvalid
+        | ProblemCode::RequestMethodNotAllowed
+        | ProblemCode::RequestNotFound
+        | ProblemCode::RequestUnprocessable
+        | ProblemCode::RequestUnsupportedMediaType
+        | ProblemCode::ServiceUnavailable
+        | ProblemCode::TemplateDataInvalid
+        | ProblemCode::TemplateLocaleUnavailable
+        | ProblemCode::TemplateNotFound
+        | ProblemCode::TemplateRenderRefused => Attribution::Plain,
+    }
+}
+
+/// The fixed advice a refusal's log line carries for the checks an operator
+/// fixes in the access profiles or the issuer's scope claim.
+const fn remedy(check: FailedCheck) -> Option<&'static str> {
+    match check {
+        FailedCheck::Scope => {
+            Some("check scopeClaim of the issuer entry and accessProfiles requiredScopes")
+        }
+        FailedCheck::AccessProfile | FailedCheck::ActorKind => {
+            Some("check accessProfiles actorKind and requesterClients")
+        }
+        _ => None,
+    }
+}
+
+/// Count a refused request and write its admitted log line. The note rides in
+/// the answer's extensions, which no serializer reads.
+async fn record_refusals(
+    State(metrics): State<Arc<Metrics>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let response = next.run(request).await;
+    if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
+        record_refusal!(
+            metrics.refusal_recorder(),
+            note,
+            trace_id = current_trace().trace_id,
+            declared = response.extensions().get::<DeclaredScope>()
+        );
+    }
+    response
+}
 
 /// Render a refused submission: its problem, with `Retry-After` in whole
 /// seconds, never below one, when a limit says how long to wait.
@@ -1010,7 +1191,17 @@ fn retry_after_seconds(wait: std::time::Duration) -> u64 {
 
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
-        problem_response(self.0)
+        let mut response = problem_answer(self.problem, self.check);
+        if let Some(declared) = self.declared {
+            response.extensions_mut().insert(declared);
+        }
+        if let (Some(remedy), Some(note)) = (
+            self.remedy,
+            response.extensions().get::<RefusalNote>().copied(),
+        ) {
+            response.extensions_mut().insert(note.with_remedy(remedy));
+        }
+        response
     }
 }
 
@@ -1020,9 +1211,16 @@ fn current_trace() -> TraceContext {
         .unwrap_or_else(|_| TraceContext::server_created())
 }
 
-/// Render one problem: the pinned code, title, status, and detail from the
-/// closed vocabulary, under the answering request's trace.
+/// Render one problem whose failed check, if it refuses the caller, follows
+/// from its code.
 fn problem_response(problem: ProblemCode) -> Response {
+    HttpError::problem(problem).into_response()
+}
+
+/// Render one problem: the pinned code, title, status, and detail from the
+/// closed vocabulary, under the answering request's trace. The failed check
+/// rides in the response extensions for [`record_refusals`].
+fn problem_answer(problem: ProblemCode, check: Option<FailedCheck>) -> Response {
     let trace = current_trace();
     let status = problem.http_status();
     let body = ProblemBody {
@@ -1055,6 +1253,12 @@ fn problem_response(problem: ProblemCode) -> Response {
             "5".parse()
                 .expect("the retry interval is a valid header value"),
         );
+    }
+    if let Some(check) = check {
+        let note = RefusalNote::new(check);
+        response
+            .extensions_mut()
+            .insert(remedy(check).map_or(note, |remedy| note.with_remedy(remedy)));
     }
     response
 }
@@ -1095,6 +1299,7 @@ mod tests {
     ) -> HttpState {
         let package = starter_package();
         HttpState {
+            posture: PostureReport::new(crate::config::DEFAULT_POSTURE),
             authenticator: Arc::new(authenticator),
             readiness: Readiness::Fixed(ready),
             metrics: Arc::new(Metrics::default()),
@@ -1277,6 +1482,126 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn development_marks_readiness_and_the_metrics_listener() {
+        let mut state = state_with(authenticator(), true);
+        state.posture = PostureReport::new(registry_platform_config::DeclaredPosture {
+            posture: Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        });
+        let metrics = metrics_router(Arc::clone(&state.metrics), None, Posture::Development);
+        let ready = call(router(state), "GET", READY_PATH, None).await;
+        assert_eq!(ready.headers()["registry-posture"], "development");
+        let body = to_bytes(ready.into_body(), 4096).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"status":"ready", "posture":"development", "developmentSettings":[]}),
+        );
+        let metrics = call(metrics, "GET", METRICS_PATH, None).await;
+        assert_eq!(metrics.headers()["registry-posture"], "development");
+    }
+
+    /// A state declared as `posture`, over an in-memory journal the test can
+    /// read.
+    fn state_declared(
+        posture: Posture,
+        authenticator: MessagingAuthenticator,
+        audit: MessagingAudit,
+    ) -> HttpState {
+        let mut state = state_over(authenticator, true, audit);
+        state.posture = PostureReport::new(registry_platform_config::DeclaredPosture {
+            posture,
+            source: registry_platform_config::PostureSource::Flag,
+        });
+        state
+    }
+
+    async fn problem_members(response: Response) -> serde_json::Map<String, serde_json::Value> {
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let mut members = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone();
+        // Each request carries its own trace.
+        assert!(members.remove("traceId").is_some());
+        members
+    }
+
+    #[tokio::test]
+    async fn the_development_body_names_the_failed_check_and_production_does_not() {
+        let message = "/v1/messages/0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+        let forged = token_signed_with(sender_claims(), b"another-secret-another-secret-another!");
+        let mut answers = Vec::new();
+        for posture in [Posture::Production, Posture::Development] {
+            let state = state_declared(posture, authenticator(), memory_journal().1);
+            let response = call(router(state), "GET", message, Some(&forged)).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{posture:?}");
+            answers.push(problem_members(response).await);
+        }
+        let [production, mut development] = <[_; 2]>::try_from(answers).unwrap();
+        assert!(!production.contains_key("failedCheck"), "{production:?}");
+        assert_eq!(
+            development.remove("failedCheck"),
+            Some(json!(FailedCheck::TokenSignature.as_str()))
+        );
+        assert_eq!(
+            development, production,
+            "the development body adds failedCheck and nothing else"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_token_reaches_the_same_profile_in_both_postures() {
+        let mut answers = Vec::new();
+        for posture in [Posture::Production, Posture::Development] {
+            let (sink, journal) = memory_journal();
+            let state = state_declared(posture, authenticator(), journal);
+            let response = post_json(
+                router(state),
+                PREVIEW,
+                Some(&token(sender_claims())),
+                &sample_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{posture:?}");
+            let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+            let records = self::journal(&sink);
+            assert_eq!(records.len(), 1, "{posture:?}");
+            answers.push((body, records[0]["accessProfile"].clone()));
+        }
+        assert_eq!(answers[0], answers[1]);
+        assert_eq!(answers[0].1, json!("case-notices"));
+
+        // A token no profile names is refused the same way in both postures,
+        // and development alone says which check refused it.
+        let mut unprofiled = sender_claims();
+        unprofiled["azp"] = json!(UNPROFILED_CLIENT);
+        let mut refusals = Vec::new();
+        for posture in [Posture::Production, Posture::Development] {
+            let state = state_declared(posture, authenticator(), memory_journal().1);
+            let response = post_json(
+                router(state),
+                PREVIEW,
+                Some(&token(unprofiled.clone())),
+                &sample_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{posture:?}");
+            refusals.push(problem_members(response).await);
+        }
+        let [production, mut development] = <[_; 2]>::try_from(refusals).unwrap();
+        assert_eq!(
+            development.remove("failedCheck"),
+            Some(json!(FailedCheck::AccessProfile.as_str()))
+        );
+        assert_eq!(development, production);
+    }
+
+    #[tokio::test]
     async fn ready_answers_unavailable_when_the_store_is_not_ready() {
         let app = router(state_with(authenticator(), false));
         let headers = expect_problem(
@@ -1301,7 +1626,7 @@ mod tests {
     async fn the_metrics_listener_serves_counters_and_nothing_else() {
         let (app, metrics) = app();
         call(app, "GET", "/v1/messages/m-1", None).await;
-        let metrics_app = metrics_router(metrics, None);
+        let metrics_app = metrics_router(metrics, None, Posture::Production);
         let response = call(metrics_app.clone(), "GET", METRICS_PATH, None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
@@ -1412,7 +1737,7 @@ mod tests {
         let during_outage = authenticator_over(Arc::new(JwksFetcher::new_with_fetch_url_policy(
             format!("{}/jwks.json", issuer_keys.uri()),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )));
         let app = router(state_with(during_outage, true));
         let headers = expect_problem(
@@ -2530,6 +2855,800 @@ mod tests {
             ProblemCode::RequestBodyTooLarge,
         )
         .await;
+    }
+
+    /// One refusal answer reduced to what a caller can observe: the status,
+    /// the headers that carry a decision, and the body without its per-request
+    /// `traceId`.
+    async fn answer_snapshot(name: &str, response: Response) -> serde_json::Value {
+        let status = response.status().as_u16();
+        let header = |response: &Response, name: &str| {
+            response
+                .headers()
+                .get(name)
+                .map(|value| value.to_str().unwrap().to_owned())
+        };
+        let headers = json!({
+            "content-type": header(&response, "content-type"),
+            "www-authenticate": header(&response, "www-authenticate"),
+            "retry-after": header(&response, "retry-after"),
+            "cache-control": header(&response, "cache-control"),
+        });
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let mut body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(body["traceId"].is_string(), "{name}: {body}");
+        body.as_object_mut().unwrap().remove("traceId");
+        json!({"name": name, "status": status, "headers": headers, "body": body})
+    }
+
+    /// Every authentication, authorization, visibility and rate refusal the
+    /// HTTP surface answers without a database.
+    async fn refusal_snapshots() -> Vec<serde_json::Value> {
+        let mut snapshots = Vec::new();
+        let (app, _) = app();
+        let message = "/v1/messages/0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+        snapshots.push(
+            answer_snapshot(
+                "no credential",
+                call(app.clone(), "GET", message, None).await,
+            )
+            .await,
+        );
+        let basic = Request::builder()
+            .uri(message)
+            .header(AUTHORIZATION, "Basic dXNlcjpwYXNz")
+            .body(Body::empty())
+            .unwrap();
+        snapshots.push(
+            answer_snapshot(
+                "not the bearer scheme",
+                app.clone().oneshot(basic).await.unwrap(),
+            )
+            .await,
+        );
+        snapshots.push(
+            answer_snapshot(
+                "not a compact token",
+                call(app.clone(), "GET", message, Some("not-a-jwt")).await,
+            )
+            .await,
+        );
+        let forged = token_signed_with(sender_claims(), b"another-secret-another-secret-another!");
+        snapshots.push(
+            answer_snapshot(
+                "forged signature",
+                call(app.clone(), "GET", message, Some(&forged)).await,
+            )
+            .await,
+        );
+        let mut claims = sender_claims();
+        claims["aud"] = json!("urn:elsewhere");
+        snapshots.push(
+            answer_snapshot(
+                "other audience",
+                call(app.clone(), "GET", message, Some(&token(claims))).await,
+            )
+            .await,
+        );
+        let mut claims = sender_claims();
+        claims["azp"] = json!("unrelated-app");
+        snapshots.push(
+            answer_snapshot(
+                "client the verifier does not admit",
+                call(app.clone(), "GET", message, Some(&token(claims))).await,
+            )
+            .await,
+        );
+        let mut claims = sender_claims();
+        claims["azp"] = json!(UNPROFILED_CLIENT);
+        snapshots.push(
+            answer_snapshot(
+                "client with no access profile",
+                call(app.clone(), "GET", message, Some(&token(claims))).await,
+            )
+            .await,
+        );
+        let mut claims = sender_claims();
+        claims["registry_scopes"] = json!("messaging:read");
+        snapshots.push(
+            answer_snapshot(
+                "scope the profile requires is missing",
+                call(app.clone(), "GET", message, Some(&token(claims))).await,
+            )
+            .await,
+        );
+        let mut claims = sender_claims();
+        claims["registry_actor_kind"] = json!("human");
+        snapshots.push(
+            answer_snapshot(
+                "actor kind the profile does not admit",
+                call(app.clone(), "GET", message, Some(&token(claims))).await,
+            )
+            .await,
+        );
+        let mut claims = sender_claims();
+        claims["registry_actor_kind"] = json!("robot");
+        snapshots.push(
+            answer_snapshot(
+                "malformed actor kind",
+                call(app.clone(), "GET", message, Some(&token(claims))).await,
+            )
+            .await,
+        );
+        let mut claims = sender_claims();
+        claims.as_object_mut().unwrap().remove("sub");
+        snapshots.push(
+            answer_snapshot(
+                "no principal",
+                call(app.clone(), "GET", message, Some(&token(claims))).await,
+            )
+            .await,
+        );
+        let mut claims = sender_claims();
+        claims[registry_platform_oidc::ASSERTION_ISSUER_CLAIM] =
+            json!("https://assertions.example.test");
+        snapshots.push(
+            answer_snapshot(
+                "exchanged token with no declared authority",
+                call(app.clone(), "GET", message, Some(&token(claims))).await,
+            )
+            .await,
+        );
+        snapshots.push(
+            answer_snapshot(
+                "a message id no message can carry",
+                call(
+                    app.clone(),
+                    "GET",
+                    "/v1/messages/not-an-id",
+                    Some(&token(sender_claims())),
+                )
+                .await,
+            )
+            .await,
+        );
+        snapshots.push(
+            answer_snapshot(
+                "operator submits",
+                post_json(
+                    app.clone(),
+                    "/v1/messages",
+                    Some(&token(operator_claims())),
+                    &json!({}),
+                )
+                .await,
+            )
+            .await,
+        );
+        snapshots.push(
+            answer_snapshot(
+                "operator previews",
+                post_json(
+                    app.clone(),
+                    PREVIEW,
+                    Some(&token(operator_claims())),
+                    &sample_request(),
+                )
+                .await,
+            )
+            .await,
+        );
+        snapshots.push(
+            answer_snapshot(
+                "sender previews a template its profile does not list",
+                post_json(
+                    app.clone(),
+                    "/v1/templates/unlisted-template/versions/1/preview",
+                    Some(&token(sender_claims())),
+                    &sample_request(),
+                )
+                .await,
+            )
+            .await,
+        );
+        snapshots.push(
+            answer_snapshot(
+                "callback for a provider that receives none",
+                post(
+                    app,
+                    "/v1/provider-callbacks/mail-relay",
+                    None,
+                    Some("application/json"),
+                    b"{}".to_vec(),
+                )
+                .await,
+            )
+            .await,
+        );
+        let mut state = callback_state(path_token_verifier());
+        state.callback_limits = Arc::new(CallbackLimits::new(60, 2).unwrap());
+        let app = router(state);
+        let mut limited = None;
+        for _ in 0..3 {
+            limited = Some(
+                post(
+                    app.clone(),
+                    "/v1/provider-callbacks/sms-gateway/callback-token-000000",
+                    None,
+                    Some("application/json"),
+                    b"{}".to_vec(),
+                )
+                .await,
+            );
+        }
+        snapshots.push(answer_snapshot("callback past the rate", limited.unwrap()).await);
+        let issuer_keys = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/jwks.json"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&issuer_keys)
+            .await;
+        let outage = authenticator_over(Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            format!("{}/jwks.json", issuer_keys.uri()),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::https_or_loopback(),
+        )));
+        let app = router(state_with(outage, true));
+        snapshots.push(
+            answer_snapshot(
+                "key endpoint outage",
+                call(app, "GET", message, Some(&token(sender_claims()))).await,
+            )
+            .await,
+        );
+        snapshots
+    }
+
+    /// The refusal answers are frozen in `tests/golden/refusals.json`. Set
+    /// `REGISTRY_UPDATE_GOLDEN=1` to rewrite the file from the current code.
+    #[tokio::test]
+    async fn refusal_answers_match_the_golden_file() {
+        let golden =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/refusals.json");
+        let actual = serde_json::Value::Array(refusal_snapshots().await);
+        if std::env::var_os("REGISTRY_UPDATE_GOLDEN").is_some() {
+            std::fs::create_dir_all(golden.parent().unwrap()).unwrap();
+            let mut text = serde_json::to_string_pretty(&actual).unwrap();
+            text.push('\n');
+            std::fs::write(&golden, text).unwrap();
+        }
+        let expected: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&golden).expect("the golden file"))
+                .expect("the golden file is JSON");
+        assert_eq!(actual, expected);
+    }
+
+    fn request(
+        method: &str,
+        uri: &str,
+        authorization: Option<String>,
+        body: Option<&serde_json::Value>,
+    ) -> Request<Body> {
+        let mut request = Request::builder().method(method).uri(uri);
+        if let Some(authorization) = authorization {
+            request = request.header(AUTHORIZATION, authorization);
+        }
+        match body {
+            Some(body) => request
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(body).unwrap()))
+                .unwrap(),
+            None => request.body(Body::empty()).unwrap(),
+        }
+    }
+
+    fn bearer(token: &str) -> Option<String> {
+        Some(format!("Bearer {token}"))
+    }
+
+    /// The request counts under `check` once: the counter moved by one, and
+    /// the log carries one line naming it.
+    fn assert_counted_under(metrics: &Metrics, logs: &str, check: FailedCheck, context: &str) {
+        let text = metrics.render(None);
+        assert!(
+            text.contains(&format!(
+                "messaging_request_refusals_total{{check=\"{}\"}} 1\n",
+                check.as_str()
+            )),
+            "{context}: {text}"
+        );
+        let counted: u64 = text
+            .lines()
+            .filter(|line| line.starts_with("messaging_request_refusals_total{"))
+            .map(|line| line.rsplit(' ').next().unwrap().parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(counted, 1, "{context}: {text}");
+        assert!(
+            logs.contains(&format!("failed_check=\"{}\"", check.as_str())),
+            "{context}: {logs}"
+        );
+        assert_eq!(
+            logs.matches("request refused").count(),
+            1,
+            "{context}: {logs}"
+        );
+    }
+
+    /// One request per check the service decides, each answered by the golden
+    /// problem and counted and logged under the check that failed.
+    #[tokio::test]
+    async fn each_refusal_is_counted_and_logged_under_the_check_that_failed() {
+        use crate::smtp::tests::Captured;
+        let message = "/v1/messages/0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+        let claims_with = |key: &str, value: serde_json::Value| {
+            let mut claims = sender_claims();
+            claims[key] = value;
+            token(claims)
+        };
+        let forged = token_signed_with(sender_claims(), b"another-secret-another-secret-another!");
+        let mut without_principal = sender_claims();
+        without_principal.as_object_mut().unwrap().remove("sub");
+        let basic = Some("Basic dXNlcjpwYXNz".to_owned());
+        let cases: Vec<(&str, FailedCheck, Request<Body>)> = vec![
+            (
+                "no credential",
+                FailedCheck::CredentialMissing,
+                request("GET", message, None, None),
+            ),
+            (
+                "not the bearer scheme",
+                FailedCheck::CredentialMissing,
+                request("GET", message, basic, None),
+            ),
+            (
+                "not a compact token",
+                FailedCheck::CredentialMalformed,
+                request("GET", message, bearer("not-a-jwt"), None),
+            ),
+            (
+                "forged signature",
+                FailedCheck::TokenSignature,
+                request("GET", message, bearer(&forged), None),
+            ),
+            (
+                "other audience",
+                FailedCheck::TokenAudience,
+                request(
+                    "GET",
+                    message,
+                    bearer(&claims_with("aud", json!("urn:elsewhere"))),
+                    None,
+                ),
+            ),
+            (
+                "other issuer",
+                FailedCheck::TokenIssuer,
+                request(
+                    "GET",
+                    message,
+                    bearer(&claims_with("iss", json!("https://elsewhere.test"))),
+                    None,
+                ),
+            ),
+            (
+                "client the verifier does not admit",
+                FailedCheck::TokenClient,
+                request(
+                    "GET",
+                    message,
+                    bearer(&claims_with("azp", json!("unrelated-app"))),
+                    None,
+                ),
+            ),
+            (
+                "client with no access profile",
+                FailedCheck::AccessProfile,
+                request(
+                    "GET",
+                    message,
+                    bearer(&claims_with("azp", json!(UNPROFILED_CLIENT))),
+                    None,
+                ),
+            ),
+            (
+                "missing scope",
+                FailedCheck::Scope,
+                request(
+                    "GET",
+                    message,
+                    bearer(&claims_with("registry_scopes", json!("messaging:read"))),
+                    None,
+                ),
+            ),
+            (
+                "actor kind the profile does not admit",
+                FailedCheck::ActorKind,
+                request(
+                    "GET",
+                    message,
+                    bearer(&claims_with("registry_actor_kind", json!("human"))),
+                    None,
+                ),
+            ),
+            (
+                "malformed actor kind",
+                FailedCheck::ActorKind,
+                request(
+                    "GET",
+                    message,
+                    bearer(&claims_with("registry_actor_kind", json!("robot"))),
+                    None,
+                ),
+            ),
+            (
+                "no principal",
+                FailedCheck::TokenClaims,
+                request("GET", message, bearer(&token(without_principal)), None),
+            ),
+            (
+                "exchanged token with no declared authority",
+                FailedCheck::TokenAssertionIssuer,
+                request(
+                    "GET",
+                    message,
+                    bearer(&claims_with(
+                        registry_platform_oidc::ASSERTION_ISSUER_CLAIM,
+                        json!("https://assertions.example.test"),
+                    )),
+                    None,
+                ),
+            ),
+            (
+                "a message id no message can carry",
+                FailedCheck::Visibility,
+                request(
+                    "GET",
+                    "/v1/messages/not-an-id",
+                    bearer(&token(sender_claims())),
+                    None,
+                ),
+            ),
+            (
+                "operator submits",
+                FailedCheck::Operation,
+                request(
+                    "POST",
+                    "/v1/messages",
+                    bearer(&token(operator_claims())),
+                    Some(&json!({})),
+                ),
+            ),
+            (
+                "operator previews",
+                FailedCheck::Operation,
+                request(
+                    "POST",
+                    PREVIEW,
+                    bearer(&token(operator_claims())),
+                    Some(&sample_request()),
+                ),
+            ),
+            (
+                "sender previews a template its profile does not list",
+                FailedCheck::Operation,
+                request(
+                    "POST",
+                    "/v1/templates/unlisted-template/versions/1/preview",
+                    bearer(&token(sender_claims())),
+                    Some(&sample_request()),
+                ),
+            ),
+        ];
+        for (name, check, request) in cases {
+            let (app, metrics) = app();
+            let captured = Captured::install();
+            let response = app.oneshot(request).await.unwrap();
+            let logs = captured.finish();
+            assert!(response.status().is_client_error(), "{name}");
+            assert_counted_under(&metrics, &logs, check, name);
+        }
+    }
+
+    /// A scope refusal's line names the values the deployment declared: the
+    /// scope claim it reads, the scope the profile requires and the profile.
+    /// The scope the token carries never reaches the line, and no other
+    /// refusal writes any of the three.
+    #[tokio::test]
+    async fn a_scope_refusal_line_names_the_declared_scope_and_none_of_the_tokens() {
+        use crate::smtp::tests::Captured;
+        let message = "/v1/messages/0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+        let canary = "canary:never-logged";
+        let mut scoped = sender_claims();
+        scoped["registry_scopes"] = json!(canary);
+        let (first_app, _metrics) = app();
+        let captured = Captured::install();
+        let response = first_app
+            .oneshot(request("GET", message, bearer(&token(scoped)), None))
+            .await
+            .unwrap();
+        let logs = captured.finish();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!logs.contains(canary), "{logs}");
+        assert!(logs.contains("failed_check=\"scope\""), "{logs}");
+        assert!(logs.contains("scope_claim=\"registry_scopes\""), "{logs}");
+        assert!(logs.contains("required_scope=\"messaging:send\""), "{logs}");
+        assert!(logs.contains("access_profile=\"case-notices\""), "{logs}");
+
+        let mut unprofiled = sender_claims();
+        unprofiled["azp"] = json!(UNPROFILED_CLIENT);
+        unprofiled["registry_scopes"] = json!(canary);
+        let (second_app, _metrics) = app();
+        let captured = Captured::install();
+        let response = second_app
+            .oneshot(request("GET", message, bearer(&token(unprofiled)), None))
+            .await
+            .unwrap();
+        let logs = captured.finish();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(logs.contains("failed_check=\"access-profile\""), "{logs}");
+        for name in ["scope_claim", "required_scope", "access_profile="] {
+            assert!(!logs.contains(name), "{name}: {logs}");
+        }
+        assert!(!logs.contains(canary), "{logs}");
+    }
+
+    #[tokio::test]
+    async fn a_key_endpoint_outage_counts_under_the_key_source() {
+        use crate::smtp::tests::Captured;
+        let issuer_keys = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/jwks.json"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&issuer_keys)
+            .await;
+        let outage = authenticator_over(Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            format!("{}/jwks.json", issuer_keys.uri()),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::https_or_loopback(),
+        )));
+        let state = state_with(outage, true);
+        let metrics = Arc::clone(&state.metrics);
+        let captured = Captured::install();
+        let response = call(
+            router(state),
+            "GET",
+            "/v1/messages/0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d",
+            Some(&token(sender_claims())),
+        )
+        .await;
+        let logs = captured.finish();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_counted_under(&metrics, &logs, FailedCheck::KeySourceUnavailable, "outage");
+    }
+
+    #[tokio::test]
+    async fn each_callback_refusal_is_counted_and_logged_under_the_check_that_failed() {
+        use crate::smtp::tests::Captured;
+        let signed_wrong = Request::builder()
+            .method("POST")
+            .uri("/v1/provider-callbacks/sms-gateway")
+            .header(CONTENT_TYPE, "application/json")
+            .header("x-gateway-signature", "00".repeat(32))
+            .body(Body::from(br#"{"id":"gw-1"}"#.to_vec()))
+            .unwrap();
+        let unsigned = Request::builder()
+            .method("POST")
+            .uri("/v1/provider-callbacks/sms-gateway")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(br#"{"id":"gw-1"}"#.to_vec()))
+            .unwrap();
+        let callback = |uri: &str| request("POST", uri, None, Some(&json!({})));
+        let cases: Vec<(&str, serde_json::Value, FailedCheck, Request<Body>)> = vec![
+            (
+                "no provider that receives callbacks",
+                path_token_verifier(),
+                FailedCheck::DeliveryBinding,
+                callback("/v1/provider-callbacks/no-such-provider"),
+            ),
+            (
+                "a token on a route the verifier does not use",
+                body_verifier(),
+                FailedCheck::DeliveryBinding,
+                callback("/v1/provider-callbacks/sms-gateway/anything"),
+            ),
+            (
+                "no token on the route that needs one",
+                path_token_verifier(),
+                FailedCheck::DeliveryBinding,
+                callback("/v1/provider-callbacks/sms-gateway"),
+            ),
+            (
+                "a wrong path token",
+                path_token_verifier(),
+                FailedCheck::SharedSecret,
+                callback("/v1/provider-callbacks/sms-gateway/callback-token-000000"),
+            ),
+            (
+                "a wrong signature",
+                body_verifier(),
+                FailedCheck::DeliverySignature,
+                signed_wrong,
+            ),
+            (
+                "a missing signature",
+                body_verifier(),
+                FailedCheck::DeliverySignature,
+                unsigned,
+            ),
+        ];
+        for (name, verifier, check, request) in cases {
+            let (app, metrics) = callback_app(verifier);
+            let captured = Captured::install();
+            let response = app.oneshot(request).await.unwrap();
+            let logs = captured.finish();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{name}");
+            assert_counted_under(&metrics, &logs, check, name);
+            for needle in ["callback-token", "sms-gateway", "no-such-provider", "gw-1"] {
+                assert!(
+                    !logs.contains(needle),
+                    "{name}: the log carries {needle:?}: {logs}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_callback_past_the_rate_and_a_caller_past_the_rate_count_as_rate_limits() {
+        use crate::smtp::tests::Captured;
+        let mut state = callback_state(path_token_verifier());
+        state.callback_limits = Arc::new(CallbackLimits::new(60, 1).unwrap());
+        let metrics = Arc::clone(&state.metrics);
+        let app = router(state);
+        let uri = "/v1/provider-callbacks/sms-gateway/callback-token-000000";
+        let first = post(
+            app.clone(),
+            uri,
+            None,
+            Some("application/json"),
+            b"{}".to_vec(),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::FORBIDDEN);
+        let captured = Captured::install();
+        let second = post(app, uri, None, Some("application/json"), b"{}".to_vec()).await;
+        let logs = captured.finish();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        let text = metrics.render(None);
+        assert!(
+            text.contains("messaging_request_refusals_total{check=\"rate-limit\"} 1\n"),
+            "{text}"
+        );
+        assert!(logs.contains("failed_check=\"rate-limit\""), "{logs}");
+
+        let package = starter_package();
+        let profiles = package
+            .access_profiles()
+            .iter()
+            .cloned()
+            .map(|profile| registry_messaging_core::AccessProfile {
+                requests_per_minute: 60,
+                burst: 1,
+                ..profile
+            })
+            .collect();
+        let mut state = state_with(authenticator(), true);
+        state.limits = Arc::new(
+            CallerLimits::new(&registry_messaging_core::AccessProfiles::new(profiles).unwrap())
+                .unwrap(),
+        );
+        let metrics = Arc::clone(&state.metrics);
+        let app = router(state);
+        let sender = token(sender_claims());
+        let submit = |app: Router| {
+            let sender = sender.clone();
+            async move { post_json(app, "/v1/messages", Some(&sender), &json!({})).await }
+        };
+        assert_ne!(
+            submit(app.clone()).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        let limited = submit(app).await;
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        let text = metrics.render(None);
+        assert!(
+            text.contains("messaging_request_refusals_total{check=\"rate-limit\"} 1\n"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_log_carries_the_check_and_a_fixed_remedy_and_no_value() {
+        use crate::smtp::tests::Captured;
+        let (app, _) = app();
+        let credential = token(sender_claims_with_scope("messaging:read"));
+        let captured = Captured::install();
+        call(app.clone(), "GET", "/v1/messages/m-1", Some(&credential)).await;
+        let logs = captured.finish();
+        assert!(logs.contains("failed_check=\"scope\""), "{logs}");
+        assert!(logs.contains("scopeClaim"), "{logs}");
+        // The scope refusal names the configured scope claim, scope and
+        // profile, and nothing the credential or the request carried.
+        for needle in [
+            "scope_claim=\"registry_scopes\"",
+            "required_scope=\"messaging:send\"",
+            "access_profile=\"case-notices\"",
+        ] {
+            assert!(logs.contains(needle), "logs lack {needle:?}:\n{logs}");
+        }
+        for needle in [
+            credential.as_str(),
+            "messaging:read",
+            "case-system",
+            "registry_actor_kind",
+            "m-1",
+        ] {
+            assert!(!logs.contains(needle), "logs carry {needle:?}:\n{logs}");
+        }
+        let human = {
+            let mut claims = sender_claims();
+            claims["registry_actor_kind"] = json!("human");
+            token(claims)
+        };
+        let captured = Captured::install();
+        call(app, "GET", "/v1/messages/m-1", Some(&human)).await;
+        let logs = captured.finish();
+        assert!(logs.contains("failed_check=\"actor-kind\""), "{logs}");
+        assert!(!logs.contains("scopeClaim"), "{logs}");
+        for needle in ["scope_claim", "required_scope", "access_profile="] {
+            assert!(!logs.contains(needle), "logs carry {needle:?}:\n{logs}");
+        }
+    }
+
+    fn sender_claims_with_scope(scope: &str) -> serde_json::Value {
+        let mut claims = sender_claims();
+        claims["registry_scopes"] = json!(scope);
+        claims
+    }
+
+    #[tokio::test]
+    async fn malformed_credentials_log_a_bounded_value_free_line() {
+        use crate::smtp::tests::Captured;
+        use registry_platform_testing::malformed_access_token_fixtures;
+        let tokens = malformed_access_token_fixtures();
+        let (app, metrics) = app();
+        let captured = Captured::install();
+        for _ in 0..3 {
+            for token in &tokens {
+                let response = call(app.clone(), "GET", "/v1/messages/m-1", Some(token)).await;
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            }
+        }
+        let logs = captured.finish();
+        let sent = u64::try_from(3 * tokens.len()).unwrap();
+        let text = metrics.render(None);
+        assert!(
+            text.contains(&format!(
+                "messaging_request_refusals_total{{check=\"credential-malformed\"}} {sent}\n"
+            )),
+            "{text}"
+        );
+        assert_eq!(logs.matches("request refused").count(), 5, "{logs}");
+        for token in &tokens {
+            assert!(token.is_empty() || !logs.contains(token.as_str()), "{logs}");
+        }
+    }
+
+    #[test]
+    fn every_problem_that_answers_401_or_403_is_attributed() {
+        for problem in ProblemCode::ALL {
+            let refuses = matches!(problem.http_status(), 401 | 403);
+            assert!(
+                !refuses || attribution(*problem) != Attribution::Plain,
+                "{problem:?} refuses a caller and names no check"
+            );
+        }
+        assert_eq!(
+            attribution(ProblemCode::MessageNotVisible),
+            Attribution::Service(FailedCheck::Visibility)
+        );
+        assert_eq!(
+            attribution(ProblemCode::RateLimitExceeded),
+            Attribution::Service(FailedCheck::RateLimit)
+        );
+        assert_eq!(
+            attribution(ProblemCode::OperationNotAuthorized),
+            Attribution::Service(FailedCheck::Operation)
+        );
     }
 
     #[test]

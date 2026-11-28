@@ -105,7 +105,9 @@ pub(crate) fn failure(error: BaseRegistryClientError, mutation: bool) -> CallOut
             retryable("transport-unavailable")
         }
         BaseRegistryClientError::InvalidRequest { .. } => refused("invalid-command"),
-        BaseRegistryClientError::Protocol { .. } => refused("invalid-response"),
+        BaseRegistryClientError::Protocol { .. } | BaseRegistryClientError::DevelopmentPeer => {
+            refused("invalid-response")
+        }
         _ => refused("product-refused"),
     }
 }
@@ -273,6 +275,14 @@ mod tests {
                 CallOutcome::Uncertain { code } if code == "transport-uncertain"
             ));
         }
+    }
+
+    #[test]
+    fn a_development_peer_is_refused_as_an_invalid_response() {
+        assert!(matches!(
+            failure(BaseRegistryClientError::DevelopmentPeer, false),
+            CallOutcome::Refused { code } if code == "invalid-response"
+        ));
     }
 
     #[test]

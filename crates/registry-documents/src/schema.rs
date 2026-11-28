@@ -202,7 +202,7 @@ pub const OPERATIONS: &[Operation] = &[
         paged: false,
         request: Payload::Empty,
         success: 200,
-        response: Payload::Empty,
+        response: Payload::Json("Readiness"),
         problems: &[
             ProblemCode::RequestMethodNotAllowed,
             ProblemCode::ServiceUnavailable,
@@ -629,6 +629,21 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         .map(|problem| problem.code())
         .collect();
     schemas.insert(
+        "Readiness".to_owned(),
+        json!({
+            "type": "object",
+            "required": ["status", "posture", "developmentSettings"],
+            "properties": {
+                "status": {"const": "ready"},
+                "posture": {"enum": ["production", "development"]},
+                "developmentSettings": {"type": "array", "items": {
+                    "type": "object", "required": ["code", "pointer"],
+                    "properties": {"code": {"type": "string"}, "pointer": {"type": "string"}}
+                }}
+            }
+        }),
+    );
+    schemas.insert(
         "Problem".to_owned(),
         json!({
             "type": "object",
@@ -803,21 +818,27 @@ fn install_runtime_constraints(schema: &mut Value) {
         set_definition_property(schema, definition, property, "pattern", json!("^/"));
     }
     // Every access profile resolves its caller from the matched client, so
-    // a Document Store deployment always lists the clients it admits. The
-    // shared block also admits the keyword `unrestricted`, which this
-    // runtime refuses in every mode, so the member is restated as the list
-    // alone and the shared definition is dropped.
-    if let Some(clients) = schema.pointer_mut("/$defs/OidcConfig/properties/allowedClients") {
+    // every issuer entry states the clients it admits. The shared block
+    // also admits the keyword `unrestricted`, which this runtime refuses in
+    // every mode, so the member is restated as `from-package` or the list
+    // and the shared definition is dropped.
+    if let Some(clients) = schema.pointer_mut("/$defs/IssuerConfig/properties/allowedClients") {
         *clients = json!({
-            "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, an empty or repeated client, and\n`unrestricted` are refused.",
-            "type": "array",
-            "items": {"type": "string", "minLength": 1},
-            "minItems": 1,
-            "uniqueItems": true,
+            "description": "The clients whose access tokens this issuer admits. Required in every\nentry: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client admits those clients.\nA client belongs to one issuer, and the lists of all entries together must\ncover every client a profile names. An omitted or empty list, an empty or\nrepeated client, and `unrestricted` are refused.",
+            "oneOf": [
+                {"type": "string", "const": "from-package"},
+                {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                    "uniqueItems": true,
+                },
+            ],
         });
     }
     if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
         definitions.remove("OidcAllowedClients");
+        definitions.remove("OidcPackageAllowedClients");
     }
     if let Some(providers) = schema
         .pointer_mut("/$defs/SecretProvidersConfig")
@@ -922,10 +943,17 @@ mod tests {
                 "{definition}.{property} must be absolute"
             );
         }
-        let clients = &document["$defs"]["OidcConfig"]["properties"]["allowedClients"];
-        assert_eq!(clients["type"], "array");
-        assert_eq!(clients["minItems"], 1);
+        let clients = &document["$defs"]["IssuerConfig"]["properties"]["allowedClients"];
+        let forms = clients["oneOf"].as_array().expect("two written forms");
+        assert_eq!(forms.len(), 2, "{clients}");
+        assert_eq!(forms[0], json!({"type": "string", "const": "from-package"}));
+        assert_eq!(forms[1]["type"], "array");
+        assert_eq!(forms[1]["minItems"], 1);
+        assert_eq!(forms[1]["uniqueItems"], true);
+        assert_eq!(forms[1]["items"]["minLength"], 1);
+        assert!(clients.get("$ref").is_none(), "{clients}");
         assert!(document["$defs"].get("OidcAllowedClients").is_none());
+        assert!(document["$defs"].get("OidcPackageAllowedClients").is_none());
     }
 
     #[test]

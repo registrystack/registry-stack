@@ -33,7 +33,11 @@ pub(super) struct JwksServer {
 }
 
 impl JwksServer {
-    fn start(listener: TcpListener, jwks: &Value) -> Result<Self> {
+    pub(super) fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    pub(super) fn start(listener: TcpListener, jwks: &Value) -> Result<Self> {
         listener.set_nonblocking(true)?;
         let origin = format!("http://{}", listener.local_addr()?);
         let body = serde_json::to_vec(jwks)?;
@@ -146,15 +150,24 @@ impl ProductRunner<'_> {
             false,
             || self.ensure_active(),
         )?;
-        let listener = self
-            .issuer_listener
-            .take()
-            .context("the run issuer listener is not reserved")?;
-        let jwks = JwksServer::start(listener, &self.issuer_jwks()?)?;
+        let jwks = if plan.jwks_uri().is_some() {
+            None
+        } else {
+            let listener = self
+                .issuer_listener
+                .take()
+                .context("the run issuer listener is not reserved")?;
+            Some(JwksServer::start(listener, &self.issuer_jwks()?)?)
+        };
+        let jwks_uri = jwks
+            .as_ref()
+            .map(JwksServer::uri)
+            .or_else(|| plan.jwks_uri().map(str::to_owned))
+            .context("missing Evidence key endpoint")?;
         let target_file = target_dir.join("target.yaml");
         let missing = self.point_target_at_run(
             &target_file,
-            (bind, &jwks.uri()),
+            (bind, &jwks_uri),
             &secrets,
             &package_root,
             &plan.product(Product::Evidence).audience,
@@ -207,7 +220,7 @@ impl ProductRunner<'_> {
             false,
             || self.ensure_active(),
         )?;
-        self.jwks = Some(jwks);
+        self.jwks = jwks;
         Ok(config)
     }
 
@@ -308,10 +321,13 @@ impl ProductRunner<'_> {
         // The run issuer is the key set server's own origin: a local Evidence
         // target accepts only a canonical loopback issuer whose key set is
         // served from that origin.
-        oidc["issuer"] = json!(self.input.plan.issuer);
-        oidc["jwksSource"] = json!({"type": "uri", "uri": jwks_uri});
-        oidc["audience"] = json!(audience);
-        read_run_issuer_claims(oidc);
+        if self.input.plan.jwks_uri().is_some() {
+            oidc["issuer"] = json!(self.input.plan.issuer);
+            oidc["jwksSource"] = json!({"type": "uri", "uri": jwks_uri});
+            oidc["audience"] = json!(audience);
+        } else {
+            configure_run_oidc(oidc, &self.input.plan.issuer, jwks_uri, audience);
+        }
         target["listener"]["bind"] = json!(bind);
         target["service"]["publicOrigin"] = json!(format!("http://{bind}"));
         target["package"]["root"] = json!(package);
@@ -331,7 +347,11 @@ impl ProductRunner<'_> {
 /// signs ES256 access tokens and names the claims the same way for every
 /// project, so an authored target's own algorithm and claim names, including
 /// renamed actor-kind and grant claims, give way to its defaults.
-fn read_run_issuer_claims(oidc: &mut Value) {
+fn configure_run_oidc(oidc: &mut Value, issuer: &str, jwks_uri: &str, audience: &str) {
+    oidc["issuer"] = json!(issuer);
+    oidc["jwksSource"] = json!({"type": "uri", "uri": jwks_uri});
+    oidc["audience"] = json!(audience);
+    oidc["maximumTokenLifetimeSeconds"] = json!(crate::issuer::TOKEN_LIFETIME_SECONDS);
     oidc["tokenTypes"] = json!(["at+jwt"]);
     oidc["algorithms"] = json!(["ES256"]);
     oidc["principalClaim"] = json!("sub");
@@ -428,6 +448,8 @@ mod tests {
     #[test]
     fn an_authored_target_reads_the_run_issuer_claims() {
         let mut oidc = json!({
+            "issuer": "https://unused.example.test",
+            "jwksSource": {"type": "uri", "uri": "https://unused.example.test/keys"},
             "tokenTypes": ["JWT"],
             "algorithms": ["RS256"],
             "principalClaim": "client_id",
@@ -435,10 +457,16 @@ mod tests {
             "evidenceAudienceClaim": "aud_evidence",
             "claims": {"actorKind": "kind", "purpose": "why"},
         });
-        read_run_issuer_claims(&mut oidc);
+        let issuer = "http://127.0.0.1:36001";
+        let key_set = format!("{issuer}/jwks");
+        configure_run_oidc(&mut oidc, issuer, &key_set, "urn:example:evidence");
         assert_eq!(
             oidc,
             json!({
+                "issuer": issuer,
+                "jwksSource": {"type": "uri", "uri": key_set},
+                "audience": "urn:example:evidence",
+                "maximumTokenLifetimeSeconds": 3600,
                 "tokenTypes": ["at+jwt"],
                 "algorithms": ["ES256"],
                 "principalClaim": "sub",

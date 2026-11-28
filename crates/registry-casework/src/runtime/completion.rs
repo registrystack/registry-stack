@@ -571,6 +571,7 @@ impl DispatchTransport for CompletionTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_crypto::delivery_signature::{DeliveryKey, DeliveryKeys};
 
     fn normalized(sql: &str) -> String {
         sql.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -594,10 +595,7 @@ mod tests {
     fn target(maximum_attempts: u32, retry: Duration) -> ReviewCompletionTarget {
         ReviewCompletionTarget {
             url: "http://127.0.0.1/completion".to_owned(),
-            credential: super::super::ReviewCompletionCredential::Bearer(
-                registry_platform_httputil::BearerToken::new("completion-secret".to_owned())
-                    .expect("test bearer token"),
-            ),
+            keys: DeliveryKeys::new(DeliveryKey::new(&[0; 32]).unwrap(), None).unwrap(),
             timeout: Duration::from_secs(30),
             maximum_attempts,
             retry,

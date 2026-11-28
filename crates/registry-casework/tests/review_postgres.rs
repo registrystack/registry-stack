@@ -19,6 +19,7 @@ use registry_casework::{
     ReviewRuntimeError, ReviewTaskDecisionRequest, RuntimeError, StoreError,
 };
 use registry_casework_core::*;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -530,12 +531,13 @@ async fn fixture() -> Fixture {
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
-    let migration = PostgresStore::connect_migration(&database_config, &secrets)
+    let migration = PostgresStore::connect_migration(&database_config, &secrets, None)
         .expect("migration store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     migration.migrate().await.expect("review migrations");
-    let store = PostgresStore::connect_runtime(&database_config, &secrets)
+    let store = PostgresStore::connect_runtime(&database_config, &secrets, None)
         .expect("runtime store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     let database = connect_scoped(&scoped_url).await;
@@ -837,31 +839,51 @@ struct DurableCompletionReceiver {
     observations: Arc<Mutex<Vec<(serde_json::Value, String, String)>>>,
 }
 
+const COMPLETION_TEST_KEY: &str = "synthetic-test-key-not-for-use!!";
+
 async fn durable_completion_receiver(
     State(state): State<DurableCompletionReceiver>,
     headers: axum::http::HeaderMap,
-    axum::Json(event): axum::Json<ReviewCompletion>,
+    body: axum::body::Bytes,
 ) -> StatusCode {
-    if headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        != Some("Bearer canary-completion-secret")
+    use registry_platform_crypto::delivery_signature::{
+        verify, DeliveryKey, DeliveryKeys, SignedContent, DELIVERY_TOLERANCE,
+    };
+
+    let value = |name| headers.get(name).and_then(|value| value.to_str().ok());
+    let (Some(id), Some(timestamp), Some(signature)) = (
+        value("webhook-id"),
+        value("webhook-timestamp"),
+        value("webhook-signature"),
+    ) else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    let keys = DeliveryKeys::new(
+        DeliveryKey::new(COMPLETION_TEST_KEY.as_bytes()).unwrap(),
+        None,
+    )
+    .unwrap();
+    if verify(
+        &keys,
+        SignedContent {
+            id,
+            timestamp,
+            signature,
+            body: &body,
+        },
+        std::time::SystemTime::now(),
+        DELIVERY_TOLERANCE,
+    )
+    .is_err()
     {
         return StatusCode::UNAUTHORIZED;
     }
-    let key = headers
-        .get("idempotency-key")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
-    let recipient = headers
-        .get("registry-recipient-binding")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
-    assert_eq!(key, event.event_id.to_string());
+    let Ok(event) = serde_json::from_slice::<ReviewCompletion>(&body) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    assert_eq!(id, event.event_id.to_string());
+    let key = id.to_owned();
+    let recipient = value("registry-recipient-binding").unwrap().to_owned();
     let payload = serde_json::to_value(&event).unwrap();
     state
         .observations
@@ -943,7 +965,7 @@ async fn at_least_once_completion_durably_deduplicates_after_lost_ack_and_exhaus
             store.clone(),
             "registry-completion",
             url.clone(),
-            "canary-completion-secret",
+            COMPLETION_TEST_KEY,
         )
         .with_subscriber(subscriber.clone())
         .await
@@ -1015,7 +1037,7 @@ async fn at_least_once_completion_durably_deduplicates_after_lost_ack_and_exhaus
     let rendered = serde_json::to_string(&entries).unwrap();
     for canary in [
         "canary-private-destination",
-        "canary-completion-secret",
+        COMPLETION_TEST_KEY,
         "canary-durable-receiver-subject",
         "canary-terminal-receiver-subject",
         &request_id.to_string(),
@@ -1078,7 +1100,7 @@ async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
         fixture.store.clone(),
         "registry-completion",
         completion_url.clone(),
-        "completion-secret",
+        COMPLETION_TEST_KEY,
     ));
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -1134,7 +1156,7 @@ async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
         fixture.store.clone(),
         "registry-completion",
         completion_url.clone(),
-        "completion-secret",
+        COMPLETION_TEST_KEY,
     )
     .await
     .expect("recover the lapsed completion lease");
@@ -1171,7 +1193,7 @@ async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
         fixture.store.clone(),
         "registry-completion",
         completion_url.clone(),
-        "completion-secret",
+        COMPLETION_TEST_KEY,
     ));
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -1231,7 +1253,7 @@ async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
         fixture.store.clone(),
         "registry-completion",
         completion_url,
-        "completion-secret",
+        COMPLETION_TEST_KEY,
     )
     .await
     .expect("deliver the later completion");
@@ -1995,7 +2017,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
             .service_v1
             .review_accountability(&fixture.reviewer_b, accountability_event)
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
 
     let result = fixture
@@ -2566,6 +2588,7 @@ async fn activation_plan_refuses_a_package_that_drops_the_producer_of_an_in_flig
     renamed.check().expect("candidate project");
     let digest = format!("sha256:{}", "c".repeat(64));
     let candidate = registry_casework::ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         database_id: "casework-review-test",
         package_digest: &digest,
         project: &renamed,
@@ -4325,7 +4348,7 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
         service
             .review_accountability(&fixture.reviewer_b, *event)
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     let outsider = actor("outside-team", CaseworkActsAs::Supervisor, "supervisor");
     assert!(matches!(
@@ -4692,7 +4715,7 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
         source
             .own_review_decisions(&fixture.producer, None, "", None, None, 1)
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     assert!(matches!(
         source
@@ -4705,7 +4728,7 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
                 1
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     let wrong_profile = actor("reviewer-a", CaseworkActsAs::Staff, "not-pinned");
     assert!(source
@@ -7187,7 +7210,9 @@ async fn prior_stage_identity_and_invalid_structured_result_emit_nothing() {
                 "claim-excluded-secondary",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(
+            FailedCheck::SeparationOfDuties
+        ))
     ));
     assert_eq!(
         count_for_request(
@@ -7419,7 +7444,7 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
                 "nonmember-claim",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
 
     let assigned = fixture
@@ -7484,7 +7509,7 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
                 "removed-holder-decision",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     assert_eq!(
         count_for_request(
@@ -7547,7 +7572,7 @@ async fn delegation_requires_the_selected_profile_in_pinned_deciding_profiles() 
                 "delegate-ineligible-profile",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     let unchanged = fixture
         .service_v1
@@ -7674,7 +7699,7 @@ async fn delegation_requires_membership_matching_the_selected_role_in_a_mixed_st
                 "delegate-cross-role-membership",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation) | ReviewRuntimeError::NotFound)
     ));
     let persisted = fixture
         .database
@@ -7755,7 +7780,7 @@ async fn delegation_requires_membership_matching_the_selected_role_in_a_mixed_st
                 "delegate-exact-role-membership",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
     assert_eq!(
@@ -7816,7 +7841,7 @@ async fn assignment_requires_a_selected_supervisor_profile_despite_directory_mem
                 "assign-staff-scoped-supervisor",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     let unchanged = fixture
         .service_v1
@@ -7875,7 +7900,7 @@ async fn assignment_requires_a_selected_supervisor_profile_despite_directory_mem
                 "assign-supervisor-scoped",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.supervisor, "supervisor", true).await;
     assert_eq!(
@@ -7954,7 +7979,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
                 "claim-reviewer-replay",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
     let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
@@ -8042,7 +8067,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
                 "release-reviewer-replay",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
     let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
@@ -8166,7 +8191,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
                 "decide-reviewer-replay",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
     let (replay_service, replay_audit) = service_with_audit(&fixture, answer_project(false));
@@ -11516,7 +11541,9 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
                 "assign-initiator",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(
+            FailedCheck::SeparationOfDuties
+        ))
     ));
     let assigned = fixture
         .service_v1
@@ -11557,7 +11584,9 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
                 "delegate-initiator",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(
+            FailedCheck::SeparationOfDuties
+        ))
     ));
     let delegated = fixture
         .service_v1
@@ -12019,7 +12048,7 @@ async fn staffing_diagnostic_is_disclosed_and_clears_when_responsibility_resumes
                 100
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
 
     // A diagnostic adds no authority. Concealed work matches unknown work for

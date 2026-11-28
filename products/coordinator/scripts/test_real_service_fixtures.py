@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+
+import yaml
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -50,6 +52,17 @@ class NativeFixtureContracts(unittest.TestCase):
             ]):
                 self.assertEqual(journey.ctl("caseworkctl", "check", "project"), casework)
                 self.assertEqual(journey.ctl("coordinatorctl", "check"), coordinator)
+
+    def test_coordinator_producer_grants_the_policy_scopes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = native.write_breg(Path(directory), {"jwks": "http://127.0.0.1:1", "casework": "http://127.0.0.1:2"})
+            facts = yaml.safe_load((root / "dev-clients.yaml").read_text())
+        producer = next(client for client in facts["clients"] if client["id"] == "coordinator-producer")
+        audience = facts["issuer"]["clientResources"][producer["id"]]
+        resource = next(resource for resource in facts["issuer"]["resources"] if resource["audience"] == audience)
+        self.assertEqual(audience, native.COORDINATOR_RESOURCE)
+        self.assertEqual(set(producer["scopes"]), {"coordinator:start", "coordinator:operate"})
+        self.assertEqual(set(producer["scopes"]), set(resource["scopes"]))
 
     def test_start_discovers_exact_revision_and_replays_same_command(self):
         journey = native.Journey.__new__(native.Journey)
@@ -110,9 +123,30 @@ if __name__ == "__main__":
 
 
 class OwnedCleanupTests(unittest.TestCase):
+    def test_failed_journey_recovers_then_cleans_its_managed_run(self):
+        journey = native.Journey.__new__(native.Journey)
+        journey.proxies, journey.children, journey.containers = [], [], []
+        journey.rstack_runs = ["owned-run"]
+        journey.issuer_root = journey.root = Path("/synthetic/owned")
+        calls = []
+
+        def ctl(*args, **kwargs):
+            calls.append(args)
+            return int(len(calls) == 1)
+
+        journey.ctl = ctl
+        journey.cleanup(False)
+        self.assertEqual(calls, [
+            ("rstack", "dev", "stop", "owned-run", "--clean"),
+            ("rstack", "dev", "stop", "owned-run", "--recover"),
+            ("rstack", "dev", "stop", "owned-run", "--clean"),
+        ])
+
     def test_an_auto_removed_owned_image_container_is_already_clean(self):
         journey = native.Journey.__new__(native.Journey)
-        journey.proxies, journey.children, journey.sessions = [], [], []
+        journey.proxies, journey.children = [], []
+        journey.rstack_runs = []
+        journey.issuer_root = Path("/synthetic/owned/thunderid")
         journey.containers = ["coordinator-tutorial-messagingctl-owned"]
         journey.env, journey.root = {}, Path("/synthetic/owned")
         with patch.object(native.subprocess, "run", side_effect=[
@@ -122,7 +156,9 @@ class OwnedCleanupTests(unittest.TestCase):
 
     def test_an_unavailable_container_listing_does_not_hide_cleanup_failure(self):
         journey = native.Journey.__new__(native.Journey)
-        journey.proxies, journey.children, journey.sessions = [], [], []
+        journey.proxies, journey.children = [], []
+        journey.rstack_runs = []
+        journey.issuer_root = Path("/synthetic/owned/thunderid")
         journey.containers = ["coordinator-tutorial-messagingctl-owned"]
         journey.env, journey.root = {}, Path("/synthetic/owned")
         with patch.object(native.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout=b"")):

@@ -688,7 +688,41 @@
       },
       "ReadinessResponse": {
         "additionalProperties": false,
+        "else": {
+          "maxProperties": 1
+        },
+        "if": {
+          "properties": {
+            "status": {
+              "const": "ready"
+            }
+          }
+        },
         "properties": {
+          "developmentSettings": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "posture": {
+            "enum": [
+              "development",
+              "production"
+            ]
+          },
           "status": {
             "enum": [
               "ready",
@@ -699,6 +733,12 @@
         "required": [
           "status"
         ],
+        "then": {
+          "required": [
+            "posture",
+            "developmentSettings"
+          ]
+        },
         "type": "object"
       },
       "RequestedSubject": {

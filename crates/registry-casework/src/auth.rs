@@ -1,57 +1,144 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use registry_casework_core::{
     AccessProfile, ActorContext, CaseworkActsAs, CaseworkProject, IssuerPrincipal,
 };
-use registry_platform_authcommon::validate_compact_access_token;
-use registry_platform_oidc::{JwksFetcher, TokenVerifier, TokenVerifierConfig};
+use registry_platform_authcommon::{validate_compact_access_token, DeclaredScope, FailedCheck};
+use registry_platform_oidc::{
+    caller_kind, ActorKind, CallerKind, CallerKindError, ClaimNames, DeclaredKinds, IssuerEntry,
+    IssuerSet, IssuerSetError, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
+    VerifiedCaller,
+};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::HumanIdentityConfig;
+use crate::CaseworkIssuerVerifier;
 
 pub(crate) mod delegated;
 
 pub struct CaseworkAuthenticator {
-    verifier: TokenVerifier,
-    source_verifier_config: TokenVerifierConfig,
-    source_keys: Arc<JwksFetcher>,
-    source_verifiers: BTreeMap<String, TokenVerifier>,
-    audience: String,
+    /// The issuers a token may come from. A token is verified only by the
+    /// entry whose issuer it names.
+    issuers: IssuerSet,
+    /// What each entry configures beyond its verifier, by issuer id.
+    entries: BTreeMap<Arc<str>, IssuerFacts>,
+    /// The verifier of a human source token, by context provider and then by
+    /// the issuer id of the entry that verified the Casework token.
+    source_verifiers: BTreeMap<String, BTreeMap<Arc<str>, TokenVerifier>>,
     profiles: BTreeMap<String, AccessProfile>,
     /// Requester profiles through which a person reads their own review
     /// requests; they authenticate a person as strictly as reviewer profiles.
     initiator_profiles: BTreeSet<String>,
-    human_identity: HumanIdentityConfig,
     delegated_staff_readers: BTreeMap<String, crate::DelegatedStaffReaderConfig>,
 }
 
-impl CaseworkAuthenticator {
-    pub(crate) fn record_header_refusal(&self) {
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            registry_platform_oidc::AuthenticationStage::Header,
-            "Casework authentication refused"
-        );
-    }
+/// One issuer entry's settings that the authenticator reads after the set
+/// verified a token.
+struct IssuerFacts {
+    /// The one audience every token from this entry carries.
+    audience: String,
+    /// The claim this entry's tokens carry scopes in. A scope refusal names
+    /// it to the operator.
+    scope_claim: String,
+    /// The entry's verifier settings, whose key trust and lifetime policy a
+    /// human source token from the same issuer reuses.
+    source_config: TokenVerifierConfig,
+    keys: Arc<JwksFetcher>,
+    declared: DeclaredKinds,
+}
 
+tokio::task_local! {
+    /// The operator-declared values of the scope check the current request
+    /// failed. The HTTP edge scopes it around each request and attaches it to
+    /// the refusal answer's extensions, which are never written to the wire.
+    pub(crate) static DECLARED_SCOPE: std::cell::RefCell<Option<DeclaredScope>>;
+    /// The sentence that names the setting involved when the issuer set
+    /// refused the current request's token. The HTTP edge scopes it around
+    /// each request and puts it on the refusal's log line, never in its body.
+    pub(crate) static CALLER_REMEDY: Cell<Option<&'static str>>;
+}
+
+/// Record, for the operator's refusal line, the scope the operation needs
+/// and the access profile that was applied. Both are declared by the
+/// configuration or the package, never read from the token.
+fn declare_scope_refusal(
+    scope_claim: &str,
+    required_scope: Option<&str>,
+    access_profile: Option<&str>,
+) {
+    let mut declared = DeclaredScope::new(scope_claim);
+    if let Some(scope) = required_scope {
+        declared = declared.with_required_scope(scope);
+    }
+    if let Some(profile) = access_profile {
+        declared = declared.with_access_profile(profile);
+    }
+    // Outside an HTTP request there is no line to carry it.
+    let _ = DECLARED_SCOPE.try_with(|slot| *slot.borrow_mut() = Some(declared));
+}
+
+/// Record, for the operator's refusal line, the setting the issuer set named
+/// when it refused the token.
+fn declare_caller_remedy(remedy: Option<&'static str>) {
+    // Outside an HTTP request there is no line to carry it.
+    let _ = CALLER_REMEDY.try_with(|slot| slot.set(remedy));
+}
+
+/// The operator hint when a token of a source pair does not resolve to the
+/// human actor kind.
+const SOURCE_PAIR_KIND_REMEDY: &str = "Both tokens of a source pair must resolve to the human actor kind under the issuer entry that verified the Casework token. Declare each token's client in that entry's clientActorKinds, or have the provider write registry_actor_kind.";
+
+/// Whether the verified caller is a person: its kind, declared or claimed,
+/// resolved to human.
+fn is_person(kind: CallerKind) -> bool {
+    kind.kind() == Some(ActorKind::Human)
+}
+
+impl CaseworkAuthenticator {
     /// Constructs an authenticator from a project already validated by
-    /// [`CaseworkProject::load`] or [`CaseworkProject::check`].
-    #[must_use]
+    /// [`CaseworkProject::load`] or [`CaseworkProject::check`] and one
+    /// verifier per issuer entry. Two entries that name one issuer, or one
+    /// issuer id, are refused.
     pub fn new(
         project: &CaseworkProject,
-        verifier: TokenVerifierConfig,
-        keys: Arc<JwksFetcher>,
-        human_identity: HumanIdentityConfig,
-    ) -> Self {
-        let audience = verifier.audiences.first().cloned().unwrap_or_default();
-        Self {
-            source_verifier_config: verifier.clone(),
-            source_keys: Arc::clone(&keys),
+        verifiers: Vec<CaseworkIssuerVerifier>,
+    ) -> Result<Self, IssuerSetError> {
+        let mut entries = BTreeMap::new();
+        let mut issuer_entries = Vec::new();
+        for issuer in verifiers {
+            let id: Arc<str> = Arc::from(issuer.id.as_str());
+            let facts = IssuerFacts {
+                audience: issuer
+                    .verifier
+                    .audiences
+                    .first()
+                    .cloned()
+                    .unwrap_or_default(),
+                scope_claim: issuer.verifier.scope_claim.clone(),
+                source_config: issuer.verifier.clone(),
+                keys: Arc::clone(&issuer.keys),
+                declared: issuer.declared.clone(),
+            };
+            // A repeated id would let two entries answer to one name, which
+            // is refused like two entries naming one issuer.
+            if entries.insert(Arc::clone(&id), facts).is_some() {
+                return Err(IssuerSetError::DuplicateIss {
+                    first: issuer.id.clone(),
+                    second: issuer.id,
+                });
+            }
+            issuer_entries.push(IssuerEntry::new(
+                id,
+                TokenVerifier::new(issuer.verifier, issuer.keys),
+                issuer.declared,
+            ));
+        }
+        Ok(Self {
+            issuers: IssuerSet::new(issuer_entries, ClaimNames::default())?,
+            entries,
             source_verifiers: BTreeMap::new(),
-            verifier: TokenVerifier::new(verifier, keys),
-            audience,
             profiles: project
                 .access_profiles
                 .iter()
@@ -63,38 +150,68 @@ impl CaseworkAuthenticator {
                 .iter()
                 .filter_map(|producer| producer.initiator_profile.clone())
                 .collect(),
-            human_identity,
             delegated_staff_readers: BTreeMap::new(),
-        }
+        })
     }
 
     /// Source authentication shares existing issuer/key trust, never Casework
     /// client admission. BReg independently enforces source client authority.
+    /// Each provider gets one verifier per issuer entry whose audience differs
+    /// from the provider's, so a source token is verified under the issuer
+    /// that verified the Casework token it pairs with.
     #[must_use]
     pub fn with_human_source_audiences(mut self, audiences: BTreeMap<String, String>) -> Self {
         for (provider, audience) in audiences {
-            if audience == self.audience {
-                continue;
+            for (id, facts) in &self.entries {
+                if audience == facts.audience {
+                    continue;
+                }
+                // Reuse only cryptographic trust and lifetime policy. In
+                // particular, Casework clients, assertion authorities and
+                // scope mappings are not source admission policy. BReg owns
+                // those independent decisions.
+                let existing = &facts.source_config;
+                let mut config = TokenVerifierConfig::access_token_profile(
+                    existing.issuer.clone(),
+                    vec![audience.clone()],
+                    existing.allowed_algorithms.clone(),
+                    existing.allowed_typ.clone(),
+                );
+                config.denied_kids = existing.denied_kids.clone();
+                config.max_token_lifetime = existing.max_token_lifetime;
+                config.leeway = existing.leeway;
+                self.source_verifiers
+                    .entry(provider.clone())
+                    .or_default()
+                    .insert(
+                        Arc::clone(id),
+                        TokenVerifier::new(config, Arc::clone(&facts.keys)),
+                    );
             }
-            // Reuse only cryptographic trust and lifetime policy. In particular,
-            // Casework clients, assertion authorities and scope mappings are not
-            // source admission policy; BReg owns those independent decisions.
-            let existing = &self.source_verifier_config;
-            let mut config = TokenVerifierConfig::access_token_profile(
-                existing.issuer.clone(),
-                vec![audience],
-                existing.allowed_algorithms.clone(),
-                existing.allowed_typ.clone(),
-            );
-            config.denied_kids = existing.denied_kids.clone();
-            config.max_token_lifetime = existing.max_token_lifetime;
-            config.leeway = existing.leeway;
-            self.source_verifiers.insert(
-                provider,
-                TokenVerifier::new(config, Arc::clone(&self.source_keys)),
-            );
         }
         self
+    }
+
+    /// Verify `token` with the entry whose issuer it names, settle the
+    /// caller's kind, and refuse an identity-only token. A refusal keeps the
+    /// setting it names for the operator's log line.
+    async fn verify_caller(
+        &self,
+        token: &str,
+    ) -> Result<(VerifiedCaller, &IssuerFacts), AuthenticationError> {
+        validate_compact_access_token(token)
+            .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
+        let caller = self.issuers.verify(token).await.map_err(|refusal| {
+            declare_caller_remedy(refusal.remedy);
+            AuthenticationError::Refused(refusal.failed_check())
+        })?;
+        // The set and this map hold the same ids, so an entry that verified
+        // a token always has its settings here.
+        let facts = self
+            .entries
+            .get(&caller.issuer_id)
+            .ok_or(AuthenticationError::Refused(FailedCheck::TokenIssuer))?;
+        Ok((caller, facts))
     }
 
     pub(crate) async fn verify_human_source_pair(
@@ -103,50 +220,73 @@ impl CaseworkAuthenticator {
         source: &str,
         provider: &str,
     ) -> Result<(), AuthenticationError> {
-        validate_compact_access_token(source).map_err(|_| AuthenticationError::Refused)?;
-        let source_verifier = self
+        validate_compact_access_token(source)
+            .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
+        let source_verifiers = self
             .source_verifiers
             .get(provider)
-            .ok_or(AuthenticationError::Refused)?;
-        let primary = self
-            .verifier
-            .verify(casework)
-            .await
-            .map_err(|_| AuthenticationError::Refused)?;
+            .ok_or(AuthenticationError::Refused(FailedCheck::AccessProfile))?;
+        let (primary, facts) = self.verify_caller(casework).await?;
+        let source_verifier = source_verifiers
+            .get(&primary.issuer_id)
+            .ok_or(AuthenticationError::Refused(FailedCheck::AccessProfile))?;
         let secondary = source_verifier
             .verify(source)
             .await
-            .map_err(|_| AuthenticationError::Refused)?;
-        for verified in [&primary, &secondary] {
+            .map_err(|error| AuthenticationError::Refused(error.failed_check()))?;
+        // The source token comes from the same issuer, so its kind is
+        // settled under the same declarations.
+        let secondary_client = secondary
+            .claims
+            .azp
+            .as_deref()
+            .or(secondary.claims.client_id.as_deref());
+        let secondary_kind = caller_kind(
+            &facts.declared,
+            secondary_client,
+            &secondary.claims,
+            &ClaimNames::default(),
+        )
+        .map_err(|error| {
+            declare_caller_remedy(
+                match error {
+                    CallerKindError::Conflict => OidcError::ActorKindConflict,
+                    CallerKindError::Claim(_) => OidcError::ActorKindMalformed,
+                }
+                .remedy(false),
+            );
+            AuthenticationError::Refused(FailedCheck::ActorKind)
+        })?;
+        for (verified, kind) in [(&primary.token, primary.kind), (&secondary, secondary_kind)] {
             if !matches!(
                 verified.claims.aud,
                 Some(registry_platform_oidc::Audience::One(_))
-            ) || verified.claims.sub.as_deref().is_none_or(str::is_empty)
-                || verified
-                    .claims
-                    .extra
-                    .get("registry_actor_kind")
-                    .and_then(Value::as_str)
-                    != Some("human")
-                || verified
-                    .claims
-                    .extra
-                    .get(&self.human_identity.claim)
-                    .and_then(Value::as_str)
-                    != Some(self.human_identity.value.as_str())
-                || verified.claims.extra.contains_key("act")
-                || verified
-                    .claims
-                    .extra
-                    .keys()
-                    .any(|key| key.starts_with("registry_grant_"))
+            ) {
+                return Err(AuthenticationError::Refused(FailedCheck::TokenAudience));
+            }
+            if verified.claims.sub.as_deref().is_none_or(str::is_empty) {
+                return Err(AuthenticationError::Refused(FailedCheck::TokenClaims));
+            }
+            if !is_person(kind) {
+                declare_caller_remedy(Some(SOURCE_PAIR_KIND_REMEDY));
+                return Err(AuthenticationError::Refused(FailedCheck::ActorKind));
+            }
+            if verified.claims.extra.contains_key("act") {
+                return Err(AuthenticationError::Refused(FailedCheck::Delegation));
+            }
+            if verified
+                .claims
+                .extra
+                .keys()
+                .any(|key| key.starts_with("registry_grant_"))
             {
-                return Err(AuthenticationError::Refused);
+                return Err(AuthenticationError::Refused(FailedCheck::TaskGrantClaims));
             }
         }
-        if primary.claims.iss != secondary.claims.iss || primary.claims.sub != secondary.claims.sub
+        if primary.token.claims.iss != secondary.claims.iss
+            || primary.token.claims.sub != secondary.claims.sub
         {
-            return Err(AuthenticationError::Refused);
+            return Err(AuthenticationError::Refused(FailedCheck::TokenClaims));
         }
         Ok(())
     }
@@ -164,40 +304,37 @@ impl CaseworkAuthenticator {
         &self,
         token: &str,
         scope: &str,
-        kind: registry_platform_oidc::ActorKind,
+        kind: ActorKind,
     ) -> Result<registry_platform_oidc::VerifiedToken, AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| {
-            self.record_header_refusal();
-            AuthenticationError::Refused
-        })?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                error.authentication_stage(),
-                "Casework authentication refused"
-            );
-            AuthenticationError::Refused
-        })?;
+        let (caller, facts) = self.verify_caller(token).await?;
+        let verified = caller.token;
         if !matches!(
             verified.claims.aud.as_ref(),
             Some(registry_platform_oidc::Audience::One(_))
         ) && !matches!(verified.claims.aud.as_ref(), Some(registry_platform_oidc::Audience::Many(values)) if values.len() == 1)
-            || verified.claims.extra.contains_key("act")
-            || !verified.scopes.iter().any(|value| value == scope)
-            || verified.matched_client_id().ok().flatten().is_none()
-            || registry_platform_oidc::actor_kind(
-                &verified.claims,
-                &registry_platform_oidc::ClaimNames::default(),
-            )
-            .ok()
-                != Some(kind)
-            || verified
-                .claims
-                .extra
-                .keys()
-                .any(|key| key.starts_with("registry_grant_"))
         {
-            return Err(AuthenticationError::Refused);
+            return Err(AuthenticationError::Refused(FailedCheck::TokenAudience));
+        }
+        if verified.claims.extra.contains_key("act") {
+            return Err(AuthenticationError::Refused(FailedCheck::Delegation));
+        }
+        if !verified.scopes.iter().any(|value| value == scope) {
+            declare_scope_refusal(&facts.scope_claim, Some(scope), None);
+            return Err(AuthenticationError::Refused(FailedCheck::Scope));
+        }
+        if verified.matched_client_id().ok().flatten().is_none() {
+            return Err(AuthenticationError::Refused(FailedCheck::TokenClient));
+        }
+        if caller.kind.kind() != Some(kind) {
+            return Err(AuthenticationError::Refused(FailedCheck::ActorKind));
+        }
+        if verified
+            .claims
+            .extra
+            .keys()
+            .any(|key| key.starts_with("registry_grant_"))
+        {
+            return Err(AuthenticationError::Refused(FailedCheck::TaskGrantClaims));
         }
         Ok(verified)
     }
@@ -207,46 +344,47 @@ impl CaseworkAuthenticator {
         token: &str,
         selected_profile: &str,
     ) -> Result<ActorContext, AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| {
-            self.record_header_refusal();
-            AuthenticationError::Refused
-        })?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                error.authentication_stage(),
-                "Casework authentication refused"
-            );
-            AuthenticationError::Refused
-        })?;
+        let (caller, facts) = self.verify_caller(token).await?;
+        let verified = caller.token;
         let matched_client = verified
             .matched_client_id()
-            .map_err(|_| AuthenticationError::Refused)?;
-        if self.delegated_staff_readers.values().any(|reader| {
-            matched_client == Some(reader.client.as_str())
-                && (verified.claims.extra.contains_key("act")
-                    || verified
-                        .scopes
-                        .iter()
-                        .any(|scope| scope == &reader.required_scope))
-        }) {
-            return Err(AuthenticationError::Refused);
+            .map_err(|_| AuthenticationError::Refused(FailedCheck::TokenClient))?;
+        for reader in self.delegated_staff_readers.values() {
+            if matched_client != Some(reader.client.as_str()) {
+                continue;
+            }
+            if verified.claims.extra.contains_key("act") {
+                return Err(AuthenticationError::Refused(FailedCheck::Delegation));
+            }
+            if verified
+                .scopes
+                .iter()
+                .any(|scope| scope == &reader.required_scope)
+            {
+                // The delegated read scope is refused here because it belongs to the
+                // delegated path, so the line names no scope as required.
+                declare_scope_refusal(&facts.scope_claim, None, None);
+                return Err(AuthenticationError::Refused(FailedCheck::Scope));
+            }
         }
-        let profile = self.profiles.get(selected_profile).ok_or_else(|| {
-            self.profile_diagnostic();
-            AuthenticationError::Profile
-        })?;
+        let profile = self
+            .profiles
+            .get(selected_profile)
+            .ok_or(AuthenticationError::Profile(FailedCheck::AccessProfile))?;
         let requires_person = profile.acts_as != CaseworkActsAs::Requester
             || self.initiator_profiles.contains(&profile.id);
-        if requires_person
-            && (verified.claims.extra.contains_key("act")
-                || verified
-                    .claims
-                    .extra
-                    .keys()
-                    .any(|key| key.starts_with("registry_grant_")))
-        {
-            return Err(AuthenticationError::Refused);
+        if requires_person {
+            if verified.claims.extra.contains_key("act") {
+                return Err(AuthenticationError::Refused(FailedCheck::Delegation));
+            }
+            if verified
+                .claims
+                .extra
+                .keys()
+                .any(|key| key.starts_with("registry_grant_"))
+            {
+                return Err(AuthenticationError::Refused(FailedCheck::TaskGrantClaims));
+            }
         }
         let actual_scopes: BTreeSet<_> = verified.scopes.iter().map(String::as_str).collect();
         if !profile
@@ -254,29 +392,19 @@ impl CaseworkAuthenticator {
             .iter()
             .all(|scope| actual_scopes.contains(scope.as_str()))
         {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                registry_platform_oidc::AuthenticationStage::Scope,
-                "Casework authentication profile refused",
-                remedy = "check authentication.oidc.scopeClaim and accessProfiles requiredScopes"
+            declare_scope_refusal(
+                &facts.scope_claim,
+                profile
+                    .required_scopes
+                    .iter()
+                    .map(String::as_str)
+                    .find(|scope| !actual_scopes.contains(scope)),
+                Some(&profile.id),
             );
-            return Err(AuthenticationError::Profile);
+            return Err(AuthenticationError::Profile(FailedCheck::Scope));
         }
-        if requires_person {
-            let human_identity = verified
-                .claims
-                .extra
-                .get(&self.human_identity.claim)
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    self.profile_diagnostic();
-                    AuthenticationError::NotHuman
-                })?;
-            if human_identity != self.human_identity.value {
-                self.profile_diagnostic();
-                return Err(AuthenticationError::NotHuman);
-            }
+        if requires_person && !is_person(caller.kind) {
+            return Err(AuthenticationError::NotHuman(FailedCheck::ActorKind));
         }
         let principal = if profile.principal_claim == "sub" {
             verified.claims.sub.as_deref()
@@ -288,12 +416,12 @@ impl CaseworkAuthenticator {
                 .and_then(Value::as_str)
         }
         .filter(|value| !value.is_empty())
-        .ok_or(AuthenticationError::Claims)?;
+        .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
         let issuer = verified
             .claims
             .iss
             .filter(|issuer| !issuer.is_empty())
-            .ok_or(AuthenticationError::Claims)?;
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
         Ok(ActorContext {
             principal: IssuerPrincipal {
                 issuer,
@@ -303,42 +431,48 @@ impl CaseworkAuthenticator {
             role: profile.acts_as,
         })
     }
-
-    fn profile_diagnostic(&self) {
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            registry_platform_oidc::AuthenticationStage::Profile,
-            "Casework authentication profile refused",
-            remedy = "check selected accessProfiles and authentication.oidc.humanIdentity profile category"
-        );
-    }
 }
 
 impl std::fmt::Debug for CaseworkAuthenticator {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CaseworkAuthenticator")
-            .field("verifier", &"<redacted>")
+            .field("issuers", &self.entries.keys())
             .field("profiles", &self.profiles.keys())
             .field(
                 "delegated_staff_readers",
                 &self.delegated_staff_readers.keys(),
             )
-            .field("human_identity_claim", &self.human_identity.claim)
             .finish()
     }
 }
 
+/// Why authentication refused a request. Each variant names the check that
+/// failed, which goes to the operator's counter and log and never to the
+/// caller.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum AuthenticationError {
     #[error("the bearer credential was refused")]
-    Refused,
+    Refused(FailedCheck),
     #[error("the selected Casework profile was refused")]
-    Profile,
+    Profile(FailedCheck),
     #[error("the verified identity is not a human session")]
-    NotHuman,
+    NotHuman(FailedCheck),
     #[error("the verified identity claims are invalid")]
-    Claims,
+    Claims(FailedCheck),
+}
+
+impl AuthenticationError {
+    /// The check the request failed.
+    #[must_use]
+    pub const fn failed_check(self) -> FailedCheck {
+        match self {
+            Self::Refused(check)
+            | Self::Profile(check)
+            | Self::NotHuman(check)
+            | Self::Claims(check) => check,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -359,7 +493,7 @@ mod tests {
     const SECRET: &[u8] = b"01234567890123456789012345678901";
 
     #[tokio::test]
-    async fn equivalent_profile_refusals_share_one_bounded_value_free_diagnostic() {
+    async fn equivalent_profile_refusals_name_their_check_and_write_no_log_line() {
         use tracing::instrument::WithSubscriber;
         #[derive(Clone)]
         struct Writer(Arc<std::sync::Mutex<Vec<u8>>>);
@@ -397,7 +531,7 @@ mod tests {
             vec![Algorithm::HS256],
             vec!["at+jwt".into()],
         );
-        let auth = CaseworkAuthenticator::new(&p, verifier, keys(), HumanIdentityConfig::default());
+        let auth = build(&p, verifier, keys());
         let base = json!({"sub":"canary-private-subject","scope":"canary-private-scope"});
         let credential = token(base.clone());
         assert_eq!(
@@ -405,9 +539,21 @@ mod tests {
                 .with_subscriber(subscriber.clone())
                 .await
                 .unwrap_err(),
-            AuthenticationError::Profile
+            AuthenticationError::Profile(FailedCheck::AccessProfile)
         );
-        for kind in [None, Some(""), Some("canary-private-actor")] {
+        // A token without a kind is not a person's. A kind the token claims
+        // but no reader can name refuses the token itself.
+        for (kind, expected) in [
+            (None, AuthenticationError::NotHuman(FailedCheck::ActorKind)),
+            (
+                Some(""),
+                AuthenticationError::Refused(FailedCheck::ActorKind),
+            ),
+            (
+                Some("canary-private-actor"),
+                AuthenticationError::Refused(FailedCheck::ActorKind),
+            ),
+        ] {
             let mut claims = base.clone();
             if let Some(kind) = kind {
                 claims["registry_actor_kind"] = json!(kind);
@@ -418,15 +564,13 @@ mod tests {
                     .with_subscriber(subscriber.clone())
                     .await
                     .unwrap_err(),
-                AuthenticationError::NotHuman
+                expected
             );
         }
+        // Recording belongs to the HTTP boundary, which counts and logs each
+        // refusal once by its check. The authenticator writes nothing.
         let rendered = String::from_utf8(output.lock().unwrap().clone()).unwrap();
-        assert_eq!(rendered.lines().count(), 1);
-        assert!(rendered.contains("profile"));
-        assert!(rendered.contains("authentication.oidc.humanIdentity"));
-        assert!(!rendered.contains("canary-private"));
-        assert!(!rendered.contains(&credential));
+        assert!(rendered.is_empty(), "{rendered}");
     }
 
     fn project() -> CaseworkProject {
@@ -461,6 +605,24 @@ mod tests {
         ))
     }
 
+    /// An authenticator with one issuer entry, `main`, that declares no kind.
+    fn build(
+        project: &CaseworkProject,
+        verifier: TokenVerifierConfig,
+        keys: Arc<JwksFetcher>,
+    ) -> CaseworkAuthenticator {
+        CaseworkAuthenticator::new(
+            project,
+            vec![CaseworkIssuerVerifier {
+                id: "main".to_owned(),
+                verifier,
+                keys,
+                declared: DeclaredKinds::None,
+            }],
+        )
+        .expect("one issuer entry")
+    }
+
     fn authenticator(assertion_issuers: BTreeMap<String, Vec<String>>) -> CaseworkAuthenticator {
         let verifier = TokenVerifierConfig::access_token_profile(
             ISSUER,
@@ -471,7 +633,7 @@ mod tests {
         .with_scope_claim("scope")
         .with_allowed_clients(vec![CLIENT.to_owned()])
         .with_assertion_issuers(assertion_issuers);
-        CaseworkAuthenticator::new(&project(), verifier, keys(), HumanIdentityConfig::default())
+        build(&project(), verifier, keys())
     }
 
     /// Sign a standing task-client access token, filling in the claims a real
@@ -487,10 +649,143 @@ mod tests {
     }
 
     fn signed_token(claims: Value) -> String {
+        signed_token_with_kid(claims, "test")
+    }
+
+    fn signed_token_with_kid(claims: Value, kid: &str) -> String {
         let mut header = Header::new(Algorithm::HS256);
-        header.kid = Some("test".to_owned());
+        header.kid = Some(kid.to_owned());
         header.typ = Some("at+jwt".to_owned());
         jsonwebtoken::encode(&header, &claims, &EncodingKey::from_secret(SECRET)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_source_token_whose_kind_is_not_human_names_the_kind_declarations_to_the_operator() {
+        let verifier = TokenVerifierConfig::access_token_profile(
+            ISSUER,
+            vec![AUDIENCE.into()],
+            vec![Algorithm::HS256],
+            vec!["at+jwt".into()],
+        )
+        .with_allowed_clients(vec![CLIENT.into()]);
+        let auth = CaseworkAuthenticator::new(
+            &project(),
+            vec![CaseworkIssuerVerifier {
+                id: "main".to_owned(),
+                verifier,
+                keys: keys(),
+                declared: DeclaredKinds::Clients(BTreeMap::from([(
+                    CLIENT.to_owned(),
+                    ActorKind::Human,
+                )])),
+            }],
+        )
+        .expect("one issuer entry")
+        .with_human_source_audiences(BTreeMap::from([(
+            "registry".into(),
+            "urn:breg:source".into(),
+        )]));
+        // The person's Casework token is human by declaration. The source
+        // token's client is declared nowhere.
+        let primary =
+            token(json!({"sub":"same-human", "client_id":CLIENT, "scope":"casework-review"}));
+        for kind in [Value::Null, json!("service"), json!("canary-kind")] {
+            let mut claims = json!({"aud":"urn:breg:source", "sub":"same-human", "client_id":"facility-registry"});
+            if !kind.is_null() {
+                claims["registry_actor_kind"] = kind.clone();
+            }
+            let source = token(claims);
+            let (refused, remedy) = CALLER_REMEDY
+                .scope(Cell::new(None), async {
+                    let refused = auth
+                        .verify_human_source_pair(&primary, &source, "registry")
+                        .await
+                        .unwrap_err();
+                    (refused, CALLER_REMEDY.with(Cell::get))
+                })
+                .await;
+            assert_eq!(
+                refused,
+                AuthenticationError::Refused(FailedCheck::ActorKind),
+                "{kind}"
+            );
+            let remedy = remedy.unwrap_or_else(|| panic!("{kind}: no remedy"));
+            assert!(remedy.contains("clientActorKinds"), "{kind}: {remedy}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_source_token_is_verified_by_the_entry_that_verified_its_casework_token() {
+        const OTHER_ISSUER: &str = "https://other-token.test";
+        // Both entries trust one key set, under two key ids. Only the other
+        // entry refuses the key id `retired`.
+        let jwks: Vec<Value> = ["test", "retired"]
+            .into_iter()
+            .map(|kid| {
+                json!({
+                    "kty": "oct",
+                    "kid": kid,
+                    "alg": "HS256",
+                    "use": "sig",
+                    "k": URL_SAFE_NO_PAD.encode(SECRET),
+                })
+            })
+            .collect();
+        let keys = Arc::new(JwksFetcher::new_static(
+            serde_json::from_value(json!({ "keys": jwks })).unwrap(),
+            JwksFetcherConfig::defaults(),
+        ));
+        let entry =
+            |id: &str, issuer: &str, client: &str, revoked: &[&str]| CaseworkIssuerVerifier {
+                id: id.to_owned(),
+                verifier: TokenVerifierConfig::access_token_profile(
+                    issuer,
+                    vec![AUDIENCE.into()],
+                    vec![Algorithm::HS256],
+                    vec!["at+jwt".into()],
+                )
+                .with_allowed_clients(vec![client.to_owned()])
+                .with_denied_kids(revoked.iter().map(|kid| (*kid).to_owned()).collect()),
+                keys: Arc::clone(&keys),
+                declared: DeclaredKinds::None,
+            };
+        let auth = CaseworkAuthenticator::new(
+            &project(),
+            vec![
+                entry("main", ISSUER, "main-client", &[]),
+                entry("other", OTHER_ISSUER, CLIENT, &["retired"]),
+            ],
+        )
+        .expect("two issuer entries")
+        .with_human_source_audiences(BTreeMap::from([(
+            "registry".into(),
+            "urn:breg:source".into(),
+        )]));
+        let primary = token(json!({
+            "iss":OTHER_ISSUER, "sub":"same-human", "client_id":CLIENT,
+            "scope":"casework-review", "registry_actor_kind":"human"
+        }));
+        let mut source = json!({
+            "iss":OTHER_ISSUER, "aud":"urn:breg:source", "sub":"same-human",
+            "client_id":"source-client", "registry_actor_kind":"human"
+        });
+        auth.verify_human_source_pair(&primary, &token(source.clone()), "registry")
+            .await
+            .expect("the entry that verified the Casework token verifies its source token");
+        let now = Utc::now().timestamp();
+        let object = source.as_object_mut().unwrap();
+        object.insert("iat".to_owned(), json!(now));
+        object.insert("exp".to_owned(), json!(now + 300));
+        assert_eq!(
+            auth.verify_human_source_pair(
+                &primary,
+                &signed_token_with_kid(source, "retired"),
+                "registry"
+            )
+            .await
+            .unwrap_err(),
+            AuthenticationError::Refused(FailedCheck::TokenKey)
+        );
     }
 
     #[tokio::test]
@@ -512,21 +807,13 @@ mod tests {
         )
         .with_allowed_clients(vec![CLIENT.into()])
         .with_max_token_lifetime(Some(std::time::Duration::from_secs(600)));
-        let auth = CaseworkAuthenticator::new(
-            &project,
-            verifier,
-            keys(),
-            HumanIdentityConfig {
-                claim: "human_session".into(),
-                value: "yes".into(),
-            },
-        )
-        .with_human_source_audiences(BTreeMap::from([(
-            "registry".into(),
-            "urn:breg:source".into(),
-        )]));
-        let primary_claims = json!({"sub":"same-human", "casework_principal":"casework-alias", "client_id":CLIENT, "scope":"casework-review", "registry_actor_kind":"human", "human_session":"yes"});
-        let source_claims = json!({"aud":"urn:breg:source", "sub":"same-human", "registry_principal":"source-alias", "client_id":"different-source-client", "scope":"source-only", "registry_actor_kind":"human", "human_session":"yes"});
+        let auth =
+            build(&project, verifier, keys()).with_human_source_audiences(BTreeMap::from([(
+                "registry".into(),
+                "urn:breg:source".into(),
+            )]));
+        let primary_claims = json!({"sub":"same-human", "casework_principal":"casework-alias", "client_id":CLIENT, "scope":"casework-review", "registry_actor_kind":"human"});
+        let source_claims = json!({"aud":"urn:breg:source", "sub":"same-human", "registry_principal":"source-alias", "client_id":"different-source-client", "scope":"source-only", "registry_actor_kind":"human"});
         let primary = token(primary_claims.clone());
         let source = token(source_claims.clone());
         assert_eq!(
@@ -555,7 +842,6 @@ mod tests {
             json!({"aud":["urn:breg:source",AUDIENCE]}),
             json!({"registry_actor_kind":"service"}),
             json!({"registry_actor_kind":null}),
-            json!({"human_session":"no"}),
             json!({"act":{"sub":"agent"}}),
             json!({"registry_grant_id":"grant"}),
             json!({"iat":now-7200,"exp":now-3600}),
@@ -620,7 +906,10 @@ mod tests {
             .await
             .is_err());
         let mut auth = auth;
-        auth.source_verifier_config
+        auth.entries
+            .get_mut("main")
+            .expect("the main entry")
+            .source_config
             .denied_kids
             .insert("test".into());
         let auth = auth.with_human_source_audiences(BTreeMap::from([(
@@ -634,6 +923,71 @@ mod tests {
             .verify_human_source_pair(&primary, &source, "registry")
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn separate_human_source_refusals_name_the_check_that_failed() {
+        let auth = authenticator(BTreeMap::new()).with_human_source_audiences(BTreeMap::from([(
+            "registry".into(),
+            "urn:breg:source".into(),
+        )]));
+        let primary_claims = json!({"sub":"same-human", "client_id":CLIENT, "scope":"casework-review", "registry_actor_kind":"human"});
+        let source_claims = json!({"aud":"urn:breg:source", "sub":"same-human", "client_id":"source-client", "registry_actor_kind":"human"});
+        let primary = token(primary_claims.clone());
+        auth.verify_human_source_pair(&primary, &token(source_claims.clone()), "registry")
+            .await
+            .expect("the pair is the same human");
+        assert_eq!(
+            auth.verify_human_source_pair(&primary, &token(source_claims.clone()), "unknown")
+                .await
+                .unwrap_err(),
+            AuthenticationError::Refused(FailedCheck::AccessProfile)
+        );
+        assert_eq!(
+            auth.verify_human_source_pair(&primary, "not-a-token", "registry")
+                .await
+                .unwrap_err(),
+            AuthenticationError::Refused(FailedCheck::CredentialMalformed)
+        );
+        for (patch, expected) in [
+            (json!({"sub":"another-human"}), FailedCheck::TokenClaims),
+            (json!({"aud":AUDIENCE}), FailedCheck::TokenAudience),
+            (
+                json!({"aud":["urn:breg:source"]}),
+                FailedCheck::TokenAudience,
+            ),
+            (
+                json!({"iss":"https://other.example.test"}),
+                FailedCheck::TokenIssuer,
+            ),
+            (
+                json!({"registry_actor_kind":"service"}),
+                FailedCheck::ActorKind,
+            ),
+            (
+                json!({"registry_actor_kind":"person"}),
+                FailedCheck::ActorKind,
+            ),
+            (json!({"registry_actor_kind":null}), FailedCheck::ActorKind),
+            (json!({"act":{"sub":"agent"}}), FailedCheck::Delegation),
+            (
+                json!({"registry_grant_id":"grant"}),
+                FailedCheck::TaskGrantClaims,
+            ),
+        ] {
+            let mut claims = source_claims.clone();
+            claims
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            assert_eq!(
+                auth.verify_human_source_pair(&primary, &token(claims), "registry")
+                    .await
+                    .unwrap_err(),
+                AuthenticationError::Refused(expected),
+                "{patch}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -665,7 +1019,7 @@ mod tests {
             "urn:breg:source".into(),
         )]));
         let primary = token(
-            json!({"sub":"primary-human-canary", "client_id":CLIENT, "registry_actor_kind":"human"}),
+            json!({"sub":"primary-human-canary", "client_id":CLIENT, "scope":"casework-review", "registry_actor_kind":"human"}),
         );
         let source = token(
             json!({"aud":"urn:breg:source", "sub":"different-source-human-canary", "client_id":"source-client-canary", "registry_actor_kind":"human"}),
@@ -730,7 +1084,10 @@ mod tests {
         let result = authenticator
             .authenticate_task_client(&disallowed, "task-grant", ActorKind::Service)
             .await;
-        assert!(matches!(result, Err(AuthenticationError::Refused)));
+        assert_eq!(
+            result.unwrap_err(),
+            AuthenticationError::Refused(FailedCheck::TokenAssertionIssuer)
+        );
 
         let allowed = token(json!({
             "azp": CLIENT,
@@ -775,35 +1132,46 @@ mod tests {
             CLIENT.to_owned(),
             vec![assertion_issuer.to_owned()],
         )]));
-        CaseworkAuthenticator::new(&project, verifier, keys(), HumanIdentityConfig::default())
-            .with_delegated_staff_readers(BTreeMap::from([
-                (
-                    "staff-mcp".to_owned(),
-                    crate::DelegatedStaffReaderConfig {
-                        profile: "staff".to_owned(),
-                        client: CLIENT.to_owned(),
-                        actor_subject: "registry-mcp".to_owned(),
-                        assertion_issuer: assertion_issuer.to_owned(),
-                        required_scope: "casework:staff:delegated-read".to_owned(),
-                        maximum_token_lifetime_seconds: 300,
-                        source_profiles: vec!["review-agent".to_owned()],
-                    },
-                ),
-                (
-                    "other-reader".to_owned(),
-                    crate::DelegatedStaffReaderConfig {
-                        profile: "staff".to_owned(),
-                        client: CLIENT.to_owned(),
-                        actor_subject: "registry-mcp".to_owned(),
-                        assertion_issuer: assertion_issuer.to_owned(),
-                        required_scope: "casework:other-delegated-read".to_owned(),
-                        maximum_token_lifetime_seconds: 300,
-                        source_profiles: vec!["review-agent".to_owned()],
-                    },
-                ),
-            ]))
+        build(&project, verifier, keys()).with_delegated_staff_readers(BTreeMap::from([
+            (
+                "staff-mcp".to_owned(),
+                crate::DelegatedStaffReaderConfig {
+                    profile: "staff".to_owned(),
+                    client: CLIENT.to_owned(),
+                    actor_subject: "registry-mcp".to_owned(),
+                    assertion_issuer: assertion_issuer.to_owned(),
+                    required_scope: "casework:staff:delegated-read".to_owned(),
+                    maximum_token_lifetime_seconds: 300,
+                    source_profiles: vec!["review-agent".to_owned()],
+                    represented_human: represented_human(),
+                },
+            ),
+            (
+                "other-reader".to_owned(),
+                crate::DelegatedStaffReaderConfig {
+                    profile: "staff".to_owned(),
+                    client: CLIENT.to_owned(),
+                    actor_subject: "registry-mcp".to_owned(),
+                    assertion_issuer: assertion_issuer.to_owned(),
+                    required_scope: "casework:other-delegated-read".to_owned(),
+                    maximum_token_lifetime_seconds: 300,
+                    source_profiles: vec!["review-agent".to_owned()],
+                    represented_human: represented_human(),
+                },
+            ),
+        ]))
     }
 
+    /// The claim the issuer carries through the exchange about the person a
+    /// delegated token represents.
+    fn represented_human() -> crate::RepresentedHumanConfig {
+        crate::RepresentedHumanConfig {
+            claim: "registry_subject_actor_kind".to_owned(),
+            value: "human".to_owned(),
+        }
+    }
+
+    /// A delegated token. A claim given as `null` is left out.
     fn delegated_token(mut claims: Value) -> String {
         let object = claims.as_object_mut().unwrap();
         object.entry("azp").or_insert(json!(CLIENT));
@@ -815,13 +1183,59 @@ mod tests {
             .entry("registry_actor_kind")
             .or_insert(json!("human"));
         object
+            .entry("registry_subject_actor_kind")
+            .or_insert(json!("human"));
+        object
             .entry("registry_assertion_issuer")
             .or_insert(json!("https://people.example.test"));
         object.entry("act").or_insert(json!({
             "iss": ISSUER,
             "sub": "registry-mcp"
         }));
+        object.retain(|_, value| !value.is_null());
         token(claims)
+    }
+
+    #[tokio::test]
+    async fn a_delegated_token_whose_represented_human_claim_matches_is_admitted_on_staff_read() {
+        let auth = delegated_authenticator();
+        // The token's own kind is the gateway's. The binding reads the
+        // represented person from the claim it names.
+        for own_kind in [json!("service"), json!("agent"), Value::Null] {
+            let credential = delegated_token(json!({"registry_actor_kind": own_kind}));
+            let reader = auth
+                .authenticate_staff_read(&credential, "staff-mcp", Some("review-agent"))
+                .await
+                .unwrap_or_else(|error| panic!("{own_kind}: {error:?}"));
+            assert_eq!(reader.principal_for_test().subject, "officer-7");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_delegated_token_without_the_represented_human_claim_or_with_another_value_is_refused(
+    ) {
+        let auth = delegated_authenticator();
+        for represented in [
+            Value::Null,
+            json!("service"),
+            json!("Human"),
+            json!(""),
+            json!(true),
+        ] {
+            // A human kind on the token itself does not stand for the
+            // represented person.
+            let credential = delegated_token(json!({
+                "registry_actor_kind": "human",
+                "registry_subject_actor_kind": represented
+            }));
+            assert_eq!(
+                auth.authenticate_staff_read(&credential, "staff-mcp", Some("review-agent"))
+                    .await
+                    .unwrap_err(),
+                AuthenticationError::NotHuman(FailedCheck::ActorKind),
+                "{represented}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -833,39 +1247,46 @@ mod tests {
             .await
             .expect("the exact delegated reader is accepted");
         assert_eq!(reader.principal_for_test().subject, "officer-7");
-        assert!(matches!(
-            auth.authenticate(&credential, "staff").await,
-            Err(AuthenticationError::Refused)
-        ));
-        assert!(matches!(
-            auth.authenticate(&credential, "requester-overlap").await,
-            Err(AuthenticationError::Refused)
-        ));
+        assert_eq!(
+            auth.authenticate(&credential, "staff").await.unwrap_err(),
+            AuthenticationError::Refused(FailedCheck::Delegation)
+        );
+        assert_eq!(
+            auth.authenticate(&credential, "requester-overlap")
+                .await
+                .unwrap_err(),
+            AuthenticationError::Refused(FailedCheck::Delegation)
+        );
         let delegated_actor_without_reader_scope = delegated_token(json!({
             "scope": "casework:staff"
         }));
-        assert!(matches!(
+        assert_eq!(
             auth.authenticate(&delegated_actor_without_reader_scope, "requester-overlap")
-                .await,
-            Err(AuthenticationError::Refused)
-        ));
+                .await
+                .unwrap_err(),
+            AuthenticationError::Refused(FailedCheck::Delegation)
+        );
         let second_policy = delegated_token(json!({
             "scope": "casework:staff casework:other-delegated-read"
         }));
-        assert!(matches!(
-            auth.authenticate(&second_policy, "requester-overlap").await,
-            Err(AuthenticationError::Refused)
-        ));
+        assert_eq!(
+            auth.authenticate(&second_policy, "requester-overlap")
+                .await
+                .unwrap_err(),
+            AuthenticationError::Refused(FailedCheck::Delegation)
+        );
         let stripped = token(json!({
             "azp": CLIENT,
             "sub": "officer-7",
             "scope": "casework:staff casework:staff:delegated-read",
             "registry_actor_kind": "service"
         }));
-        assert!(matches!(
-            auth.authenticate(&stripped, "requester-overlap").await,
-            Err(AuthenticationError::Refused)
-        ));
+        assert_eq!(
+            auth.authenticate(&stripped, "requester-overlap")
+                .await
+                .unwrap_err(),
+            AuthenticationError::Refused(FailedCheck::Scope)
+        );
         let credential = delegated_token(json!({"aud": [AUDIENCE]}));
         auth.authenticate_staff_read(&credential, "staff-mcp", Some("review-agent"))
             .await
@@ -888,35 +1309,35 @@ mod tests {
         for (claims, expected) in [
             (
                 json!({"act":{"iss":ISSUER,"sub":"other"}}),
-                AuthenticationError::Refused,
+                AuthenticationError::Refused(FailedCheck::Delegation),
             ),
             (
                 json!({"act":{"iss":ISSUER,"sub":"registry-mcp","act":{"sub":"nested"}}}),
-                AuthenticationError::Refused,
+                AuthenticationError::Refused(FailedCheck::Delegation),
             ),
             (
                 json!({"scope":"casework:staff:delegated-read"}),
-                AuthenticationError::Profile,
+                AuthenticationError::Profile(FailedCheck::Scope),
             ),
             (
                 json!({"scope":"casework:staff"}),
-                AuthenticationError::Profile,
+                AuthenticationError::Profile(FailedCheck::Scope),
             ),
             (
                 json!({"scope":"casework:staff casework:staff casework:staff:delegated-read"}),
-                AuthenticationError::Profile,
+                AuthenticationError::Profile(FailedCheck::Scope),
             ),
             (
                 json!({"iat":now,"exp":now+301}),
-                AuthenticationError::Refused,
+                AuthenticationError::Refused(FailedCheck::TokenTime),
             ),
             (
                 json!({"registry_grant_id":"not-allowed"}),
-                AuthenticationError::Refused,
+                AuthenticationError::Refused(FailedCheck::TaskGrantClaims),
             ),
             (
                 json!({"aud":[AUDIENCE, AUDIENCE]}),
-                AuthenticationError::Refused,
+                AuthenticationError::Refused(FailedCheck::TokenAudience),
             ),
         ] {
             let credential = delegated_token(claims);
@@ -928,11 +1349,12 @@ mod tests {
             );
         }
         let credential = delegated_token(json!({}));
-        assert!(matches!(
+        assert_eq!(
             auth.authenticate_staff_read(&credential, "staff-mcp", Some("other-source"))
-                .await,
-            Err(AuthenticationError::Profile)
-        ));
+                .await
+                .unwrap_err(),
+            AuthenticationError::Profile(FailedCheck::AccessProfile)
+        );
     }
 
     #[tokio::test]
@@ -956,20 +1378,21 @@ mod tests {
             json!({"sub":"other-gateway"}),
             json!({"sub":"registry-mcp","act":{"sub":"prior-gateway"}}),
         ] {
-            assert!(matches!(
+            assert_eq!(
                 auth.authenticate_staff_read(
                     &delegated_token(json!({"act":act})),
                     "staff-mcp",
                     Some("review-agent"),
                 )
-                .await,
-                Err(AuthenticationError::Refused)
-            ));
+                .await
+                .unwrap_err(),
+                AuthenticationError::Refused(FailedCheck::Delegation)
+            );
         }
     }
 
     #[tokio::test]
-    async fn delegated_staff_read_negative_cases_have_value_free_stage_diagnostics() {
+    async fn delegated_staff_read_negative_cases_name_their_check_and_write_no_log_line() {
         use registry_platform_testing::CapturedDiagnosticLogs;
         use tracing::instrument::WithSubscriber;
 
@@ -979,7 +1402,6 @@ mod tests {
             policy: &'static str,
             source_profile: Option<&'static str>,
             expected_error: AuthenticationError,
-            expected_stage: &'static str,
             default_off: bool,
         }
 
@@ -1008,8 +1430,7 @@ mod tests {
                 credential: without_act,
                 policy: "staff-mcp",
                 source_profile: Some("review-agent"),
-                expected_error: AuthenticationError::Refused,
-                expected_stage: "client",
+                expected_error: AuthenticationError::Refused(FailedCheck::Delegation),
                 default_off: false,
             },
             NegativeCase {
@@ -1017,8 +1438,7 @@ mod tests {
                 credential: delegated_token(json!({"azp": "canary-wrong-client"})),
                 policy: "staff-mcp",
                 source_profile: Some("review-agent"),
-                expected_error: AuthenticationError::Refused,
-                expected_stage: "client",
+                expected_error: AuthenticationError::Refused(FailedCheck::TokenAssertionIssuer),
                 default_off: false,
             },
             NegativeCase {
@@ -1028,17 +1448,15 @@ mod tests {
                 })),
                 policy: "staff-mcp",
                 source_profile: Some("review-agent"),
-                expected_error: AuthenticationError::Refused,
-                expected_stage: "client",
+                expected_error: AuthenticationError::Refused(FailedCheck::TokenAssertionIssuer),
                 default_off: false,
             },
             NegativeCase {
-                name: "non-human credential",
-                credential: delegated_token(json!({"registry_actor_kind": "service"})),
+                name: "represented person not human",
+                credential: delegated_token(json!({"registry_subject_actor_kind": "service"})),
                 policy: "staff-mcp",
                 source_profile: Some("review-agent"),
-                expected_error: AuthenticationError::NotHuman,
-                expected_stage: "profile",
+                expected_error: AuthenticationError::NotHuman(FailedCheck::ActorKind),
                 default_off: false,
             },
             NegativeCase {
@@ -1046,8 +1464,7 @@ mod tests {
                 credential: missing_iat,
                 policy: "staff-mcp",
                 source_profile: Some("review-agent"),
-                expected_error: AuthenticationError::Refused,
-                expected_stage: "time",
+                expected_error: AuthenticationError::Refused(FailedCheck::TokenTime),
                 default_off: false,
             },
             NegativeCase {
@@ -1055,8 +1472,7 @@ mod tests {
                 credential: delegated_token(json!({"sub": "canary-unknown-policy"})),
                 policy: "canary-unknown-policy",
                 source_profile: Some("review-agent"),
-                expected_error: AuthenticationError::Profile,
-                expected_stage: "profile",
+                expected_error: AuthenticationError::Profile(FailedCheck::AccessProfile),
                 default_off: false,
             },
             NegativeCase {
@@ -1064,8 +1480,7 @@ mod tests {
                 credential: delegated_token(json!({"sub": "canary-default-off"})),
                 policy: "staff-mcp",
                 source_profile: Some("review-agent"),
-                expected_error: AuthenticationError::Profile,
-                expected_stage: "profile",
+                expected_error: AuthenticationError::Profile(FailedCheck::AccessProfile),
                 default_off: true,
             },
             NegativeCase {
@@ -1073,8 +1488,7 @@ mod tests {
                 credential: delegated_token(json!({"sub": "canary-source-profile"})),
                 policy: "staff-mcp",
                 source_profile: Some("canary-unlisted-source"),
-                expected_error: AuthenticationError::Profile,
-                expected_stage: "profile",
+                expected_error: AuthenticationError::Profile(FailedCheck::AccessProfile),
                 default_off: false,
             },
         ];
@@ -1090,33 +1504,15 @@ mod tests {
                 .with_subscriber(captured.subscriber())
                 .await;
             assert_eq!(result.unwrap_err(), case.expected_error, "{}", case.name);
-            let rendered = captured.text();
-            let entries = rendered
-                .lines()
-                .map(|line| serde_json::from_str::<Value>(line).expect("JSON diagnostic"))
-                .collect::<Vec<_>>();
-            assert_eq!(entries.len(), 1, "{}: {rendered}", case.name);
-            assert_eq!(
-                entries[0]["fields"]["message"], "Casework delegated staff authentication refused",
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                entries[0]["fields"]["stage"], case.expected_stage,
-                "{}",
-                case.name
-            );
-            assert!(!rendered.contains("canary"), "{}: {rendered}", case.name);
-            assert!(
-                !rendered.contains(&case.credential),
-                "{}: credential reached diagnostic",
-                case.name
-            );
+            // Recording belongs to the HTTP boundary. The authenticator
+            // writes nothing, whatever the credential carries.
+            assert_eq!(captured.text(), "", "{}", case.name);
         }
     }
 
     #[tokio::test]
-    async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
+    async fn compact_token_admission_refuses_a_malformed_token_as_malformed_and_writes_no_log_line()
+    {
         use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
         use tracing::instrument::WithSubscriber;
         let captured = CapturedDiagnosticLogs::default();
@@ -1125,25 +1521,27 @@ mod tests {
         let auth = authenticator(BTreeMap::new());
         for _ in 0..3 {
             for token in &tokens {
-                assert!(matches!(
+                assert_eq!(
                     auth.authenticate(token, "requester")
                         .with_subscriber(subscriber.clone())
-                        .await,
-                    Err(AuthenticationError::Refused)
-                ));
-                assert!(matches!(
+                        .await
+                        .unwrap_err(),
+                    AuthenticationError::Refused(FailedCheck::CredentialMalformed)
+                );
+                assert_eq!(
                     auth.authenticate_task_client(
                         token,
                         "casework:grants:status",
                         ActorKind::Service
                     )
                     .with_subscriber(subscriber.clone())
-                    .await,
-                    Err(AuthenticationError::Refused)
-                ));
+                    .await
+                    .unwrap_err(),
+                    AuthenticationError::Refused(FailedCheck::CredentialMalformed)
+                );
             }
         }
-        captured.assert_one_value_free_header_diagnostic(&tokens);
+        assert_eq!(captured.text(), "");
     }
 
     #[tokio::test]
@@ -1171,8 +1569,7 @@ mod tests {
                 required_scopes: vec!["casework:staff".into()],
                 acts_as: CaseworkActsAs::Staff,
             });
-            let auth =
-                CaseworkAuthenticator::new(&p, verifier, source, HumanIdentityConfig::default());
+            let auth = build(&p, verifier, source);
             let now = Utc::now().timestamp();
             let claims = json!({"iss":ISSUER,"aud":AUDIENCE,"azp":CLIENT,"sub":"canary-person","scope":"casework:staff","registry_actor_kind":"human","iat":now,"exp":now+300});
             let sign = |claims: serde_json::Value, typ: &str| {
@@ -1190,31 +1587,42 @@ mod tests {
                     let auth = &auth;
                     async move { auth.authenticate(&token, "staff").await }
                 },
-                |error| matches!(error, AuthenticationError::Refused),
+                |error| matches!(error, AuthenticationError::Refused(_)),
             )
             .await;
             // A valid symmetric JWT is outside the asymmetric production baseline.
             let token = self::token(
                 json!({"azp":CLIENT,"scope":"casework:staff","registry_actor_kind":"human"}),
             );
-            assert!(matches!(
-                auth.authenticate(&token, "staff").await,
-                Err(AuthenticationError::Refused)
-            ));
+            assert_eq!(
+                auth.authenticate(&token, "staff").await.unwrap_err(),
+                AuthenticationError::Refused(FailedCheck::TokenAlgorithm)
+            );
+            // A kind no reader can name refuses the token itself.
             let mut wrong_actor = claims.clone();
             wrong_actor["registry_actor_kind"] = json!("canary-invalid-actor");
             let token = sign(wrong_actor, "at+jwt");
-            assert!(matches!(
-                auth.authenticate(&token, "staff").await,
-                Err(AuthenticationError::NotHuman)
-            ));
+            assert_eq!(
+                auth.authenticate(&token, "staff").await.unwrap_err(),
+                AuthenticationError::Refused(FailedCheck::ActorKind)
+            );
+            // A token with no scope and no declared kind proves an identity,
+            // not access, so it is refused before any profile is read.
             let mut missing = claims.clone();
             missing["scope"] = json!("");
             let token = sign(missing, "at+jwt");
-            assert!(matches!(
-                auth.authenticate(&token, "staff").await,
-                Err(AuthenticationError::Profile)
-            ));
+            assert_eq!(
+                auth.authenticate(&token, "staff").await.unwrap_err(),
+                AuthenticationError::Refused(FailedCheck::ActorKind)
+            );
+            // A token whose scopes are all its own still meets the profile.
+            let mut unrelated = claims.clone();
+            unrelated["scope"] = json!("casework:unrelated");
+            let token = sign(unrelated, "at+jwt");
+            assert_eq!(
+                auth.authenticate(&token, "staff").await.unwrap_err(),
+                AuthenticationError::Profile(FailedCheck::Scope)
+            );
         }
     }
 }

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn render_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_registry-render"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
+    command.env_remove("REGISTRY_STACK_POSTURE");
+    command
 }
 
 fn tempdir() -> PathBuf {
@@ -523,6 +525,42 @@ fn compile_preview_seal_renders_the_sealed_variant_without_a_signature() {
         );
     }
     assert!(!refused_pdf.exists(), "a refused preview writes nothing");
+}
+
+#[test]
+fn package_excludes_development_companions() {
+    let root = tempdir();
+    let bundle = root.join("bundle");
+    let package = root.join("package");
+    assert!(run(&["init", bundle.to_str().unwrap()]).status.success());
+    std::fs::copy(bundle.join("dev.yaml"), bundle.join("copy-of-dev.yml")).unwrap();
+    std::fs::write(
+        bundle.join("alternate.json"),
+        r#"{"apiVersion":"id.registrystack.org/formats/rstack/scenarios/v1alpha1","kind":"RStackScenarios"}"#,
+    ).unwrap();
+
+    let output = run(&[
+        "package",
+        "--bundle",
+        bundle.to_str().unwrap(),
+        "--output",
+        package.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sums = std::fs::read_to_string(package.join("SHA256SUMS")).unwrap();
+    for companion in [
+        "dev.yaml",
+        "dev-scenarios.yaml",
+        "copy-of-dev.yml",
+        "alternate.json",
+    ] {
+        assert!(!package.join(companion).exists(), "{companion}");
+        assert!(!sums.contains(companion), "{companion}");
+    }
 }
 
 #[test]
@@ -1117,6 +1155,11 @@ fn openapi_document_has_no_drift() {
     for path in expected_paths {
         assert!(paths.contains_key(path), "missing {path}: {paths:?}");
     }
+    assert_eq!(
+        paths["/ready"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+            ["required"],
+        serde_json::json!(["status", "posture", "developmentSettings"])
+    );
     let render = &paths["/v1/render/{type}"]["post"];
     assert!(
         render["security"][0]["bearerAuth"].is_array(),
@@ -1727,4 +1770,58 @@ fn copy_dir(from: &Path, to: &Path) {
             std::fs::copy(&entry, &target).unwrap();
         }
     }
+}
+
+#[test]
+fn deny_warnings_keeps_the_local_assurance_listing() {
+    let (_home, runtime, _) = serve_deployment();
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    std::fs::write(&runtime, format!("{text}assuranceProfile: local\n")).unwrap();
+    let output = render_bin()
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--posture",
+            "development",
+            "--deny-warnings",
+            "--runtime-config",
+        ])
+        .arg(runtime)
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| {
+                finding["code"] == "render.posture.local-assurance"
+                    && finding["severity"] == "warning"
+            }),
+        "{report}"
+    );
+}
+
+#[test]
+fn conflict_with_environment_names_the_production_flag() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .args(["check", "--format", "json", "--production"])
+        .env("REGISTRY_STACK_POSTURE", "development")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["diagnostics"][0]["code"], "platform.posture.conflict",
+        "{report}"
+    );
+    assert_eq!(
+        report["diagnostics"][0]["message"],
+        "--production and REGISTRY_STACK_POSTURE declare different postures",
+        "{report}"
+    );
 }

@@ -46,11 +46,13 @@ pub(crate) struct StatisticsWithdrawRequest<'a> {
 }
 
 pub(crate) fn publish(
+    posture: registry_platform_config::DeclaredPosture,
     request: StatisticsPublishRequest<'_>,
 ) -> Result<ReleaseVersionHeader, StatisticsLifecycleError> {
     let key = BRegIdempotencyKey::parse(request.idempotency_key)
         .map_err(|_| StatisticsLifecycleError::IdempotencyKey)?;
-    let (client, runtime) = client_and_runtime(request.breg_url, request.access_token_file)?;
+    let (client, runtime) =
+        client_and_runtime(posture, request.breg_url, request.access_token_file)?;
     let response = runtime
         .block_on(client.statistics_publish(
             request.dataset,
@@ -69,11 +71,13 @@ pub(crate) fn publish(
 }
 
 pub(crate) fn withdraw(
+    posture: registry_platform_config::DeclaredPosture,
     request: StatisticsWithdrawRequest<'_>,
 ) -> Result<ReleaseVersionHeader, StatisticsLifecycleError> {
     let key = BRegIdempotencyKey::parse(request.idempotency_key)
         .map_err(|_| StatisticsLifecycleError::IdempotencyKey)?;
-    let (client, runtime) = client_and_runtime(request.breg_url, request.access_token_file)?;
+    let (client, runtime) =
+        client_and_runtime(posture, request.breg_url, request.access_token_file)?;
     let response = runtime
         .block_on(client.statistics_withdraw(
             request.dataset,
@@ -94,11 +98,13 @@ pub(crate) fn withdraw(
 }
 
 fn client_and_runtime(
+    posture: registry_platform_config::DeclaredPosture,
     breg_url: &str,
     access_token_file: &Path,
 ) -> Result<(BaseRegistryClient, tokio::runtime::Runtime), StatisticsLifecycleError> {
     let base_url = Url::parse(breg_url).map_err(|_| StatisticsLifecycleError::BRegUrl)?;
-    let config = BaseRegistryClientConfig::new(base_url).with_user_agent(STATISTICS_USER_AGENT);
+    let config = BaseRegistryClientConfig::new(base_url, crate::peer_policy(posture))
+        .with_user_agent(STATISTICS_USER_AGENT);
     let client = BaseRegistryClient::new(config).map_err(|_| StatisticsLifecycleError::BRegUrl)?;
     let token =
         read_access_token(access_token_file).map_err(|_| StatisticsLifecycleError::Token)?;

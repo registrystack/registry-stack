@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-21"
+last_reviewed: "2026-11-28"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -34,7 +34,7 @@ product can take back.
 | Holder of the migration credential | Applying a reviewed package and running operator commands (`bregctl apply`, `adopt`, `hook discard`, erasure). | Applying any valid successor of the active package. Packages are unsigned (`BREG-SEC-02`). |
 | Holder of the runtime credential | Serving reads and writes through the generated row-level security policies. | In split-role mode, nothing beyond what the grants allow (`BREG-SEC-04`, `BREG-SEC-118`, `BREG-SEC-119`); the grants include reading any row by setting the transaction context the policies read (see [Read boundary](#read-boundary)). In single-role mode, rewriting the activation ledger. |
 | Database superuser | Nothing is withheld from a superuser. | Editing the ledger, the instance claim, or any row. The activation audit stream is the independent trace. |
-| Operator who writes the runtime file | Naming the issuer, JWKS source, listeners, secret references, and destinations. | Naming a private-network issuer or an HTTP issuer when `allowInsecureHttp` is set. |
+| Operator who writes the runtime file | Naming the issuer, JWKS source, listeners, secret references, and destinations. | Naming a private-network issuer, or a non-loopback HTTP issuer in development with `allowInsecureHttp` set. |
 | Token issuer | Authenticating callers and signing the claims the access profiles map to authority. | An issuer that signs wrong claims. BReg verifies signature, issuer, audience, and lifetime; it does not second-guess the claims. |
 | Review, evidence, and function providers | Their own decisions, within the exact bindings BReg freezes. | A provider that decides wrongly. BReg binds the result to the frozen request but does not judge it (`BREG-SEC-34`). |
 | Host users who can write audit files | Nothing. | Rewriting or removing lines of a local audit file. Ship the stream to append-only storage (obligation 2). |
@@ -60,9 +60,21 @@ access profile or a Record type changes through a new package applied under the 
 credential. A webhook destination's endpoint and secret change in the runtime file and apply at
 restart.
 
+The signature covers `webhook-id`, `webhook-timestamp` and the exact body, leaving the method,
+the URL and `Registry-Recipient-Binding` outside the signed input. The binding only selects a key,
+so a substituted binding selects a key the sender does not hold, and BReg requires separate keys
+per destination and per review authority because a captured delivery verifies wherever its key is held.
+Startup refuses shared key bytes and identifies both configuration paths.
+BReg refuses a timestamp more than 300 seconds from its clock and stores one completion per
+authority and `webhook-id` for the recovery window.
+
+An accepted completion only makes a result lookup due.
+
 {/* Evidence: products/breg/generated/facility/generated/openapi.json, paths;
     crates/registry-breg/src/startup.rs, production startup verifies the package once,
-    before any listener binds. */}
+    before any listener binds;
+    crates/registry-breg/src/event_destination.rs, distinct_delivery_keys();
+    crates/registry-breg/src/review_store.rs, verify_completion(), receive_completion(). */}
 
 ### In-process refresh worker
 
@@ -159,6 +171,27 @@ A request batch audits both items as not available, and the metric still counts 
     a_refused_record_and_an_unknown_record_give_a_caller_the_same_answer,
     declared_existence_disclosure_mode_governs_the_public_collapse,
     a_declared_unresolved_problem_logs_a_cause_only_when_a_404_does_not_match_it. */}
+
+BReg counts each request it refuses by the check that refused it, in `breg_request_refusals_total{check}` on the private metrics listener.
+The `check` label is a closed set of 45 names, every one published at zero, and no caller value becomes a label.
+Each refusal also writes one `request refused` log line with `failed_check` and the request's trace id when it has one, at most five lines per check per minute, with `suppressed` counting what a window held back.
+A request that BReg answers `404 resource.not_found` because the caller may not see the target reads the same to the caller whatever the reason.
+The operator can tell the reasons apart: the counter holds the request under the rule that refused it, for example `scope`, `purpose`, `requester-client`, `row-boundary`, `task-grant-binding`, `disclosure` or `visibility`.
+A refused write the engine answers with `write.outside-boundary` counts under `row-boundary`, and a Proposal outside the caller's scope counts under `ownership`.
+A batch of Proposal review contexts answers `200`, and each concealed item counts once under its own check.
+A `412` for a stale version and a request for an unknown route are not counted.
+A failed field guard counts under `action-guard`, also when it answers the generic `412`.
+A refusal on the `scope` check also names the claim that carries scopes, the scope the operation needs and the access profile, each as the configuration or package declares it.
+Neither the counter nor the line holds a token, claim, client, subject, scope or identifier from the request, and recording a refusal changes nothing the caller receives.
+A `visibility` count is a record that is absent or outside the boundary, and BReg does not say which, so it also counts a caller probing for identifiers.
+The audit journal's `refusalReason` stays the three values it lists below.
+
+{/* Evidence: crates/registry-breg/tests/concealment_refusals.rs,
+    every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wire;
+    crates/registry-breg/src/api/mod.rs, concealed(), refusal_check_tests;
+    crates/registry-breg/tests/postgres_proposal.rs,
+    review_context_projects_an_omitted_optional_input_as_null;
+    crates/registry-breg/src/mutation.rs, MutationError::failed_check. */}
 
 ### Public check export
 
@@ -314,6 +347,39 @@ The link has these known limits:
     history_erasure_keeps_a_promoted_file_and_removes_the_link_to_the_erased_revision,
     an_applied_proposal_stays_bounded_by_a_record_whose_revision_was_erased;
     products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-217. */}
+
+### One-call writes
+
+An immediate Action that patches an existing Record normally asks the caller for a condition:
+a token that proves which revision the caller saw.
+An Action that declares `concurrency: current-revision` sends no condition.
+BReg then evaluates the Action's commit guards against the Record it has locked for the write,
+and applies the patch to that same locked row.
+
+On such an Action the guard is the only protection against a stale write.
+The author owns choosing a guard that the Action's own write makes false, so a second, stale call
+finds the guard false and answers `412`.
+`bregctl check` refuses the Action unless every Record it patches has an `equals` or `isNull` guard
+that its write falsifies.
+It also refuses a `revision: unchanged` guard, a function plan that writes an existing Record, and
+any value from `fromInput` or `fromEffect` written into an existing Record, because a value the caller chose
+from a stale view would silently overwrite a concurrent update.
+A create effect may still take caller values.
+A Proposal cannot declare the setting.
+
+A missing Record and a Record outside the caller's row boundary answer with the same body, as they do for a conditioned Action.
+A caller who holds no read grant on the guarded field gets the generic `412 precondition.failed`.
+
+{/* Evidence: crates/registry-breg/src/immediate_actions.rs, validate_current_revision;
+    crates/registry-breg/src/mutation/action.rs, lock_action_patch_targets;
+    crates/registry-breg/tests/immediate_action_requirements.rs,
+    current_revision_refuses_a_revision_guard,
+    current_revision_refuses_caller_values_written_into_an_existing_record,
+    current_revision_needs_a_guard_the_write_falsifies;
+    crates/registry-breg/tests/postgres_immediate_actions.rs,
+    two_concurrent_current_revision_invocations_commit_exactly_once,
+    a_current_revision_action_does_not_tell_a_hidden_record_from_a_missing_one;
+    products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-224. */}
 
 ### Record files
 
@@ -484,19 +550,53 @@ The residuals refer to these obligations by number.
    {/* Evidence: crates/registry-breg/src/migration.rs, MAX_BACKUP_AGE_SECONDS. */}
 6. Choose the production identity.
    Set `canonicalBaseIri` to a hostname you control before packaging.
-   Only the reserved `.invalid` namespace is refused.
-   {/* Evidence: crates/registry-breg/src/compiler.rs, reserved_production_iri,
-        deployment_diagnostics. */}
+   A reserved `.invalid` placeholder identity and local-file data-key custody
+   require the development posture. Production uses Transit for field encryption.
+   Development HTTP responses carry `Registry-Posture: development`, and journal
+   entries carry `posture`. Production BReg refuses development task-grant
+   status responses, verified bearer tokens marked as development, and
+   development Evidence and Review peers. A development BReg accepts
+   development peers for all three clients. BReg omits HSTS on loopback
+   listeners in development. Production sends HSTS on every API listener.
+   Run your stack under one posture. A deployment that uses key-file signing in Render or
+   Evidence runs in development. Use Transit for production signing.
+   {/* Evidence: crates/registry-breg/src/compiler.rs, deployment_diagnostics;
+        crates/registry-breg/src/field_encryption.rs, BREG_LOCAL_KEY_CUSTODY;
+        crates/registry-breg/src/api/mod.rs, authenticated_router_with_listener;
+        crates/registry-breg/src/startup.rs, open_registry_audit;
+        crates/registry-breg/src/auth.rs, grant_context_check;
+        crates/registry-breg/tests/http_auth.rs, production_refuses_a_marked_token_without_grant_claims;
+        crates/registry-platform-oidc/src/task_grant.rs, TaskGrantStatusClient;
+        crates/registry-breg/src/runtime_config.rs, review_client_respects_the_runtime_posture;
+        crates/registry-breg/tests/postgres_action_evidence.rs, real_evidence_service_resolves_exact_selector_and_commits_verified_postgres_result. */}
 7. Use TLS to PostgreSQL and an HTTPS issuer.
    `database.testOnlyPlaintext` is refused unless BReg was built with its test-only PostgreSQL
    feature.
-   Loopback HTTP is accepted for an issuer; anything else needs
-   `authentication.oidc.allowInsecureHttp: true`, which is logged at startup and reported by
-   `bregctl doctor` (`BREG-RES-17`).
-   {/* Evidence: crates/registry-breg/src/runtime_config.rs, PlaintextDatabase;
+   Loopback HTTP is accepted for an issuer in either posture. Non-loopback
+   HTTP requires development and `allowInsecureHttp: true` in the issuer's entry
+   (`BREG-RES-17`).
+   Set `listener.publicOrigin` to HTTPS in production. A loopback HTTP public
+   origin requires development and a root path.
+   {/* Evidence: crates/registry-breg/tests/runtime_config.rs, http_public_origin_requires_development_posture, malformed_loopback_public_origins_get_listener_diagnostics_in_both_postures. */}
+   For an issuer and for `listener.publicOrigin`, loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case. BReg connects to an issuer named `localhost` only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
+   A pinned key set (`authentication.oidc.issuers.ISSUER_ID.jwksSource.type: static`) holds public keys only.
+   BReg refuses a key that carries a private or symmetric member (`d`, `p`, `q`, `dp`, `dq`, `qi`,
+   `oth`, `k`), a repeated member name, a missing or repeated `kid`, or a key that does not match
+   `allowedAlgorithm`.
+   It also requires `use` to be `sig` and `key_ops` to be `["verify"]` when a key carries either,
+   and refuses a denied `kid`, a `kid` over the bound and more than 128 keys.
+   It ignores other members it does not name, such as `x5c` or `ext`.
+   When the shared public-key rule refuses a key, the startup log and `bregctl doctor` name the rule
+   and, for a rule about one key, the key's position, never a value.
+   The algorithm, `use`, `key_ops`, `kid` and key-count rules name no position.
+   {/* Evidence: crates/registry-breg/src/runtime_config.rs, DatabaseTransport,
+        validate_static_jwks, PublicOrigin::parse;
         crates/registry-breg/tests/runtime_config.rs,
-        non_loopback_http_issuer_refusal_names_the_opt_in;
-        crates/registry-bregctl/src/doctor.rs, insecure_http_warning. */}
+        non_loopback_http_issuer_refusal_names_the_opt_in,
+        static_jwks_validation_refuses_unsafe_documents_value_free,
+        a_static_key_set_with_unknown_public_members_loads,
+        public_origin_accepts_only_explicit_web_origins_and_redacts_debug;
+        crates/registry-breg/src/runtime_config.rs, insecure_http_startup_diagnostic. */}
 8. Keep the metrics listener private.
    `metricsListener.bind` must be a loopback or private address; it carries no authentication.
    A wildcard bind needs an explicit `metricsListener.networkExposure: container-private`, and the metrics port must not be published.
@@ -506,7 +606,7 @@ The residuals refer to these obligations by number.
    `bregctl idempotency-retention erase-expired` is the only thing that clears raw caller and key
    values from spent rows; the engine schedules nothing.
    Resolve uncertain writes and finish or cancel open ingestion runs before changing
-   `authentication.oidc.issuer` or the principal claim (`BREG-RES-05`).
+   `authentication.oidc.issuers.ISSUER_ID.issuer` or the principal claim (`BREG-RES-05`).
    {/* Evidence: crates/registry-breg/tests/postgres_mutation.rs,
         real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key,
         real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent;
@@ -749,7 +849,7 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 
 ### `BREG-RES-05`: idempotency keys and run ownership are scoped to issuer and principal
 
-- Condition: `authentication.oidc.issuer` or the principal claim changes; an operator never runs
+- Condition: `authentication.oidc.issuers.ISSUER_ID.issuer` or the principal claim changes; an operator never runs
   the sweep; a first response is lost and the retry arrives past the receipt horizon (seven days by
   default).
 - Consequence: after a mapping change, a retry is another caller's fresh request and an open
@@ -896,14 +996,11 @@ Each lists the condition, the consequence, the mitigation, and the related matri
   Access explanations are review aids; runtime admission is authoritative.
   The same-engine fingerprint comparison when rehearsing over a predecessor does not stop `test`;
   the strict final check still catches any effect on the candidate.
-  The deployment identity check guards against accident, not against an operator who means to
-  bypass it: a database initialised for `local` accepts the reserved identity.
 - Mitigation: treat availability as a form hint and handle Invoke refusal.
 - Related: `BREG-SEC-186`.
 
 {/* Evidence: crates/registry-breg/tests/postgres_immediate_action_requirements.rs,
-    immediate_action_availability_preserves_disclosure_and_commit_boundaries;
-    crates/registry-breg/src/startup.rs, database_initialization_environment. */}
+    immediate_action_availability_preserves_disclosure_and_commit_boundaries. */}
 
 ### `BREG-RES-14`: a global unique constraint reveals that a value is taken
 
@@ -961,12 +1058,11 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 
 - Condition: the runtime file names an issuer or JWKS URI.
 - Consequence: BReg trusts a declared issuer or JWKS URI on the operator's word.
-  Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
-  keys.
+  In development with `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute keys.
   The residual is shared across products and set out in [Token issuer and key endpoints](../#token-issuer-and-key-endpoints).
   `breg-review` never takes the HTTP opt-in, because it sends client credentials to the token
   endpoint.
-- Mitigation: use an HTTPS issuer; leave `allowInsecureHttp` off.
+- Mitigation: use an HTTPS issuer and leave `allowInsecureHttp` off.
 - Related: `BREG-SEC-19`.
 
 {/* Evidence: crates/registry-breg/tests/runtime_config.rs,

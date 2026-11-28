@@ -15,7 +15,22 @@ use registry_discovery_profile::{
     MEDIA_TYPE,
 };
 use registry_discoveryctl::{package_project, package_project_at, BuildError};
+use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use tempfile::TempDir;
+
+fn declaration(development: bool) -> DeclaredPosture {
+    if development {
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        }
+    } else {
+        DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Default,
+        }
+    }
+}
 use time::{macros::datetime, OffsetDateTime};
 
 async fn build_project(
@@ -23,7 +38,7 @@ async fn build_project(
     output: &std::path::Path,
     allow_loopback: bool,
 ) -> Result<registry_discovery::DiscoveryIndex, BuildError> {
-    package_project(project, output, allow_loopback, None)
+    package_project(project, output, declaration(allow_loopback), None)
         .await
         .map(|package| package.index)
 }
@@ -34,7 +49,7 @@ async fn build_project_at(
     allow_loopback: bool,
     built_at: OffsetDateTime,
 ) -> Result<registry_discovery::DiscoveryIndex, BuildError> {
-    package_project_at(project, output, allow_loopback, None, built_at)
+    package_project_at(project, output, declaration(allow_loopback), None, built_at)
         .await
         .map(|package| package.index)
 }
@@ -404,7 +419,13 @@ async fn production_policy_refuses_loopback_before_connecting() {
     let project = authoring_project("https://127.0.0.1:9/catalog.jsonld");
     let output = project.path().join("index.json");
     let result = build_project_at(project.path(), &output, false, OffsetDateTime::UNIX_EPOCH).await;
-    assert!(matches!(result, Err(BuildError::Fetch)));
+    let Err(BuildError::Project(error)) = result else {
+        panic!("the authored loopback claim must be refused before fetching");
+    };
+    assert_eq!(
+        error.report.diagnostics()[0].code,
+        "discovery.posture.loopback-catalog-url"
+    );
     assert!(!output.exists());
 }
 
@@ -713,4 +734,53 @@ async fn package_refuses_an_existing_output_without_changing_it() {
         .collect::<Vec<_>>();
     assert_eq!(entries, [std::ffi::OsString::from("index.json")]);
     task.abort();
+}
+
+#[tokio::test]
+async fn package_requires_declared_development_for_a_loopback_catalog() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (url, server) = provider(description(), StatusCode::OK, Arc::clone(&requests)).await;
+    let project = authoring_project(&url);
+    let packages = tempfile::tempdir().unwrap();
+    let binary = env!("CARGO_BIN_EXE_discoveryctl");
+    let root = project.path().to_owned();
+    let output = packages.path().join("package");
+    tokio::task::spawn_blocking(move || {
+        let command = |flags: &[&str]| {
+            std::process::Command::new(binary)
+                .env_remove("REGISTRY_STACK_POSTURE")
+                .args(["package", "--project"])
+                .arg(&root)
+                .arg("--output")
+                .arg(&output)
+                .args(flags)
+                .output()
+                .unwrap()
+        };
+        for flags in [&[][..], &["--posture", "production"][..]] {
+            let result = command(flags);
+            assert_eq!(result.status.code(), Some(1));
+            let stderr = String::from_utf8(result.stderr).unwrap();
+            assert!(
+                stderr.contains("discovery.posture.loopback-catalog-url"),
+                "{stderr}"
+            );
+            assert!(stderr.contains("rstack dev"), "{stderr}");
+            assert!(!output.exists());
+        }
+        let retired = command(&["--allow-loopback"]);
+        assert_eq!(retired.status.code(), Some(2));
+        let development = command(&["--posture", "development"]);
+        assert!(development.status.success(), "{development:?}");
+        let stdout = String::from_utf8(development.stdout).unwrap();
+        assert!(
+            stdout.contains("discovery.posture.loopback-catalog-url"),
+            "{stdout}"
+        );
+        assert!(output.join(INDEX_FILE).is_file());
+    })
+    .await
+    .unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    server.abort();
 }

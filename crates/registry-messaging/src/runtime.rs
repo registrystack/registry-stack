@@ -24,6 +24,7 @@
 //! finishes the batch it is erasing and starts no other, and both listeners stop accepting and
 //! finish the requests they are answering. The process then exits 0.
 
+use registry_platform_config::DeclaredPosture;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
@@ -76,6 +77,13 @@ pub fn command() -> Command {
                 .help("Runtime configuration file")
                 .required(true),
         )
+        .arg(
+            Arg::new("posture")
+                .long("posture")
+                .global(true)
+                .value_name("POSTURE")
+                .help("Declared posture: development or production. Unset means production."),
+        )
         .subcommand_required(true)
         .subcommand(Command::new("serve").about("Run the Messaging HTTP service"))
 }
@@ -97,7 +105,11 @@ pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter, Runtime
 /// Run the parsed command. `serve` sends through `transports`, the
 /// transport registered for each provider id, beside the transport it
 /// activates for each provider the runtime configuration connects.
-pub async fn run(matches: &clap::ArgMatches, transports: Transports) -> Result<(), RuntimeError> {
+pub async fn run(
+    matches: &clap::ArgMatches,
+    declared: DeclaredPosture,
+    transports: Transports,
+) -> Result<(), RuntimeError> {
     let path = matches
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
@@ -108,7 +120,7 @@ pub async fn run(matches: &clap::ArgMatches, transports: Transports) -> Result<(
             // stop signal would end with sends in flight.
             let shutdown =
                 registry_platform_httpsec::shutdown_signal().map_err(RuntimeError::Signal)?;
-            serve_from_path_until(path, transports, shutdown).await
+            serve_from_path_until(path, declared, transports, shutdown).await
         }
         _ => Err(RuntimeError::Arguments),
     }
@@ -116,24 +128,31 @@ pub async fn run(matches: &clap::ArgMatches, transports: Transports) -> Result<(
 
 /// The runtime document at `path`, or a refusal that reports every rule it
 /// breaks, each at its position, rather than only the first.
-fn load_config(path: &Path) -> Result<RuntimeConfig, RuntimeError> {
-    RuntimeConfig::load(path).map_err(|error| match startup_report(path, &error) {
-        Some(report) => RuntimeError::ConfigurationRefused(report),
-        None => RuntimeError::Config(error),
+fn load_config(path: &Path, declared: DeclaredPosture) -> Result<RuntimeConfig, RuntimeError> {
+    RuntimeConfig::load(path, declared).map_err(|error| {
+        match startup_report(path, &error, declared) {
+            Some(report) => RuntimeError::ConfigurationRefused(report),
+            None => RuntimeError::Config(error),
+        }
     })
 }
 
 /// Name the provisioning or startup act a store failure happened in.
 fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
-    move |source| RuntimeError::Database { stage, source }
+    move |source| match source {
+        StoreError::DatabaseTransport(error) => RuntimeError::DatabaseTransport(error),
+
+        source => RuntimeError::Database { stage, source },
+    }
 }
 
 #[cfg(feature = "postgres-test")]
 pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
-    let config = load_config(path.as_ref())?;
+    let config = load_config(path.as_ref(), crate::config::DEFAULT_POSTURE)?;
     let secrets = config.secret_resolver()?;
-    let store = PostgresStore::connect_migration(&config.database, &secrets)
-        .map_err(database_step("migration database configuration"))?;
+    let store =
+        PostgresStore::connect_migration(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("migration database configuration"))?;
     store
         .migrate()
         .await
@@ -177,9 +196,16 @@ pub async fn apply_package(
     let loaded = config.load_package()?;
     let secrets = config.secret_resolver()?;
     let package_digest = loaded.package.digest().to_owned();
-    let runtime = PostgresStore::connect_runtime(&config.database, &secrets)
-        .map_err(database_step("runtime database configuration"))?;
-    let plan = activation::plan(&runtime, config.database_id(), &package_digest).await?;
+    let runtime =
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("runtime database configuration"))?;
+    let plan = activation::plan(
+        &runtime,
+        config.database_id(),
+        &package_digest,
+        config.posture_report().posture(),
+    )
+    .await?;
     let active_digest = plan.active_digest.clone();
     let change = if plan.change == activation::ActivationChange::None {
         PackageChange::None
@@ -206,17 +232,25 @@ pub async fn activation_plan(
 ) -> Result<activation::ActivationPlan, RuntimeError> {
     let loaded = config.load_package()?;
     let secrets = config.secret_resolver()?;
-    let store = PostgresStore::connect_runtime(&config.database, &secrets)
-        .map_err(database_step("runtime database configuration"))?;
-    Ok(activation::plan(&store, config.database_id(), loaded.package.digest()).await?)
+    let store =
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("runtime database configuration"))?;
+    Ok(activation::plan(
+        &store,
+        config.database_id(),
+        loaded.package.digest(),
+        config.posture_report().posture(),
+    )
+    .await?)
 }
 
 pub async fn activation_status(
     config: &RuntimeConfig,
 ) -> Result<activation::ActivationStatus, RuntimeError> {
     let secrets = config.secret_resolver()?;
-    let store = PostgresStore::connect_runtime(&config.database, &secrets)
-        .map_err(database_step("runtime database configuration"))?;
+    let store =
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("runtime database configuration"))?;
     Ok(activation::status(&store).await?)
 }
 
@@ -226,14 +260,16 @@ pub async fn apply_activation(
 ) -> Result<activation::ActivationApplied, RuntimeError> {
     let loaded = config.load_package()?;
     let secrets = config.secret_resolver()?;
-    let runtime = PostgresStore::connect_runtime(&config.database, &secrets)
-        .map_err(database_step("runtime database configuration"))?;
+    let runtime =
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("runtime database configuration"))?;
     let runtime_role = runtime
         .current_user()
         .await
         .map_err(database_step("runtime role read"))?;
-    let migration = PostgresStore::connect_migration(&config.database, &secrets)
-        .map_err(database_step("migration database configuration"))?;
+    let migration =
+        PostgresStore::connect_migration(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("migration database configuration"))?;
     let audit = open_audit(config, &secrets, Some("messagingctl")).await?;
     Ok(activation::apply(
         &migration,
@@ -242,6 +278,7 @@ pub async fn apply_activation(
         loaded.package.digest(),
         request,
         &audit,
+        config.posture_report().posture(),
     )
     .await?)
 }
@@ -251,8 +288,9 @@ pub async fn apply_activation(
 /// and exposes no mutating operation.
 pub async fn message_reader(config: &RuntimeConfig) -> Result<MessageReader, RuntimeError> {
     let secrets = config.secret_resolver()?;
-    let store = PostgresStore::connect_runtime(&config.database, &secrets)
-        .map_err(database_step("runtime database configuration"))?;
+    let store =
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("runtime database configuration"))?;
     store
         .ready()
         .await
@@ -267,8 +305,9 @@ pub async fn message_reader(config: &RuntimeConfig) -> Result<MessageReader, Run
 pub async fn message_store(config: &RuntimeConfig) -> Result<MessageStore, RuntimeError> {
     let secrets = config.secret_resolver()?;
     let audit = Arc::new(open_audit(config, &secrets, Some("messagingctl")).await?);
-    let store = PostgresStore::connect_runtime(&config.database, &secrets)
-        .map_err(database_step("runtime database configuration"))?;
+    let store =
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("runtime database configuration"))?;
     store
         .ready()
         .await
@@ -303,8 +342,9 @@ pub async fn erase_expired_as_operator(
     } else {
         None
     };
-    let store = PostgresStore::connect_migration(&config.database, &secrets)
-        .map_err(database_step("migration database configuration"))?;
+    let store =
+        PostgresStore::connect_migration(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("migration database configuration"))?;
     store
         .ready()
         .await
@@ -337,9 +377,10 @@ pub async fn erase_expired_as_operator(
 
 pub async fn serve_from_path(
     path: impl AsRef<Path>,
+    declared: DeclaredPosture,
     transports: Transports,
 ) -> Result<(), RuntimeError> {
-    serve_from_path_until(path, transports, std::future::pending()).await
+    serve_from_path_until(path, declared, transports, std::future::pending()).await
 }
 
 /// Serve as [`serve_from_path`] until `shutdown` resolves, then shut down
@@ -350,10 +391,12 @@ pub async fn serve_from_path(
 /// As [`serve_from_path`].
 pub async fn serve_from_path_until(
     path: impl AsRef<Path>,
+    declared: DeclaredPosture,
     transports: Transports,
     shutdown: impl std::future::Future<Output = ()>,
 ) -> Result<(), RuntimeError> {
-    let config = load_config(path.as_ref())?;
+    let config = load_config(path.as_ref(), declared)?;
+    config.posture_report().log_startup();
     let listeners = Listeners::bind(&config).await?;
     let app = assemble(&config, transports).await?;
     tracing::info!(
@@ -383,9 +426,16 @@ pub async fn assemble(
 ) -> Result<Assembled, RuntimeError> {
     let loaded = config.load_package()?;
     let secrets = config.secret_resolver()?;
-    let store = PostgresStore::connect_runtime(&config.database, &secrets)
-        .map_err(database_step("runtime database configuration"))?;
-    activation::check_runtime(&store, config.database_id(), loaded.package.digest()).await?;
+    let store =
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("runtime database configuration"))?;
+    activation::check_runtime(
+        &store,
+        config.database_id(),
+        loaded.package.digest(),
+        config.posture_report().posture(),
+    )
+    .await?;
 
     let mut transports = transports;
     let callbacks = Arc::new(activate_providers(
@@ -395,22 +445,25 @@ pub async fn assemble(
         &mut transports,
     )?);
 
-    let keys = config.jwks_fetcher(&secrets).await?;
-    let authenticator = Arc::new(MessagingAuthenticator::new(
-        config.verifier_profile(),
-        keys,
-        loaded.package.access_profiles().clone(),
-        config.binds_assertion_issuers(),
-    ));
+    let sources = config
+        .issuer_sources(&secrets, loaded.package.access_profiles())
+        .await?;
+    let authenticator = Arc::new(
+        MessagingAuthenticator::new(sources, loaded.package.access_profiles().clone())
+            .map_err(|error| RuntimeConfigError::from_issuer_set(&error))?,
+    );
 
     let audit_secret = resolve_audit_secret(&secrets, config.audit.key.hash_key_ref.as_str())?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
         audit_secret.expose_secret().to_vec(),
     ))
     .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
-    let writer = AuditWriter::open(config.audit.destination()?)
-        .await
-        .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
+    let writer = AuditWriter::open(
+        config.audit.destination()?,
+        config.posture_report().posture(),
+    )
+    .await
+    .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     let audit = Arc::new(MessagingAudit::new(writer, audit_profile.key_hasher()));
     let schema = store
         .current_schema()
@@ -464,6 +517,7 @@ pub async fn assemble(
     );
     Ok(Assembled {
         public: router(HttpState {
+            posture: config.posture_report().clone(),
             authenticator,
             readiness: Readiness::Store {
                 store: store.clone(),
@@ -479,7 +533,11 @@ pub async fn assemble(
             callbacks,
             callback_limits,
         }),
-        metrics: metrics_router(Arc::clone(&metrics), Some(store.clone())),
+        metrics: metrics_router(
+            Arc::clone(&metrics),
+            Some(store.clone()),
+            config.posture_report().posture(),
+        ),
         worker,
         retention: RetentionSweep::new(store, audit, config.retention, metrics),
     })
@@ -637,7 +695,7 @@ async fn open_audit(
             .for_process(process)
             .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     }
-    let writer = AuditWriter::open(destination)
+    let writer = AuditWriter::open(destination, config.posture_report().posture())
         .await
         .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     Ok(MessagingAudit::new(writer, profile.key_hasher()))
@@ -645,6 +703,8 @@ async fn open_audit(
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
+    #[error("{}: {}\n  next: {}", .0.code(), .0, .0.suggested_action())]
+    DatabaseTransport(registry_platform_config::DatabaseTransportError),
     #[error(transparent)]
     Activation(#[from] ActivationError),
     #[error("the messaging command arguments are invalid")]
@@ -752,7 +812,9 @@ mod tests {
             ),
         )
         .unwrap();
-        let Err(RuntimeError::ConfigurationRefused(report)) = load_config(&path) else {
+        let Err(RuntimeError::ConfigurationRefused(report)) =
+            load_config(&path, crate::config::DEFAULT_POSTURE)
+        else {
             panic!("the document was not refused with a report");
         };
         let unknown: Vec<_> = report
@@ -835,9 +897,12 @@ mod tests {
         let profile =
             AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(vec![7u8; 32]))
                 .unwrap();
-        let writer = AuditWriter::open(registry_platform_audit::AuditDestination::File(
-            registry_platform_audit::FileDestination::new(&audit).unwrap(),
-        ))
+        let writer = AuditWriter::open(
+            registry_platform_audit::AuditDestination::File(
+                registry_platform_audit::FileDestination::new(&audit).unwrap(),
+            ),
+            registry_platform_config::Posture::Production,
+        )
         .await
         .unwrap();
         let journal = MessagingAudit::new(writer, profile.key_hasher());

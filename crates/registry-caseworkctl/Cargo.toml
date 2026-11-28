@@ -33,6 +33,7 @@ clap.workspace = true
 jsonschema.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
+registry-platform-provision = { workspace = true, features = ["cli"] }
 registry-platform-yaml.workspace = true
 registry-rstack-dev.workspace = true
 registry-cli-api.workspace = true
@@ -47,7 +48,9 @@ serde_norway.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 uuid = { workspace = true, features = ["serde"] }
+zeroize.workspace = true
 
 [dev-dependencies]
 registry-breg.workspace = true
+registry-platform-provision = { workspace = true, features = ["test-support"] }
 tokio-postgres.workspace = true

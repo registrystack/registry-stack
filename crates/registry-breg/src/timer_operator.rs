@@ -101,6 +101,11 @@ closed_vocabulary!(TimerTechnicalCode {
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum TimerOperatorError {
+    #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
+    PostureMismatch {
+        recorded: registry_platform_config::Posture,
+        declared: registry_platform_config::Posture,
+    },
     #[error("the timer runtime configuration path must be absolute")]
     RuntimeConfigPath,
     #[error("the timer runtime configuration was refused")]
@@ -137,6 +142,7 @@ impl TimerOperatorError {
             Self::RuntimeConfigRefused => "timer.runtime-config.refused",
             Self::PackageRefused => "timer.package.refused",
             Self::DatabaseUnavailable => "timer.database.unavailable",
+            Self::PostureMismatch { .. } => crate::migration::POSTURE_MISMATCH_CODE,
             Self::OutcomeUnresolved => "timer.outcome.unresolved",
             Self::OperationRefused => "timer.operation.refused",
             Self::OccurrenceNotFound => "timer.occurrence.not-found",
@@ -300,11 +306,14 @@ pub struct TimerOperatorService {
 }
 
 impl TimerOperatorService {
-    pub async fn from_runtime_config(path: &Path) -> Result<Self, TimerOperatorError> {
+    pub async fn from_runtime_config(
+        path: &Path,
+        posture: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self, TimerOperatorError> {
         if !path.is_absolute() {
             return Err(TimerOperatorError::RuntimeConfigPath);
         }
-        let config = crate::runtime_config::load_runtime_config(path)
+        let config = crate::runtime_config::load_runtime_config(path, posture)
             .map_err(|_| TimerOperatorError::RuntimeConfigRefused)?;
         let package = config
             .load_active_package()
@@ -333,6 +342,9 @@ impl TimerOperatorService {
         )
         .await
         .map_err(|error| match error {
+            crate::startup::StartupError::PostureMismatch { recorded, declared } => {
+                TimerOperatorError::PostureMismatch { recorded, declared }
+            }
             crate::startup::StartupError::PackageRefused(_)
             | crate::startup::StartupError::PackageEnvelopeRefused(_)
             | crate::startup::StartupError::ActivePackageMismatch => {

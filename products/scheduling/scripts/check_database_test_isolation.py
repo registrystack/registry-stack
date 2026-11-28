@@ -15,6 +15,7 @@ DATABASE_SUITES = {
         "records_apply_postgres",
         "intents_postgres",
         "activation_postgres",
+        "provision_postgres",
     },
 }
 

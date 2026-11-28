@@ -1,5 +1,6 @@
 export interface RenderClientConfig {
   baseUrl: string;
+  refuseDevelopmentPeer?: boolean;
   attemptTimeoutMilliseconds?: number;
   connectTimeoutMilliseconds?: number;
   maximumResponseBytes?: number;

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -58,9 +58,9 @@ the next step to take.
 
 Each [access profile](../../reference/glossary/#access-profile) admits a token that carries its `requiredScopes`, takes the caller's identity
 from `principalClaim`, and gives the caller one `actsAs` value: `staff`, `supervisor`, `administrator`, or
-`requester`. Casework trusts one issuer, so every profile a person uses must name the same
-`principalClaim`; otherwise one person would appear as two principals, and Casework refuses the
-project with `casework.access-profile.mixed-principal-claims`. Profiles a trusted producer uses are
+`requester`. You configure trusted issuers under `authentication.oidc.issuers.<id>`. Every profile
+a person uses must name the same `principalClaim` across the issuer set. Otherwise one person
+would appear as two principals and Casework refuses the project with `casework.access-profile.mixed-principal-claims`. Profiles a trusted producer uses are
 services and share one claim among themselves, which may differ from the people's. The project
 declares one of each:
 
@@ -408,7 +408,7 @@ The same producer reads `GET /v1/review-requests/{requestId}/result` or its resu
 A `ReviewResult` repeats the subject, policy and submission digest, and carries a terminal status such as `approved`, `rejected`, `answered`, `cancelled` or `superseded`.
 A decided result names its `outcome` and any `publicReason`; a cancelled or superseded one carries neither.
 
-A completion destination, when configured, receives an authenticated wake with event, request and result identifiers.
+A completion destination, when configured, receives a Standard Webhooks-signed wake with event, request and result identifiers.
 Delivery is at-least-once.
 A wake carries no decision payload; the producer fetches the result and authorises any later mutation independently.
 [Receive Casework completion wakes](../casework-completion-receivers/) defines the wake.
@@ -545,10 +545,15 @@ people:
 To generate one of the approval patterns for an existing Proposal-mode Action, use `caseworkctl provider add`:
 
 ```sh test-skip="needs a BReg project with a Proposal-mode Action and its package"
-caseworkctl provider add ./review --breg-project ./facility \
+caseworkctl provider add ./review --posture development --breg-project ./facility \
   --action correct-address --pattern single-reviewer-approval \
   --breg-package ./facility-package
 ```
+
+The command generates a runtime example for development, and production requires an explicit list of admitted OAuth clients.
+
+{/* Evidence: crates/registry-caseworkctl/src/provider_add.rs, write_yaml;
+    crates/registry-casework/src/config.rs, UNRESTRICTED_CLIENTS. */}
 
 The command reads BReg through the matching `bregctl` public CLI.
 Missing review requirements, context or reader grants produce `casework.provider-add.breg-changes-needed`, proposed YAML and no project.

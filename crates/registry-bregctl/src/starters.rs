@@ -38,6 +38,8 @@ const STARTERS: &[Starter] = &[
         id: DEFAULT_TEMPLATE,
         replacements: &[],
         files: &[
+            ("dev.yaml", include_bytes!("../../../products/breg/examples/minimal/dev.yaml")),
+            ("dev/scenarios.yaml", include_bytes!("../../../products/breg/examples/minimal/dev/scenarios.yaml")),
             (
                 "README.md",
                 include_bytes!("../../../products/breg/examples/minimal/README.md"),
@@ -97,6 +99,8 @@ const STARTERS: &[Starter] = &[
             },
         ],
         files: &[
+            ("dev.yaml", include_bytes!("../../../products/breg/examples/facility/dev.yaml")),
+            ("dev/scenarios.yaml", include_bytes!("../../../products/breg/examples/facility/dev/scenarios.yaml")),
             (
                 "README.md",
                 include_bytes!("../../../products/breg/examples/facility/README.md"),
@@ -261,7 +265,7 @@ fn next_steps(destination: &Path, id: &str) -> Vec<String> {
             "inspect the compiled contract with 'bregctl explain model {}'",
             destination.display()
         ),
-        format!("start the local registry with 'bregctl dev start {}'", destination.display()),
+        format!("start the local registry with 'rstack dev start {}'", destination.display()),
         "replace the example registry identity and source revision before preparing a production package".to_owned(),
     ]
 }
@@ -336,6 +340,7 @@ mod tests {
             };
             let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
             let exit = crate::check::run(
+                crate::DEFAULT_POSTURE,
                 &request,
                 crate::OutputFormat::Json,
                 &mut stdout,
@@ -360,14 +365,10 @@ mod tests {
                 _ => panic!("unregistered template"),
             });
         // The optional console is a separate application, not project input.
-        // The `rstack dev` plan and its scenarios are read by `rstack`, not by
-        // `bregctl`, so the starter does not ship them.
         let starter = lookup(id).expect("registered template");
         walk_files(&root)
             .into_iter()
-            .filter(|(path, _)| {
-                !path.starts_with("console/") && path != "dev.yaml" && !path.starts_with("dev/")
-            })
+            .filter(|(path, _)| !path.starts_with("console/"))
             .map(|(path, bytes)| {
                 let contents = materialize(starter, &path, &bytes);
                 (path, contents)

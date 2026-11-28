@@ -80,7 +80,7 @@ impl EvidenceProvider {
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        let config = EvidenceClientConfig::new(
+        let config = EvidenceClientConfig::new_without_peer_policy(
             format!("http://{address}").parse().unwrap(),
             Arc::new(StaticToken::new("synthetic-test-token").unwrap()),
             JwksDocument { keys: vec![public] },

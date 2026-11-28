@@ -18,6 +18,7 @@ use registry_adapter_engine::{
         compile_evidence_pack_with_protocols, EvidenceAcquisitionIntent, EvidenceExecutionError,
         EvidenceHookFuture, EvidenceHostHooks, EvidenceLimits, EvidenceSendIntent,
     },
+    host_protocol::HostProtocolRegistry,
     replay::ReplayTranscript,
     route::EvidenceHttpDiagnostic,
 };
@@ -27,7 +28,7 @@ use tempfile::TempDir;
 
 use crate::{
     bundle::{Bundle, RuntimeBindingPlanError, SourcePack},
-    config::SourceConfig,
+    config::{Posture, SourceConfig},
     kernel::KernelError,
     model::LookupResult,
     pack_source::authorized_route_inputs,
@@ -100,6 +101,7 @@ pub struct FixtureAcquisition {
 pub struct OfflineSourceProgram {
     source: SourceConfig,
     closure: SourcePack,
+    protocols: HostProtocolRegistry,
 }
 
 /// One offline acquisition outcome and the physical data operations it
@@ -157,7 +159,7 @@ impl OfflineSourceProgram {
             self.source.route.as_str(),
             &artifacts,
             EvidenceLimits::default(),
-            &crate::host_protocol::registry().map_err(|_| KernelError::Bundle)?,
+            &self.protocols,
         )
         .map_err(|_| KernelError::Bundle)
     }
@@ -313,7 +315,10 @@ impl OfflineSourceProgram {
 /// Runtime secrets and captured deployment extracts are never consulted here.
 pub fn compile_sources(
     bundle: &Bundle,
+    posture: Posture,
 ) -> Result<BTreeMap<String, OfflineSourceProgram>, KernelError> {
+    let protocols =
+        crate::host_protocol::registry_with_posture(posture).map_err(|_| KernelError::Bundle)?;
     bundle
         .config
         .sources
@@ -327,7 +332,7 @@ pub fn compile_sources(
                 source.route.as_str(),
                 &artifacts,
                 EvidenceLimits::default(),
-                &crate::host_protocol::registry().map_err(|_| KernelError::Bundle)?,
+                &protocols,
             )
             .map_err(|error| {
                 RuntimeBindingPlanError::SourcePlan {
@@ -343,6 +348,7 @@ pub fn compile_sources(
                 OfflineSourceProgram {
                     source: source.clone(),
                     closure: closure.clone(),
+                    protocols: protocols.clone(),
                 },
             ))
         })
@@ -472,7 +478,8 @@ mod tests {
             "urn:registry-evidence:offline-evaluation",
         )
         .expect("fixture authorization");
-        let programs = compile_sources(&bundle).expect("source pack compiles");
+        let programs = compile_sources(&bundle, crate::config::Posture::Production)
+            .expect("source pack compiles");
         let program = &programs[requirement.initial_source()];
         let assets = program
             .materialize_single_extract_in(

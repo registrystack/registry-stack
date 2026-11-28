@@ -67,7 +67,9 @@ schedulingctl init ./scheduling --template standalone-exact-time --format json
     "runtime.example.yaml",
     "records.yaml",
     "fixtures/counter-stations.yaml",
-    "fixtures/fold-day-rebooking.yaml"
+    "fixtures/fold-day-rebooking.yaml",
+    "dev.yaml",
+    "dev-scenarios.yaml"
   ],
   "template": "standalone-exact-time"
 }
@@ -75,7 +77,8 @@ schedulingctl init ./scheduling --template standalone-exact-time --format json
 
 `scheduling.yaml` is the policy: what callers may book and when. `records.yaml` holds the
 locations and staff stations a running deployment loads separately, and the two `fixtures` prove
-the policy offline. You meet `runtime.example.yaml` only when you deploy.
+the policy offline. `dev.yaml` and `dev-scenarios.yaml` describe a local `rstack dev` run, and you
+meet `runtime.example.yaml` only when you deploy.
 
 ## Check the policy
 

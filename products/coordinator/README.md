@@ -11,7 +11,7 @@ installation, custody, activation, and recovery.
 Coordinator is one of the six products the Registry Stack 1.0 compatibility promise covers: the
 workflow model, run API, and `coordinator` client namespace. Before 1.0, use one source version's
 binaries, packages, configuration, and state layout together. The current protected state schema
-is version 6, with no in-place migration from earlier layouts.
+is version 7, with no in-place migration from earlier layouts.
 
 Build the Coordinator service, operator CLI, client, and client bindings from source using
 the [deployment guide](https://docs.registrystack.org/operate/coordinator/#install-and-package) and the client crate instructions. Release packaging includes the
@@ -24,7 +24,28 @@ Coordinator is optional. A direct application can prepare a BReg Proposal, obtai
 of its exact version and effects, and ask BReg to apply it without running Coordinator. Every
 product retains its own authorization and source mutation boundary.
 
-## Create and check a project
+## Start a development run
+
+Install the product with `rstack install` or set the binary overrides for a source build.
+See [Build from source](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#build-from-source) for the override names. Start Docker before running the example.
+
+```sh
+coordinatorctl init --directory ./follow-up
+rstack dev start ./follow-up
+```
+
+Copy the run ID and loopback URL from the report. Ask for the starter reader’s token
+and use the header file the command prints.
+Set `RUN` and `ORIGIN` to those reported values before running the commands.
+Set `HEADERS` to the header file path before calling curl.
+
+```sh
+rstack dev token "$RUN" --as reader
+curl --fail --header @"$HEADERS" "$ORIGIN/v1/workflows/follow-up"
+rstack dev stop "$RUN"
+```
+
+## Author a project for a deployment you operate
 
 From the maintained Registry Stack checkout:
 
@@ -61,7 +82,7 @@ project, its mappings, waits, and checks.
 - [Reviewed notice](examples/reviewed-notice/README.md) combines standalone review with a fresh
   record and permission check before Messaging.
 - [Product events](examples/product-events/README.md) admits committed BReg events and a
-  conforming alternate-source fixture through the same signed event contract.
+  conforming alternate-source fixture through Standard Webhooks with a distinct key for each trigger.
 - [External directory](examples/external-directory/README.md) performs a configured HTTP GET.
 - [External job](examples/external-job/README.md) uses a bounded completion poll and pure
   interpreter for one previously selected external job.

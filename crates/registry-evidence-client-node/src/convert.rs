@@ -18,7 +18,7 @@ use registry_evidence_client::{
     SelectorValue, StaticToken, SubjectBindingReceipt, SubjectExpectations, SubjectRequest,
     TokenError, TokenProvider,
 };
-use registry_platform_crypto::PrivateJwk;
+use registry_platform_crypto::{PrivateJwk, PRIVATE_JWK_MEMBERS};
 use registry_platform_httputil::{exchange_authorization_from_json, ExchangeAuthorization};
 use serde_json::{Map, Value};
 use url::Url;
@@ -595,15 +595,15 @@ fn response_format_from_json(value: &Value) -> Result<EvidenceResponseFormat, Co
     })
 }
 
-/// Every JWK member that carries a private key half, across the key types a
-/// caller could paste one from.
-///
-/// [`HolderPublicKey`] is `deny_unknown_fields`, so each of these already
-/// fails to deserialize. What that refusal cannot do is say why it matters: an
-/// unknown member reads as a typo. A caller who pasted a whole key pair here
-/// has done something materially different from mistyping a field name, and
-/// gets told exactly that by the check below instead.
-const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
+// `PRIVATE_JWK_MEMBERS`, the shared list in `registry-platform-crypto`, names
+// every JWK member that carries a private key half, across the key types a
+// caller could paste one from.
+//
+// [`HolderPublicKey`] is `deny_unknown_fields`, so each of these already
+// fails to deserialize. What that refusal cannot do is say why it matters: an
+// unknown member reads as a typo. A caller who pasted a whole key pair here
+// has done something materially different from mistyping a field name, and
+// gets told exactly that by the check below instead.
 
 /// Read one caller-supplied holder public key.
 ///
@@ -985,6 +985,7 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
             "trustedRootCertificates",
             "maximumResponseBytes",
             "maxMetadataBytes",
+            "refuseDevelopmentPeer",
         ],
         "the client configuration",
     )
@@ -998,11 +999,23 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
             "trustedRootCertificates",
             "maximumResponseBytes",
             "maxMetadataBytes",
+            "refuseDevelopmentPeer",
         ],
         "client configuration",
     )
     .map_err(ConfigError::Shape)?;
 
+    let refuse_development_peer = object
+        .get("refuseDevelopmentPeer")
+        .map(|value| {
+            value.as_bool().ok_or_else(|| {
+                ConfigError::Shape(ConversionError::new(
+                    "`refuseDevelopmentPeer` must be a boolean",
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(false);
     let base_url = parse_url(
         &required_string(object, "baseUrl").map_err(ConfigError::Shape)?,
         "`baseUrl`",
@@ -1023,8 +1036,13 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
 
     let token_provider = token_provider_from_json(object)?;
 
-    let mut config =
-        EvidenceClientConfig::new(base_url, token_provider, trusted_jwks, revoked_key_ids);
+    let mut config = EvidenceClientConfig::new(
+        base_url,
+        token_provider,
+        trusted_jwks,
+        revoked_key_ids,
+        crate::peer_policy(refuse_development_peer),
+    );
 
     if let Some(millis) =
         optional_u64(object, "attemptTimeoutMilliseconds").map_err(ConfigError::Shape)?
@@ -1098,7 +1116,7 @@ pub fn map_config_error(error: &ConfigError) -> Value {
 ///
 /// Never included: response bytes, a credential, a header value, a selector
 /// value, or a subject binding. Every message here is `Display` text over
-/// fixed, non-secret reasons; none of the ten kinds can carry one of those.
+/// fixed, non-secret reasons; none of the kinds can carry one of those.
 pub fn map_client_error(error: &EvidenceClientError) -> Value {
     let mut fields = Map::new();
     fields.insert("kind".to_owned(), Value::String(error.kind().to_owned()));
@@ -2397,11 +2415,11 @@ mod tests {
         assert_eq!(protocol["status"], 500);
     }
 
-    /// The discriminant is what a caller branches on, so every one of the
-    /// ten stable kinds is distinct.
+    /// Each failure has a distinct stable kind.
     #[test]
     fn every_client_failure_reports_a_distinct_kind() {
         let errors = [
+            EvidenceClientError::DevelopmentPeer,
             EvidenceClientError::Configuration { reason: "unusable" },
             EvidenceClientError::Nonce(registry_evidence_client::NonceError::Entropy),
             EvidenceClientError::Token(TokenError::Unavailable),

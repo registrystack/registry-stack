@@ -432,13 +432,15 @@ impl Admission {
                 "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_state WHERE singleton
              AND package_id=$1 AND database_id=$2 AND active_package_digest=$3
              AND active_activation_id::text=$4 AND schema_fingerprint=$5
-             AND maintenance_status='ready')",
+             AND maintenance_status='ready'
+             AND coalesce(to_jsonb(registry_state) ->> 'posture', 'production')=$6)",
                 &[
                     &expected.package_id,
                     &expected.database_id,
                     &expected.package_digest,
                     &expected.activation_id,
                     &expected.schema_fingerprint,
+                    &self.lock_key.posture().as_str(),
                 ],
             )
             .await
@@ -902,6 +904,59 @@ fn unavailable<T>(_: T) -> VerificationWorkerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "postgres-test")]
+    #[tokio::test]
+    async fn postgres_posture_attachment_verification_requires_a_match() {
+        use crate::postgres::posture_test_support::*;
+
+        let database = TestDatabase::create(2).await;
+        let expected = install_ready_identity(&database).await;
+        let (migration, task) = database.connect_migration().await;
+        migration
+            .batch_execute(
+                "CREATE TABLE registry_internal.registry_attachment_storage_binding (
+                backend_id text, verification_policy text
+            );
+            CREATE TABLE registry_internal.registry_attachment_blobs (backend_id text);
+            INSERT INTO registry_internal.registry_attachment_storage_binding VALUES
+                ('database', 'fixture-verifier')",
+            )
+            .await
+            .unwrap();
+        task.abort();
+        let pool = database.migration_config.build_pool().unwrap();
+        let mut client = pool.get().await.unwrap();
+        let key = RegistryLockKey::derive(&expected.package_id).unwrap();
+        let mut admission = Admission {
+            pool,
+            expected,
+            lock_key: key,
+            lock_timeout: Duration::from_secs(2),
+            storage_binding: "database".into(),
+            verification_binding: "fixture-verifier".into(),
+        };
+        for (recorded, declared) in MISMATCHES {
+            record_posture(&database, recorded).await;
+            admission.lock_key = key.for_posture(declared);
+            let transaction = client.transaction().await.unwrap();
+            assert!(
+                matches!(
+                    admission.admit(&transaction).await,
+                    Err(VerificationWorkerError)
+                ),
+                "{recorded:?} / {declared:?}"
+            );
+            transaction.rollback().await.unwrap();
+        }
+        admission.lock_key = key;
+        let transaction = client.transaction().await.unwrap();
+        admission.admit(&transaction).await.unwrap();
+        transaction.rollback().await.unwrap();
+        drop(client);
+        drop(admission);
+        database.cleanup().await;
+    }
 
     #[test]
     fn the_policy_is_valid_never_expires_and_retries_on_backoff() {

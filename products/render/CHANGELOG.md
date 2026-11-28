@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
+
+- BREAKING: Rust client configurations take a peer policy in `RenderClient::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
+- The library checks verify a configured package. Use `check_runtime_only` to check a runtime file without inspecting its package.
+
+- Start a local development run from the starter with `rstack dev start`.
+
+- BREAKING: An undeclared posture is production. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `check` without a declared posture reports development settings as errors. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: Render accepts `assuranceProfile: local` in development and `assuranceProfile: production` in production. Migration: Use assuranceProfile: local under development, and build a production bundle for production.
+- BREAKING: Render local seals carry a signed `/Reason`. Migration: No change.
+- BREAKING: `/ready` gains `posture` and `developmentSettings`. Migration: No change for probes that read the status code.
+- BREAKING: Render audit lines gain `posture`. Migration: Audit readers with a closed line parser accept the posture member.
+- BREAKING: Development responses carry `Registry-Posture: development` and production refuses development peers. Migration: Point production runtimes at production peers.
+- BREAKING: `authentication.oidc` declares its issuers under `issuers`, one entry per issuer id, and the members `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`, `allowedClients` and `assertionIssuers` move into the entry. `assertionIssuers` keeps its rules. The old keys are refused as `config.removed-key`, each naming its replacement. Migration: Declare each of them under `authentication.oidc.issuers.ISSUER_ID`.
+- BREAKING: Render refuses an ID token under `accessTokenType: JWT`, and an access token that carries no scope beyond openid, profile, email, address, phone and offline_access and no declared actor kind. Migration: Name the issuer's access-token type on its entry, and declare the client's kind in `clientActorKinds`, or the issuer's in `actorKind`, where the provider grants no scope.
+- BREAKING: An issuer entry that lists `allowedClients: unrestricted` is an explicit production setting, reported as `platform.posture.unrestricted-clients` at the entry's `allowedClients`. It replaces `render.posture.unrestricted-oidc-clients`. Migration: Match `platform.posture.unrestricted-clients` where an operator or script matched the old code.
+
+- A secret file Render refuses names the failed check and its fix.
+- `authentication.oidc.renderScope` and `authentication.oidc.sealScope` name the scope the render and document routes and the seal route require. They default to `render:render` and `render:seal`, and a runtime whose two names are equal is refused as `render.runtime.seal-scope-is-render-scope`.
+- Each issuer entry may state `accessTokenType`, `scopeClaim`, `actorKind` and `clientActorKinds`, and several issuers may be declared at once. With more than one issuer, every client a seal allows is listed by exactly one issuer, as `render.runtime.seal-client-not-admitted` reports, and a token another issuer signs never carries that client. A refusal under `development` posture carries `failedCheck` in its body, naming the check that refused the caller. A production body is unchanged.
+- `registry-render generate identity-facts PACKAGE --runtime-config FILE --output FILE` writes the identity facts a deployment states about one issuer: the issuer, the audience, the admitted clients, the scope of each route, and the requester clients of its seals. `--issuer` names the issuer when the runtime declares more than one, and an issuer that carries no seal client states only the render profile. `--posture` reads the runtime under that posture, as `serve` does. It never replaces an existing file.
+
+- `check --runtime-config` verifies the configured package when its path is resolved and the runtime file passes its structural checks. A structural runtime error stops package inspection even when the package exists. An invalid package or digest mismatch returns exit 1 with `render.runtime.package-refused`. An unreadable package returns exit 3.
+- Production check and startup report `render.posture.local-assurance` for a local assurance profile and `render.posture.seals-not-served` for a sealed package without `signing`. When both apply, they appear in one refusal.
+- `test-seal` refuses an undeclared or production posture with the diagnostic `render.posture.test-signing`.
+- `serve` logs the posture block and refuses a sealed bundle served without `signing` before authentication starts. `healthcheck` refuses a listener bound to a scoped IPv6 address, which a URL cannot name.
+
+- A scope refusal writes the scope claim name and the scope the route
+  requires on its `request refused` log line. Both values come from the
+  runtime file and never from the caller's token. Production responses are
+  unchanged.
+- Render counts every refusal of a caller in `render_request_refusals_total{check}`
+  (served when `metricsListener` is set) and writes one `request refused` log line with
+  `failed_check` and the trace id, at most five per check per minute. The
+  counter and the line carry a fixed check name only. Production responses are
+  unchanged.
+  A refusal whose audit entry cannot be written is answered as an audit
+  failure and is not counted.
+- A static key set that Render refuses at startup now names the reason in the
+  `render.runtime-invalid` detail, such as a private key member or an OKP key.
+- A test timestamp authority may use an IPv4-mapped loopback literal in plain
+  `http`, such as `http://[::ffff:127.0.0.1]/tsr`, the same as `127.0.0.1`.
+  An IPv4-mapped address off the host, such as `[::ffff:10.0.0.5]`, stays
+  refused.
 - `registry-render test-seal` creates a test-signed PDF and its public test CA
   certificate from a bundle and an example record. Each run uses a fresh local
   development signer.

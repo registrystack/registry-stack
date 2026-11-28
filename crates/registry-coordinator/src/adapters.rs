@@ -21,7 +21,7 @@ use registry_payment_client::{
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{
     client::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenError, TokenProvider},
-    ExchangeAuthorization, ExchangeContext, FetchUrlPolicy,
+    ExchangeAuthorization, ExchangeContext, FetchUrlPolicy, PeerPolicy,
 };
 use registry_scheduling_client::{
     AdmissionRequest, AvailabilityPreviewRequest, AvailabilitySelection, CancelAppointmentRequest,
@@ -82,6 +82,7 @@ struct PaymentConnection {
 }
 
 struct TaskConnection {
+    peer_policy: PeerPolicy,
     base_url: Url,
     options: BRegRecordOptions,
     authorization: AuthorizationConfig,
@@ -89,9 +90,18 @@ struct TaskConnection {
 }
 
 pub struct HttpAdapters {
+    event_keys: crate::event_trigger::EventKeys,
     connections: BTreeMap<String, Connection>,
     digest: String,
     config: RuntimeConfig,
+}
+
+pub(crate) fn peer_policy(posture: registry_platform_config::Posture) -> PeerPolicy {
+    use registry_platform_config::Posture;
+    match posture {
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    }
 }
 
 fn config_error() -> CoordinatorError {
@@ -106,7 +116,7 @@ fn config_error() -> CoordinatorError {
 // reject metadata addresses. Cleartext remains numeric loopback only.
 fn configured_endpoint_policy(endpoint: &Url) -> FetchUrlPolicy {
     if endpoint.scheme() == "http" {
-        FetchUrlPolicy::dev()
+        FetchUrlPolicy::https_or_loopback()
     } else {
         FetchUrlPolicy {
             allowed_schemes: vec!["https".into()],
@@ -140,9 +150,10 @@ fn tokens(
 fn breg_client(
     url: Url,
     tokens: Arc<dyn TokenProvider>,
+    peer_policy: PeerPolicy,
 ) -> std::result::Result<BaseRegistryClient, BaseRegistryClientError> {
     BaseRegistryClient::new(
-        BaseRegistryClientConfig::new(url)
+        BaseRegistryClientConfig::new(url, peer_policy)
             .with_token_provider(tokens)
             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
             .with_attempt_timeout(REQUEST_TIMEOUT)
@@ -168,6 +179,15 @@ impl HttpAdapters {
 
     pub fn new(config: &RuntimeConfig) -> Result<Self> {
         config.validate()?;
+        Self::with_event_keys(config, crate::event_trigger::resolve_keys(config)?)
+    }
+
+    pub(crate) fn with_event_keys(
+        config: &RuntimeConfig,
+        event_keys: crate::event_trigger::EventKeys,
+    ) -> Result<Self> {
+        config.validate()?;
+        let peer_policy = peer_policy(config.posture());
         let secrets = Arc::new(
             config
                 .secret_providers
@@ -238,6 +258,7 @@ impl HttpAdapters {
                         .map_err(|_| config_error())?;
                     if auth.task_authority.is_some() {
                         Connection::BregTask(Box::new(TaskConnection {
+                            peer_policy,
                             base_url: binding.base_url.clone(),
                             options,
                             authorization: auth,
@@ -250,7 +271,7 @@ impl HttpAdapters {
                         );
                         Connection::Breg {
                             client: Box::new(
-                                breg_client(binding.base_url.clone(), tokens)
+                                breg_client(binding.base_url.clone(), tokens, peer_policy)
                                     .map_err(|_| config_error())?,
                             ),
                             options,
@@ -268,7 +289,7 @@ impl HttpAdapters {
                         None
                     };
                     let client = SchedulingClient::new(
-                        SchedulingClientConfig::new(binding.base_url.clone())
+                        SchedulingClientConfig::new(binding.base_url.clone(), peer_policy)
                             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
@@ -291,7 +312,7 @@ impl HttpAdapters {
                             .map_err(|_| config_error())?,
                     );
                     let client = MessagingClient::new(
-                        MessagingClientConfig::new(binding.base_url.clone())
+                        MessagingClientConfig::new(binding.base_url.clone(), peer_policy)
                             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
@@ -312,13 +333,17 @@ impl HttpAdapters {
                         .cloned()
                         .ok_or_else(config_error)?;
                     let client = PaymentClient::new(
-                        PaymentClientConfig::new(binding.base_url.clone(), payment_connection)
-                            .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
-                            .with_attempt_timeout(REQUEST_TIMEOUT)
-                            .with_connect_timeout(Duration::from_millis(
-                                crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
-                            ))
-                            .with_maximum_response_bytes(FILE_BOUND),
+                        PaymentClientConfig::new(
+                            binding.base_url.clone(),
+                            payment_connection,
+                            peer_policy,
+                        )
+                        .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
+                        .with_attempt_timeout(REQUEST_TIMEOUT)
+                        .with_connect_timeout(Duration::from_millis(
+                            crate::operations::HTTP_CONNECT_TIMEOUT_MILLISECONDS,
+                        ))
+                        .with_maximum_response_bytes(FILE_BOUND),
                     )
                     .map_err(|_| config_error())?;
                     Connection::Payments(Box::new(PaymentConnection {
@@ -335,27 +360,30 @@ impl HttpAdapters {
                         crate::runtime::DEFAULT_RESULT_CHECK_SECONDS,
                         registry_platform_yaml::BoundedU32::get,
                     );
-                    let completion = match &binding.completion {
-                        Some(completion) => {
-                            let bytes = secrets
-                                .resolve_reference(&completion.bearer_token_ref)
-                                .map_err(|_| config_error())?;
-                            let token = std::str::from_utf8(bytes.expose_secret())
-                                .map_err(|_| config_error())?;
-                            if !valid_completion_token(token) {
-                                return Err(config_error());
-                            }
-                            Some(crate::review::CompletionSender {
-                                token: zeroize::Zeroizing::new(token.to_owned()),
+                    let completion = binding
+                        .completion
+                        .map(|completion| {
+                            let ingress = crate::event_trigger::IngressKeys::resolve(
+                                &secrets,
+                                format!("connections.{name}.completion"),
+                                &completion.hmac_sha256_key_ref,
+                                completion.previous_hmac_sha256_key_ref.as_ref(),
+                                |path, advice| {
+                                    config_error()
+                                        .at("runtime.yaml", crate::runtime::pointer(path))
+                                        .suggest(advice)
+                                },
+                            )?;
+                            Ok(crate::review::CompletionSender {
+                                ingress,
                                 recipient: completion.recipient_binding.clone(),
                             })
-                        }
-                        None => None,
-                    };
+                        })
+                        .transpose()?;
                     let tokens = tokens(&auth, key, &auth.resource, &auth.scopes)
                         .map_err(|_| config_error())?;
                     let client = CaseworkClient::new(
-                        CaseworkClientConfig::new(binding.base_url.clone())
+                        CaseworkClientConfig::new(binding.base_url.clone(), peer_policy)
                             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
@@ -376,21 +404,27 @@ impl HttpAdapters {
             };
             connections.insert(name.clone(), connection);
         }
+        let completion_keys = connections
+            .values()
+            .filter_map(|connection| match connection {
+                Connection::Casework(connection) => connection.completion(),
+                _ => None,
+            });
+        registry_platform_crypto::delivery_signature::distinct_delivery_keys(
+            event_keys
+                .values()
+                .flat_map(|keys| keys.labelled())
+                .chain(completion_keys.flat_map(|sender| sender.ingress.labelled())),
+        )
+        .map_err(|error| crate::event_trigger::duplicate_key(error.first(), error.second()))?;
         let digest = config.binding_digest()?;
         Ok(Self {
+            event_keys,
             connections,
             digest,
             config: config.clone(),
         })
     }
-}
-
-/// A completion token is a bearer token Casework can send unchanged: the
-/// header grammar holds it and it is at most 4096 bytes.
-fn valid_completion_token(token: &str) -> bool {
-    token.len() <= 4096
-        && registry_platform_authcommon::parse_bearer_token(&format!("Bearer {token}"))
-            .is_ok_and(|parsed| parsed == token)
 }
 
 pub(crate) fn refused(code: &str) -> CallOutcome {
@@ -466,7 +500,9 @@ fn payment_failure(error: PaymentClientError, operation: Operation) -> CallOutco
                     code: PaymentProblemCode::ProviderProtocol,
                     ..
                 } => "payment-invalid-response",
-                PaymentClientError::Protocol { .. } => "payment-invalid-response",
+                PaymentClientError::Protocol { .. } | PaymentClientError::DevelopmentPeer => {
+                    "payment-invalid-response"
+                }
                 _ => "transport-uncertain",
             }
             .into(),
@@ -499,6 +535,7 @@ fn payment_failure(error: PaymentClientError, operation: Operation) -> CallOutco
         } => refused("payment-correlation-mismatch"),
         PaymentClientError::InvalidRequest { .. } => refused("invalid-command"),
         PaymentClientError::Protocol { .. }
+        | PaymentClientError::DevelopmentPeer
         | PaymentClientError::Problem {
             code: PaymentProblemCode::ProviderProtocol,
             ..
@@ -823,6 +860,7 @@ fn task_provider(
     auth: &AuthorizationConfig,
     key: &PrivateJwk,
     grant: &GrantReference,
+    peer_policy: PeerPolicy,
 ) -> std::result::Result<ExchangeAuthorization, CallOutcome> {
     let authority = auth
         .task_authority
@@ -845,7 +883,7 @@ fn task_provider(
     )
     .map_err(|error| token_failure(&error))?;
     let casework = CaseworkClient::new(
-        CaseworkClientConfig::new(authority.base_url.clone())
+        CaseworkClientConfig::new(authority.base_url.clone(), peer_policy)
             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
             .with_attempt_timeout(REQUEST_TIMEOUT)
             .with_connect_timeout(Duration::from_millis(
@@ -876,8 +914,8 @@ impl TaskConnection {
         &self,
         grant: &GrantReference,
     ) -> std::result::Result<BaseRegistryClient, CallOutcome> {
-        let provider = task_provider(&self.authorization, &self.key, grant)?;
-        breg_client(self.base_url.clone(), Arc::new(provider))
+        let provider = task_provider(&self.authorization, &self.key, grant, self.peer_policy)?;
+        breg_client(self.base_url.clone(), Arc::new(provider), self.peer_policy)
             .map_err(|_| refused("credential-configuration"))
     }
 }
@@ -935,7 +973,9 @@ pub(crate) fn read_failure(error: BaseRegistryClientError) -> CallOutcome {
             retryable("transport-unavailable")
         }
         BaseRegistryClientError::InvalidRequest { .. } => refused("invalid-command"),
-        BaseRegistryClientError::Protocol { .. } => refused("invalid-response"),
+        BaseRegistryClientError::Protocol { .. } | BaseRegistryClientError::DevelopmentPeer => {
+            refused("invalid-response")
+        }
         _ => refused("product-refused"),
     }
 }
@@ -1152,6 +1192,7 @@ impl AdapterSet for HttpAdapters {
                     &connection.key,
                     connection.standing.as_deref(),
                     request,
+                    peer_policy(self.config.posture()),
                 )
                 .await
             }
@@ -1302,24 +1343,30 @@ impl AdapterSet for HttpAdapters {
         }
     }
 
-    fn review_completion(&self, token: &str, recipient: &str) -> Option<String> {
-        // Every connection is compared, so the time taken does not depend on
-        // which one matched.
-        let mut matched = None;
-        let mut ambiguous = false;
-        for (name, connection) in &self.connections {
-            if let Connection::Casework(connection) = connection {
-                if connection.completion_matches(token, recipient) {
-                    ambiguous |= matched.is_some();
-                    matched = Some(name.clone());
-                }
-            }
-        }
-        if ambiguous {
-            None
-        } else {
-            matched
-        }
+    fn event_keys(
+        &self,
+        workflow: &str,
+        trigger: &str,
+    ) -> Option<&registry_platform_crypto::delivery_signature::DeliveryKeys> {
+        use registry_platform_yaml::LocalId;
+        let path = (LocalId::new(workflow).ok()?, LocalId::new(trigger).ok()?);
+        self.event_keys.get(&path).map(|ingress| &ingress.keys)
+    }
+
+    fn review_completion(
+        &self,
+        recipient: &str,
+    ) -> Option<(
+        &str,
+        &registry_platform_crypto::delivery_signature::DeliveryKeys,
+    )> {
+        self.connections.iter().find_map(|(name, connection)| {
+            let Connection::Casework(connection) = connection else {
+                return None;
+            };
+            let sender = connection.completion()?;
+            (sender.recipient == recipient).then_some((name.as_str(), &sender.ingress.keys))
+        })
     }
 
     async fn reconcile(
@@ -1579,10 +1626,11 @@ async fn scheduling_token(
     key: &PrivateJwk,
     standing: Option<&PrivateKeyJwt>,
     grant: Option<&GrantReference>,
+    peer_policy: PeerPolicy,
 ) -> std::result::Result<registry_platform_httputil::client::BearerToken, CallOutcome> {
     if auth.task_authority.is_some() {
         let grant = grant.ok_or_else(|| refused("invalid-command"))?;
-        task_provider(auth, key, grant)?
+        task_provider(auth, key, grant, peer_policy)?
             .bearer_token()
             .await
             .map_err(|error| token_failure(&error))
@@ -1632,7 +1680,9 @@ fn scheduling_failure(error: SchedulingClientError, operation: Operation) -> Cal
             ..
         } => retryable("transport-unavailable"),
         SchedulingClientError::InvalidRequest { .. } => refused("invalid-command"),
-        SchedulingClientError::Protocol { .. } => refused("invalid-response"),
+        SchedulingClientError::Protocol { .. } | SchedulingClientError::DevelopmentPeer => {
+            refused("invalid-response")
+        }
         _ => refused("product-refused"),
     }
 }
@@ -1653,6 +1703,7 @@ async fn scheduling_call(
     key: &PrivateJwk,
     standing: Option<&PrivateKeyJwt>,
     request: &CallRequest,
+    peer_policy: PeerPolicy,
 ) -> CallOutcome {
     match request.operation {
         Operation::ReadScheduling => {
@@ -1660,7 +1711,15 @@ async fn scheduling_call(
                 Ok(input) => input,
                 Err(_) => return refused("invalid-command"),
             };
-            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+            let token = match scheduling_token(
+                auth,
+                key,
+                standing,
+                input.grant.as_ref(),
+                peer_policy,
+            )
+            .await
+            {
                 Ok(token) => token,
                 Err(outcome) => return outcome,
             };
@@ -1675,7 +1734,15 @@ async fn scheduling_call(
                 Ok(input) => input,
                 Err(_) => return refused("invalid-command"),
             };
-            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+            let token = match scheduling_token(
+                auth,
+                key,
+                standing,
+                input.grant.as_ref(),
+                peer_policy,
+            )
+            .await
+            {
                 Ok(token) => token,
                 Err(outcome) => return outcome,
             };
@@ -1702,7 +1769,15 @@ async fn scheduling_call(
             {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+            let token = match scheduling_token(
+                auth,
+                key,
+                standing,
+                input.grant.as_ref(),
+                peer_policy,
+            )
+            .await
+            {
                 Ok(token) => token,
                 Err(outcome) => return outcome,
             };
@@ -1732,7 +1807,15 @@ async fn scheduling_call(
                 Ok(input) => input,
                 Err(_) => return refused("invalid-command"),
             };
-            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+            let token = match scheduling_token(
+                auth,
+                key,
+                standing,
+                input.grant.as_ref(),
+                peer_policy,
+            )
+            .await
+            {
                 Ok(token) => token,
                 Err(outcome) => return outcome,
             };
@@ -1755,10 +1838,11 @@ async fn scheduling_call(
             if auth.task_authority.is_none() || !valid_key(idempotency_key) {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .create_hold(
                     SchedulingAuth::new(&token),
@@ -1779,10 +1863,11 @@ async fn scheduling_call(
             if auth.task_authority.is_none() || request.idempotency_key.is_some() {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .release_hold(SchedulingAuth::new(&token), &input.hold_id)
                 .await
@@ -1808,10 +1893,11 @@ async fn scheduling_call(
             {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .create_appointment(
                     SchedulingAuth::new(&token),
@@ -1835,10 +1921,11 @@ async fn scheduling_call(
             if auth.task_authority.is_none() || !valid_key(idempotency_key) {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .reschedule_appointment(
                     SchedulingAuth::new(&token),
@@ -1863,10 +1950,11 @@ async fn scheduling_call(
             if auth.task_authority.is_none() || !valid_key(idempotency_key) {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .cancel_appointment(
                     SchedulingAuth::new(&token),
@@ -1903,6 +1991,14 @@ fn unresolved(code: &str) -> ReconciliationOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_development_breg_peer_is_an_invalid_response() {
+        assert!(matches!(
+            read_failure(BaseRegistryClientError::DevelopmentPeer),
+            CallOutcome::Refused { code, .. } if code == "invalid-response"
+        ));
+    }
 
     #[test]
     fn reviewed_https_peers_allow_private_networks_and_metadata_and_cleartext_stay_denied() {

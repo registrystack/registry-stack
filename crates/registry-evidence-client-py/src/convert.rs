@@ -30,7 +30,7 @@ use pyo3::{
     types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple},
     IntoPyObjectExt,
 };
-use registry_platform_crypto::PrivateJwk;
+use registry_platform_crypto::{PrivateJwk, PRIVATE_JWK_MEMBERS};
 use registry_platform_httputil::{exchange_authorization_from_json, ExchangeAuthorization};
 use serde_json::{Map, Value};
 use url::Url;
@@ -515,15 +515,15 @@ fn response_format_from_json(value: &Value) -> Result<EvidenceResponseFormat, Co
     })
 }
 
-/// Every JWK member that carries a private key half, across the key types a
-/// caller could paste one from.
-///
-/// [`HolderPublicKey`] is `deny_unknown_fields`, so each of these already
-/// fails to deserialize. What that refusal cannot do is say why it matters: an
-/// unknown member reads as a typo. A caller who pasted a whole key pair here
-/// has done something materially different from mistyping a field name, and
-/// gets told exactly that by the check below instead.
-const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
+// `PRIVATE_JWK_MEMBERS`, the shared list in `registry-platform-crypto`, names
+// every JWK member that carries a private key half, across the key types a
+// caller could paste one from.
+//
+// [`HolderPublicKey`] is `deny_unknown_fields`, so each of these already
+// fails to deserialize. What that refusal cannot do is say why it matters: an
+// unknown member reads as a typo. A caller who pasted a whole key pair here
+// has done something materially different from mistyping a field name, and
+// gets told exactly that by the check below instead.
 
 /// Read one caller-supplied holder public key.
 ///
@@ -950,6 +950,7 @@ pub fn config_from_parts_with_authorization(
         trusted_root_certificates,
         maximum_response_bytes,
         max_metadata_bytes,
+        evidence_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
     )
 }
 
@@ -966,6 +967,7 @@ pub fn config_from_parts_with_authorization_durations(
     trusted_root_certificates: Option<Vec<u8>>,
     maximum_response_bytes: Option<u64>,
     max_metadata_bytes: Option<u64>,
+    peer_policy: evidence_client_sdk::PeerPolicy,
 ) -> Result<EvidenceClientConfig, ConfigError> {
     let base_url = parse_url(base_url, "`base_url`").map_err(ConfigError::Shape)?;
 
@@ -987,8 +989,13 @@ pub fn config_from_parts_with_authorization_durations(
         token_provider_from_json(token)?
     };
 
-    let mut config =
-        EvidenceClientConfig::new(base_url, token_provider, trusted_jwks, revoked_key_ids);
+    let mut config = EvidenceClientConfig::new(
+        base_url,
+        token_provider,
+        trusted_jwks,
+        revoked_key_ids,
+        peer_policy,
+    );
 
     if let Some(timeout) = request_timeout {
         config = config.with_attempt_timeout(timeout);
@@ -1133,7 +1140,7 @@ pub fn map_config_error(error: &ConfigError) -> MappedError {
 ///
 /// Never included: response bytes, a credential, a header value, a selector
 /// value, or a subject binding. Every message here is `Display` text over
-/// fixed, non-secret reasons; none of the ten kinds can carry one of those.
+/// fixed, non-secret reasons; none of the error kinds can carry one of those.
 pub fn map_client_error(error: &EvidenceClientError) -> MappedError {
     let mut mapped = MappedError::bare(error.kind(), error.to_string());
     mapped.trace_id = error.trace_id().map(str::to_owned);
@@ -2201,7 +2208,7 @@ mod tests {
     }
 
     /// The discriminant is what the Python exception's `kind` attribute
-    /// carries, so every one of the ten stable names must map to itself.
+    /// carries, so every one of the stable names must map to itself.
     /// `EvidenceClientError` is `#[non_exhaustive]` at the enum level, which
     /// only bears on match exhaustiveness (a wildcard arm is required
     /// elsewhere in this module); it does not block constructing a
@@ -2210,6 +2217,7 @@ mod tests {
     #[test]
     fn map_client_error_reports_every_stable_kind() {
         let cases: Vec<(EvidenceClientError, &str)> = vec![
+            (EvidenceClientError::DevelopmentPeer, "development-peer"),
             (
                 EvidenceClientError::Configuration { reason: "unusable" },
                 "configuration",

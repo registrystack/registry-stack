@@ -1,64 +1,310 @@
 ---
-title: Signed hook deliveries
-description: How receivers authenticate signed Base Registry Engine, Scheduling, and Coordinator hook deliveries, including the raw timestamp rule and freshness handling.
+title: Receive signed deliveries
+description: Verify Standard Webhooks signatures, handle duplicate deliveries, and rotate receiver keys.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-Base Registry Engine (BReg), Scheduling, and Coordinator sign every hook delivery they send.
-A receiver authenticates a delivery with the shared verifier before it acts on the body.
+Use the [Standard Webhooks specification](https://github.com/standard-webhooks/standard-webhooks/blob/4a8ee40c5bcb6157f856905cc8871040d41a78ce/spec/standard-webhooks.md)
+to authenticate deliveries before your receiver acts on them.
 
-## Verify a delivery
+## What every product sends
 
-In Rust, authenticate a delivery through the receiver verifier in the hooks platform crate.
-The HMAC-SHA256 signature itself comes from the platform crypto crate, whose Version 1 signing domain and length-prefixed field order are part of the wire contract.
-One JSON fixture of signed deliveries is shared by the Rust, Node, and Python tests.
+This contract applies to these senders:
 
-{/* Evidence: crates/registry-platform-hooks/src/receiver.rs verify_delivery;
-    crates/registry-platform-crypto/src/delivery_signature.rs SIGNATURE_DOMAIN, sign_v1, verify_v1;
-    crates/registry-platform-crypto/tests/fixtures/delivery-signatures.json. */}
+- [Base Registry Engine](../../operate/breg-webhooks/) event destinations and proposal hooks.
+- [Registry Document Store](../../security/documents/) hooks.
+- [Registry Scheduling](../../security/scheduling/) hooks and reminders.
+- [Registry Adapter](../../operate/adapter/) jobs that send signed Coordinator events.
+- [Registry Casework](../../security/casework/) completion wakes.
 
-Pass the exact method, request target, signed headers, and body bytes.
-The signature authenticates the raw delivery-time bytes before the shared verifier parses freshness.
-Valid RFC 3339 fractions such as `.12Z`, `.120Z`, and `.000Z` are accepted.
-Never normalise the timestamp before comparison: replacing `.120Z` with `.12Z` changes the signature even though it represents the same instant.
-Invalid times, changed signatures, and stale deliveries remain refused.
+| Request part | Value |
+| --- | --- |
+| Method | `POST` |
+| `content-type` | `application/json` |
+| `accept` | `application/json` |
+| `webhook-id` | The event ID in the body, reused on every retry and operator replay |
+| `webhook-timestamp` | The attempt time in Unix seconds |
+| `webhook-signature` | `v1,<base64>` entries separated by one space, current key first, with two entries while a previous key is configured |
 
-{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs verify_v1_authenticity;
-    crates/registry-platform-crypto/tests/fixtures/delivery-signatures.json deliveryTime. */}
+The sender joins `webhook-id`, a period, `webhook-timestamp`, a period, and the exact body bytes.
+It signs those bytes with HMAC-SHA-256 and encodes the result in standard base64 with padding.
 
-## Freshness
-
-Rust receivers select the freshness mode with `DeliveryFreshness::Within { now, skew }`, which checks the delivery time against the clock and skew you pass.
-
-{/* Evidence: crates/registry-platform-hooks/src/receiver.rs DeliveryFreshness, Within. */}
-
-The Node and Python bindings expose the same check as an entry point that takes the request parts and your key:
-
-- Node: `breg.verifyHookDelivery({method, path, headers, body, key})`
-- Python: `breg.verify_hook_delivery(method=..., path=..., headers=..., body=..., key=...)`
-
-Both return the authenticated exact values, including `deliveryTime` (Python `delivery_time`) and `idempotencyKey` (Python `idempotency_key`).
-These binding entry points use caller-enforced freshness.
-Compare the returned instant with your trusted clock and chosen window, and durably deduplicate on the idempotency key before taking an effect.
-Verification alone creates no source, schema, recipient, or business authority.
-
-{/* Evidence: crates/registry-platform-hooks/src/receiver.rs CallerEnforced;
-    crates/registry-breg-client-py/src/lib.rs verify_hook_delivery;
-    crates/registry-breg-client-node/__test__/webhook-verification.test.js verifyHookDelivery, deliveryTime. */}
-
-## Casework completion wakes
-
-Casework completion wakes use their own bearer and named-header receiver contract, not this hook-signature scheme.
+Casework completion wakes add the unsigned `registry-recipient-binding` header.
+Use it to select the receiver key. Each connection uses a distinct key, so a changed binding fails
+verification.
 See [Casework completion receivers](../../configure/casework-completion-receivers/).
 
-## Next
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs sign();
+    crates/registry-platform-hooks/src/delivery/service.rs delivery_header_values();
+    crates/registry-platform-crypto/tests/fixtures/standard-webhooks.json. */}
 
-- [Request an access token from your own code](../../configure/request-an-access-token/)
-- [Errors](../errors/)
+## The key
+
+Every product reads the key file as 32 to 64 exact bytes, without trimming or base64 decoding.
+Generate a file with 64 hexadecimal characters:
+
+```sh
+(umask 077; openssl rand -hex 32 | tr -d '\n' > webhook.key)
+```
+
+Plain `openssl rand -hex 32 > webhook.key` writes 65 bytes: 64 hexadecimal characters and a newline.
+The sender refuses that length at startup and names the trailing newline.
+A file within the length limit may end in a newline.
+Use the same file on the receiver because the newline is part of the key.
+Products refuse key files that start with `whsec_`.
+Existing key files must be readable by their owner only.
+
+## Use a separate key for each destination
+
+Set the current key file with `hmacSha256KeyRef` and the optional previous file with
+`previousHmacSha256KeyRef`. Use a different key for each destination.
+If two destinations share key bytes, the sender refuses to start and names both settings.
+The signature covers the webhook ID, the timestamp and the body but not the URL, so a delivery
+signed with a key two destinations share could be replayed to the other one.
+
+```text
+<first path> and <second path> resolve to the same key bytes. Give <second path> its own key by writing 32 new random bytes to another secret and referencing it there.
+```
+
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs DeliveryKey, distinct_delivery_keys(). */}
+
+## Verify, in five steps
+
+1. Require exactly one value each for `webhook-id`, `webhook-timestamp`, `webhook-signature`, and
+   `content-type`. Require the content type to be `application/json`.
+2. Require a canonical decimal timestamp.
+3. Verify the signature over the raw body bytes before parsing. Compare the signature in constant
+   time.
+4. Check that the timestamp is within the [delivery window](#the-window-and-clocks).
+5. Parse the authenticated body. Require `webhook-id` to equal `id` in a registry event envelope
+   or `eventId` in a Casework completion wake.
+
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs verify(), MAX_SIGNATURE_ENTRIES;
+    crates/registry-platform-hooks/src/receiver.rs verify_hook_delivery(). */}
+
+## The window and clocks
+
+Accept timestamps up to 300 seconds before or after your receiver clock.
+Keep your receiver clock synchronised.
+Base Registry Engine, Document Store, and Scheduling stamp each attempt when they take its lease.
+Adapter and Casework stamp each attempt when they send it.
+Coordinator, Base Registry Engine, and the client helpers apply the same window.
+
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs DELIVERY_TOLERANCE;
+    crates/registry-platform-hooks/src/delivery/service.rs delivery_header_values();
+    crates/registry-platform-hooks/src/receiver.rs verify_hook_delivery();
+    crates/registry-breg-client/src/hook.rs verify_hook_delivery(). */}
+
+## Duplicates
+
+Retries and operator replays reuse `webhook-id`.
+Before acting, store the authenticated sender identity and `webhook-id` with a digest of the body.
+Refuse a different body under a stored ID.
+Keep the IDs for at least the sender's retry span, which can exceed the verification window.
+By default, Casework allows 12 completion wake attempts 30 seconds apart.
+You can configure up to 100 attempts with up to 86,400 seconds between them.
+
+You can skip the store when acting twice is harmless, for example when a wake only prompts you to
+read an authoritative result.
+Without a store, the timestamp window bounds how long someone can replay a captured delivery.
+
+{/* Evidence: crates/registry-platform-hooks/src/delivery/service.rs delivery_header_values();
+    crates/registry-casework/src/config.rs default_review_completion_attempts(),
+    default_review_completion_retry_seconds(), MAXIMUM_REVIEW_COMPLETION_ATTEMPTS,
+    MAXIMUM_REVIEW_COMPLETION_RETRY_SECONDS;
+    products/platform/examples/delivery-receiver-go/main_test.go TestRepeatedIDIsProcessedOnce(),
+    TestAChangedBodyUnderTheSameIDIsRefused(). */}
+
+## Rotate delivery keys
+
+1. On the sender, copy the current key file to `<name>.previous`.
+   Set `previousHmacSha256KeyRef` to the copy and write new bytes to the original file.
+   Keep the file mode owner-only and restart the sender.
+   It signs with both keys, current first, and re-signs retained retries at send time.
+2. On the receiver, copy the current key file to `<name>.previous` and configure it as the
+   previous key.
+   Write the same new bytes to the original file and restart the receiver so it accepts either key.
+3. Remove `previousHmacSha256KeyRef` and restart the sender.
+   Then remove the previous key from your receiver configuration and restart or reload the
+   receiver so it uses only the current key. The Go example reads its key files at startup.
+
+Keep the path in `hmacSha256KeyRef` throughout rotation.
+The sender refuses to start if the previous and current keys contain the same bytes.
+
+```text
+<previous path> holds the same bytes as <current path>. To rotate, write 32 new random bytes to the secret <current path> references and keep the old bytes behind <previous path>.
+```
+
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs DeliveryKey, sign(), verify();
+    crates/registry-platform-hooks/src/delivery/service.rs delivery_header_values(). */}
+
+## Helpers
+
+Use these helpers for registry event envelopes. Use the Casework completion receiver contract for
+completion wakes.
+
+- Rust runs `registry_stack_client::breg::verify_hook_delivery`.
+- Node runs `breg.verifyHookDelivery`.
+- Python runs `breg.verify_hook_delivery`.
+
+Each takes the headers, raw body bytes, key, and optional previous key.
+It returns the ID, timestamp, source, type, time, dataschema, and body.
+See [Verify a hook delivery](../client-api/#verify-a-hook-delivery).
+
+The Standard Webhooks Python library's `Webhook` constructor uses a `bytes` key as supplied.
+It base64-decodes a `str` secret after removing an optional `whsec_` prefix.
+For a library that only accepts a text secret, use `whsec_` followed by the standard base64 of the
+exact key bytes.
+Check the library's documentation for a raw-key entry point.
+
+{/* Evidence: crates/registry-breg-client/src/hook.rs verify_hook_delivery();
+    products/platform/scripts/test_standard_webhooks_vectors.py. */}
+
+## Example receiver in Go
+
+In the [Go receiver example](https://github.com/registrystack/registry-stack/tree/main/products/platform/examples/delivery-receiver-go),
+`main.go` serves `/events` on loopback and keeps seen IDs in memory for ten minutes only.
+For a production receiver, keep the IDs durably for the sender's retry span.
+
+```go
+package main
+
+import (
+    "bytes"
+    "crypto/hmac"
+    "crypto/sha256"
+    "encoding/base64"
+    "math"
+    "strconv"
+    "strings"
+    "time"
+)
+
+type Refusal string
+
+func (r Refusal) Error() string { return string(r) }
+
+const (
+    InvalidKey          Refusal = "invalid-key"
+    InvalidID           Refusal = "invalid-id"
+    BodyTooLarge        Refusal = "body-too-large"
+    InvalidTimestamp    Refusal = "invalid-timestamp"
+    MalformedSignature  Refusal = "malformed-signature"
+    UnsupportedVersion  Refusal = "unsupported-version"
+    SignatureMismatch   Refusal = "signature-mismatch"
+    StaleDelivery       Refusal = "stale-delivery"
+    maxBodyBytes                = 1 << 20
+    maxSignatureEntries         = 4
+    deliveryTolerance           = 300 * time.Second
+)
+
+func Verify(keys [][]byte, id, timestamp, signature string, body []byte, now time.Time) error {
+    if len(keys) < 1 || len(keys) > 2 {
+        return InvalidKey
+    }
+    for _, key := range keys {
+        if len(key) < 32 || len(key) > 64 || bytes.HasPrefix(key, []byte("whsec_")) {
+            return InvalidKey
+        }
+    }
+    if len(keys) == 2 && bytes.Equal(keys[0], keys[1]) {
+        return InvalidKey
+    }
+
+    if len(id) == 0 || len(id) > 256 {
+        return InvalidID
+    }
+    for i := 0; i < len(id); i++ {
+        if id[i] < '!' || id[i] > '~' || id[i] == '.' {
+            return InvalidID
+        }
+    }
+    if len(body) > maxBodyBytes {
+        return BodyTooLarge
+    }
+
+    if len(timestamp) == 0 || len(timestamp) > 20 || (len(timestamp) > 1 && timestamp[0] == '0') {
+        return InvalidTimestamp
+    }
+    for i := 0; i < len(timestamp); i++ {
+        if timestamp[i] < '0' || timestamp[i] > '9' {
+            return InvalidTimestamp
+        }
+    }
+    seconds, err := strconv.ParseUint(timestamp, 10, 64)
+    if err != nil {
+        return InvalidTimestamp
+    }
+
+    tags, err := signatureTags(signature)
+    if err != nil {
+        return err
+    }
+    for _, key := range keys {
+        mac := hmac.New(sha256.New, key)
+        mac.Write([]byte(id + "." + timestamp + "."))
+        mac.Write(body)
+        expected := mac.Sum(nil)
+        for _, tag := range tags {
+            if hmac.Equal(expected, tag) {
+                if seconds > math.MaxInt64 {
+                    return StaleDelivery
+                }
+                // Bias signed Unix seconds so unsigned subtraction preserves their order.
+                delivery := seconds + 1<<63
+                receiver := uint64(now.Unix()) ^ (1 << 63)
+                if delivery > receiver {
+                    if delivery-receiver > uint64(deliveryTolerance/time.Second) {
+                        return StaleDelivery
+                    }
+                } else if receiver-delivery > uint64(deliveryTolerance/time.Second) ||
+                    (receiver-delivery == uint64(deliveryTolerance/time.Second) && now.Nanosecond() != 0) {
+                    return StaleDelivery
+                }
+                return nil
+            }
+        }
+    }
+    return SignatureMismatch
+}
+
+func signatureTags(signature string) ([][]byte, error) {
+    entries := strings.SplitN(signature, " ", maxSignatureEntries+1)
+    if len(entries) > maxSignatureEntries {
+        return nil, MalformedSignature
+    }
+    var tags [][]byte
+    for _, entry := range entries {
+        version, value, found := strings.Cut(entry, ",")
+        if !found || version == "" || value == "" {
+            return nil, MalformedSignature
+        }
+        if version != "v1" {
+            continue
+        }
+        if len(value) != base64.StdEncoding.EncodedLen(sha256.Size) {
+            return nil, MalformedSignature
+        }
+        tag, err := base64.StdEncoding.Strict().DecodeString(value)
+        if err != nil || len(tag) != sha256.Size {
+            return nil, MalformedSignature
+        }
+        tags = append(tags, tag)
+    }
+    if len(tags) == 0 {
+        return nil, UnsupportedVersion
+    }
+    return tags, nil
+}
+```
+
+{/* Evidence: products/platform/examples/delivery-receiver-go/verify_test.go TestCommittedVectors(),
+    TestDocsPageQuotesVerifyGo(); products/platform/examples/delivery-receiver-go/main_test.go
+    TestRepeatedIDIsProcessedOnce(). */}

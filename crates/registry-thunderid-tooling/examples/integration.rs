@@ -120,6 +120,7 @@ fn description(state_root: &Path, public_jwks: String) -> IssuerDescription {
             token_attributes: vec!["synthetic_tag".to_owned(), "evidence_tags".to_owned()],
             access_token_lifetime_seconds: 300,
             token_exchange: None,
+            unit: None,
         }],
         compatibility_clients: vec![CompatibilityClient {
             agent_id: COMPAT_AGENT_ID.to_owned(),
@@ -133,6 +134,7 @@ fn description(state_root: &Path, public_jwks: String) -> IssuerDescription {
         interactive_applications: vec![],
         synthetic_users: vec![],
         schema_attributes: vec!["evidence_tags".to_owned(), "synthetic_tag".to_owned()],
+        units: vec![],
     }
 }
 

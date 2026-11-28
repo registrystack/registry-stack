@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-28"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -53,6 +53,25 @@ that every value is accepted.
 
 {/* Generated from src/data/generated/messaging-configuration.json by
     docs/site/scripts/generate-messaging-configuration.mjs. Run npm run generate from docs/site. */}
+
+## Deployment posture
+
+With neither `--posture` nor `REGISTRY_STACK_POSTURE`, the deployment uses `production`.
+The two inputs must agree when both are present.
+Use `--posture development` for a development runtime file.
+`check` reports development settings as errors in production and warnings in development.
+
+The listener's `tlsTermination: loopback-plaintext` restricts its bind address to loopback in either posture.
+`database.transport: loopback-plaintext` allows a PostgreSQL socket, a loopback IP, or `localhost`.
+`database.transport: private-network-plaintext` requires development.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+A non-loopback HTTP issuer requires development and `allowInsecureHttp: true` in its entry under `authentication.oidc.issuers`.
+A loopback HTTP issuer needs no opt-in.
+
+{/* Evidence: crates/registry-messaging/src/config.rs finish_load, check_database, check_oidc;
+    crates/registry-platform-config/src/blocks.rs permitted_transport;
+    crates/registry-platform-postgres/src/lib.rs postgres_connection. */}
 
 ## The runtime file
 
@@ -111,7 +130,7 @@ The runtime, `messagingctl check`, and `messagingctl apply` refuse a package who
 
 `listener` is required.
 `listener.bind` is one numeric socket address and must be explicit, such as `127.0.0.1:8107`.
-`listener.tlsTermination` is required: use `operator-controlled-upstream` behind an operator-managed TLS edge, or `development-loopback` for direct local development, which is refused on any non-loopback bind.
+`listener.tlsTermination` is required: use `operator-controlled-upstream` behind an operator-managed TLS edge, or `loopback-plaintext` for direct local development, which is refused on any non-loopback bind.
 `listener.networkExposure` defaults to `private-address`; `container-private` permits an unspecified bind only for a listener kept on a private container network.
 A public unicast address is refused under every combination.
 
@@ -130,6 +149,7 @@ The metrics are Prometheus text, and every label is closed:
 | `messaging_provider_callbacks_total` | counter | `outcome` |
 | `messaging_provider_attempts_total` | counter | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent` |
 | `messaging_limit_refusals_total` | counter | `limit`: `rate`, `daily`, `pacing`, `callback` |
+| `messaging_request_refusals_total` | counter | `check`: the closed set of 45 failed checks, every value published at zero |
 | `messaging_retention_runs_total` | counter | `outcome`: `erased`, `idle`, `failed` |
 | `messaging_dispatch_jobs` | gauge | `state`: `pending`, `leased`, `unknown` |
 
@@ -155,9 +175,9 @@ The runtime requires TLS on both.
 `database.caBundleRef` optionally selects the PEM bundle of a private CA.
 `database.testOnlyPlaintext: true` is accepted only by a build that carries the `postgres-test` feature.
 
-`authentication.oidc` requires `issuer`, `audience`, and `allowedClients`.
-`allowedClients` lists at least one distinct client, and every requester client that an access profile names must be listed; a profile that no admitted client could reach is refused at load.
-An omitted member, an empty list, and a repeated client are refused when the file is read, and so is the `unrestricted` keyword that the sibling runtimes accept on development loopback.
+Each entry under `authentication.oidc.issuers` requires `issuer`, `audience`, and `allowedClients`.
+`allowedClients` is required. Write `from-package` to admit exactly the requester clients of the package's access profiles, so the clients are written once, in the package. A list is also accepted. It lists at least one distinct client and must include every requester client that an access profile names, or the runtime refuses to start with `messaging.runtime.profile-client-not-allowed`. A profile that no admitted client could reach is refused at load.
+Messaging refuses an omitted member, an empty list, a repeated client and the `unrestricted` keyword with `messaging.runtime.allowed-clients-required`.
 `scopeClaim` defaults to `scope`.
 `jwksSource` defaults to issuer discovery and can instead select `{type: static, documentRef: secret:...}` or `{type: uri, uri: HTTPS_URL}`.
 The former `jwksUri` member is refused.
@@ -234,8 +254,8 @@ An `smtp` connection takes these keys:
 | Key | Required | Meaning |
 |---|---|---|
 | `host` | yes | The relay's DNS name or IP literal, at most 253 bytes; the name TLS verifies |
-| `tls` | yes | `starttls`, `implicit`, or `development-loopback` (plaintext to a loopback relay, accepted only by a test build or behind a `development-loopback` listener) |
-| `port` | no | Defaults to 587 for `starttls` and 465 for `implicit`; required for `development-loopback` |
+| `tls` | yes | `starttls`, `implicit`, or `loopback-plaintext` (plaintext to a loopback relay, valid in either posture) |
+| `port` | no | Defaults to 587 for `starttls` and 465 for `implicit`; required for `loopback-plaintext` |
 | `authentication` | no | `usernameRef` and `passwordRef` |
 | `attemptTimeoutMilliseconds` | no | One attempt's whole budget, 1000 to 60000, default 30000 |
 | `caBundleRef` | no | A PEM root trusted besides the public web roots |

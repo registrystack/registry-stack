@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - operator
@@ -37,14 +37,17 @@ Authenticate the checksum bundle as `release/VERIFY.md` at the tag you install d
 install the binaries with the release-pinned installer or as an `rstack` component:
 
 ```sh
-bash adapter-<tag>-install.sh
-adapterctl --version
+tag="vX.Y.Z"
+bash "adapter-${tag:?set tag to the release tag}-install.sh"
+"${ADAPTER_INSTALL_DIR:-$HOME/.local/bin}/adapterctl" --version
 
 rstack install adapter
 rstack adapter check --help
 ```
 
 The installer puts the two binaries in `~/.local/bin`; set `ADAPTER_INSTALL_DIR` to change that.
+The version check runs `adapterctl` by that path, so it works before the directory is on your
+`PATH`.
 `rstack install adapter` installs the same two binaries into an `rstack` generation, and
 `rstack adapter` runs `adapterctl`.
 Neither path needs a Rust toolchain.
@@ -59,12 +62,73 @@ You build it from a reviewed source checkout (see [Build the job host](#build-th
 
 {/* Evidence: docs/site/src/data/cli-reference.yaml source_build_only_binaries. */}
 
+## Provision PostgreSQL
+
+Your runtime file already names the roles, their passwords and the database. They are the URLs in
+`database.migrationUrlRef` and `database.runtimeUrlRef`.
+Put both URLs in their secret files, then run `adapterctl provision` once as a PostgreSQL role that
+can create roles and databases:
+
+```sh
+adapterctl provision --runtime-config runtime.yaml --admin-url-file admin-url
+```
+
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`.
+The administrator needs `CREATEROLE` and `CREATEDB` and does not need to be a superuser.
+To pass the URL in an environment variable instead, use `--admin-url-env NAME`.
+The connection requires TLS and verifies the server certificate.
+Set `database.caBundleRef` in the runtime file to trust a private CA.
+The command never prints the administrator URL or a password.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Gives the migration role `USAGE` and `CREATE` on the `public` schema, and takes `CREATE` on it
+  from `PUBLIC`.
+
+Run it again at any time.
+It creates only what is missing.
+It refuses a role that exists with a different password than its URL holds, and tells you which role.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags.
+The command connects to nothing and prints the script, with a `\password` prompt after each
+`CREATE ROLE` so the script holds no password.
+Add `--format json` for a report of each statement and its outcome.
+
+`provision` grants the runtime role nothing beyond `CONNECT`.
+`adapter serve` grants the table privileges when it starts, as the next section describes.
+An administrator that is not a superuser becomes a member of the roles it creates, holding
+`ADMIN OPTION`, and that membership does not stop the grant.
+
+{/* Evidence: crates/registry-adapterctl/src/provision.rs;
+    crates/registry-adapterctl/tests/provision_cli.rs;
+    crates/registry-adapterctl/tests/provision_postgres.rs provision_then_serve_with_split_roles. */}
+
 ## Grant the runtime database role
+
+Stop every Adapter process of an earlier release before starting this one
+against the same journal database. An earlier process's journal writes are
+refused once the journal migrates.
+{/* Evidence: crates/registry-adapter/src/journal/migrations/0600_declared_posture.sql. */}
+
+Each new disbursement audit event records the process's declared posture.
+
+{/* Evidence: crates/registry-adapter/src/payments/g2p_store.rs migrate_g2p, event;
+    crates/registry-adapter/tests/postgres_journal_retention_served.rs served_development_accepts_a_development_payment_peer, served_production_records_disbursement_observation_posture. */}
 
 The facade journals every request and, when it serves a write, keeps idempotency state in
 PostgreSQL.
-Serving needs TLS to PostgreSQL, even on loopback: `database.testOnlyPlaintext` is refused outside
-test builds.
+The database transport defaults to `verified-tls`. Use `database.transport: loopback-plaintext`
+for a Unix socket, numeric loopback address or `localhost`.
+Use `private-network-plaintext` only in development.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+The runtime refuses
+`database.testOnlyPlaintext` outside test builds.
 Without a configured root, the system roots verify the server.
 When the certificate comes from a private CA, name that CA with
 `database.caBundleRef`.
@@ -75,11 +139,22 @@ When the certificate comes from a private CA, name that CA with
 `adapter serve` migrates through `database.migrationUrlRef` and serves through
 `database.runtimeUrlRef`.
 The migration role owns the tables.
-Give the runtime role only the grants its deployment uses.
-The Adapter refuses a runtime role at startup, naming each missing grant and table, before it
-listens.
-In the statements that follow, `adapter` stands for the schema on the runtime role's search path and
-`runtime` for that role:
+After it migrates and before it grants anything, `adapter serve` connects as the runtime role and reads
+that session's role name.
+When it differs from the migration session's role name, `adapter serve` grants the runtime session's
+role the privileges its deployment uses.
+The grants run in one transaction, then `adapter serve` checks them and refuses to listen if one is
+missing.
+A runtime connection that fails stops startup before any grant.
+The runtime role must already exist, be able to log in and hold `CONNECT` on the database.
+When both sessions run as the same role, `adapter serve` issues no grant and the single role keeps
+every privilege it owns.
+The runtime role's search path must reach the same schema as the migration role's.
+
+The statements below are equivalent to what `adapter serve` runs for the facade tables, with
+`adapter` standing for the schema on the migration role's search path and `runtime` for the runtime
+role.
+`adapter serve` issues only the grants the role still lacks:
 
 ```sql
 -- Every deployment: append journal events, run audit.retentionDays, report readiness.
@@ -98,16 +173,76 @@ GRANT SELECT, INSERT, UPDATE ON adapter_idempotency_async_artifacts TO runtime;
 GRANT SELECT, INSERT ON adapter_idempotency_resume_bindings TO runtime;
 ```
 
-The runtime role needs no grant on `adapter_idempotency_schema_migrations`; only the migration role
-reads it.
+The Adapter grants nothing else: no default privileges, and nothing on
+`adapter_idempotency_schema_migrations`, which only the migration role reads.
+It never revokes a grant, so a feature you remove from a deployment leaves its earlier grants in
+place until you revoke them.
 
-{/* Evidence: crates/registry-adapter/src/serve.rs required, missing_table_privileges;
+When you start `adapter serve` with `--payments-config`, the same grant step covers the payment
+tables, in the same transaction as the facade tables.
+`adapter serve` without a project (payments only) runs the grant step on its own and also grants
+`USAGE` on the schema.
+The statements below are equivalent to what it runs for them.
+The G2P statements apply when `payments.yaml` declares disbursement connections, and only the
+grants the role still lacks are issued:
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON adapter_payment_attempts TO runtime;
+GRANT SELECT, INSERT ON adapter_payment_commands, adapter_payment_events TO runtime;
+GRANT USAGE ON SEQUENCE adapter_payment_events_sequence_seq TO runtime;
+
+-- When payments.yaml declares disbursement connections.
+GRANT SELECT, INSERT, UPDATE ON adapter_g2p_attempts TO runtime;
+GRANT SELECT, INSERT ON adapter_g2p_commands, adapter_g2p_events TO runtime;
+GRANT USAGE ON SEQUENCE adapter_g2p_events_sequence_seq TO runtime;
+
+-- When you serve payments without a project.
+GRANT USAGE ON SCHEMA adapter TO runtime;
+```
+
+When `adapter serve` makes no grant for the reasons below, grant these yourself.
+The payment host then refuses to start until the runtime role holds them.
+
+`adapter serve` makes no automatic grant in two cases:
+
+- The runtime role lacks a privilege and has members that would inherit it.
+  `adapter serve` leaves that decision to you: grant the privileges above to the runtime role
+  yourself, and startup then passes the check.
+  A member that holds `ADMIN OPTION` on the runtime role and has no members of its own does not
+  count, because it can already grant the role to itself.
+  A role with `CREATEROLE` that is not a superuser and created the runtime role is such a member.
+- The migration role does not own an object it must grant on, for example a table that an earlier
+  role created.
+  PostgreSQL ignores or refuses a grant its issuer has no right to make, so `adapter serve` rolls
+  the grants back and refuses to start.
+  Run the statements above as the object's owner, or make the migration role the owner.
+
+When the runtime role holds every privilege in the migration schema and startup still reports one
+missing, the runtime session's search path resolves a different schema.
+
+{/* Evidence: crates/registry-adapter/src/serve.rs runtime_requirements, grant_runtime_privileges;
+    crates/registry-adapter/src/payments/store.rs RUNTIME_GRANTS, RUNTIME_SEQUENCE;
+    crates/registry-adapter/src/payments/g2p_store.rs RUNTIME_GRANTS, RUNTIME_SEQUENCE;
+    crates/registry-adapter/src/payments/http.rs PreparedPayments;
     crates/registry-adapter/src/journal.rs RUNTIME_PRIVILEGES;
     crates/registry-adapter/src/idempotent.rs WRITE_RUNTIME_GRANTS, RECOVERY_RUNTIME_GRANTS,
     RESUME_RUNTIME_GRANTS;
     crates/registry-adapter/tests/postgres_journal_retention_served.rs
-    a_write_runtime_role_without_idempotency_grants_is_refused_by_name,
-    a_resumable_write_runtime_role_needs_the_recovery_grants_and_serves_on_first_run. */}
+    serve_grants_exactly_the_required_privileges, single_role_serve_issues_no_grant,
+    a_runtime_url_naming_public_is_refused_and_grants_nothing,
+    a_runtime_role_with_members_is_granted_nothing_and_refused,
+    a_runtime_role_whose_only_member_administers_it_is_granted_its_privileges,
+    a_provisioned_runtime_role_is_granted_its_privileges,
+    a_provisioned_runtime_role_with_a_plain_member_is_granted_nothing_and_refused,
+    an_administrator_with_members_of_its_own_blocks_the_grant,
+    a_migration_role_that_does_not_own_the_tables_fails_startup_and_grants_nothing,
+    serve_grants_the_collection_tables_beside_a_project,
+    serve_grants_the_g2p_tables_when_disbursements_are_declared_beside_a_project,
+    the_payments_only_host_grants_the_collection_tables_and_schema_usage,
+    the_payments_only_host_grants_the_g2p_tables_when_disbursements_are_declared,
+    a_single_role_payments_host_issues_no_grant,
+    a_payments_runtime_role_with_members_is_granted_nothing_and_refused,
+    a_migration_role_that_does_not_own_a_payment_table_fails_startup_and_grants_nothing. */}
 
 ## Operate an ingestion job
 
@@ -179,8 +314,12 @@ Prepare the source and one destination:
    narrowly scoped BReg credential.
    The `kobotoolbox-breg` example is the BReg project that matches the job's mapping and access
    profile.
-4. For the Coordinator job, configure the reviewed event trigger and workflow, provision its signing
-   key, and keep the host clock within 30 seconds of Coordinator's.
+4. For the Coordinator job, configure the reviewed workflow and its event triggers. Provision a separate
+   private file of 32 to 64 exact key bytes per trigger. Give each receiving Coordinator trigger
+   the same key file as the job uses for it.
+   Keep the host clock synchronized with Coordinator's. See
+   [Signed event to Coordinator](../../configure/adapter-jobs/#signed-event-to-coordinator)
+   for the runtime key references and rotation.
 
 Choose one destination before the first pass.
 Do not run both jobs against one form, and do not fall back from a refusal to the other destination.
@@ -423,7 +562,7 @@ Drain a direct BReg job the same way, and take a backup, before upgrading from a
 receiver identity did not include the client assertion audience: this binary's receiver identity
 includes it, so an item left pending stops as `adapter.job.breg-receiver-changed` before any BReg
 call, and no configuration clears it.
-The new `init-store` moves the store to schema 104, which the previous binary refuses, so the
+The new `init-store` moves the store to schema 105, which the previous binary refuses, so the
 recovery is the same: restore that backup, settle the item with the previous binary, and upgrade
 again.
 Run the new binary's `init-store` once before you restart passes.
@@ -750,6 +889,36 @@ The stop report prints the same fix as its `next` step.
 {/* TODO[evidence]: no test names adapter.job.page-bytes-bound or the maximumRowsPerPage times
     maximumRowBytes memory ceiling; only the code that raises the stop is cited. */}
 
+## Probe health and readiness
+
+The facade listener answers two probes without authentication, for load balancers and
+orchestrators:
+
+- `GET /health` answers 200 `{"status":"ok"}` and does no work.
+- `GET /ready` answers 200 when the journal migrations match the binary
+  and the runtime role holds its journal privileges, and 503 `{"status":"not-ready"}` otherwise.
+  It reads the journal store and never contacts a source.
+
+A successful readiness body contains `status: ready`, `posture` and
+`developmentSettings`. Each development setting has a `code` and `pointer`.
+A setting from the payments configuration also names that file in `file`.
+In development, the facade, payment, metrics and job hook listeners add
+`Registry-Posture: development` to every response.
+Each new PostgreSQL request journal row carries the posture declared by the facade process.
+
+Because `/health` and `/ready`
+belong to the listener, a project operation whose path is one of them is unserved, with the
+reason code `adapter.operation.reserved-facade-path` in the effective contract.
+
+{/* Evidence: crates/registry-adapter/src/facade.rs;
+    crates/registry-adapter/src/journal.rs ready;
+    crates/registry-adapter/src/journal.rs append_in_posture;
+    crates/registry-adapter/tests/postgres_journal_retention_served.rs
+    served_journal_rows_include_the_declared_posture,
+    serve_grants_the_collection_tables_beside_a_project;
+    crates/registry-adapter/tests/health_routes.rs;
+    crates/registry-adapter-engine/src/load.rs ReservedFacadePath. */}
+
 ## Scrape metrics
 
 Neither the facade listener nor the hook ingress serves metrics. Set `metricsListener.bind` in the
@@ -771,6 +940,7 @@ Facade series:
 | --- | --- | --- | --- |
 | `adapter_http_requests_total` | counter | `route` (route template, or `unmatched`), `method`, `status` (`1xx`, `2xx`, `3xx`, `4xx`, `5xx`, `other`) | Answered facade requests. |
 | `adapter_upstream_failures_total` | counter | `class` (`upstream`, `upstream.http`, `upstream.timeout`, `upstream.connection`, `upstream.malformed`, `upstream.too-large`, `upstream.redirect`, `breaker.open`, `throttle.rejected`, `credential.rejected`, `egress.refused`) | Calls to the source that failed, by error class. It counts failed exchanges, status polls, bounded-wait polls and recovery checks. |
+| `adapter_request_refusals_total` | counter | `check` (the 45 shared failed-check labels, all present at zero, for example `credential-missing`, `token-signature`, `scope`, `operation`, `ownership`, `visibility`) | Facade and payment requests refused, by the check that failed. Each refusal also writes one `request refused` log line carrying `failed_check` and no caller value, at most five lines per check per minute. |
 | `adapter_journal_write_failures_total` | counter | none | Audit journal writes that failed, so the exchange answered an internal error. Custody and rendering failures are not counted here. |
 | `adapter_retention_sweep_failures_total` | counter | `store` (`journal`, `idempotency`, `other`) | Retention sweep batches that failed and were left to the next tick. |
 
@@ -782,6 +952,7 @@ Job host series:
 | `adapter_job_last_successful_pass_age_seconds` | gauge | none | Seconds since a pass in this process settled its page. Absent until the first such pass. |
 | `adapter_job_pass_failures_total` | counter | `reason` (`page-fault`, `destination-stop`, `refusal-limit`, `store-unreachable`) | Passes that did not settle, and passes that could not reach the store. A pass that finds another process holding the lease is not a failure and is not counted. |
 | `adapter_job_hook_refusals_total` | counter | `reason` (`not-found`, `method`, `unauthenticated`, `rate-limited`, `unavailable`, `body-timeout`, `body-too-large`, `body-unreadable`) | Hook requests the ingress refused. |
+| `adapter_job_request_refusals_total` | counter | `check` (the 45 shared failed-check labels, all present at zero. The hook ingress records `credential-missing`, `credential-malformed`, `shared-secret` and `rate-limit`) | Hook requests refused for a credential or the rate limit, by the check that failed. Each refusal also writes one `request refused` log line carrying `failed_check` and no caller value, at most five lines per check per minute. Present when the host is built with `job-hook`. |
 | `adapter_job_gauge_sample_failures_total` | counter | none | Item count reads that failed or timed out. |
 
 When the store cannot be read at scrape time, `adapter_job_items` carries no samples and

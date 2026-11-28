@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use chrono::{SubsecRound as _, Utc};
 use registry_adapter_engine::route::EvidenceHttpDiagnostic;
 use registry_platform_audit::{AuditDestination, AuditError, AuditProfile};
+use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_crypto::{
     LocalJwkSigner, PrivateJwk, SigningProvider, TransitInitializationError, TransitSigner,
     TransitSignerConfig,
@@ -412,6 +413,9 @@ pub async fn validate_verification_material(
 pub struct RuntimeFailure {
     problem: ProblemCode,
     category: &'static str,
+    /// The check a refusal failed. Present exactly when the problem is one of
+    /// the refusal codes, which only [`refusal`] builds.
+    check: Option<FailedCheck>,
 }
 
 impl RuntimeFailure {
@@ -422,6 +426,12 @@ impl RuntimeFailure {
     pub fn category(self) -> &'static str {
         self.category
     }
+
+    /// The check a refusal failed, for the operator's count and log line. It is
+    /// written to no response.
+    pub fn check(self) -> Option<FailedCheck> {
+        self.check
+    }
 }
 
 impl std::fmt::Debug for RuntimeFailure {
@@ -430,6 +440,7 @@ impl std::fmt::Debug for RuntimeFailure {
             .debug_struct("RuntimeFailure")
             .field("problem", &self.problem)
             .field("category", &self.category)
+            .field("check", &self.check.map(FailedCheck::as_str))
             .finish()
     }
 }
@@ -489,6 +500,7 @@ pub enum SourceFreshnessIssue {
 
 /// All runtime state is derived from one captured immutable package.
 pub struct EvidenceRuntime {
+    posture: registry_platform_config::PostureReport,
     kernel: OfflineKernel,
     runtime_config: RuntimeConfig,
     authenticator: Arc<dyn RuntimeAuthenticator>,
@@ -513,6 +525,12 @@ pub(crate) trait RuntimeAuthenticator: Send + Sync {
     async fn announce_key_source(&self);
 
     async fn key_source_ready(&self) -> bool;
+
+    /// What a scope refusal may say about the deployment, when it has a scope
+    /// gate.
+    fn declared_scope(&self) -> Option<DeclaredScope> {
+        None
+    }
 }
 
 #[async_trait]
@@ -530,6 +548,10 @@ impl RuntimeAuthenticator for Authenticator {
 
     async fn announce_key_source(&self) {
         Authenticator::announce_key_source(self).await;
+    }
+
+    fn declared_scope(&self) -> Option<DeclaredScope> {
+        Authenticator::declared_scope(self)
     }
 
     async fn key_source_ready(&self) -> bool {
@@ -622,6 +644,22 @@ fn rate_limiter(bundle: &Bundle) -> Result<EvidenceRateLimiter, RuntimeInitializ
     .map_err(|_| RuntimeInitializationError::RateLimit)
 }
 
+pub(crate) fn runtime_authenticator(
+    config: &crate::config::AuthenticationConfig,
+    issuer_roots: Vec<reqwest::Certificate>,
+    posture: registry_platform_config::Posture,
+) -> Authenticator {
+    let peer_policy = match posture {
+        registry_platform_config::Posture::Production => {
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+        }
+        registry_platform_config::Posture::Development => {
+            registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer
+        }
+    };
+    Authenticator::from_config(config, issuer_roots).with_peer_policy(peer_policy)
+}
+
 /// Everything startup builds from one captured deployment, with whatever its
 /// audit step produced.
 struct Startup<A> {
@@ -685,9 +723,10 @@ async fn assemble<A>(
 
     let authenticator = match authenticator_override {
         Some(authenticator) => authenticator,
-        None => Arc::new(Authenticator::from_config(
+        None => Arc::new(runtime_authenticator(
             &bundle.config.authentication,
             issuer_trust_roots(&bundle, &runtime_document)?,
+            runtime_document.posture.posture(),
         )),
     };
 
@@ -732,9 +771,12 @@ async fn dependencies_ready(
 
 impl EvidenceRuntime {
     /// Capture and initialize the complete Version 1 deployment at one revision.
-    pub async fn initialize(runtime_path: &Path) -> Result<Self, RuntimeInitializationError> {
-        let deployment =
-            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
+    pub async fn initialize(
+        runtime_path: &Path,
+        declared: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self, RuntimeInitializationError> {
+        let deployment = DeploymentInputs::load(runtime_path, declared)
+            .map_err(|_| RuntimeInitializationError::Bundle)?;
         Self::initialize_internal(deployment, None).await
     }
 
@@ -752,8 +794,22 @@ impl EvidenceRuntime {
         runtime_path: &Path,
         authenticator: Authenticator,
     ) -> Result<Self, RuntimeInitializationError> {
-        let deployment =
-            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
+        let deployment = DeploymentInputs::load(
+            runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .map_err(|_| RuntimeInitializationError::Bundle)?;
+        Self::initialize_from_with_authenticator(deployment, authenticator).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn initialize_from_with_authenticator(
+        deployment: DeploymentInputs,
+        authenticator: Authenticator,
+    ) -> Result<Self, RuntimeInitializationError> {
         Self::initialize_internal(deployment, Some(Arc::new(authenticator))).await
     }
 
@@ -762,8 +818,14 @@ impl EvidenceRuntime {
         runtime_path: &Path,
         authenticator: Arc<dyn RuntimeAuthenticator>,
     ) -> Result<Self, RuntimeInitializationError> {
-        let deployment =
-            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
+        let deployment = DeploymentInputs::load(
+            runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .map_err(|_| RuntimeInitializationError::Bundle)?;
         Self::initialize_internal(deployment, Some(authenticator)).await
     }
 
@@ -771,17 +833,20 @@ impl EvidenceRuntime {
         deployment: DeploymentInputs,
         authenticator_override: Option<Arc<dyn RuntimeAuthenticator>>,
     ) -> Result<Self, RuntimeInitializationError> {
+        let posture = deployment.runtime().posture.clone();
+        let value = posture.posture();
         let startup = assemble(
             deployment,
             authenticator_override,
-            async |destination, secret, key_version| {
-                EvidenceAuditLog::initialize(destination, secret, key_version)
+            async move |destination, secret, key_version| {
+                EvidenceAuditLog::initialize(destination, secret, key_version, value)
                     .await
                     .map_err(|error| RuntimeInitializationError::Audit((&error).into()))
             },
         )
         .await?;
         Ok(Self {
+            posture,
             kernel: startup.kernel,
             runtime_config: startup.runtime_config,
             authenticator: startup.authenticator,
@@ -797,6 +862,10 @@ impl EvidenceRuntime {
 
     pub fn bundle(&self) -> &Bundle {
         self.kernel.bundle()
+    }
+
+    pub fn posture(&self) -> &registry_platform_config::PostureReport {
+        &self.posture
     }
 
     pub fn runtime_config(&self) -> &RuntimeConfig {
@@ -841,6 +910,11 @@ impl EvidenceRuntime {
 
     /// The per-source diagnostics whose counters back the
     /// `evidence_source_shape_drift_total` series on the metrics listener.
+    /// The configured values a scope refusal's log line may name.
+    pub(crate) fn declared_scope(&self) -> Option<DeclaredScope> {
+        self.authenticator.declared_scope()
+    }
+
     pub(crate) fn source_diagnostics(&self) -> Arc<SourceDiagnostics> {
         Arc::clone(&self.source_diagnostics)
     }
@@ -947,7 +1021,7 @@ impl EvidenceRuntime {
             .authenticator
             .authenticate(access_token)
             .await
-            .map_err(|_| failure(ProblemCode::AuthenticationFailed, "authentication"))?;
+            .map_err(|error| authentication_refusal(&error))?;
         let rate_scope = rate_limit_scope(&self.bundle().config.service.trust_domain);
         let request_limit_key = self
             .audit
@@ -1292,9 +1366,10 @@ impl EvidenceRuntime {
             ));
         }
         if self.bundle().configuration_revision(requirement) != Some(expected) {
-            return Err(failure(
+            return Err(refusal(
                 ProblemCode::NotAuthorized,
                 "configuration-revision",
+                FailedCheck::RevisionPin,
             ));
         }
         Ok(())
@@ -1337,7 +1412,7 @@ impl EvidenceRuntime {
             .authenticator
             .authenticate(access_token)
             .await
-            .map_err(|_| failure(ProblemCode::AuthenticationFailed, "authentication"))?;
+            .map_err(|error| authentication_refusal(&error))?;
         let grant_deadline = grant_release_deadline(&context);
         let rate_scope = rate_limit_scope(&self.bundle().config.service.trust_domain);
         let request_limit_key = self
@@ -1435,7 +1510,10 @@ impl EvidenceRuntime {
             };
             let matched = match match_entitlement(self.bundle(), &request, &context) {
                 Ok(matched) => matched,
-                Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+                Err(
+                    error @ (AuthorizationError::Unauthorized(_)
+                    | AuthorizationError::AmbiguousAuthority),
+                ) => {
                     self.append_authorization_refusal(
                         operation,
                         AuditCaller {
@@ -1448,7 +1526,7 @@ impl EvidenceRuntime {
                         started,
                     )
                     .await?;
-                    return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+                    return Err(map_authority(error));
                 }
                 Err(error) => return Err(map_authority(error)),
             };
@@ -1477,7 +1555,11 @@ impl EvidenceRuntime {
                     started,
                 )
                 .await?;
-                return Err(failure(ProblemCode::NotAuthorized, "response-format"));
+                return Err(refusal(
+                    ProblemCode::NotAuthorized,
+                    "response-format",
+                    FailedCheck::Disclosure,
+                ));
             }
 
             let selector_limit_input = canonical_pair(
@@ -1495,7 +1577,10 @@ impl EvidenceRuntime {
                 .map_err(map_selector_limit)?;
             let resolved = match resolve_selectors(self.bundle(), &request, &context, &matched) {
                 Ok(resolved) => resolved,
-                Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+                Err(
+                    error @ (AuthorizationError::Unauthorized(_)
+                    | AuthorizationError::AmbiguousAuthority),
+                ) => {
                     self.append_authorization_refusal(
                         operation,
                         AuditCaller {
@@ -1508,7 +1593,7 @@ impl EvidenceRuntime {
                         started,
                     )
                     .await?;
-                    return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+                    return Err(map_authority(error));
                 }
                 Err(error) => {
                     if error == AuthorizationError::Selector {
@@ -1810,7 +1895,7 @@ impl EvidenceRuntime {
             .authenticator
             .authenticate(access_token)
             .await
-            .map_err(|_| failure(ProblemCode::AuthenticationFailed, "authentication"))?;
+            .map_err(|error| authentication_refusal(&error))?;
         let grant_deadline = grant_release_deadline(&context);
         let rate_scope = rate_limit_scope(&self.bundle().config.service.trust_domain);
         let request_limit_key = self
@@ -1881,7 +1966,10 @@ impl EvidenceRuntime {
 
         let matched = match match_entitlement(self.bundle(), request, &context) {
             Ok(matched) => matched,
-            Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+            Err(
+                error @ (AuthorizationError::Unauthorized(_)
+                | AuthorizationError::AmbiguousAuthority),
+            ) => {
                 self.append_authorization_refusal(
                     operation,
                     AuditCaller {
@@ -1894,7 +1982,7 @@ impl EvidenceRuntime {
                     started,
                 )
                 .await?;
-                return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+                return Err(map_authority(error));
             }
             Err(error) => return Err(map_authority(error)),
         };
@@ -1921,7 +2009,11 @@ impl EvidenceRuntime {
                 started,
             )
             .await?;
-            return Err(failure(ProblemCode::NotAuthorized, "response-format"));
+            return Err(refusal(
+                ProblemCode::NotAuthorized,
+                "response-format",
+                FailedCheck::Disclosure,
+            ));
         }
         // Only the batch container carries more than one credential, so every
         // other media type answers at most one presented key, in either binding
@@ -1965,7 +2057,10 @@ impl EvidenceRuntime {
             .map_err(map_selector_limit)?;
         let resolved = match resolve_selectors(self.bundle(), request, &context, &matched) {
             Ok(resolved) => resolved,
-            Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
+            Err(
+                error @ (AuthorizationError::Unauthorized(_)
+                | AuthorizationError::AmbiguousAuthority),
+            ) => {
                 self.append_authorization_refusal(
                     operation,
                     AuditCaller {
@@ -1978,7 +2073,7 @@ impl EvidenceRuntime {
                     started,
                 )
                 .await?;
-                return Err(failure(ProblemCode::NotAuthorized, "authorization"));
+                return Err(map_authority(error));
             }
             Err(error) => {
                 if error == AuthorizationError::Selector {
@@ -3777,13 +3872,21 @@ fn acquisition_source_for_subjects<'a>(
     for subject in subjects {
         let source = acquisition
             .source_for_profile(&subject.selector_profile)
-            .ok_or_else(|| failure(ProblemCode::NotAuthorized, "acquisition-channel"))?;
+            .ok_or_else(acquisition_channel_refusal)?;
         if selected.is_some_and(|previous| previous != source) {
-            return Err(failure(ProblemCode::NotAuthorized, "acquisition-channel"));
+            return Err(acquisition_channel_refusal());
         }
         selected = Some(source);
     }
-    selected.ok_or_else(|| failure(ProblemCode::NotAuthorized, "acquisition-channel"))
+    selected.ok_or_else(acquisition_channel_refusal)
+}
+
+fn acquisition_channel_refusal() -> RuntimeFailure {
+    refusal(
+        ProblemCode::NotAuthorized,
+        "acquisition-channel",
+        FailedCheck::AcquisitionChannel,
+    )
 }
 
 /// The shared value-free source failure classification used by serving and offline tooling.
@@ -3791,7 +3894,13 @@ pub fn pack_source_failure(error: PackSourceError) -> RuntimeFailure {
     let (problem, category) = match error {
         PackSourceError::Plan => (ProblemCode::ServiceUnavailable, "source-plan"),
         PackSourceError::Inputs => (ProblemCode::ServiceUnavailable, "source-inputs"),
-        PackSourceError::Authority => (ProblemCode::NotAuthorized, "source-authority"),
+        PackSourceError::Authority => {
+            return refusal(
+                ProblemCode::NotAuthorized,
+                "source-authority",
+                FailedCheck::SourceAuthority,
+            )
+        }
         PackSourceError::Audit => (ProblemCode::ServiceUnavailable, "access-audit"),
         PackSourceError::Budget => (ProblemCode::DependencyUnavailable, "acquisition-budget"),
         PackSourceError::Protocol => (ProblemCode::DependencyUnavailable, "source-protocol"),
@@ -4120,7 +4229,11 @@ pub(crate) fn release_admission(
     if grant_deadline
         .is_some_and(|deadline| deadline.is_expired_at(Utc::now().timestamp_millis(), now))
     {
-        return Err(failure(ProblemCode::NotAuthorized, "grant-expired"));
+        return Err(refusal(
+            ProblemCode::NotAuthorized,
+            "grant-expired",
+            FailedCheck::TaskGrantExpired,
+        ));
     }
     if now >= acquisition_deadline {
         return Err(failure(
@@ -4131,8 +4244,43 @@ pub(crate) fn release_admission(
     Ok(())
 }
 
+/// A failure that is not a refusal. The refusal codes carry the check that
+/// failed, so they are built by [`refusal`] and by nothing else.
 fn failure(problem: ProblemCode, category: &'static str) -> RuntimeFailure {
-    RuntimeFailure { problem, category }
+    debug_assert!(
+        !crate::observability::is_refusal_code(problem),
+        "a refusal code is built with `refusal`, which names its check"
+    );
+    RuntimeFailure {
+        problem,
+        category,
+        check: None,
+    }
+}
+
+/// An authentication, authorization or rate-limit refusal, with the check that
+/// failed.
+fn refusal(problem: ProblemCode, category: &'static str, check: FailedCheck) -> RuntimeFailure {
+    debug_assert!(
+        crate::observability::is_refusal_code(problem),
+        "`refusal` builds only the refusal codes"
+    );
+    RuntimeFailure {
+        problem,
+        category,
+        check: Some(check),
+    }
+}
+
+fn authentication_refusal(error: &AuthenticationError) -> RuntimeFailure {
+    refusal(
+        match error {
+            AuthenticationError::DevelopmentAssertion => ProblemCode::DevelopmentAssertion,
+            _ => ProblemCode::AuthenticationFailed,
+        },
+        "authentication",
+        error.failed_check(),
+    )
 }
 
 fn evidence_unavailable_failure() -> RuntimeFailure {
@@ -4148,16 +4296,25 @@ fn public_check_miss() -> RuntimeFailure {
 fn map_authority(error: AuthorizationError) -> RuntimeFailure {
     match error {
         AuthorizationError::Selector => failure(ProblemCode::InvalidSelector, "selector"),
-        AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority => {
-            failure(ProblemCode::NotAuthorized, "authorization")
+        AuthorizationError::Unauthorized(check) => {
+            refusal(ProblemCode::NotAuthorized, "authorization", check)
         }
+        AuthorizationError::AmbiguousAuthority => refusal(
+            ProblemCode::NotAuthorized,
+            "authorization",
+            FailedCheck::AccessProfile,
+        ),
         AuthorizationError::Binding => failure(ProblemCode::ServiceUnavailable, "subject-binding"),
     }
 }
 
 fn map_request_limit(error: RateLimitError) -> RuntimeFailure {
     match error {
-        RateLimitError::RequestExceeded => failure(ProblemCode::RateLimited, "request-rate"),
+        RateLimitError::RequestExceeded => refusal(
+            ProblemCode::RateLimited,
+            "request-rate",
+            FailedCheck::RateLimit,
+        ),
         // No wait admits a cost the burst cannot hold, so this is a request
         // the deployment will never accept, not a retryable rate limit: it
         // carries no Retry-After and charges nothing.
@@ -4168,9 +4325,11 @@ fn map_request_limit(error: RateLimitError) -> RuntimeFailure {
 
 fn map_selector_limit(error: RateLimitError) -> RuntimeFailure {
     match error {
-        RateLimitError::FailedSelectorExceeded => {
-            failure(ProblemCode::RateLimited, "selector-rate")
-        }
+        RateLimitError::FailedSelectorExceeded => refusal(
+            ProblemCode::RateLimited,
+            "selector-rate",
+            FailedCheck::RateLimit,
+        ),
         _ => failure(ProblemCode::ServiceUnavailable, "selector-rate"),
     }
 }
@@ -4496,6 +4655,11 @@ mod tests {
             let failure = pack_source_failure(error);
             assert_eq!(failure.problem, problem);
             assert_eq!(failure.category, category);
+            assert_eq!(
+                failure.check(),
+                (category == "source-authority").then_some(FailedCheck::SourceAuthority),
+                "only the authority refusal is recorded as a refusal: {category}"
+            );
             assert!(
                 categories.insert(category),
                 "two pack failures share the category {category}"
@@ -4506,6 +4670,25 @@ mod tests {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
             }));
         }
+    }
+
+    #[test]
+    fn refusals_built_outside_the_request_path_carry_the_check_that_refused() {
+        let channel = acquisition_channel_refusal();
+        assert_eq!(channel.problem(), ProblemCode::NotAuthorized);
+        assert_eq!(channel.check(), Some(FailedCheck::AcquisitionChannel));
+
+        let request_rate = map_request_limit(RateLimitError::RequestExceeded);
+        assert_eq!(request_rate.problem(), ProblemCode::RateLimited);
+        assert_eq!(request_rate.check(), Some(FailedCheck::RateLimit));
+        let selector_rate = map_selector_limit(RateLimitError::FailedSelectorExceeded);
+        assert_eq!(selector_rate.problem(), ProblemCode::RateLimited);
+        assert_eq!(selector_rate.check(), Some(FailedCheck::RateLimit));
+        assert_eq!(
+            map_request_limit(RateLimitError::CostExceedsBurst).check(),
+            None,
+            "a request the burst can never hold is not a rate-limit refusal"
+        );
     }
 
     #[test]

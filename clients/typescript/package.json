@@ -1,0 +1,61 @@
+{
+  "name": "@registrystack/client",
+  "version": "0.49.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/registrystack/registry-stack.git",
+    "directory": "clients/typescript"
+  },
+  "types": "./dist/browser.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
+    "./tasks": {
+      "types": "./dist/tasks/index.d.ts",
+      "default": "./dist/tasks/index.js"
+    },
+    "./webhook": {
+      "types": "./dist/webhook.d.ts",
+      "default": "./dist/webhook.js"
+    },
+    "./products/*": {
+      "types": "./dist/generated/*.d.ts",
+      "default": "./dist/generated/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "registry-generate.js",
+    "LICENSE"
+  ],
+  "scripts": {
+    "generate": "node generate-all.ts",
+    "check:generated": "node generate-all.ts --check",
+    "check:types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser.json",
+    "test": "node --test tests/*.test.ts",
+    "test:deno": "deno test --allow-read=tests,../../crates/registry-platform-crypto/tests/fixtures tests/deno/",
+    "build": "tsc -p tsconfig.browser.json && tsc -p tsconfig.generator.json"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "registry-generate": "./registry-generate.js"
+  }
+}

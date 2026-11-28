@@ -8,7 +8,7 @@ use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers};
+use registry_platform_httputil::{read_bounded, validate_response_headers, ResponseHeaderError};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,6 +17,7 @@ use std::{fmt, time::Duration};
 use url::Url;
 
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
+pub use registry_platform_httputil::PeerPolicy;
 
 // The server permits 32 pointers of 256 Unicode scalar values. JSON escaping
 // uses at most six bytes per scalar, leaving room for the fixed problem fields.
@@ -188,7 +189,7 @@ pub struct RenderClientError {
 fn error(kind: &'static str) -> RenderClientError {
     RenderClientError {
         kind,
-        outcome_unknown: kind == "protocol",
+        outcome_unknown: matches!(kind, "protocol" | "development-peer"),
         transport_kind: None,
         status: None,
         code: None,
@@ -202,6 +203,7 @@ fn serialize_transport_kind<S: serde::Serializer>(
 ) -> Result<S::Ok, S::Error> {
     kind.map(|kind| kind.kind()).serialize(serializer)
 }
+
 fn transport_error(kind: TransportKind) -> RenderClientError {
     RenderClientError {
         outcome_unknown: kind != TransportKind::Connect,
@@ -209,6 +211,7 @@ fn transport_error(kind: TransportKind) -> RenderClientError {
         ..error("transport")
     }
 }
+
 impl RenderClientError {
     /// A local argument refusal, before an HTTP exchange.
     pub fn invalid_request() -> Self {
@@ -228,6 +231,7 @@ impl RenderClientError {
 }
 
 pub struct RenderClient {
+    peer_policy: PeerPolicy,
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     maximum_response_bytes: u64,
@@ -238,7 +242,14 @@ impl fmt::Debug for RenderClient {
     }
 }
 impl RenderClient {
-    pub fn new(config: RenderClientConfig) -> Result<Self, RenderClientError> {
+    pub fn new_without_peer_policy(config: RenderClientConfig) -> Result<Self, RenderClientError> {
+        Self::new(config, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
+    pub fn new(
+        config: RenderClientConfig,
+        peer_policy: PeerPolicy,
+    ) -> Result<Self, RenderClientError> {
         if !(1..=300_000).contains(&config.attempt_timeout_milliseconds)
             || !(1..=300_000).contains(&config.connect_timeout_milliseconds)
             || !(1024..=32 * 1024 * 1024).contains(&config.maximum_response_bytes)
@@ -259,6 +270,7 @@ impl RenderClient {
         })
         .map_err(|_| error("configuration"))?;
         Ok(Self {
+            peer_policy,
             http,
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
@@ -500,7 +512,12 @@ impl RenderClient {
             .send()
             .await
             .map_err(|error| transport_error(send_failure_kind(&error)))?;
-        validate_response_headers(response.headers()).map_err(|_| error("protocol"))?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(|failure| {
+            match failure {
+                ResponseHeaderError::DevelopmentPeer => error("development-peer"),
+                _ => error("protocol"),
+            }
+        })?;
         let trace = response_trace_id(response.headers())
             .map_err(|_| error("protocol"))?
             .to_owned();
@@ -692,4 +709,56 @@ fn first_revision_matches(pdf: &[u8], document_hex: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod peer_posture_tests {
+    use super::*;
+    use axum::http::header::{HeaderMap, HeaderValue};
+    use axum::{routing::any, Router};
+
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        for posture in [None, Some("production"), Some("development")] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            );
+            if let Some(posture) = posture {
+                headers.insert("registry-posture", HeaderValue::from_static(posture));
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url =
+                url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let server = tokio::spawn(async move {
+                let router = Router::new().fallback(any(move || async move { (headers, r#"{}"#) }));
+                axum::serve(listener, router).await.unwrap();
+            });
+            for policy in [
+                PeerPolicy::RefuseDevelopmentPeer,
+                PeerPolicy::AcceptDevelopmentPeer,
+            ] {
+                let client =
+                    RenderClient::new(RenderClientConfig::new(url.as_str()), policy).unwrap();
+                let response = client
+                    .exchange(
+                        &BearerToken::new("fixture").unwrap(),
+                        Route::Render,
+                        "fixture",
+                        b"{}".to_vec(),
+                        None,
+                    )
+                    .await;
+                if posture == Some("development") && policy == PeerPolicy::RefuseDevelopmentPeer {
+                    let RenderClientError { kind, .. } = response.unwrap_err();
+                    assert_eq!(kind, "development-peer");
+                } else {
+                    response.expect("peer response accepted");
+                }
+            }
+            server.abort();
+        }
+    }
 }

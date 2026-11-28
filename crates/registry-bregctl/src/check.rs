@@ -33,9 +33,9 @@ use serde_json::Value;
 use super::{
     canonicalize_project_path, capture_resolved_project_source, compile_captured_registry,
     ensure_source_entry_identity, file_check, has_parent_component, inspect_package_integrity,
-    path_diagnostic, read_module_directory_names, remap_derived_diagnostic_path, write_ctl_report,
-    OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError, DOMAIN_REFUSAL_EXIT,
-    OPERATIONAL_FAILURE_EXIT,
+    path_diagnostic, read_module_directory_names, remap_derived_diagnostic_path,
+    write_ctl_report_with_settings, OutputFormat, ProfileArg, SafeDir, SafeEntry, SafePathError,
+    DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT,
 };
 
 /// The registered kind of `registry.yaml`, named as the `artifact` of a
@@ -154,9 +154,13 @@ struct Outcome {
     unavailable: bool,
     revision: Option<String>,
     package_digest: Option<String>,
+    /// The explicit production settings a checked runtime file states.
+    /// `None` when no runtime file was checked.
+    explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 }
 
 pub(super) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     request: &Request<'_>,
     format: OutputFormat,
     stdout: &mut dyn Write,
@@ -173,6 +177,7 @@ pub(super) fn run(
             let compiled = check_project(project, profile, &mut outcome);
             if let Some(runtime) = request.runtime_config {
                 check_runtime_file(
+                    posture,
                     runtime,
                     request.environment,
                     compiled.as_ref(),
@@ -196,7 +201,8 @@ pub(super) fn run(
         registry_platform_config::apply_check_acceptances(project, &mut outcome.report);
         outcome.files = outcome.report.files_checked().unwrap_or(outcome.files);
     }
-    let denied = request.deny_warnings && outcome.report.warning_count() > 0;
+    let denied = request.deny_warnings
+        && registry_platform_config::has_denied_warnings(outcome.report.diagnostics());
     let exit = if outcome.unavailable {
         OPERATIONAL_FAILURE_EXIT
     } else if outcome.report.has_errors() || denied {
@@ -205,7 +211,7 @@ pub(super) fn run(
         0
     };
     let passed = exit == 0;
-    let written = if format == OutputFormat::Json {
+    let written = if format.is_json() {
         let diagnostics = ranked_diagnostics(outcome.report.diagnostics());
         let report = CheckReport {
             ok: passed,
@@ -223,9 +229,14 @@ pub(super) fn run(
             package_digest: outcome.package_digest.as_deref().filter(|_| passed),
             diagnostics,
         };
-        write_ctl_report(&mut *stdout, &report)
-            .map_err(std::io::Error::other)
-            .and_then(|()| writeln!(stdout))
+        write_ctl_report_with_settings(
+            format,
+            &mut *stdout,
+            &report,
+            outcome.explicit_settings.clone(),
+        )
+        .map_err(std::io::Error::other)
+        .and_then(|()| writeln!(stdout))
     } else if passed {
         let lead = match (&outcome.revision, &outcome.package_digest) {
             (Some(revision), Some(digest)) => {
@@ -239,7 +250,12 @@ pub(super) fn run(
             }
             (None, _) => "Check passed.".to_owned(),
         };
-        write!(stdout, "{lead}\n{}", outcome.report.render_human())
+        write!(
+            stdout,
+            "{lead}\n{}{}",
+            explicit_setting_notes(outcome.explicit_settings.as_deref()),
+            outcome.report.render_human()
+        )
     } else {
         let lead = if outcome.unavailable {
             format!("bregctl check could not read the {subject}.")
@@ -765,8 +781,20 @@ fn compile_project_with_documents(
     // deployment, so it also reports the identity a deployable package must
     // not carry.
     if profile == ProfileArg::Production {
+        let mut posture = registry_platform_config::PostureReport::new(crate::DEFAULT_POSTURE);
+        registry_breg::compiler::record_project_posture(&mut posture, &source.project);
+        let posture_diagnostics = posture.diagnostics(&project.join("registry.yaml"));
         for refusal in registry_breg::compiler::deployment_diagnostics(&source.project) {
-            diagnostics.push(place(project, &documents, refusal, Severity::Error));
+            let mut finding = place(project, &documents, refusal, Severity::Error);
+            if let Some(posture_diagnostic) = posture_diagnostics
+                .iter()
+                .find(|item| item.code == finding.code)
+            {
+                finding
+                    .suggested_action
+                    .clone_from(&posture_diagnostic.suggested_action);
+            }
+            diagnostics.push(finding);
         }
     }
     match compile_captured_registry(&source, profile) {
@@ -1206,6 +1234,7 @@ fn file_diagnostic(
 }
 
 fn check_runtime_file(
+    posture: registry_platform_config::DeclaredPosture,
     path: &Path,
     environment: bool,
     registry: Option<&CompiledRegistry>,
@@ -1224,9 +1253,15 @@ fn check_runtime_file(
         return;
     };
     let absolute_text = absolute.display().to_string();
-    let check = check_runtime_config(&absolute, environment, registry);
+    let check = check_runtime_config(&absolute, environment, registry, posture);
     outcome.files += 1;
     outcome.unavailable |= check.unavailable;
+    outcome
+        .explicit_settings
+        .get_or_insert_with(Vec::new)
+        .extend(check.explicit_settings.iter().map(|found| {
+            registry_cli_report::ExplicitSettingLine::from_found(found, Some(&given))
+        }));
     for mut diagnostic in check.diagnostics {
         if let Some(source) = &mut diagnostic.source {
             if source.file == absolute_text {
@@ -1240,6 +1275,23 @@ fn check_runtime_file(
         }
         outcome.report.push(diagnostic);
     }
+}
+
+/// One line per explicit production setting a checked runtime file states,
+/// for the human report. They are facts for a reviewer, not diagnostics.
+fn explicit_setting_notes(settings: Option<&[registry_cli_report::ExplicitSettingLine]>) -> String {
+    settings
+        .unwrap_or_default()
+        .iter()
+        .map(|setting| {
+            format!(
+                "Explicit production setting {} at {}. {}.\n",
+                setting.code,
+                setting.pointer.as_deref().unwrap_or(""),
+                setting.summary.trim_end_matches('.')
+            )
+        })
+        .collect()
 }
 
 /// The path made absolute against the working directory, with `.` and `..`

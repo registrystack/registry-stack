@@ -22,7 +22,9 @@ use super::{
     RuntimeRevoke, SqlIdentifier,
 };
 
-pub(super) const MANAGED_SCHEMAS: &[&str] = &[
+/// The schemas a package creates its tables, functions and policies in. The
+/// migration role owns them.
+pub const MANAGED_SCHEMAS: &[&str] = &[
     "registry_internal",
     "registry_data",
     "registry_source",
@@ -1147,6 +1149,9 @@ pub(crate) async fn install_registry_state_schema(
                  active_package_digest text NOT NULL
                      CONSTRAINT registry_state_package_digest_nonempty CHECK (active_package_digest <> ''),
                  active_activation_id uuid NOT NULL,
+                 posture text NOT NULL DEFAULT 'production'
+                     CONSTRAINT registry_state_posture_closed
+                     CHECK (posture IN ('development', 'production')),
                  schema_fingerprint text NOT NULL
                      CONSTRAINT registry_state_schema_fingerprint_nonempty CHECK (schema_fingerprint <> ''),
                  maintenance_status text NOT NULL
@@ -1272,6 +1277,50 @@ pub(crate) async fn install_registry_state_schema(
     Ok(())
 }
 
+/// Read only the two posture values the activation tables permit.
+pub(crate) fn recorded_posture(value: &str) -> Result<registry_platform_config::Posture> {
+    registry_platform_config::Posture::parse(value).ok_or(PostgresKernelError::CatalogInvariant(
+        "the activation posture is invalid",
+    ))
+}
+
+/// An activation adds both columns in the same transaction as its ledger
+/// write. Legacy rows acquire the production default.
+pub(crate) async fn ensure_activation_posture_columns(client: &impl GenericClient) -> Result<()> {
+    let columns = client
+        .query(
+            "SELECT table_name FROM information_schema.columns
+             WHERE table_schema = 'registry_internal' AND column_name = 'posture'
+             AND table_name IN ('registry_state', 'registry_migrations')",
+            &[],
+        )
+        .await?;
+    for (table, upgrade) in [
+        (
+            "registry_state",
+            "ALTER TABLE registry_internal.registry_state
+             ADD COLUMN IF NOT EXISTS posture text NOT NULL DEFAULT 'production'
+                 CONSTRAINT registry_state_posture_closed
+                 CHECK (posture IN ('development', 'production'))",
+        ),
+        (
+            "registry_migrations",
+            "ALTER TABLE registry_internal.registry_migrations
+             ADD COLUMN IF NOT EXISTS posture text NOT NULL DEFAULT 'production'
+                 CONSTRAINT registry_migrations_posture_closed
+                 CHECK (posture IN ('development', 'production'))",
+        ),
+    ] {
+        if !columns
+            .iter()
+            .any(|column| column.get::<_, &str>(0) == table)
+        {
+            client.batch_execute(upgrade).await?;
+        }
+    }
+    Ok(())
+}
+
 /// Initializes a Registry state row against an explicit closed catalog,
 /// records the applied initial activation in the ledger the way an initial
 /// apply would, and records the physical claim of the database it runs in.
@@ -1281,8 +1330,10 @@ async fn initialize_registry_state_for_catalog(
     runtime_role: &SqlIdentifier,
     expected_catalog: &ExpectedManagedCatalog,
     initial: &RegistryStateTestIdentity<'_>,
+    posture: registry_platform_config::Posture,
 ) -> Result<ExpectedRegistryIdentity> {
     initial.validate()?;
+    ensure_activation_posture_columns(migration).await?;
     let schema_fingerprint =
         managed_schema_fingerprint(migration, runtime_role, expected_catalog).await?;
     let expected = ExpectedRegistryIdentity {
@@ -1296,8 +1347,8 @@ async fn initialize_registry_state_for_catalog(
         .execute(
             "INSERT INTO registry_internal.registry_state (
                  singleton, package_id, database_id, active_package_digest,
-                 active_activation_id, schema_fingerprint, maintenance_status
-             ) VALUES (true, $1, $2, $3, $4, $5, 'ready')
+                 active_activation_id, schema_fingerprint, maintenance_status, posture
+             ) VALUES (true, $1, $2, $3, $4, $5, 'ready', $6)
              ON CONFLICT (singleton) DO NOTHING",
             &[
                 &expected.package_id,
@@ -1305,6 +1356,7 @@ async fn initialize_registry_state_for_catalog(
                 &expected.package_digest,
                 &expected.activation_uuid()?,
                 &expected.schema_fingerprint,
+                &posture.as_str(),
             ],
         )
         .await?;
@@ -1319,18 +1371,19 @@ async fn initialize_registry_state_for_catalog(
                  activation_id, apply_order, package_digest, predecessor_package_digest,
                  registry_revision, plan_kind, migration_kind, statement_checksums,
                  artifact_paths, artifact_checksums, outcome, completed_at, applied_at,
-                 role_mode, runtime_role
+                 role_mode, runtime_role, posture
              ) VALUES (
                  $1, 1, $2, NULL, $3, 'initial', 'compiled-additive', ARRAY[$2]::text[],
                  ARRAY[]::text[], ARRAY[]::text[], 'applied', transaction_timestamp(),
                  transaction_timestamp(),
-                 CASE WHEN $4 = current_user THEN 'single' ELSE 'split' END, $4
+                 CASE WHEN $4 = current_user THEN 'single' ELSE 'split' END, $4, $5
              )",
             &[
                 &expected.activation_uuid()?,
                 &expected.package_digest,
                 &initial.label,
                 &runtime_role.as_str(),
+                &posture.as_str(),
             ],
         )
         .await?;
@@ -1348,8 +1401,14 @@ pub async fn initialize_registry_state_for_catalog_test(
     expected_catalog: &ExpectedManagedCatalog,
     identity: RegistryStateTestIdentity<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
-    initialize_registry_state_for_catalog(migration, runtime_role, expected_catalog, &identity)
-        .await
+    initialize_registry_state_for_catalog(
+        migration,
+        runtime_role,
+        expected_catalog,
+        &identity,
+        registry_platform_config::Posture::Production,
+    )
+    .await
 }
 
 /// Test-only helper for integration fixtures that install a compiled Registry
@@ -1365,11 +1424,31 @@ pub async fn initialize_compiled_registry_state_for_test(
     registry: &CompiledRegistry,
     identity: RegistryStateTestIdentity<'_>,
 ) -> Result<ExpectedRegistryIdentity> {
+    initialize_compiled_registry_state_with_posture_for_test(
+        migration,
+        runtime_role,
+        registry,
+        identity,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn initialize_compiled_registry_state_with_posture_for_test(
+    migration: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+    registry: &CompiledRegistry,
+    identity: RegistryStateTestIdentity<'_>,
+    posture: registry_platform_config::Posture,
+) -> Result<ExpectedRegistryIdentity> {
     let expected = initialize_registry_state_for_catalog(
         migration,
         runtime_role,
         &ExpectedManagedCatalog::compiled(registry),
         &identity,
+        posture,
     )
     .await?;
     install_empty_history_baseline_for_compiled_registry(
@@ -2245,7 +2324,30 @@ async fn fingerprint_catalog(
     // remain covered. The versioned domain keeps a hash of physical column
     // order from ever matching this one.
     hasher.update(b"breg/catalog/v6/columns");
+    // Both deployment-owned posture columns can be absent on a legacy
+    // database. Validate their shape here and preserve the fingerprint of
+    // the package's existing managed catalog in either case.
+    let mut posture_columns = 0;
+    let mut posture_checks = 0;
     for row in column_rows {
+        if row.get::<_, &str>(0) == "registry_internal"
+            && matches!(
+                row.get::<_, &str>(1),
+                "registry_state" | "registry_migrations"
+            )
+            && row.get::<_, &str>(7) == "posture"
+        {
+            if row.get::<_, &str>(8) != "text"
+                || !row.get::<_, bool>(9)
+                || row.get::<_, &str>(10) != "'production'::text"
+            {
+                return Err(PostgresKernelError::CatalogInvariant(
+                    "the activation posture column has drifted",
+                ));
+            }
+            posture_columns += 1;
+            continue;
+        }
         for index in [0, 1, 2, 7, 8, 10, 11, 12] {
             hash_text(&mut hasher, &row.get::<_, String>(index));
         }
@@ -2264,12 +2366,36 @@ async fn fingerprint_catalog(
                 "a managed NOT NULL constraint is not validated; validate it before applying the package",
             ));
         }
+        if row.get::<_, &str>(0) == "registry_internal"
+            && matches!(
+                (row.get::<_, &str>(1), row.get::<_, &str>(2)),
+                ("registry_state", "registry_state_posture_closed")
+                    | ("registry_migrations", "registry_migrations_posture_closed")
+            )
+        {
+            if kind != "c"
+                || !row.get::<_, bool>(5)
+                || row.get::<_, &str>(4)
+                    != "CHECK ((posture = ANY (ARRAY['development'::text, 'production'::text])))"
+            {
+                return Err(PostgresKernelError::CatalogInvariant(
+                    "the activation posture constraint has drifted",
+                ));
+            }
+            posture_checks += 1;
+            continue;
+        }
         if !constraint_belongs_in_fingerprint(&kind) {
             continue;
         }
         for index in 0..5 {
             hash_text(&mut hasher, &row.get::<_, String>(index));
         }
+    }
+    if !matches!((posture_columns, posture_checks), (0, 0) | (2, 2)) {
+        return Err(PostgresKernelError::CatalogInvariant(
+            "the activation posture catalog is incomplete",
+        ));
     }
     hasher.update(b"breg/catalog/v3/indexes");
     for row in index_rows {

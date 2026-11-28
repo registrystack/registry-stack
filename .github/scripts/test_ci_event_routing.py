@@ -11,7 +11,7 @@ import tempfile
 import textwrap
 import unittest
 
-from ci_changes import SHARDS, Workspace, classify
+from ci_changes import RSTACK_DEV_HOST_PACKAGES, SHARDS, Workspace, classify
 from ci_event_routing import select_event, selection_outputs
 
 
@@ -233,6 +233,12 @@ class EventRoutingTest(unittest.TestCase):
         )
         self.assertNotEqual(bumped, lock)
         head = self.commit("Cargo.lock", bumped)
+        # registry-render hosts `rstack dev`, so its change also runs the
+        # registry-rstack dev_run harness.
+        self.assertIn("registry-render", RSTACK_DEV_HOST_PACKAGES)
+        expected = sorted(
+            self.workspace.affected_packages({"registry-render"}) | {"registry-rstack"}
+        )
         for event_name, event in (
             ("pull_request", {"pull_request": {"base": {"sha": base}, "head": {"sha": head}}}),
             ("merge_group", {"merge_group": {"base_sha": base, "head_sha": head}}),
@@ -243,10 +249,7 @@ class EventRoutingTest(unittest.TestCase):
                 self.assertEqual(selection.paths, ("Cargo.lock",))
                 self.assertEqual(selection.lock_texts, (lock, bumped))
                 outputs = selection_outputs(self.workspace, selection)
-                self.assertEqual(
-                    outputs["rust_packages"],
-                    sorted(self.workspace.affected_packages({"registry-render"})),
-                )
+                self.assertEqual(outputs["rust_packages"], expected)
                 self.assertFalse(outputs["release_linux_node_clients"] and event_name == "pull_request")
 
     def test_lock_absent_at_one_endpoint_selects_every_rust_package(self) -> None:

@@ -1357,6 +1357,149 @@ class ReleaseCandidateTest(TestCase):
                     self.assertEqual(0, result)
                     self.assertNotIn("coordinator", stdout.getvalue().split())
 
+    def test_adapter_image_is_absent_from_every_roster_while_held(self) -> None:
+        self.assertIsNone(self.module.release_roster.ADAPTER_IMAGE_FIRST_RELEASE)
+        held_images = {
+            "breg", "breg-mcp", "breg-review", "casework", "discovery", "evidence",
+            "evidence-oid4vci", "messaging", "registry-render", "scheduling",
+        }
+        held_tools = {
+            "breg": "bregctl",
+            "casework": "caseworkctl",
+            "scheduling": "schedulingctl",
+            "messaging": "messagingctl",
+        }
+        with mock.patch.object(
+            self.module.release_roster, "COORDINATOR_FIRST_RELEASE", None
+        ):
+            for version in ("0.48.0", "1.0.0"):
+                with self.subTest(version=version):
+                    self.assertEqual(
+                        held_images, self.module._candidate_image_names(version)
+                    )
+                    self.assertEqual(
+                        held_tools, self.module.image_operator_tools(version)
+                    )
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                        result = self.module.main(
+                            ["image-names", "--version", version, "--unit", "stack"]
+                        )
+                    self.assertEqual(0, result)
+                    self.assertEqual(held_images, set(stdout.getvalue().split()))
+                    required = self.module._security_evidence_required_files(
+                        self.module._candidate_image_names(version)
+                    )
+                    self.assertFalse(any("adapter" in name for name in required))
+
+    def test_browser_and_node_client_tarballs_are_distinct_from_v0_49_0(self) -> None:
+        previous = self.module._release_payload_inventory("0.48.0")
+        current = self.module._release_payload_inventory("0.49.0")
+        self.assertEqual("client-package", previous["registrystack-client-0.48.0.tgz"])
+        self.assertNotIn("registrystack-client-node-0.48.0.tgz", previous)
+        for name in (
+            "registrystack-client-0.49.0.tgz",
+            "registrystack-client-node-0.49.0.tgz",
+            "registrystack-client-node-linux-x64-gnu-0.49.0.tgz",
+        ):
+            self.assertEqual("client-package", current[name])
+        self.assertNotIn("registrystack-client-linux-x64-gnu-0.49.0.tgz", current)
+        self.assertNotIn("registrystack-web-client-0.49.0.tgz", current)
+
+    @roster_patch("release_roster.ADAPTER_IMAGE_FIRST_RELEASE", (0, 49, 0))
+    def test_adapter_image_joins_the_rosters_from_its_first_release(self) -> None:
+        self.hold_out("COORDINATOR_FIRST_RELEASE")
+        before = self.module._candidate_image_names("0.48.0")
+        self.assertNotIn("adapter", before)
+        self.assertEqual(
+            before | {"adapter"}, self.module._candidate_image_names("0.49.0")
+        )
+        self.assertNotIn("adapter", self.module.image_operator_tools("0.48.0"))
+        self.assertEqual(
+            "adapterctl", self.module.image_operator_tools("0.49.0")["adapter"]
+        )
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            result = self.module.main(
+                ["image-names", "--version", "0.49.0", "--unit", "stack"]
+            )
+        self.assertEqual(0, result)
+        self.assertIn("adapter", stdout.getvalue().split())
+        evidence = {
+            "image-sbom/adapter.spdx.json",
+            "syft/adapter.syft.json",
+            "grype/adapter.grype.json",
+        }
+        self.assertTrue(
+            evidence.issubset(
+                self.module._security_evidence_required_files(
+                    self.module._candidate_image_names("0.49.0")
+                )
+            )
+        )
+        self.assertTrue(evidence.issubset(self.module.SECURITY_EVIDENCE_REQUIRED_FILES))
+        # Adapter image onboarding keeps the existing binary payloads.
+        def non_client_payloads(version: str) -> dict[str, str]:
+            return {
+                name.replace(version, "<version>"): kind
+                for name, kind in self.module._release_payload_inventory(version).items()
+                if kind != "client-package"
+            }
+
+        self.assertEqual(non_client_payloads("0.48.0"), non_client_payloads("0.49.0"))
+
+    @roster_patch("release_roster.ADAPTER_IMAGE_FIRST_RELEASE", (0, 49, 0))
+    def test_adapter_onboarding_stays_closed_until_external_setup(self) -> None:
+        self.hold_out("COORDINATOR_FIRST_RELEASE")
+        root = self.onboarding_repository()
+        shutil.copy2(
+            ROOT / "release/docker/Dockerfile.adapter",
+            root / "release/docker/Dockerfile.adapter",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError, "adapter advisory baseline is missing"
+        ):
+            self.module.check_image_onboarding(root, "0.49.0")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "CANDIDATE_PACKAGES must contain adapter-candidate",
+        ):
+            self.module.check_image_onboarding(
+                root, "0.49.0", allow_missing_baseline=True
+            )
+        cleanup = root / "release/scripts/cleanup-release-candidates.py"
+        cleanup.write_text(
+            cleanup.read_text(encoding="utf-8").replace(
+                '    "messaging-candidate",\n',
+                '    "messaging-candidate",\n    "adapter-candidate",\n',
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError, "PUBLIC_PACKAGES must contain adapter"
+        ):
+            self.module.check_image_onboarding(
+                root, "0.49.0", allow_missing_baseline=True
+            )
+        # The canonical recipe stages the runtime and its operator tool.
+        for staged in ("adapter", "adapterctl"):
+            recipe = root / "release/scripts/build-release-binaries.sh"
+            original = recipe.read_text(encoding="utf-8")
+            line = f"cp target/release/{staged} dist/image-bin/{staged}"
+            self.assertIn(line, original)
+            recipe.write_text(
+                original.replace(line, f"cp target/release/{staged} dist/image-bin/wrong-{staged}"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                self.module.CandidateError,
+                f"canonical binary recipe must stage dist/image-bin/{staged}",
+            ):
+                self.module.check_image_onboarding(
+                    root, "0.49.0", allow_missing_baseline=True
+                )
+            recipe.write_text(original, encoding="utf-8")
+
     def test_no_version_ships_the_document_store_while_it_is_held_out(
         self,
     ) -> None:

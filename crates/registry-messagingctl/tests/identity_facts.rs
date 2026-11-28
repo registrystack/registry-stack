@@ -282,3 +282,112 @@ fn a_reserved_scope_claim_is_refused_and_writes_nothing() {
     assert!(!ok);
     assert!(facts.is_empty());
 }
+
+/// The starter with a second issuer entry, `partner`, admitting the
+/// operations client the `main` entry no longer lists.
+fn starter_with_two_issuers(root: &Path) -> std::path::PathBuf {
+    let runtime = starter(root);
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    let marker = "allowedClients: [case-system, operations-console]";
+    assert!(text.contains(marker));
+    std::fs::write(
+        &runtime,
+        text.replace(
+            marker,
+            "allowedClients: [case-system]\n      partner:\n        issuer: https://partner.example.test\n        audience: urn:example:messaging\n        allowedClients: [operations-console]",
+        ),
+    )
+    .unwrap();
+    runtime
+}
+
+fn generate(runtime: &Path, output: &Path, extra: &[&str]) -> (bool, String) {
+    let run = messagingctl(
+        &[
+            &[
+                "generate",
+                "identity-facts",
+                "--runtime-config",
+                path(runtime),
+            ],
+            &["--output", path(output)][..],
+            extra,
+        ]
+        .concat(),
+    );
+    (
+        run.status.success(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        ),
+    )
+}
+
+#[test]
+fn two_issuers_need_the_issuer_named_and_an_unknown_one_is_refused() {
+    let temporary = tempfile::tempdir().unwrap();
+    let runtime = starter_with_two_issuers(temporary.path());
+    let output = runtime.parent().unwrap().join("facts.yaml");
+
+    let (ok, report) = generate(&runtime, &output, &[]);
+    assert!(!ok, "{report}");
+    assert!(
+        report.contains("identity.facts.issuer-required"),
+        "{report}"
+    );
+    assert!(!output.exists(), "a refusal writes nothing");
+
+    let (ok, report) = generate(&runtime, &output, &["--issuer", "elsewhere"]);
+    assert!(!ok, "{report}");
+    assert!(report.contains("identity.facts.unknown-issuer"), "{report}");
+    assert!(!output.exists(), "a refusal writes nothing");
+}
+
+#[test]
+fn the_facts_describe_the_issuer_entry_that_was_named() {
+    let temporary = tempfile::tempdir().unwrap();
+    let runtime = starter_with_two_issuers(temporary.path());
+    let output = runtime.parent().unwrap().join("partner.yaml");
+    let (ok, report) = generate(&runtime, &output, &["--issuer", "partner"]);
+    assert!(ok, "{report}");
+    let facts = std::fs::read_to_string(&output).unwrap();
+    assert!(
+        facts.contains("issuer: https://partner.example.test\n"),
+        "{facts}"
+    );
+    assert!(
+        facts.contains("allowedClients:\n- operations-console\n"),
+        "{facts}"
+    );
+    assert!(facts.contains("id: operations"), "{facts}");
+    assert!(!facts.contains("case-notices"), "{facts}");
+    assert!(!facts.contains("identity.example.test"), "{facts}");
+
+    let output = runtime.parent().unwrap().join("main.yaml");
+    let (ok, report) = generate(&runtime, &output, &["--issuer", "main"]);
+    assert!(ok, "{report}");
+    let facts = std::fs::read_to_string(&output).unwrap();
+    assert!(
+        facts.contains("allowedClients:\n- case-system\n"),
+        "{facts}"
+    );
+    assert!(facts.contains("id: case-notices"), "{facts}");
+    assert!(!facts.contains("id: operations"), "{facts}");
+}
+
+#[test]
+fn one_issuer_needs_no_issuer_named_and_names_it_without_changing_the_facts() {
+    let temporary = tempfile::tempdir().unwrap();
+    let runtime = starter(temporary.path());
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, report) = generate(&runtime, &output, &["--issuer", "main"]);
+    assert!(ok, "{report}");
+    assert_eq!(std::fs::read_to_string(&output).unwrap(), GOLDEN);
+
+    let other = runtime.parent().unwrap().join("other.yaml");
+    let (ok, report) = generate(&runtime, &other, &["--issuer", "elsewhere"]);
+    assert!(!ok, "{report}");
+    assert!(report.contains("identity.facts.unknown-issuer"), "{report}");
+}

@@ -11,7 +11,7 @@ set -euo pipefail
 # serve until `bregctl instance-claim adopt --acknowledge-original-retired`.
 # Once adopted it serves the committed state of the backup point, its import
 # authority is superseded, it re-sends only the delivery that was pending at
-# the backup point, under the same idempotency key, its audit stream continues
+# the backup point, under the same webhook id, its audit stream continues
 # in the same files, and it accepts a write.
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -332,7 +332,6 @@ identity:
   environment: production
   instanceId: $instance_id
   databaseId: generic-registry-production-db
-  databaseInitializationEnvironment: production
 secretProviders:
   file:
     root: $temporary_root/secrets
@@ -348,18 +347,20 @@ package:
   root: $package_root
 authentication:
   oidc:
-    issuer: https://issuer.example.invalid
-    audience: generic-registry
-    allowedAlgorithm: EdDSA
-    accessTokenType: at+jwt
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [generic-registry-client]
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 30000
-    jwksSource:
-      type: static
-      documentRef: secret:file/issuer-jwks
+    issuers:
+      primary:
+        issuer: https://issuer.example.invalid
+        audience: generic-registry
+        allowedAlgorithm: EdDSA
+        accessTokenType: at+jwt
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [generic-registry-client]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 30000
+        jwksSource:
+          type: static
+          documentRef: secret:file/issuer-jwks
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
@@ -374,7 +375,7 @@ destinations:
     record-events:
       origin: http://$receiver_address
       path: /events
-      networkProfile: loopback-development-http
+      networkProfile: loopback-http
       dnsFamily: dual-stack-strict
       allowedPrivateCidrs: []
       hmacSha256KeyRef: secret:file/record-events-key
@@ -645,15 +646,20 @@ class Receiver(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         status = int(answer_file.read_text(encoding="ascii").strip())
         try:
-            record_id = json.loads(body)["data"]["recordId"]
-        except (ValueError, KeyError, TypeError):
+            envelope = json.loads(body)
+            record_id = envelope.get("data", {}).get("recordId")
+        except (ValueError, AttributeError):
+            envelope = {}
             record_id = None
         receipt = {
-            "idempotencyKey": self.headers.get("Idempotency-Key"),
-            "eventId": self.headers.get("ce-id"),
-            "type": self.headers.get("ce-type"),
-            "source": self.headers.get("ce-source"),
-            "attempt": self.headers.get("X-Registry-Delivery-Attempt"),
+            "eventId": self.headers.get("webhook-id"),
+            "type": envelope.get("type"),
+            "source": envelope.get("source"),
+            "legacyHeaders": any(
+                name.lower().startswith(("ce-", "x-registry-"))
+                or name.lower() == "idempotency-key"
+                for name in self.headers
+            ),
             "recordId": record_id,
             "answer": status,
         }
@@ -964,14 +970,14 @@ http_json GET "${base_url}v1/records/records/$record_3?accessProfile=operator" "
 assert_status "$temporary_root/restored-record-3.json" 404
 
 checkpoint "re-sending only the delivery pending at the backup point"
-python3 - "$temporary_root/receiver-at-retirement.jsonl" "$record_2" >"$temporary_root/pending-key" <<'PY'
+python3 - "$temporary_root/receiver-at-retirement.jsonl" "$record_2" >"$temporary_root/pending-webhook-id" <<'PY'
 import json
 import sys
 receipts = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-keys = {receipt["idempotencyKey"] for receipt in receipts if receipt["recordId"] == sys.argv[2]}
-if len(keys) != 1:
-    raise SystemExit(f"the pending delivery was sent under {len(keys)} idempotency keys")
-print(keys.pop())
+ids = {receipt["eventId"] for receipt in receipts if receipt["recordId"] == sys.argv[2]}
+if len(ids) != 1 or not all(ids):
+    raise SystemExit("the pending delivery did not have one stable webhook id")
+print(ids.pop())
 PY
 retired_receipts=$(wc -l <"$temporary_root/receiver-at-retirement.jsonl")
 wait_for_receipts "the adopted copy's delivery of the event pending at the backup point" \
@@ -979,12 +985,14 @@ wait_for_receipts "the adopted copy's delivery of the event pending at the backu
 record_4=$(create_record record-4 "$temporary_root/record-4-created.json")
 wait_for_receipts "the delivered event for the write after adoption" \
   "any(r['recordId'] == '$record_4' and r['answer'] == 200 for r in receipts)"
-python3 - "$temporary_root/receiver.jsonl" "$retired_receipts" "$(<"$temporary_root/pending-key")" \
+python3 - "$temporary_root/receiver.jsonl" "$retired_receipts" "$(<"$temporary_root/pending-webhook-id")" \
   "$record_1" "$record_2" "$record_3" "$record_4" <<'PY'
 import json
 import sys
-path, retired, pending_key, record_1, record_2, record_3, record_4 = sys.argv[1:]
+path, retired, pending_webhook_id, record_1, record_2, record_3, record_4 = sys.argv[1:]
 receipts = [json.loads(line) for line in open(path, encoding="utf-8")]
+if any(receipt["legacyHeaders"] for receipt in receipts):
+    raise SystemExit("a delivery used legacy headers")
 after = receipts[int(retired):]
 by_record = {}
 for receipt in after:
@@ -994,8 +1002,8 @@ if set(by_record) != {record_2, record_4}:
 resent = by_record[record_2]
 if [receipt["answer"] for receipt in resent] != [200]:
     raise SystemExit("the pending delivery was not re-sent exactly once")
-if resent[0]["idempotencyKey"] != pending_key:
-    raise SystemExit("the pending delivery was re-sent under another idempotency key")
+if resent[0]["eventId"] != pending_webhook_id:
+    raise SystemExit("the pending delivery was re-sent under another webhook id")
 delivered_once = [receipt for receipt in receipts if receipt["recordId"] in (record_1, record_3)]
 if len(delivered_once) != 2 or any(receipt["answer"] != 200 for receipt in delivered_once):
     raise SystemExit("an event delivered before the restore was delivered again")
@@ -1031,7 +1039,7 @@ def entries(path):
     lines = Path(path).read_bytes().splitlines()
     parsed = [json.loads(line) for line in lines]
     for entry in parsed:
-        if set(entry) != {"schema", "eventId", "time", "phase", "correlation", "record"}:
+        if set(entry) != {"schema", "eventId", "time", "phase", "posture", "correlation", "record"}:
             raise SystemExit(f"{path} holds an entry of another shape")
     return parsed
 

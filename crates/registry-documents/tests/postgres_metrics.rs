@@ -35,9 +35,10 @@ async fn start(verifier: &Arc<FakeVerifier>) -> (Deployment, Prepared, Api, u16)
     let port = free_port();
     deployment.configure(&format!("metricsListener:\n  bind: 127.0.0.1:{port}\n"));
     deployment.migrate().await;
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares");
+    let prepared =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares");
     let api = Api::new(&prepared);
     (deployment, prepared, api, port)
 }

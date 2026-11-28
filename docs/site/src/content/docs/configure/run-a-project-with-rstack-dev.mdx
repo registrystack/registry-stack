@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 persona:
   - operator
@@ -16,10 +16,20 @@ standards_referenced: []
 import ConfigurationFormatChecks from '../../../components/ConfigurationFormatChecks.astro';
 
 If you are writing a registry project, `rstack dev` runs it on your machine. It starts the products
-the project lists, runs short scenarios against them, and removes everything when you stop. One
+the project lists, runs short scenarios against them, and keeps managed PostgreSQL data between runs. One
 product is enough: you do not need the others to try yours. This page starts with one product on its
 own, then runs several together, and ends with the reference for the plan, applications, issuer
 binding, isolation and recovery.
+
+## Generate the application client
+
+From the application, run `npm install @registrystack/client`, then run
+`rstack client generate --help` for the register, product and output options.
+The command looks for the installed `@registrystack/client` package starting at the output file's directory.
+Like `rstack dev`, it sets `RSTACK_BREGCTL_BIN` to the selected release's `bregctl` when an installed release is selected.
+See the [TypeScript client reference](../../reference/typescript-clients/).
+
+{/* Evidence: crates/registry-rstack/src/cli.rs, generate_client(); clients/typescript/package.json. */}
 
 ## Before you start
 
@@ -31,7 +41,7 @@ You need:
 - `curl`.
 - A checkout of Registry Stack at the release you installed, for the example projects.
 
-A plan that lists only Evidence starts no database and needs no Docker.
+Evidence, Render, and Discovery can run on their own without a database or Docker.
 
 ## Install the components
 
@@ -67,9 +77,20 @@ export RSTACK_BREGCTL_BIN="$PWD/target/debug/bregctl"
 export RSTACK_BREG_BIN="$PWD/target/debug/breg"
 ```
 
-Casework uses `RSTACK_CASEWORKCTL_BIN` and `RSTACK_CASEWORK_BIN` the same way, and Evidence uses
-`RSTACK_EVIDENCECTL_BIN` and `RSTACK_EVIDENCE_BIN`. Rebuild after every source change, because a
-stale binary fails the run in confusing ways.
+Set the tool and runtime paths for the products in your plan.
+
+| Product | Tool override | Runtime override |
+| --- | --- | --- |
+| BReg | `RSTACK_BREGCTL_BIN` | `RSTACK_BREG_BIN` |
+| Casework | `RSTACK_CASEWORKCTL_BIN` | `RSTACK_CASEWORK_BIN` |
+| Evidence | `RSTACK_EVIDENCECTL_BIN` | `RSTACK_EVIDENCE_BIN` |
+| Messaging | `RSTACK_MESSAGINGCTL_BIN` | `RSTACK_MESSAGING_BIN` |
+| Scheduling | `RSTACK_SCHEDULINGCTL_BIN` | `RSTACK_SCHEDULING_BIN` |
+| Documents | `RSTACK_DOCUMENTSCTL_BIN` | `RSTACK_DOCUMENTS_BIN` |
+| Coordinator | `RSTACK_COORDINATORCTL_BIN` | `RSTACK_COORDINATOR_BIN` |
+| Adapter | `RSTACK_ADAPTERCTL_BIN` | `RSTACK_ADAPTER_BIN` |
+| Render | `RSTACK_RENDER_BIN` | `RSTACK_RENDER_BIN` |
+| Discovery | `RSTACK_DISCOVERYCTL_BIN` | `RSTACK_DISCOVERY_BIN` |
 
 On macOS, a source build of the products links a dynamic FIPS library that the loader cannot find,
 so a binary started outside Cargo aborts with `Library not loaded`. Source the helper in your
@@ -78,7 +99,7 @@ releases do not need this.
 
 The development runner is the `crates/registry-rstack-dev` crate. Each supported product CLI links
 it behind a hidden subcommand, and `rstack dev` runs it through the CLI of the plan's first product
-in the order BReg, Casework, Evidence, Messaging.
+in the order BReg, Casework, Evidence, Messaging, Scheduling, Documents, Coordinator, Adapter, Render, and Discovery.
 
 {/* Evidence: crates/registry-rstack-dev/src/lib.rs COMMAND. */}
 
@@ -93,7 +114,7 @@ cp -R path/to/registry-stack/products/breg/examples/minimal ./directory
 
 `rstack dev` reads `dev.yaml` and the scenario file it names. Product files stay byte-for-byte
 unchanged, and generated settings, keys and packages live in the run's owner-only scratch
-directory. Check the plan, then start the run:
+directory. Check the plan, then start a shorter run with an explicit time limit:
 
 ```sh test-skip="needs the installed release and Docker"
 rstack dev check ./directory
@@ -108,7 +129,7 @@ Fix every error before you start: the report names the plan field that caused it
 
 `start` pulls the PostgreSQL image on the first run, creates databases and logins for the run,
 starts BReg on a loopback port, runs the scenario, and returns while BReg keeps running. The time to
-live (TTL) begins when the run is ready and defaults to 30 minutes. `--ttl` takes one whole number
+live (TTL) begins when the run is ready and defaults to eight hours. `--ttl` takes one whole number
 from `1s` to `24h` with an `s`, `m` or `h` suffix:
 
 ```text test-excerpt
@@ -127,7 +148,7 @@ it back. `rstack dev status RUN_ID` repeats this report at any time.
 ### Call the product with a token
 
 `token` writes a short-lived bearer header file for a test person and prints where it is. Tokens
-expire five minutes after issue, or with the run if that is sooner, so ask again when one lapses.
+expire one hour after issue, or with the run if that is sooner, so ask again when one lapses.
 Pass the header file to curl with `--header @FILE`:
 
 ```sh test-skip="needs a running development run"
@@ -154,8 +175,8 @@ Use the BReg URL from your own report. The response lists the contact the scenar
 rstack dev stop "$RUN"
 ```
 
-Success is `Run RUN_ID stopped`. Stop, and TTL expiry, terminate the services and remove the run's
-databases, roles, keys, files and containers.
+Success is `Run RUN_ID stopped`. Stop and TTL expiry remove run-scoped resources.
+Add `--clean` to stop and delete the managed volume and project state.
 
 ### Other products on their own
 
@@ -206,6 +227,7 @@ The human report prints the same facts.
   `evidencectl request prepare --runtime-config` instead of guessing it. The human report prints
   one `Runtime config PRODUCT PATH` line per product. Only the address line starts with the
   product name, so `awk '$1 == "breg" {print $2}'` reads the address.
+- `bregHookSink` gives the loopback origin and the URL where you can read received BReg hooks. The hook sink holds raw synthetic payloads and signatures, unredacted, on loopback.
 - `sinks` maps each Messaging provider to its sink, where you can read what the run sent:
   `{"type":"smtp","smtp":"HOST:PORT","url":"MAILPIT_URL"}` for Mailpit, or
   `{"type":"http","url":"GATEWAY_ORIGIN/sent"}` for the mock gateway. It is absent when the run has
@@ -233,7 +255,7 @@ the plan as before:
 
 ```sh test-skip="needs the installed release and Docker"
 rstack dev check ./licensing
-rstack dev start ./licensing --ttl 30m
+rstack dev start ./licensing
 ```
 
 The report names a URL for each product and a scenario result, and lists every test person:
@@ -291,16 +313,16 @@ To adapt a plan to your own project, change these parts and leave the structure 
 
 - `issuer` names the identity issuer the local test tokens claim. Use a name that is yours.
 - `products` lists each product's project directory and token audience, in any order. Name any
-  non-empty subset of `breg`, `casework`, `evidence` and `messaging`. The run starts BReg before
-  Casework. An application needs BReg.
+  nonempty subset of `breg`, `casework`, `evidence`, `messaging`, `scheduling`,
+  `documents`, `coordinator`, `adapter`, `render` and `discovery`. The run starts
+  BReg before Casework. An application needs BReg.
 - `people` declares synthetic test people, each with a subject and one grant per product. A grant
   selects an access profile of that product's project, its scopes, and extra claims. A BReg grant
   must name a profile the BReg project declares. When several people could fill a BReg schema-test
   step, `schemaTestPeople` names the one that does.
 - `scenarioFile` names the project-relative file (for example `tests/scenarios.yaml`) whose
-  scenarios the run makes before it reports ready. The plan must set it; an inline `journey` key is
-  refused, so move those steps into the file. Each step names a person, a product, a method, a path
-  starting with `/v1/`, and what it expects back. The file path cannot contain `..` or backslashes.
+  scenarios the run makes before it reports ready. Move any inline `journey` steps into this file.
+  Follow the [scenario step rules](#scenario-steps). Keep `..` and backslashes out of the file path.
   The start and status reports include `scenarioDigest` for the exact file bytes captured at start.
   When the BReg project is the development project root (`project: .`), keep the scenario file out
   of `tests/`, as the minimal example does with `dev/scenarios.yaml`: `bregctl check` reads every
@@ -312,8 +334,8 @@ To adapt a plan to your own project, change these parts and leave the structure 
 
 <ConfigurationFormatChecks product="rstack" />
 
-A BReg project with encrypted fields runs without extra setup: each run gets its own development
-data key, removed when the run ends, so encrypted data does not outlive its run. A step in the
+A BReg project with encrypted fields runs without extra setup. The runner keeps the development
+data key for managed PostgreSQL and generates a new one for each run using an attached server. A step in the
 project's `tests/journeys.yaml` that touches an encrypted Record type fails the pre-activation
 test, because that test has no key. Exercise those Record types in an authored Stack scenario
 file instead.
@@ -367,7 +389,7 @@ rstack dev stop RUN_ID --recover
 
 If the supervisor is still running, use plain `stop`. For a lost supervisor, its process guards
 stop the products and any product tools still running. Recovery waits for the guards, drops the
-databases and roles, removes the run's containers, and removes the run directory, including its
+run-scoped databases and roles, removes the run's containers, and removes the run directory, including its
 development key file. When you supplied the server by address, use the original PostgreSQL cluster
 and maintenance database for `--recover`. If a cleanup step fails, the report explains what to
 inspect before retrying. [Recover a run](#recover-a-run) lists the manual steps and the recovery
@@ -377,10 +399,35 @@ fields.
     crates/registry-rstack-dev/src/lib.rs CLEANUP_BUDGET, lost-supervisor, registry.rstack.error.v1;
     crates/registry-rstack-dev/src/journey.rs JOURNEY_ATTEMPT_LIMIT. */}
 
+## Use an issuer you run
+
+Set `issuer` to the exact token issuer and `externalJwksUri` to its public key endpoint.
+Use numeric loopback HTTP with an explicit port for the issuer, key endpoint and external BReg connections. Keep each product's audience in its `products` entry.
+Tokens from an issuer you run carry no development mark, so use an issuer that only this run trusts.
+BReg expects RS256 access tokens from an external issuer.
+
+Set `scenarios: []` in the scenario file and drive the run with credentials obtained from
+the external issuer. `rstack dev token` only issues tokens for the runner's own issuer.
+
+When a BReg project declares the corresponding connection, the plan can bind external fixtures:
+
+- `externalBreg.reviewAuthority` names the Casework producer, token endpoint and private-key JWT credentials.
+- `externalBreg.taskGrant` pairs the exact assertion issuer and client with the Casework status connection.
+- `externalBreg.hooks` binds declared destination IDs to signed outbound requests to a loopback event proxy.
+
+For BReg schema rehearsals, `externalBreg.schemaTestHeaders` maps each selected person
+to an owner-only bearer header obtained from the external issuer.
+
+Use `secret:file/NAME` for fixture keys and headers. Put each file under the project's
+`fixture/` directory and run `chmod 600` on it.
+
+For a Messaging throughput rehearsal, set `RSTACK_DEV_MESSAGING_MOCK_LATENCY_MS` before
+starting the run. The local mock gateway delays its responses by this many milliseconds.
+
 ## The managed PostgreSQL server
 
-With no `--database-url` and no `RSTACK_DEV_DATABASE_URL`, a run that lists `breg`, `casework` or `messaging` starts its own server.
-A plan with only `evidence` starts no database and needs no Docker.
+The run starts PostgreSQL for BReg, Casework, Messaging, Scheduling, Documents, Coordinator and
+Adapter unless you supply a database address. Evidence, Render and Discovery need no database.
 
 - The server is a `postgres:18.7` container, pinned by digest.
   A BReg project that requires PostGIS gets `postgis/postgis:18-3.6` instead.
@@ -392,7 +439,7 @@ A plan with only `evidence` starts no database and needs no Docker.
   `stop`, TTL expiry, a failed start and `stop --recover` remove it, and any Mailpit container of the run, by that label.
 - The administrator is a superuser with a generated password.
   Anyone who can run `docker inspect` on the container can read that password.
-  Docker access already grants root on the host, so the throwaway server adds no new exposure.
+  Docker access already grants root on the host.
   The least-privilege administrator described below protects a shared or hosted server.
 - If Docker is missing or its daemon does not answer, `start` fails with an operational error that names both ways out: install Docker, or supply a server by address.
 - Recovering a managed run needs Docker, not an administrator URL.
@@ -548,8 +595,8 @@ The native review example at `products/breg/acceptance/reviewed-evidence-journey
 ### Evidence on its own
 
 An Evidence plan starts no database and needs no Docker.
-The run is the issuer: Evidence's local target accepts only a loopback issuer, so the plan sets `issuer: run`, and the run signs each test token with a throwaway key it serves as a key set on its own loopback origin.
-An Evidence plan may not declare an application, and it may not name another issuer.
+With `issuer: run`, the run signs each test token with a throwaway key and serves its public key set on its own loopback origin.
+An Evidence plan may not declare an application. To provide your own issuer, follow the [external issuer requirements](#use-an-issuer-you-run).
 
 To start Evidence, the run copies the project and creates a target with `evidencectl target new`, from the project's `local-target.yaml` when it has one, with development secrets for what that target references.
 It points the target at the run's issuer, listener and package directory, packages the project, activates the compiled authority and runs `evidence serve`.
@@ -627,6 +674,7 @@ Captures are available only to later steps in the same scenario.
 Other references must name an earlier capture.
 The runner reads and validates the file during `check` and `start`, then snapshots its content before execution, so edits after `start` do not alter that run.
 Scenarios execute in file order and each gets fresh captures.
+A scenario that succeeded against kept state, including a read-only scenario, runs again only after it changes or you clear the state with `--clean`.
 
 The BReg project's `tests/journeys.yaml` remains its separate native schema test input.
 The Stack scenario file does not replace or change it.
@@ -640,7 +688,9 @@ A step path that names `accessProfile` itself is accepted only when it names tha
 ### Scenario steps
 
 A scenario runs 1 to 32 steps in order.
-Each step names the test person it runs as (`as`), the product, the method, and a relative path that starts with `/v1/`.
+Each step names the product, HTTP method and relative path. Include `as` for products that verify
+tokens. Omit it for Discovery. Use a path under `/v1/` or the Adapter contract path
+`/.well-known/registry-adapter/effective-contract`.
 A step sends one of two request bodies:
 
 - `body` is a JSON body.
@@ -682,7 +732,7 @@ A scenario can make at most 512 requests and transfer at most 8 MiB of request a
 
 `token` writes a short-lived bearer header file for each grant.
 Its human report prints one `PRODUCT headers PATH` line per grant.
-Its JSON report, with the global `--format json` option, gives the person's `alias`, the `expires_at` time when the tokens expire (five minutes after issue, or with the run if that is sooner), and a `credentials` list whose entries carry the `product`, the selected `profile`, and the `header_file` path.
+Its JSON report, with the global `--format json` option, gives the person's `alias`, the `expires_at` time when the tokens expire (one hour after issue, or with the run if that is sooner), and a `credentials` list whose entries carry the `product`, the selected `profile`, and the `header_file` path.
 Pass the file to curl with `--header @HEADER_FILE`.
 With BReg, include the selected profile as the `accessProfile` query parameter.
 With Casework, the header file carries the profile.
@@ -708,7 +758,7 @@ The child receives only the declared configuration-file environment variable and
 The ready report adds `issuer` and `application` URLs.
 `status` repeats them, and `stop`, expiry, or a crashed child stops the issuer and app alongside the products.
 Configuration commands and built hosts are trusted local code supplied by the operator; the runner does not fetch or build them.
-A later `start` creates a fresh disposable run and databases; it does not restore unfinished application work.
+A later `start` creates a fresh application run. Product data on managed PostgreSQL remains available.
 
 {/* Evidence: crates/registry-rstack-dev/src/plan.rs prepareVersion;
     crates/registry-rstack-dev/src/lib.rs application-root;
@@ -726,7 +776,7 @@ Do not use either as a BReg or Casework principal claim or as an additional auth
 One browser session can obtain a second product grant for the same person, and `prompt=login` opens the person picker again.
 The authored BReg and Casework profiles still decide which client and person can use each operation.
 Declare the browser client in the relevant BReg requester profiles; the runner adds it to the runtime's accepted-client list but does not change the authored package.
-Browser tokens last at most 15 minutes and expire with the run; `rstack dev token` continues to issue five-minute CLI tokens.
+Browser and CLI tokens last up to one hour and expire sooner when the run ends.
 
 {/* Evidence: crates/registry-rstack-dev/src/browser.rs S256, prompt;
     crates/registry-rstack-dev/src/issuer.rs BROWSER_TOKEN_LIFETIME_SECONDS, TOKEN_LIFETIME_SECONDS. */}
@@ -803,14 +853,59 @@ Review and save the authored source and declaration through normal tooling befor
 {/* Evidence: crates/registry-rstack-dev/src/plan.rs caseworkSourceCredentialRoles;
     crates/registry-rstack-dev/src/bindings.rs humanSourceAuthentication. */}
 
+## Deployment posture
+
+`rstack dev` sets `REGISTRY_STACK_POSTURE=development` on every Registry Stack product and tool it starts.
+If you set `REGISTRY_STACK_POSTURE=production`, both `rstack dev check` and `rstack dev start` refuse the command.
+Unset the variable or set it to `development` before running either command.
+
+A running product lists its accepted development settings at `/ready`, sends `Registry-Posture: development` in its HTTP responses, and includes the posture in its audit lines.
+Use one posture across your stack because a production product refuses responses marked as development.
+If Evidence signs assertions with a local key file, run the stack in development. For production assertion signing, configure Transit.
+
+The runner configures authentication for each product that verifies tokens. It supplies run-owned
+audit keys where the product's runtime configuration requires them.
+For BReg it also uses the development package posture, which accepts placeholder identity, and supplies a local field encryption key when the project encrypts fields.
+The Casework and Messaging listeners and Mailpit SMTP connection use `loopback-plaintext`, which is valid in either posture on loopback.
+
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs require_development;
+    crates/registry-rstack-dev/src/guard.rs breg_guard_launch_declares_development_for_the_workload;
+    crates/registry-rstack-dev/src/products.rs shared_config, casework_config, breg_package_arguments, local-file;
+    crates/registry-rstack-dev/src/messaging.rs smtp_connection, messaging_config;
+    crates/registry-platform-config/src/posture.rs ready_member;
+    crates/registry-platform-config/src/blocks.rs LoopbackPlaintext;
+    crates/registry-platform-httpsec/src/server.rs posture_mark;
+    crates/registry-platform-httputil/src/lib.rs RefuseDevelopmentPeer;
+    crates/registry-platform-audit/src/writer.rs posture;
+    crates/registry-evidence/src/bundle.rs evidence.posture.local-assurance. */}
+
 ## Run isolation
 
-Each run listens on loopback, creates separate databases and migration and runtime logins, and pins its own public signing key in the runtime files.
+The run builds an ordinary package, and its generated runtime files and database contain development settings that production refuses.
+
+Each run listens on loopback and pins its own public signing key in the runtime files. Managed PostgreSQL databases and logins belong to the project.
 The local issuer signs under the project's issuer name with a key unique to the run.
 Use synthetic test people and keep the issuer's private directory under your user account.
 
-Stop and TTL expiry terminate the services and remove the databases, roles, keys, containers, and run files.
-A spatial BReg run also creates a `NOLOGIN` role whose name starts with `breg_bbox_`; cleanup removes it with the others.
+Stop and TTL expiry terminate the services and remove the containers and run files.
+Managed runs keep the PostgreSQL volume, project keys and audit journals. The next start skips unchanged scenarios that previously passed.
+Use `rstack dev stop RUN_ID --clean` to delete the managed volume and project state, even after a normal stop or TTL expiry.
+Use `rstack dev start PROJECT --clean` to delete them before starting.
+Both commands permanently delete the project's local development data.
+When you supply a PostgreSQL server, stop and TTL expiry also drop the run's databases and roles, including the `breg_bbox_` role of a spatial BReg run.
+
+If the connected Docker daemon reports a different ID from the one saved in project state, the runner refuses to start.
+Switch back to the original Docker context to keep using its volume, or start with `--clean` to discard the saved project state and start fresh on the current daemon.
+
+If the volume is missing and the daemon check passes, the runner moves the previous project state to `<state dir>.orphaned-<timestamp>` beside the project state directory and reports the path.
+The runner leaves that folder for you to inspect. To remove it, delete the reported folder yourself once you no longer need its keys and audit journals.
+
+If a recorded project key is missing, startup refuses and names its path.
+Restore the original key from a backup, or use `--clean` to discard the kept data.
+When the project first needs a new key, the runner creates it and reports its path.
+
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs check_daemon, orphan_project_state, orphanedState;
+    crates/registry-rstack-dev/src/products.rs kept_key. */}
 
 {/* Evidence: crates/registry-rstack-dev/src/database.rs breg_bbox_. */}
 {/* TODO[evidence]: the NOLOGIN attribute of the breg_bbox_ role was not individually anchored. */}
@@ -818,11 +913,12 @@ A spatial BReg run also creates a `NOLOGIN` role whose name starts with `breg_bb
 ### Encrypted fields
 
 A BReg project with encrypted fields runs without extra setup.
-`start` draws a development data key for the run from the operating system's random source and writes it as `field-key` in the run directory, readable only by your user.
-BReg reads it through its `local-file` key custody, which it accepts only for a local development database.
-The key is never printed, never written to the checkout, and is removed with the run directory on stop, TTL expiry, and a failed start.
+`start` draws a development data key from the operating system's random source when it needs one and writes a copy as `field-key` in the run directory, readable only by your user.
+BReg reads it through its `local-file` key custody, which it accepts only in the development posture.
+The runner never prints the key or writes it to the checkout.
+The run's copy is removed with the run directory. Managed runs keep the project's copy in the project state.
 When a run needs recovery, the report names the key file under `recovery.field_encryption_key` until `stop --recover` removes it.
-Every run gets a new key, so encrypted data does not outlive its run.
+Runs using a supplied PostgreSQL server draw a new key each time.
 
 The schema test that `start` runs before activation has no field-encryption key.
 A step in `tests/journeys.yaml` that touches a Record type with an encrypted field fails it, and `start` reports `breg test failed (test.step.failed)`.
@@ -836,9 +932,10 @@ A deployment supplies its key as [Encrypt a field](../breg-field-encryption/) de
 
 ### State directory
 
-The state directory holds one directory per run.
-It defaults to `rstack-dev-UID` in the system temporary directory.
-Set `RSTACK_DEV_STATE_DIR` to use another location.
+The owner-only state directory holds run directories and managed project state.
+It defaults to `$XDG_STATE_HOME/registry-stack/rstack-dev` when `XDG_STATE_HOME` is absolute,
+`~/.local/state/registry-stack/rstack-dev` on Linux, or `~/Library/Application Support/registry-stack/rstack-dev` on macOS.
+Set `RSTACK_DEV_STATE_DIR` to use another location. The state root must be an absolute path.
 A run directory is renamed to `.<run_id>.removing` before it is deleted, and `status` and `stop` ignore that name.
 If the deletion is interrupted, delete that directory yourself; the run's field-encryption key is deleted before the rename, so it holds no key material.
 
@@ -863,7 +960,8 @@ For a run on a server by address, use an administrator URL for the same PostgreS
 `--database-url` defaults to `RSTACK_DEV_DATABASE_URL`, as for `start`.
 Recovery checks the recorded cluster identifier and maintenance database before dropping any resources.
 It waits for the process guards to finish, then drops the databases and roles and removes the run directory.
-If any step fails, the report gives the reason and the resources you can check before retrying.
+If the managed PostgreSQL container is gone, recovery removes the run directory and lists any remaining rehearsal databases and roles in `recovered.notDropped`. Run `rstack dev start PROJECT --clean` to clear them.
+If any other step fails, the report gives the reason and the resources you can check before retrying.
 
 An abrupt machine restart can stop a guard before it writes its completed cleanup receipt.
 In that case `--recover` refuses to claim the guarded workload was reaped, even if the process no longer exists.

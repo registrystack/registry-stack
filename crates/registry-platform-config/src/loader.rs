@@ -45,6 +45,10 @@ use registry_platform_yaml::{
 };
 use serde::de::DeserializeOwned;
 
+use crate::posture::{
+    collect_posture_settings, DeclaredPosture, DevelopmentWitness, Posture, PostureReport,
+    PostureSource,
+};
 use crate::{resolve_config_env_expression, sha256_uri};
 
 /// The default size cap for a runtime configuration document.
@@ -163,6 +167,17 @@ impl RuntimeConfigError {
         .in_file(file)
     }
 
+    /// A refusal that carries `diagnostics`, in `file`.
+    pub(crate) fn from_diagnostics(file: &Path, diagnostics: Vec<Diagnostic>) -> Self {
+        Self::from_report(Report::new(diagnostics)).in_file(file)
+    }
+
+    /// This refusal with `diagnostics` listed after its own.
+    pub(crate) fn with_diagnostics(mut self, diagnostics: Vec<Diagnostic>) -> Self {
+        self.detail.diagnostics.extend(diagnostics);
+        self
+    }
+
     fn from_report(report: Report) -> Self {
         let diagnostics = report.into_diagnostics();
         assert!(
@@ -216,12 +231,8 @@ impl RuntimeConfigError {
     /// and path.
     #[must_use]
     pub fn deciding_diagnostic(&self) -> &Diagnostic {
-        let diagnostics = &self.detail.diagnostics;
-        diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.severity == Severity::Error)
-            .min_by_key(|diagnostic| rank(diagnostic))
-            .unwrap_or(&diagnostics[0])
+        deciding_diagnostic(&self.detail.diagnostics)
+            .expect("a runtime configuration error always carries a diagnostic")
     }
 
     fn render(&self) -> String {
@@ -234,6 +245,17 @@ impl RuntimeConfigError {
         rendered.truncate(rendered.trim_end().len());
         rendered
     }
+}
+
+/// Select the first error of the lowest rank, or the first diagnostic if
+/// there are no errors. An empty list has no deciding diagnostic.
+#[must_use]
+pub fn deciding_diagnostic(diagnostics: &[Diagnostic]) -> Option<&Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .min_by_key(|diagnostic| rank(diagnostic))
+        .or_else(|| diagnostics.first())
 }
 
 /// How early a diagnostic decides the refusal; lower decides first.
@@ -276,6 +298,13 @@ pub struct LoadedRuntimeConfig<T> {
     /// spelling of an environment expression that resolved to the same value
     /// carry the same digest.
     pub effective_digest: String,
+    /// The declared posture and every development-only setting the document
+    /// holds. A loader made without a posture reports production and records
+    /// no setting.
+    pub posture: PostureReport,
+    /// Proof that the process declared development: `Some` only then, and
+    /// the only way to read a value that selects a development-only setting.
+    pub development: Option<DevelopmentWitness>,
 }
 
 impl<T> std::fmt::Debug for LoadedRuntimeConfig<T> {
@@ -287,17 +316,21 @@ impl<T> std::fmt::Debug for LoadedRuntimeConfig<T> {
 }
 
 /// Require a runtime configuration path owned by root or the effective user,
-/// with neither the file nor an ancestor writable by group or others. A
+/// with neither the file nor an ancestor writable by others. Production also
+/// refuses group write permission. A
 /// root-owned sticky ancestor is allowed. The path must be absolute,
 /// lexically normalized, and contain no symbolic-link component.
 ///
 /// This checks only the path and its metadata. It neither opens nor parses the
 /// file, so a caller with its own stable-read boundary can apply the shared
 /// path policy before that read without consuming the bytes twice.
-pub fn require_trusted_runtime_path(path: &Path) -> Result<(), RuntimeConfigError> {
+pub fn require_trusted_runtime_path(
+    path: &Path,
+    posture: Posture,
+) -> Result<(), RuntimeConfigError> {
     validate_absolute_lexical_path(path)
         .and_then(|()| reject_symlink_components(path))
-        .and_then(|()| require_trusted_ownership(path))
+        .and_then(|()| require_trusted_ownership(path, posture))
         .map_err(|error| error.in_file(path))
 }
 
@@ -308,16 +341,48 @@ pub struct RuntimeConfigLoader {
     removed_keys: &'static [RemovedKey],
     retired_api_versions: &'static [RetiredApiVersion<'static>],
     trusted_ownership: bool,
+    /// The posture the process declared. `None` for a loader made without a
+    /// posture, which refuses and records no development-only setting.
+    posture: Option<DeclaredPosture>,
+}
+
+/// What a parse does with the development-only settings it found.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Decision {
+    /// Refuse the document when the posture is production and it holds one.
+    Refuse,
+    /// Return the document and the settings, for a check that reports them.
+    Report,
 }
 
 impl RuntimeConfigLoader {
+    /// A loader for a process that declared `declared`. A document that
+    /// holds a development-only setting is refused in production, with every
+    /// such setting listed beside any other problem, and accepted in
+    /// development, which also yields the witness that reads those settings.
     #[must_use]
-    pub const fn new(envelope: RuntimeEnvelope) -> Self {
+    pub const fn new(envelope: RuntimeEnvelope, declared: DeclaredPosture) -> Self {
         Self {
             envelope,
             removed_keys: &[],
             retired_api_versions: &[],
             trusted_ownership: false,
+            posture: Some(declared),
+        }
+    }
+
+    /// A loader that declares no posture. It reports production, never
+    /// issues the witness, and neither refuses nor records a development-only
+    /// setting: a runtime that has not adopted the posture keeps the
+    /// behaviour it had.
+    #[must_use]
+    pub const fn new_without_posture(envelope: RuntimeEnvelope) -> Self {
+        Self {
+            envelope,
+            removed_keys: &[],
+            retired_api_versions: &[],
+            trusted_ownership: false,
+            posture: None,
         }
     }
 
@@ -372,7 +437,22 @@ impl RuntimeConfigLoader {
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
         let bytes = self.read_file(path)?;
-        self.parse_file(path, &bytes, &lookup)
+        self.parse_file(path, &bytes, &lookup, Decision::Refuse)
+    }
+
+    /// Check captured runtime bytes without reopening the file.
+    ///
+    /// The caller owns file admission and capture. `path` names the source in
+    /// diagnostics. As with [`Self::check_offline`], the loader reports posture
+    /// settings while returning the decoded document, without deciding posture.
+    pub fn check_offline_bytes<T: DeserializeOwned>(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        substitute: bool,
+        stand_in_for: fn(&str) -> &'static str,
+    ) -> crate::RuntimeFileCheck<T> {
+        self.check_offline_input(path, Ok(bytes), substitute, stand_in_for)
     }
 
     /// The bytes of the file at `path`, read under the file rules: the one
@@ -387,9 +467,15 @@ impl RuntimeConfigLoader {
         path: &Path,
         bytes: &[u8],
         lookup: &dyn Fn(&str) -> Option<String>,
+        decision: Decision,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        self.parse(&path.display().to_string(), bytes, Fill::Variables(lookup))
-            .map_err(|error| error.in_file(path))
+        self.parse(
+            &path.display().to_string(),
+            bytes,
+            Fill::Variables(lookup),
+            decision,
+        )
+        .map_err(|error| error.in_file(path))
     }
 
     /// Apply every rule after the file read to the `bytes` read from `path`,
@@ -400,9 +486,15 @@ impl RuntimeConfigLoader {
         path: &Path,
         bytes: &[u8],
         stand_in: &dyn Fn(&str) -> String,
+        decision: Decision,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        self.parse(&path.display().to_string(), bytes, Fill::StandIns(stand_in))
-            .map_err(|error| error.in_file(path))
+        self.parse(
+            &path.display().to_string(),
+            bytes,
+            Fill::StandIns(stand_in),
+            decision,
+        )
+        .map_err(|error| error.in_file(path))
     }
 
     /// Apply every rule after the file read to `text`. Used by authoring tools
@@ -413,15 +505,73 @@ impl RuntimeConfigLoader {
         text: &str,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
-        self.parse(BUFFER_NAME, text.as_bytes(), Fill::Variables(&lookup))
+        self.parse(
+            BUFFER_NAME,
+            text.as_bytes(),
+            Fill::Variables(&lookup),
+            Decision::Refuse,
+        )
     }
 
+    /// Decode the document, then settle the posture: collect the
+    /// development-only and explicit production settings the decode finds, and under
+    /// [`Decision::Refuse`] refuse them in production.
     fn parse<T: DeserializeOwned>(
         &self,
         file: &str,
         bytes: &[u8],
         fill: Fill<'_>,
+        decision: Decision,
     ) -> Result<LoadedRuntimeConfig<T>, RuntimeConfigError> {
+        let Some(declared) = self.posture else {
+            let (config, effective_digest) = self.decode::<T>(file, bytes, fill)?;
+            return Ok(LoadedRuntimeConfig {
+                config,
+                effective_digest,
+                posture: PostureReport::new(DeclaredPosture {
+                    posture: Posture::Production,
+                    source: PostureSource::Default,
+                }),
+                development: None,
+            });
+        };
+        let (decoded, found) = collect_posture_settings(|| self.decode::<T>(file, bytes, fill));
+        let mut posture = PostureReport::new(declared);
+        for setting in found.development {
+            posture.record(setting);
+        }
+        for setting in found.explicit {
+            posture.record_explicit(setting);
+        }
+        let named = Path::new(file);
+        match decoded {
+            Ok((config, effective_digest)) => {
+                if decision == Decision::Refuse {
+                    posture.decide(named)?;
+                }
+                Ok(LoadedRuntimeConfig {
+                    config,
+                    effective_digest,
+                    posture,
+                    development: (declared.posture == Posture::Development)
+                        .then(DevelopmentWitness::issue),
+                })
+            }
+            // The settings found before the failure are still reported, so
+            // one run lists every problem (CFG-DIAG-5).
+            Err(error) => Err(match decision {
+                Decision::Refuse if declared.posture == Posture::Development => error,
+                _ => error.with_diagnostics(posture.diagnostics(named)),
+            }),
+        }
+    }
+
+    fn decode<T: DeserializeOwned>(
+        &self,
+        file: &str,
+        bytes: &[u8],
+        fill: Fill<'_>,
+    ) -> Result<(T, String), RuntimeConfigError> {
         let removed: Vec<(String, String)> = self
             .removed_keys
             .iter()
@@ -457,15 +607,15 @@ impl RuntimeConfigLoader {
                         "Write every number as a plain decimal within the range JSON can carry.",
                     )
                 })?;
-        Ok(LoadedRuntimeConfig {
-            config: decoded.value,
-            effective_digest: sha256_uri(&canonical),
-        })
+        Ok((decoded.value, sha256_uri(&canonical)))
     }
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, RuntimeConfigError> {
         if self.trusted_ownership {
-            require_trusted_runtime_path(path)?;
+            let posture = self
+                .posture
+                .map_or(Posture::Production, |declared| declared.posture);
+            require_trusted_runtime_path(path, posture)?;
         } else {
             validate_absolute_lexical_path(path)?;
             reject_symlink_components(path)?;
@@ -914,7 +1064,7 @@ fn reject_symlink_components(path: &Path) -> Result<(), RuntimeConfigError> {
 }
 
 #[cfg(unix)]
-fn require_trusted_ownership(path: &Path) -> Result<(), RuntimeConfigError> {
+fn require_trusted_ownership(path: &Path, posture: Posture) -> Result<(), RuntimeConfigError> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     let effective_user = rustix::process::geteuid().as_raw();
@@ -926,23 +1076,98 @@ fn require_trusted_ownership(path: &Path) -> Result<(), RuntimeConfigError> {
         let last = index + 1 == count;
         let owner = metadata.uid();
         let mode = metadata.permissions().mode();
-        let trusted_owner = owner == 0 || owner == effective_user;
-        let not_writable_by_others = mode & 0o022 == 0;
         let root_sticky = !last && owner == 0 && mode & 0o1000 != 0;
-        if !trusted_owner || !(not_writable_by_others || root_sticky) {
-            return Err(unsafe_file(
-                "the runtime configuration and every directory above it must be owned by root \
-                 or the runtime user and not writable by group or others",
-                "Give the file and every directory above it to root or the runtime user, and \
-                 remove group and other write permission.",
-            ));
-        }
+        require_trusted_entry(
+            &current,
+            posture,
+            effective_user,
+            owner,
+            mode,
+            root_sticky,
+            last,
+        )?;
     }
     Ok(())
 }
 
+#[cfg(unix)]
+fn require_trusted_entry(
+    path: &Path,
+    posture: Posture,
+    effective_user: u32,
+    owner: u32,
+    mode: u32,
+    root_sticky: bool,
+    last: bool,
+) -> Result<(), RuntimeConfigError> {
+    let mask = match posture {
+        Posture::Production => 0o022,
+        Posture::Development => 0o002,
+    };
+    let entry = path.display();
+    let shell_path = || format!("'{}'", entry.to_string().replace('\'', "'\\''"));
+    if owner != 0 && owner != effective_user {
+        let runtime_user = ownership_target(effective_user);
+        return Err(RuntimeConfigError::file_level(
+            CODE_UNSAFE_FILE,
+            format!("`{entry}` is owned by another user"),
+            format!(
+                "Run `chown {runtime_user} -- {}` (you may need `sudo`), or move the file under a directory that root or the runtime user owns.",
+                shell_path()
+            ),
+        ));
+    }
+    if !root_sticky && mode & mask != 0 {
+        let (who, permission) = if mode & 0o002 != 0 {
+            ("others", "o-w")
+        } else {
+            ("its group", "g-w")
+        };
+        let shell_path = shell_path();
+        let action = if permission == "g-w" && !last {
+            format!("Run `chmod g-w -- {shell_path}`, or declare development with `--posture development` if this is a development machine.")
+        } else {
+            format!("Run `chmod {permission} -- {shell_path}`.")
+        };
+        return Err(RuntimeConfigError::file_level(
+            CODE_UNSAFE_FILE,
+            format!("`{entry}` is writable by {who}"),
+            action,
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ownership_target(uid: u32) -> String {
+    let uid = uid.to_string();
+    // Resolve the account only for the refusal, using the system tool rather
+    // than consulting PATH or trusting a username from the environment.
+    let Ok(output) = std::process::Command::new("/usr/bin/id")
+        .args(["-nu", uid.as_str()])
+        .output()
+    else {
+        return uid;
+    };
+    let Ok(name) = std::str::from_utf8(&output.stdout) else {
+        return uid;
+    };
+    let name = name.trim_end_matches('\n');
+    if output.status.success()
+        && !name.is_empty()
+        && !name.starts_with('-')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+    {
+        name.to_owned()
+    } else {
+        uid
+    }
+}
+
 #[cfg(not(unix))]
-fn require_trusted_ownership(_path: &Path) -> Result<(), RuntimeConfigError> {
+fn require_trusted_ownership(_path: &Path, _posture: Posture) -> Result<(), RuntimeConfigError> {
     Err(unsafe_file(
         "trusted ownership of the runtime configuration cannot be checked on this platform",
         "Run the runtime on a platform with Unix file ownership.",

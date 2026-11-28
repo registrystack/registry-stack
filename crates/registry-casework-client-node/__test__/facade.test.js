@@ -13,11 +13,12 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof client.CaseworkClientError, 'function');
 });
 
-test('description ignores additive response members', async (context) => {
+test('description accepts a development peer and ignores additive response members', async (context) => {
   const server = http.createServer((request, response) => {
     request.resume();
     request.on('end', () => {
       response.writeHead(200, {
+        'registry-posture': 'development',
         'content-type': 'application/json',
         traceparent: '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
       });

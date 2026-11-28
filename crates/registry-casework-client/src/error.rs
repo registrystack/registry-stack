@@ -399,6 +399,11 @@ impl fmt::Display for CaseworkProblemCode {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CaseworkClientError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     #[error("Registry Casework client configuration is invalid: {reason}")]
     Configuration { reason: &'static str },
     #[error("Registry Casework client request is invalid: {reason}")]
@@ -473,6 +478,7 @@ impl CaseworkClientError {
     #[must_use]
     pub fn is_outcome_unknown(&self) -> bool {
         match self {
+            Self::DevelopmentPeer => true,
             Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
             Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
             Self::Problem { status, .. } => *status >= 500,
@@ -487,6 +493,7 @@ impl CaseworkClientError {
     /// still refuses to resend a timeout or broken exchange after a 4xx one.
     pub(crate) fn resend_may_settle(&self) -> bool {
         match self {
+            Self::DevelopmentPeer => false,
             Self::Transport { kind } => {
                 matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
             }
@@ -499,6 +506,7 @@ impl CaseworkClientError {
         use registry_review_client::{ReviewClientError, ReviewProtocolFailure};
 
         match error {
+            ReviewClientError::DevelopmentPeer => Self::DevelopmentPeer,
             ReviewClientError::Configuration { reason } => Self::Configuration { reason },
             ReviewClientError::InvalidRequest { reason } => Self::InvalidRequest { reason },
             ReviewClientError::Transport { kind } => Self::Transport { kind },

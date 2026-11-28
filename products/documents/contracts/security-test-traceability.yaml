@@ -23,7 +23,7 @@ entries:
       - {path: crates/registry-documents/src/config.rs, name: plaintext_database_is_refused_outside_test_builds}
   - id: DOCUMENTS-SEC-04
     tests:
-      - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_development_loopback}
+      - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_declared_development}
   - id: DOCUMENTS-SEC-05
     tests:
       - {path: crates/registry-documents/src/config.rs, name: unrestricted_clients_are_refused}
@@ -43,7 +43,7 @@ entries:
       - {path: crates/registry-documents-core/src/wire.rs, name: a_problem_that_differs_from_the_vocabulary_is_not_recognized}
   - id: DOCUMENTS-SEC-08
     tests:
-      - {path: crates/registry-documents/src/config.rs, name: a_plaintext_hook_destination_is_refused_outside_development}
+      - {path: crates/registry-documents/src/config.rs, name: a_non_loopback_plaintext_hook_destination_is_refused_in_both_postures}
       - {path: crates/registry-documentsctl/src/lib.rs, name: a_refused_runtime_configuration_names_the_finding_without_the_value}
   - id: DOCUMENTS-SEC-09
     tests:
@@ -118,6 +118,7 @@ entries:
   - id: DOCUMENTS-SEC-21
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_own}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_person_omitting_the_custodian_holds_the_document_and_a_service_may_not_omit_it}
   - id: DOCUMENTS-SEC-22
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_issuing_institution_comes_from_the_profile_and_a_differing_body_is_refused}
@@ -313,6 +314,12 @@ entries:
       - {path: crates/registry-documents/src/hooks_tests.rs, name: an_observer_proposal_is_refused_with_a_kebab_case_code}
   - id: DOCUMENTS-SEC-53
     tests:
+      - {path: crates/registry-documents/src/config.rs, name: hook_signing_keys_report_both_destinations_when_their_keys_match}
+      - {path: crates/registry-documents/src/config.rs, name: hook_signing_keys_refuse_a_previous_key_equal_to_the_current_key}
+      - {path: crates/registry-documents/src/config.rs, name: hook_signing_keys_refuse_previous_key_secret_text}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: startup_reports_invalid_hook_key_bytes_after_the_offline_reference_check}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: startup_reports_an_empty_hook_key_file}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: startup_refuses_a_project_hook_whose_destination_is_not_bound}
       - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains}
       - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_hook_whose_destination_is_not_bound}

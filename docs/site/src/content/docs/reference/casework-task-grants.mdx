@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -137,6 +137,14 @@ Casework retains that issuer and returns it as `sourceIssuer` from the status en
 
 {/* Evidence: crates/registry-casework/src/config.rs TaskAuthorityConfig, exchange_audience, signing_key_ref, status_clients;
     crates/registry-casework/src/task_grants.rs registry_grant_source_issuer, source_issuer */}
+
+A development Casework includes `registry_posture: "development"` in each
+signed task assertion. Production omits the claim. A production verifier
+refuses an assertion carrying the development claim with
+`platform.task-grant.development-assertion`.
+
+{/* Evidence: crates/registry-casework/src/task_grants.rs POSTURE_CLAIM;
+    crates/registry-platform-oidc/src/authorization_claims.rs development-assertion */}
 
 ### Clients and assertion issuers
 
@@ -270,7 +278,7 @@ This table gives the longest time each piece of authority can keep working after
 | Immediate grant | 900 seconds | Revoke the grant; release, reassign or decide the task; change the subject; retire the template. Casework applies each at the next assertion request or status check. |
 | Deferred grant | 7 days (604800 seconds), the ceiling for `lifetimeSeconds` | The same actions as an immediate grant; the decision on the review task ends it. Write a shorter `lifetimeSeconds`. Withdrawing the officer's source access alone does not end it. |
 | Offline read at Evidence | The grant deadline, checked at admission and again immediately before release (a late result is refused with 403); the access token expiry is checked once, at admission | Keep Evidence grants at the 900-second immediate window. Deferred grants cannot carry Evidence bounds. |
-| Signing key set cached by a resource server | 600 seconds, plus 900 seconds served from the old key set while the issuer is unreachable, so up to 1500 seconds. BReg reads both values from its runtime file, with the same defaults. | List the key in `authentication.oidc.revokedKeyIds` and restart every instance; the list is read at startup and is local to that service. Also revoke the key at the issuer and at every other relying party. |
+| Signing key set cached by a resource server | 600 seconds, plus 900 seconds served from the old key set while the issuer is unreachable, so up to 1500 seconds. BReg reads both values from its runtime file, with the same defaults. | List the key in the issuer entry's `revokedKeyIds` (`authentication.oidc.issuers.ISSUER_ID.revokedKeyIds` in BReg and Casework) and restart every instance; the list is read at startup and is local to that service. Also revoke the key at the issuer and at every other relying party. |
 | BReg status check of a task grant | One fresh check per mutation attempt, never cached. Each HTTP request times out after 5 seconds (3 seconds to connect), and the whole attempt, including getting the service credential, is cut off after 10 seconds. A failure or timeout refuses the mutation. | Nothing to configure; revoking the grant takes effect at the next attempt. |
 
 Revoking a grant at Casework does not recall a token already issued.

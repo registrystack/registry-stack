@@ -840,7 +840,7 @@ fn destructive_binding_path(package: &PublishedPackage) -> &str {
 
 fn publish_and_load(
     prepared: registry_breg::package::PreparedPackage,
-    context: PackageLoadContext<'_>,
+    context: PackageLoadContext,
 ) -> PublishedPackage {
     let root = tempfile::Builder::new()
         .prefix("registry-spatial-migration-package-")
@@ -962,9 +962,9 @@ fn build_request(
     }
 }
 
-fn local_context() -> PackageLoadContext<'static> {
+fn local_context() -> PackageLoadContext {
     PackageLoadContext {
-        database_initialization_environment: "local",
+        posture: registry_platform_config::Posture::Development,
     }
 }
 
@@ -2544,7 +2544,9 @@ async fn assert_record_work_is_blocked(
         Vec::new(),
     )
     .expect("claim context is compiler-bound");
-    let lock_key = RegistryLockKey::derive(registry.registry_id()).expect("lock key is bounded");
+    let lock_key = RegistryLockKey::derive(registry.registry_id())
+        .expect("lock key is bounded")
+        .for_posture(local_context().posture);
     match begin_record_transaction(
         &mut runtime,
         lock_key,

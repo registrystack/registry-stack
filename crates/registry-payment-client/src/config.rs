@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::PeerPolicy;
 use std::{fmt, time::Duration};
 
 use registry_platform_httputil::client::{
@@ -16,6 +17,7 @@ const MAXIMUM_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 /// One Adapter origin and one operator-selected payment connection.
 #[derive(Clone)]
 pub struct PaymentClientConfig {
+    pub(crate) peer_policy: PeerPolicy,
     pub(crate) base_url: Url,
     pub(crate) connection: String,
     pub(crate) attempt_timeout: Duration,
@@ -27,9 +29,14 @@ pub struct PaymentClientConfig {
 }
 
 impl PaymentClientConfig {
+    pub fn new_without_peer_policy(base_url: Url, connection: impl Into<String>) -> Self {
+        Self::new(base_url, connection, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
     #[must_use]
-    pub fn new(base_url: Url, connection: impl Into<String>) -> Self {
+    pub fn new(base_url: Url, connection: impl Into<String>, peer_policy: PeerPolicy) -> Self {
         Self {
+            peer_policy,
             base_url,
             connection: connection.into(),
             attempt_timeout: DEFAULT_REQUEST_TIMEOUT,
@@ -150,7 +157,7 @@ mod tests {
 
     #[test]
     fn debug_withholds_destination_and_connection() {
-        let config = PaymentClientConfig::new(
+        let config = PaymentClientConfig::new_without_peer_policy(
             Url::parse("https://secret.example.invalid/private").unwrap(),
             "secret-connection",
         )

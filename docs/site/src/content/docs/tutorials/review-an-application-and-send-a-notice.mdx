@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-23"
+last_reviewed: "2026-11-30"
 doc_type: tutorial
 persona:
   - operator
@@ -26,7 +26,7 @@ approval email from Registry Messaging. Coordinator does the rest, even across a
   outcome="One approved, unchanged application produces one finished run and one email in local Mailpit."
   time="About 20 minutes"
   level="Local evaluation only"
-  prerequisites={['Docker 24 or later with host networking', 'OpenSSL', 'Python 3.11 or later and uv', 'curl', 'jq', 'Linux amd64 or macOS arm64', 'Verified native tools, a matching source archive, and the unified Python client']}
+  prerequisites={['Docker 24 or later with host networking', 'OpenSSL', 'Python 3.11 or later and uv', 'curl', 'jq', 'Linux amd64 or macOS arm64 and the repository Rust toolchain', 'Verified native tools, a matching source archive, and the unified Python client']}
 />
 
 ## Prepare verified release assets
@@ -39,7 +39,7 @@ Coordinator starts.
 Download the source archive for your chosen [release](https://github.com/registrystack/registry-stack/releases)
 and follow `release/VERIFY.md` at that tag to verify the manifest and asset
 checksums. Keep the verified manifest, `SHA256SUMS`, the unified Python wheel
-for your platform, and the six native assets named below in one directory.
+for your platform, and the native assets named below in one directory.
 Extract the source archive in a fresh directory and work from its root.
 
 :::note[Original candidate evaluation]
@@ -52,6 +52,9 @@ Set `REGISTRY_STACK_VERSION` to the release version without the leading `v`
 and `REGISTRY_STACK_ASSETS` to the absolute path of the asset directory.
 The preparation checks the file hashes, gives the Linux binaries their
 command names, and keeps the macOS FIPS libraries beside the executables.
+Install the Rust toolchain pinned by the source archive to build the local
+`journey-issuer` fixture. It registers clients for BReg, Casework, Coordinator,
+and the released Messaging container with the same issuer.
 
 ```sh test-skip="published archive preparation uses downloaded release assets"
 : "${REGISTRY_STACK_VERSION:?set the verified release version without the leading v}"
@@ -73,7 +76,7 @@ elif host in (("Linux", "x86_64"), ("Linux", "amd64")):
     target, suffix = "linux-amd64", "_x86_64.manylinux2014_x86_64.whl"
 else:
     raise SystemExit("This tutorial supports macOS arm64 and Linux amd64.")
-tools = ("breg", "bregctl", "casework", "caseworkctl", "coordinator", "coordinatorctl")
+tools = ("rstack", "breg", "bregctl", "casework", "caseworkctl", "coordinator", "coordinatorctl")
 checksums = {}
 for line in (assets / "SHA256SUMS").read_text().splitlines():
     if not line.strip():
@@ -107,6 +110,14 @@ for tool, path in zip(tools, files):
     (output / tool).chmod(0o755)
 print(json.dumps({"tools": str(output), "clientWheel": str(wheels[0])}))
 PY
+cargo build --locked -p registry-thunderid-tooling --features session \
+  --example journey-issuer --message-format json > tutorial-work/issuer-build.jsonl
+issuer_bin="$(jq -ers '
+  [.[] | select(.reason == "compiler-artifact" and .target.name == "journey-issuer")
+       | .executable | select(. != null)]
+  | if length == 1 then .[0] else error("Expected one journey-issuer executable") end
+' tutorial-work/issuer-build.jsonl)"
+cp -- "$issuer_bin" tutorial-work/native-tools/journey-issuer
 
 release_manifest="$REGISTRY_STACK_ASSETS/registry-stack-v${REGISTRY_STACK_VERSION}-release-manifest.json"
 MESSAGING_IMAGE="$(
@@ -131,7 +142,7 @@ Docker pulls the Linux amd64 image for this local run.
 : "${REGISTRY_STACK_CLIENT:=$(jq -r .clientWheel tutorial-work/prepared-tools.json)}"
 : "${MESSAGING_IMAGE:?set the published Messaging image digest}"
 export COORDINATOR_TUTORIAL_BIN_DIR REGISTRY_STACK_CLIENT
-for tool in breg bregctl casework caseworkctl coordinator coordinatorctl; do
+for tool in rstack journey-issuer breg bregctl casework caseworkctl coordinator coordinatorctl; do
   test -x "$COORDINATOR_TUTORIAL_BIN_DIR/$tool"
 done
 export PATH="$COORDINATOR_TUTORIAL_BIN_DIR:$PATH"
@@ -140,8 +151,7 @@ docker pull --platform linux/amd64 "$MESSAGING_IMAGE"
 
 The session's `--released-clients` option reads BReg and admits the run through
 the installed unified Python client. It uses the active workflow revision and
-repeats one identical start key to confirm the same run identity. No Rust input
-helper or Rust toolchain is needed. The preparation selects the exact local
+repeats one identical start key to confirm the same run identity. The separate Rust fixture owns the local ThunderID registration and bearer-token exchanges. The preparation selects the exact local
 wheel through `REGISTRY_STACK_CLIENT`. When that variable is unset, the start
 command instead selects the named published version. Keep this terminal open.
 
@@ -177,8 +187,10 @@ notice template it uses are in `products/coordinator/scripts/real_service_fixtur
 local evaluation configuration. Every service listens on loopback HTTP
 (`tlsTermination: development-loopback`), and Coordinator applies
 its schema as the database superuser and serves as a separate runtime role: a local setup only.
+Declare development for the client commands in this terminal so they accept the local services.
 
 ```sh
+export REGISTRY_STACK_POSTURE=development
 mkdir -p tutorial-work
 uv run --quiet --project products/coordinator/examples/reviewed-notice --locked \
   --with "${REGISTRY_STACK_CLIENT:-registry-stack-client==$REGISTRY_STACK_VERSION}" \
@@ -316,13 +328,15 @@ caseworkctl api "/v1/review-tasks/$task_id/decisions" \
 
 The command exits successfully when Casework records the decision and answers `204`.
 
-If a request answers `401`, the local token expired. Refresh the staff token, and the Coordinator
-token for `coordinatorctl`, then repeat:
+Refresh the staff and Coordinator tokens before inspecting the finished run.
+Use the same commands if an expired token causes a `401` response.
 
-```sh test-skip="only after a token expires"
-owner="$(jq -r .ownerProject "$session")"
-bregctl dev token staff "$owner"
-bregctl dev token coordinator-producer "$owner"
+```sh
+python3 products/coordinator/examples/reviewed-notice/session.py refresh-tokens \
+  --session-dir tutorial-work/reviewed-notice
+python3 products/coordinator/examples/reviewed-notice/session.py status \
+  --session-dir tutorial-work/reviewed-notice > "$session"
+staff_headers="$(jq -r .staffHeaderFile "$session")"
 (umask 077 && sed -n 's/^Authorization: Bearer //p' \
   "$(jq -r .coordinatorHeaderFile "$session")" > tutorial-work/coordinator.token)
 ```

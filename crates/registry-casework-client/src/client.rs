@@ -1,3 +1,4 @@
+use crate::PeerPolicy;
 use registry_casework_core::DirectoryTeamUpdateRequest;
 use std::fmt;
 
@@ -25,7 +26,7 @@ use registry_platform_httputil::client::{
     send_failure_kind, KeyedMutationAttempt, OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers,
+    read_bounded, url::append_path_segments, validate_response_headers, ResponseHeaderError,
 };
 use registry_review_client::{
     ReviewAuth as ProducerReviewAuth, ReviewClient as ProducerReviewClient,
@@ -58,6 +59,7 @@ const ORIGINAL_ATTEMPT_HEADER: &str = "registry-casework-attempt";
 const DELEGATED_READER_HEADER: &str = "registry-casework-delegated-reader";
 
 pub struct CaseworkClient {
+    peer_policy: PeerPolicy,
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     maximum_response_bytes: u64,
@@ -78,14 +80,15 @@ impl fmt::Debug for CaseworkClient {
 
 impl CaseworkClient {
     pub fn new(config: CaseworkClientConfig) -> Result<Self, CaseworkClientError> {
-        let mut review_config = ProducerReviewClientConfig::new(config.base_url.clone())
-            .with_attempt_timeout(config.attempt_timeout)
-            .with_connect_timeout(config.connect_timeout)
-            .with_maximum_response_bytes(
-                config
-                    .maximum_response_bytes
-                    .min(MAXIMUM_REVIEW_RESPONSE_BYTES),
-            );
+        let mut review_config =
+            ProducerReviewClientConfig::new(config.base_url.clone(), config.peer_policy)
+                .with_attempt_timeout(config.attempt_timeout)
+                .with_connect_timeout(config.connect_timeout)
+                .with_maximum_response_bytes(
+                    config
+                        .maximum_response_bytes
+                        .min(MAXIMUM_REVIEW_RESPONSE_BYTES),
+                );
         if let Some(user_agent) = &config.user_agent {
             review_config = review_config.with_user_agent(user_agent.clone());
         }
@@ -103,6 +106,7 @@ impl CaseworkClient {
         })
         .map_err(|_| CaseworkClientError::configuration("the HTTP client could not be built"))?;
         Ok(Self {
+            peer_policy: config.peer_policy,
             http,
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
@@ -1750,13 +1754,16 @@ impl CaseworkClient {
             .map_err(|error| CaseworkClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers(response.headers()).map_err(|_| {
-            protocol(
-                response.status(),
-                CaseworkProtocolFailure::HeaderBounds,
-                None,
-            )
-        })?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => CaseworkClientError::DevelopmentPeer,
+                _ => protocol(
+                    response.status(),
+                    CaseworkProtocolFailure::HeaderBounds,
+                    None,
+                ),
+            },
+        )?;
         Ok(response)
     }
 
@@ -2604,6 +2611,52 @@ mod tests {
                 None,
                 "{word}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod peer_posture_tests {
+    use super::*;
+    use axum::http::header::{HeaderMap, HeaderValue};
+    use axum::{routing::any, Router};
+
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        for posture in [None, Some("production"), Some("development")] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            );
+            if let Some(posture) = posture {
+                headers.insert("registry-posture", HeaderValue::from_static(posture));
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url =
+                url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let server = tokio::spawn(async move {
+                let router = Router::new().fallback(any(move || async move { (headers, r#"{}"#) }));
+                axum::serve(listener, router).await.unwrap();
+            });
+            for policy in [
+                PeerPolicy::RefuseDevelopmentPeer,
+                PeerPolicy::AcceptDevelopmentPeer,
+            ] {
+                let client =
+                    CaseworkClient::new(CaseworkClientConfig::new(url.clone(), policy)).unwrap();
+                let response = client.send(client.http.get(url.clone())).await;
+                if posture == Some("development") && policy == PeerPolicy::RefuseDevelopmentPeer {
+                    assert!(matches!(
+                        response,
+                        Err(CaseworkClientError::DevelopmentPeer)
+                    ));
+                } else {
+                    response.expect("peer response accepted");
+                }
+            }
+            server.abort();
         }
     }
 }

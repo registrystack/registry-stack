@@ -459,10 +459,23 @@ pub trait AdapterSet: Send + Sync {
         }
     }
 
-    /// The connection whose configured completion credential and recipient
-    /// binding both match, compared in constant time. Without exactly one
-    /// match the sender is not authenticated.
-    fn review_completion(&self, _token: &str, _recipient: &str) -> Option<String> {
+    /// Keys for the event trigger named by its workflow and trigger path.
+    fn event_keys(
+        &self,
+        _workflow: &str,
+        _trigger: &str,
+    ) -> Option<&registry_platform_crypto::delivery_signature::DeliveryKeys> {
+        None
+    }
+
+    /// The connection and completion keys selected by its recipient binding.
+    fn review_completion(
+        &self,
+        _recipient: &str,
+    ) -> Option<(
+        &str,
+        &registry_platform_crypto::delivery_signature::DeliveryKeys,
+    )> {
         None
     }
 }

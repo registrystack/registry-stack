@@ -19,8 +19,13 @@ workspace = true
 # Enables only the platform's pinned-loopback HTTPS profile for the real TLS
 # verify tests. Default and release builds retain production address policy.
 tls-test = ["registry-platform-httputil/test-support"]
+# Gates the suite that needs a disposable PostgreSQL server offering verified
+# TLS (tests/provision_postgres.rs), so a plain cargo test run never fails
+# for want of one and never silently skips it either.
+postgres-test = []
 
 [dependencies]
+registry-rstack-dev.workspace = true
 base64.workspace = true
 clap.workspace = true
 graphql-parser.workspace = true
@@ -33,12 +38,15 @@ graphql-parser.workspace = true
 # lane that tests the gates off must build registry-adapter alone.
 registry-adapter = { workspace = true, features = ["job-file", "job-postgres", "schema"] }
 registry-adapter-core = { workspace = true, features = ["schema"] }
+registry-cli-report.workspace = true
 registry-payment-mifos-connector.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config = { workspace = true, features = ["schema"] }
 registry-platform-httputil.workspace = true
+registry-platform-provision = { workspace = true, features = ["cli"] }
 registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
+registry-thunderid-tooling.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -48,6 +56,13 @@ zeroize.workspace = true
 [dev-dependencies]
 jsonschema.workspace = true
 rcgen.workspace = true
+registry-platform-provision = { workspace = true, features = ["test-support"] }
 registry-record.workspace = true
 tempfile.workspace = true
+tokio-postgres.workspace = true
 tokio-rustls.workspace = true
+uuid.workspace = true
+
+[[test]]
+name = "provision_postgres"
+required-features = ["postgres-test"]

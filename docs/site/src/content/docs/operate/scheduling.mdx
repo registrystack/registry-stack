@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 persona:
   - operator
@@ -22,8 +22,9 @@ step runs `schedulingctl` or `scheduling` against one runtime file.
   connection and refuses one it cannot protect.
 - An OpenID Connect issuer whose access tokens carry the read scope and, for bookings, the
   [task grant](../../reference/glossary/#task-grant) another system issues.
-- A directory of secret files owned by the runtime user, each with mode 0400 or 0600 and
-  written without a trailing newline.
+- A directory of secret files that meet the
+  [secret file rule](../../security/hardening-checklist/#secret-files), each written without a
+  trailing newline.
 - A TLS edge in front of the listener. Scheduling serves plain HTTP on a private address and
   refuses a public one.
 
@@ -72,40 +73,24 @@ two commands, and keep it out of the serving container.
     module comment and apply_audited(); crates/registry-schedulingctl/src/records.rs,
     connect_migration(). */}
 
-## Provision PostgreSQL
+## Declare the deployment posture
 
-Create the roles and the database, then hand the schema to the migration role:
+The runtime and ctl read `REGISTRY_STACK_POSTURE` or `--posture`.
+The default is `production`.
+For a laptop deployment that uses development settings, run with `rstack dev` or declare `development` explicitly.
+Use the same posture for the entire deployment. Production peers refuse development responses.
 
-```sql
-CREATE ROLE scheduling_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS;
-CREATE ROLE scheduling_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS;
-CREATE DATABASE scheduling;
-```
+`plan`, `apply`, `records apply`, and startup refuse a database activated under a different posture.
+`status` reports the mismatch alongside the ledger and schema information.
+To change posture, apply to a fresh database.
 
-Set each role's password with `\password scheduling_migration` and `\password scheduling_runtime`
-in `psql`, which prompts for it instead of taking it in a statement.
+A successful `/ready` returns `status`, `posture`, and `developmentSettings`.
+Each development setting lists its code and configuration pointer.
+In development, the public and metrics listeners add `Registry-Posture: development`.
 
-In the `scheduling` database:
-
-```sql
-REVOKE ALL ON DATABASE scheduling FROM PUBLIC;
-GRANT CONNECT ON DATABASE scheduling TO scheduling_migration, scheduling_runtime;
-ALTER SCHEMA public OWNER TO scheduling_migration;
-REVOKE ALL ON SCHEMA public FROM PUBLIC;
-```
-
-Grant the runtime role nothing yourself. `apply` grants it exactly what serving needs: usage on
-the schema, read and write on the Scheduling tables, usage and select on the outbox identity
-sequence, and read on the activation ledgers. It reissues the grants on every run, so a table a
-later migration adds is covered. The runtime requires TLS on its database connection and refuses
-one it cannot verify; `database.caBundleRef` names the CA bundle when a private CA
-fronts PostgreSQL.
-
-{/* Evidence: crates/registry-scheduling/migrations/0200_scheduling.sql;
-    crates/registry-schedulingctl/src/activation.rs, RoleMode;
-    products/scheduling/examples/standalone-exact-time/runtime.example.yaml, database. */}
+{/* Evidence: crates/registry-scheduling/src/config.rs finish_load;
+    crates/registry-scheduling/src/http.rs ready, http_edge;
+    crates/registry-scheduling/src/store/activation.rs posture_mismatch. */}
 
 ## Write the runtime file
 
@@ -119,7 +104,7 @@ fronts PostgreSQL.
 - `identity.databaseId`: a name for the one database this deployment owns. The first `apply`
   records it, and every later command refuses a database that names another.
 - `listener`: `bind`, plus `tlsTermination: operator-controlled-upstream` behind your TLS edge.
-  `development-loopback` is refused on any address but loopback.
+  `loopback-plaintext` is refused on any address but loopback.
 - `secretProviders.file.root` and the `*Ref` keys: secret references such as
   `secret:file/runtime-database-url`, resolved under that root. Write each file with
   `printf '%s'`: a trailing newline is part of the value, and a URL file that ends in one makes
@@ -127,7 +112,8 @@ fronts PostgreSQL.
 - `database.runtimeUrlRef` and `database.migrationUrlRef`: two PostgreSQL URLs. Give them
   different roles. With one role for both, the serving credential could rewrite the activation
   record, and `apply`, `status`, and `serve` say so.
-- `authentication.oidc`: your `issuer`, `audience`, and the exact `allowedClients` that may call.
+- `authentication.oidc.issuers`: an entry with your `issuer`, `audience`, and the exact
+  `allowedClients` that may call.
 - `taskGrantStatus`: either a list of the task authorities Scheduling asks about every grant
   before it books, or `unchecked-final-fifteen-minutes`, which asks nothing and accepts only a
   grant with 15 minutes or less left.
@@ -165,6 +151,79 @@ secretsIncluded: false
 `--output` refuses a directory that already exists. The package holds `scheduling.yaml` and a
 `SHA256SUMS` file. Set `package.expectedDigest` to the digest if the runtime must refuse any other
 package.
+
+## Provision PostgreSQL
+
+Your runtime file already names the roles, their passwords, and the database. They are the URLs in
+`database.migrationUrlRef` and `database.runtimeUrlRef`. `provision` reads the runtime file and the
+package it names, so write the file and build the package first. Put both database URLs in their
+secret files, then run `schedulingctl provision` once as a PostgreSQL role that can create roles and
+databases:
+
+```sh
+schedulingctl provision --runtime-config /etc/registry-scheduling/runtime.yaml --admin-url-file admin-url
+```
+
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
+`CREATEDB` and does not need to be a superuser. The URL must name the same host and port as the two
+product URLs, or `provision` refuses it as `platform.provision.target-mismatch`. It must also name a
+database other than the product database, such as `postgres`, or `provision` refuses it as
+`platform.provision.target-invalid`. Where the administrator may connect only to the product
+database, `provision` cannot run: add `--print-sql` and give the script to the person who
+administers the server. To pass the URL in
+an environment variable instead, use `--admin-url-env NAME`. The connection requires TLS and
+verifies the server certificate. Set
+`database.caBundleRef` in the runtime file to trust a private CA. The command never prints the
+administrator URL or a password.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Gives the migration role `USAGE` and `CREATE` on the `public` schema, takes `CREATE` on it
+  from `PUBLIC`, and gives the runtime role `USAGE` on it.
+
+Run it again at any time. It creates only what is missing. It refuses a role that exists with a
+different password than its URL holds, and tells you which role.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
+`\password` line that prompts for the password in `psql`, so the script holds no password:
+
+```sql
+-- provision script, product scheduling. Nothing was run.
+-- For a server where these objects do not exist yet. Review, then run with psql as an
+-- administrator that has CREATEROLE and CREATEDB. It stops at the first error.
+\set ON_ERROR_STOP on
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "scheduling_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "scheduling_migration"
+CREATE ROLE "scheduling_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "scheduling_runtime"
+CREATE DATABASE "scheduling" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "scheduling" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "scheduling" TO "scheduling_migration", "scheduling_runtime";
+ALTER DATABASE "scheduling" ALLOW_CONNECTIONS true;
+\connect "scheduling"
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "scheduling_migration"; GRANT USAGE ON SCHEMA public TO "scheduling_runtime";
+```
+
+The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
+
+`provision` grants the runtime role `CONNECT` on the database and `USAGE` on the `public` schema,
+and running `provision` again restores that grant. `apply` grants it the rest of what serving needs:
+read and write on the Scheduling tables, usage and select on the outbox identity sequence, and read
+on the activation ledgers. It reissues those grants on every run, so a table a later migration adds
+is covered, but it does not restore `USAGE` on `public`. The runtime requires TLS on its database connection and
+refuses one it cannot verify; `database.caBundleRef` names the CA bundle when a private CA fronts
+PostgreSQL.
+
+{/* Evidence: crates/registry-schedulingctl/src/provision.rs;
+    crates/registry-scheduling/migrations/0200_scheduling.sql;
+    crates/registry-schedulingctl/src/activation.rs, RoleMode;
+    products/scheduling/examples/standalone-exact-time/runtime.example.yaml, database. */}
 
 ## Plan and apply
 
@@ -276,16 +335,16 @@ versions, a package that was not applied, and a database that names another `dat
 route instead:
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8105/readyz
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8105/ready
 ```
 
 ```text
 200
 ```
 
-`/readyz` answers unavailable while PostgreSQL is unreachable, while the schema is not the one
+`/ready` answers unavailable while PostgreSQL is unreachable, while the schema is not the one
 this release expects, and while the audit destination refuses writes, because no booking proceeds
-without its audit entry.
+without its audit entry. `/readyz` returns the same status and body.
 
 ## Read the deployment
 
@@ -332,6 +391,7 @@ the series below and nothing else. The public listener does not route `/metrics`
 | `scheduling_hook_oldest_pending_age_seconds` | none | Gauge of how many seconds ago the oldest pending hook delivery's event was captured. Zero when none is pending |
 | `scheduling_worker_last_success_age_seconds` | `worker`: `hold-expiry`, `retention` | Gauge of seconds since the worker last finished a pass |
 | `scheduling_metrics_sample_failures_total` | `queue`: `outbox`, `hook-deliveries` | Scrapes in which that queue could not be read |
+| `scheduling_request_refusals_total` | `check`: the closed set of 45 failed checks, every value published at zero | Requests refused, by the check that failed. Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute, with `suppressed` counting what a window held back. Neither carries a token, claim, client, subject or identifier |
 
 Every state is listed, with a zero when no row is in it. Watch
 `scheduling_outbox_items{state="dead-lettered"}` and
@@ -418,7 +478,7 @@ to a new, empty database; the old ledger is not carried over.
 {/* Evidence: crates/registry-schedulingctl/src/{activation,records,intents}.rs;
     crates/registry-scheduling/src/store/activation.rs, publication and PolicyInUse;
     crates/registry-scheduling/src/runtime.rs, startup ready() and check_active_package(), workers
-    and retention; crates/registry-scheduling/src/http.rs, readyz();
+    and retention; crates/registry-scheduling/src/http.rs, ready() and readyz();
     crates/registry-schedulingctl/src/project.rs, package(); crates/registry-platform-config/src/loader.rs,
     validate_absolute_lexical_path(); crates/registry-scheduling/src/config.rs. Success lines observed with scheduling 0.42.0-dev against
     PostgreSQL 17, the standalone-exact-time project, and single-role credentials. */}

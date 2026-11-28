@@ -111,35 +111,54 @@ fn authorize_action<'a>(
     claims: &VerifiedRequestClaims,
     options: &QueryOptions,
 ) -> Option<AuthorizedActionSurface<'a>> {
-    service.mutations.as_ref()?;
+    authorize_action_checked(service, route, claims, options).ok()
+}
+
+/// The admission of one Action route. The refusal names the first check that
+/// failed, for the operator only.
+fn authorize_action_checked<'a>(
+    service: &'a HttpService,
+    route: &'a CompiledActionRoute,
+    claims: &VerifiedRequestClaims,
+    options: &QueryOptions,
+) -> Result<AuthorizedActionSurface<'a>, FailedCheck> {
+    if service.mutations.is_none() {
+        return Err(FailedCheck::Visibility);
+    }
     let inventory = service.registry.actions();
     // A caller cannot construct an alternate path, operation or action under a
     // valid route identifier. Discovery and dispatch use this same inventory.
     if !inventory.routes.contains(route)
         || !matches!(route.operation, Operation::Invoke | Operation::Start)
     {
-        return None;
+        return Err(FailedCheck::Operation);
     }
-    let access = inventory.access.iter().find(|entry| {
-        entry.route_id == route.id
-            && entry.action_id == route.action_id
-            && entry.operation == route.operation
-    })?;
+    let access = inventory
+        .access
+        .iter()
+        .find(|entry| {
+            entry.route_id == route.id
+                && entry.action_id == route.action_id
+                && entry.operation == route.operation
+        })
+        .ok_or(FailedCheck::AccessProfile)?;
     let selected = options
         .access_profile()
         .map(String::as_str)
-        .or(access.default_profile_id.as_deref())?;
+        .or(access.default_profile_id.as_deref())
+        .ok_or(FailedCheck::AccessProfile)?;
     if !access.profile_ids.contains(selected)
         || !route.access_profiles.iter().any(|id| id == selected)
     {
-        return None;
+        return Err(FailedCheck::AccessProfile);
     }
     let action = inventory
         .actions
         .iter()
-        .find(|action| action.id == route.action_id)?;
+        .find(|action| action.id == route.action_id)
+        .ok_or(FailedCheck::Operation)?;
     if route.operation == Operation::Start {
-        proposals::authorize(
+        proposals::authorize_checked(
             &service.registry,
             action,
             claims,
@@ -151,27 +170,36 @@ fn authorize_action<'a>(
         && (claims.actor_subject().is_some()
             || claims.actor_kind() == Some(registry_platform_oidc::ActorKind::Agent))
     {
-        return None;
+        return Err(FailedCheck::TaskGrantMissing);
     }
     let grant = action
         .permissions
         .iter()
-        .find(|grant| grant.profile_id == selected)?;
-    if !grant.operations.contains(&route.operation)
-        || grant.principal_claim.as_deref() != claims.principal_claim()
-        || !grant
-            .required_scopes
-            .iter()
-            .all(|scope| claims.has_scope(scope))
-        || (!grant.required_purposes.is_empty()
-            && !claims
-                .purpose()
-                .is_some_and(|purpose| grant.required_purposes.contains(purpose)))
+        .find(|grant| grant.profile_id == selected)
+        .ok_or(FailedCheck::AccessProfile)?;
+    if !grant.operations.contains(&route.operation) {
+        return Err(FailedCheck::Operation);
+    }
+    if grant.principal_claim.as_deref() != claims.principal_claim() {
+        return Err(FailedCheck::TokenClaims);
+    }
+    if !grant
+        .required_scopes
+        .iter()
+        .all(|scope| claims.has_scope(scope))
     {
-        return None;
+        claims.declare_scope_refusal(&grant.required_scopes, Some(&grant.profile_id));
+        return Err(FailedCheck::Scope);
+    }
+    if !grant.required_purposes.is_empty()
+        && !claims
+            .purpose()
+            .is_some_and(|purpose| grant.required_purposes.contains(purpose))
+    {
+        return Err(FailedCheck::Purpose);
     }
     if let Some(expected) = grant.actor_kind {
-        let actual = claims.actor_kind()?;
+        let actual = claims.actor_kind().ok_or(FailedCheck::ActorKind)?;
         if !matches!(
             (expected, actual),
             (
@@ -185,14 +213,14 @@ fn authorize_action<'a>(
                 registry_platform_oidc::ActorKind::Service
             )
         ) {
-            return None;
+            return Err(FailedCheck::ActorKind);
         }
         if route.operation == Operation::Invoke
             && expected == crate::contract::ActorKindSource::Agent
             && claims.actor_subject().is_none()
             && claims.grant().is_none()
         {
-            return None;
+            return Err(FailedCheck::TaskGrantMissing);
         }
     }
     // A delegated token acts for its principal; only a grant written for
@@ -200,18 +228,18 @@ fn authorize_action<'a>(
     if claims.actor_subject().is_some()
         && grant.actor_kind != Some(crate::contract::ActorKindSource::Agent)
     {
-        return None;
+        return Err(FailedCheck::Delegation);
     }
     if !grant.requester_clients.is_empty()
         && !claims
             .requester_client()
             .is_some_and(|client| grant.requester_clients.contains(client))
     {
-        return None;
+        return Err(FailedCheck::RequesterClient);
     }
-    let principal = claims.principal()?;
+    let principal = claims.principal().ok_or(FailedCheck::TokenClaims)?;
     let task_grant = if route.operation == Operation::Invoke {
-        action_task_grant_binding(action, grant, claims).ok()?
+        action_task_grant_binding(action, grant, claims)?
     } else {
         None
     };
@@ -224,8 +252,9 @@ fn authorize_action<'a>(
                 verified_row_boundaries_from_sources(&target.row_boundaries, claims)?,
             ))
         })
-        .collect::<Option<BTreeMap<_, _>>>()?;
-    Some(AuthorizedActionSurface {
+        .collect::<Option<BTreeMap<_, _>>>()
+        .ok_or(FailedCheck::RowBoundary)?;
+    Ok(AuthorizedActionSurface {
         route,
         action,
         context: AuthorizedActionContext::new(
@@ -245,31 +274,34 @@ fn action_task_grant_binding(
     action: &CompiledAction,
     permission: &crate::model::CompiledActionPermission,
     claims: &VerifiedRequestClaims,
-) -> Result<Option<crate::task_grant::TaskGrantBinding>, ()> {
+) -> Result<Option<crate::task_grant::TaskGrantBinding>, FailedCheck> {
     match (&permission.task_grant, claims.grant()) {
         (None, None) => Ok(None),
         (Some(source), Some(grant)) => {
-            if permission.actor_kind != Some(crate::contract::ActorKindSource::Agent)
-                || !grant
-                    .bounds()
-                    .breg_permissions()
-                    .is_some_and(|permissions| {
-                        permissions.iter().any(|bound| {
-                            bound.collection() == format!("action:{}", action.id)
-                                && bound
-                                    .operations()
-                                    .iter()
-                                    .any(|operation| operation == "invoke")
-                        })
+            if permission.actor_kind != Some(crate::contract::ActorKindSource::Agent) {
+                return Err(FailedCheck::ActorKind);
+            }
+            if !grant
+                .bounds()
+                .breg_permissions()
+                .is_some_and(|permissions| {
+                    permissions.iter().any(|bound| {
+                        bound.collection() == format!("action:{}", action.id)
+                            && bound
+                                .operations()
+                                .iter()
+                                .any(|operation| operation == "invoke")
                     })
+                })
             {
-                return Err(());
+                return Err(FailedCheck::TaskGrantScope);
             }
             bind_task_grant(&source.source_issuer, claims)
                 .map(Some)
-                .map_err(|_| ())
+                .map_err(|refusal| refusal.check)
         }
-        _ => Err(()),
+        (Some(_), None) => Err(FailedCheck::TaskGrantMissing),
+        (None, Some(_)) => Err(FailedCheck::TaskGrantScope),
     }
 }
 
@@ -284,7 +316,7 @@ pub(super) async fn dispatch(
     body: Body,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let (options, valid_options) = match QueryOptions::parse(raw_query.as_deref(), false) {
         Ok(options) => (options, true),
@@ -293,10 +325,11 @@ pub(super) async fn dispatch(
     let refusal =
         |response| action_refusal(mutations, &route, &claims, &options, &correlation, response);
     if !valid_options {
-        return refusal(concealed()).await;
+        return refusal(concealed(FailedCheck::Visibility)).await;
     }
-    let Some(surface) = authorize_action(&service, &route, &claims, &options) else {
-        return refusal(concealed()).await;
+    let surface = match authorize_action_checked(&service, &route, &claims, &options) {
+        Ok(surface) => surface,
+        Err(check) => return refusal(concealed(check)).await,
     };
     if !single_content_type(&headers, "application/json") {
         return refusal(unsupported_media_type()).await;
@@ -398,12 +431,30 @@ pub(super) async fn dispatch(
                     )
                     .await
                     {
-                        Ok(availability::Availability::NotSatisfied { guard_reason, .. }) => {
-                            crate::correlation::action_guard_failure_response(guard_reason)
-                        }
+                        Ok(availability::Availability::NotSatisfied {
+                            guard_reason,
+                            guard_label,
+                            ..
+                        }) => crate::correlation::note_refusal(
+                            crate::correlation::action_guard_failure_response(
+                                guard_reason,
+                                guard_label,
+                            ),
+                            FailedCheck::ActionGuard,
+                        ),
                         // Visibility and the record may have changed since rollback.
-                        // Never turn the private cause into an existence oracle.
-                        _ => precondition_failed(),
+                        // Never turn the private cause into an existence oracle:
+                        // count the guard refusal for the operator, and return the
+                        // bare generic 412 with no response RefusalNote so
+                        // development posture cannot distinguish it from an
+                        // unknown target.
+                        _ => {
+                            crate::correlation::record_refusal_check(
+                                FailedCheck::ActionGuard,
+                                &correlation,
+                            );
+                            precondition_failed()
+                        }
                     }
                 }
                 Err(error) => mutation_problem(error),
@@ -421,7 +472,9 @@ pub(super) async fn dispatch(
                 .await
             {
                 Ok(response) => exact_non_record_no_store(response),
-                Err(crate::mutation::MutationError::PreconditionFailed) => concealed(),
+                Err(crate::mutation::MutationError::PreconditionFailed) => {
+                    concealed(FailedCheck::RowBoundary)
+                }
                 Err(error) => mutation_problem(error),
             }
         }

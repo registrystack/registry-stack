@@ -47,6 +47,8 @@ def compile_package(evidencectl, evidence, project, target_path, candidate):
         str(evidencectl),
         "package",
         str(project),
+        "--posture",
+        "development",
         "--target",
         str(target_path),
         "--output",
@@ -223,6 +225,8 @@ def main():
         str(evidence),
         "authority",
         "activate",
+        "--posture",
+        "development",
         "--runtime-config",
         str(runtime_path),
         "--document",
@@ -258,7 +262,11 @@ def main():
         stop.set()
     threading.Thread(target=stdin_stop, daemon=True).start()
     with (output / "service.log").open("wb") as log:
-        process = subprocess.Popen([str(evidence), "serve", "--runtime-config", str(runtime_path)], stdout=log, stderr=log)
+        process = subprocess.Popen(
+            [str(evidence), "serve", "--runtime-config", str(runtime_path), "--posture", "development"],
+            stdout=log,
+            stderr=log,
+        )
         try:
             deadline = time.monotonic() + 15
             while True:

@@ -8,12 +8,12 @@ Transport configuration uses `attemptTimeoutMilliseconds`,
 `connectTimeoutMilliseconds`, and `maximumResponseBytes`; custom roots are PEM
 text in `trustedRootCertificates`.
 
-This crate publishes through the unified `@registrystack/client` package.
+This crate publishes through the unified `@registrystack/client-node` package.
 Install the exact client version that matches the Discovery deployment, and use
 its `discovery` namespace:
 
 ```sh
-npm install "@registrystack/client@<version>"
+npm install "@registrystack/client-node@<version>"
 ```
 
 The root package selects the native package for Linux amd64 with glibc, Linux
@@ -23,9 +23,8 @@ JavaScript API only, so normal installs do not download an unused native
 binary.
 
 Registry Stack v0.23.0 through v0.26.0 published this binding on its own, as
-`@registrystack/discovery-client`. Those versions stay published and unchanged,
-and no later version joins them: from v0.26.1 the maintained Node.js client is
-`@registrystack/client`.
+`@registrystack/discovery-client`. The unified Node client first shipped in
+v0.26.1. Install `@registrystack/client-node` for v0.49.0 and later.
 
 ```js
 const {
@@ -35,8 +34,8 @@ const {
   selectEvidenceAlternative,
   selectEvidenceService,
   validateSelectionStructure,
-} = require('@registrystack/client').discovery;
-const { EvidenceClient } = require('@registrystack/client').evidence;
+} = require('@registrystack/client-node').discovery;
+const { EvidenceClient } = require('@registrystack/client-node').evidence;
 
 // These exact pins are application configuration. They are not copied from
 // Discovery metadata and do not define a Discovery-owned trust-store schema.
@@ -205,3 +204,7 @@ them.
 This boundary keeps Discovery an index (see the
 [Discovery README](../../products/discovery/README.md)): it neither defines
 adopter trust policy nor proxies native Evidence invocation.
+
+Discovery clients accept development-marked catalog responses by default.
+To reject them, construct the client with
+`new DiscoveryClient({ baseUrl, refuseDevelopmentPeer: true })`.

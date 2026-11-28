@@ -818,6 +818,8 @@ pub fn build_sources(
             ),
         );
     }
+    let protocols = crate::host_protocol::registry_with_posture(document.posture.posture())
+        .map_err(|_| SourceBindingError::new(SourceBindingReason::HostProtocols))?;
     let mut sources = BTreeMap::new();
     for (id, source) in bundle.config.sources.iter() {
         let refused = |reason| SourceBindingError::new(reason).for_source(id);
@@ -872,12 +874,13 @@ pub fn build_sources(
         }
         sources.insert(
             id.to_owned(),
-            PackSourceExecutor::compile_diagnosed(
+            PackSourceExecutor::compile_diagnosed_with_registry(
                 source,
                 closure,
                 runtime,
                 &policies.endpoints,
                 limits,
+                &protocols,
             )
             .map_err(|error| error.for_source(id))?,
         );

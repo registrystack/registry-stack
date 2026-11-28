@@ -8,7 +8,7 @@ source_repos:
   - registry-platform
   - registry-breg
   - registry-evidence
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -164,9 +164,11 @@ Every product that validates access tokens fetches the issuer's keys under one s
 network policy:
 
 - The declared issuer and a declared key set URI may be on a private network or on loopback.
-  Loopback means a host written as a literal loopback address or `localhost`. A name that resolves
-  to a loopback address is refused. The operator who writes the runtime file is trusted to name
-  them.
+  Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8`
+  address, or the name `localhost` in any letter case, which the product connects to only through
+  the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts. Any
+  other name that resolves to a loopback address is refused. The operator who writes the runtime
+  file is trusted to name them.
 - Cloud metadata and link-local addresses are refused for declared and discovered endpoints alike.
 - A key endpoint discovered on the issuer's own origin inherits the issuer's policy. On another
   origin it must use HTTPS and is refused when it resolves to a private or loopback address.
@@ -200,11 +202,33 @@ verifier front end log no startup warning when `allowInsecureHttp` is on.
     crates/registry-platform-httputil/src/lib.rs, outbound_client_does_not_follow_redirects;
     crates/registry-platform-config/src/blocks.rs, JwksSource;
     crates/registry-breg/src/runtime_config.rs, insecure_http_startup_diagnostic;
-    crates/registry-casework/src/config.rs, insecure_http_startup_diagnostic;
-    crates/registry-coordinator/src/access.rs, http_issuer_opt_in_has_a_startup_diagnostic;
+    crates/registry-casework/src/config.rs, loopback_issuer_http_needs_no_setting_in_production;
+    crates/registry-coordinator/src/runtime.rs, production_accepts_a_loopback_http_issuer_with_a_development_loopback_listener;
     crates/registry-documents/src/config.rs, allow_insecure_http;
     crates/registry-messaging/src/config.rs, insecure_http_startup_diagnostic;
     crates/registry-scheduling/src/config.rs, insecure_http_startup_diagnostic. */}
+
+## Refused requests
+
+Each runtime counts every refused request by the check that refused it, in
+`<product>_request_refusals_total{check}`, with a closed set of 45 checks that start at zero.
+Each refusal also writes one `request refused` log line with `failed_check`, at most five lines per
+check per minute, and no token, claim, scope value or client identifier.
+The answer a caller receives does not change, so the counter is how an operator tells apart refusals
+that look the same to the caller.
+Alert on the counter, and not on a log line, because the line is rate limited.
+The counter names the check and never the caller.
+The labels `ownership` and `visibility` tell apart a target that exists from one that does not, so
+keep metrics to the operator.
+The product pages say what each counter covers:
+[BReg](breg/), [Casework](casework/), [Coordinator](coordinator/),
+[Document Store](documents/), [Evidence](evidence/), [Messaging](messaging/), [Render](render/) and
+[Scheduling](scheduling/).
+
+{/* Evidence: crates/registry-platform-authcommon/src/refusal.rs;
+    crates/registry-breg/tests/golden/authentication_refusals.json;
+    crates/registry-messaging/tests/golden/refusals.json;
+    crates/registry-scheduling/tests/golden/refusal-answers.json. */}
 
 ## Operator responsibilities
 
@@ -216,6 +240,7 @@ provisions and runs.
 ## Continue
 
 - [Threat model](../explanation/threat-model/)
+- [Where authority lives](../explanation/where-authority-lives/)
 - [Production hardening checklist](hardening-checklist/)
 - [Known limitations](../explanation/known-limitations/)
 - [Report a vulnerability](report-a-vulnerability/)

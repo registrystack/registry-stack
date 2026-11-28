@@ -47,12 +47,11 @@ void bregClient.registryContract('reader').then((metadata) => {
   }
 })
 breg.verifyHookDelivery({
-  method: 'POST',
-  path: '/hooks/registry',
-  headers: { 'X-Registry-Signature': 'v1=opaque' },
+  headers: { 'webhook-signature': 'v1,opaque' },
   body: Buffer.from('{}'),
   key: Buffer.alloc(32),
-}).deliveryTime.toUpperCase()
+  previousKey: Buffer.alloc(32, 1),
+}).timestamp.toUpperCase()
 // @ts-expect-error Structural validation uses its explicit canonical name.
 void discovery.validateSelection
 declare const selection: discovery.EvidenceServiceSelection

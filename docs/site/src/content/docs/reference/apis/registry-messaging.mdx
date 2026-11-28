@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-25"
+last_reviewed: "2026-11-28"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -32,9 +32,9 @@ deployment admits. The token's scopes are read from `scope` unless the deploymen
 another claim. Liveness and readiness take no token, and provider callbacks take none either: a
 callback verifier authenticates them instead.
 
-{/* Evidence: crates/registry-messaging/src/config.rs, MESSAGING_ACCESS_TOKEN_TYPE;
+{/* Evidence: crates/registry-messaging/src/config.rs, AccessTokenType;
     crates/registry-messaging/src/auth.rs, authenticate();
-    crates/registry-messaging/src/config.rs, default_scope_claim. */}
+    crates/registry-platform-config/src/caller_issuers.rs, default_scope_claim. */}
 
 `POST /v1/messages` requires an `Idempotency-Key` header of 1 to 128 visible ASCII characters,
 scoped to the verified issuer and principal. The access profile's `principalClaim` selects that

@@ -13,8 +13,7 @@
 //!
 //! The `request.*` family carries the request-edge rejections (a route that
 //! does not exist, a method the route refuses, a body too large or not JSON)
-//! under this product's own prefix, exactly as Casework does: no shared
-//! platform problem prefix exists in the Registry Stack catalog.
+//! under this product's own prefix, as Casework does.
 
 use crate::naming::SCHEDULING_PROBLEM_TYPE_BASE;
 
@@ -26,6 +25,7 @@ pub const CAPACITY_EXHAUSTED_PROBLEM: &str = "capacity.exhausted";
 pub const CURSOR_EXPIRED_PROBLEM: &str = "cursor.expired";
 pub const CURSOR_INVALID_PROBLEM: &str = "cursor.invalid";
 pub const ELIGIBILITY_UNAVAILABLE_PROBLEM: &str = "eligibility.unavailable";
+pub const GRANT_LIFETIME_TOO_LONG_PROBLEM: &str = "grant.lifetime-too-long";
 pub const HOLD_EXPIRED_PROBLEM: &str = "hold.expired";
 pub const HOLD_RELEASED_PROBLEM: &str = "hold.released";
 pub const HORIZON_OUTSIDE_PROBLEM: &str = "horizon.outside";
@@ -35,6 +35,7 @@ pub const IDEMPOTENCY_KEY_REUSED_PROBLEM: &str = "idempotency.key-reused";
 pub const LOCATION_CLOSED_PROBLEM: &str = "location.closed";
 pub const OPERATION_NOT_AUTHORIZED_PROBLEM: &str = "operation.not-authorized";
 pub const PARTY_CAPACITY_INADEQUATE_PROBLEM: &str = "party.capacity-inadequate";
+pub const DEVELOPMENT_ASSERTION_PROBLEM: &str = "platform.task-grant.development-assertion";
 pub const POLICY_CHANGED_PROBLEM: &str = "policy.changed";
 pub const PRECONDITION_FAILED_PROBLEM: &str = "precondition.failed";
 pub const PRECONDITION_REQUIRED_PROBLEM: &str = "precondition.required";
@@ -63,6 +64,7 @@ pub enum ProblemCode {
     CursorExpired,
     CursorInvalid,
     EligibilityUnavailable,
+    GrantLifetimeTooLong,
     HoldExpired,
     HoldReleased,
     HookUnavailable,
@@ -72,6 +74,7 @@ pub enum ProblemCode {
     LocationClosed,
     OperationNotAuthorized,
     PartyCapacityInadequate,
+    PlatformTaskGrantDevelopmentAssertion,
     PolicyChanged,
     PreconditionFailed,
     PreconditionRequired,
@@ -101,6 +104,7 @@ impl ProblemCode {
         Self::CursorExpired,
         Self::CursorInvalid,
         Self::EligibilityUnavailable,
+        Self::GrantLifetimeTooLong,
         Self::HoldExpired,
         Self::HoldReleased,
         Self::HookUnavailable,
@@ -110,6 +114,7 @@ impl ProblemCode {
         Self::LocationClosed,
         Self::OperationNotAuthorized,
         Self::PartyCapacityInadequate,
+        Self::PlatformTaskGrantDevelopmentAssertion,
         Self::PolicyChanged,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
@@ -139,6 +144,7 @@ impl ProblemCode {
             Self::CursorExpired => CURSOR_EXPIRED_PROBLEM,
             Self::CursorInvalid => CURSOR_INVALID_PROBLEM,
             Self::EligibilityUnavailable => ELIGIBILITY_UNAVAILABLE_PROBLEM,
+            Self::GrantLifetimeTooLong => GRANT_LIFETIME_TOO_LONG_PROBLEM,
             Self::HoldExpired => HOLD_EXPIRED_PROBLEM,
             Self::HoldReleased => HOLD_RELEASED_PROBLEM,
             Self::HorizonOutside => HORIZON_OUTSIDE_PROBLEM,
@@ -148,6 +154,7 @@ impl ProblemCode {
             Self::LocationClosed => LOCATION_CLOSED_PROBLEM,
             Self::OperationNotAuthorized => OPERATION_NOT_AUTHORIZED_PROBLEM,
             Self::PartyCapacityInadequate => PARTY_CAPACITY_INADEQUATE_PROBLEM,
+            Self::PlatformTaskGrantDevelopmentAssertion => DEVELOPMENT_ASSERTION_PROBLEM,
             Self::PolicyChanged => POLICY_CHANGED_PROBLEM,
             Self::PreconditionFailed => PRECONDITION_FAILED_PROBLEM,
             Self::PreconditionRequired => PRECONDITION_REQUIRED_PROBLEM,
@@ -194,8 +201,10 @@ impl ProblemCode {
     pub const fn http_status(self) -> u16 {
         match self {
             Self::CursorInvalid | Self::RequestInvalid => 400,
-            Self::AuthenticationRefused => 401,
-            Self::OperationNotAuthorized | Self::ProfileNotAuthorized => 403,
+            Self::AuthenticationRefused | Self::PlatformTaskGrantDevelopmentAssertion => 401,
+            Self::GrantLifetimeTooLong
+            | Self::OperationNotAuthorized
+            | Self::ProfileNotAuthorized => 403,
             Self::RequestNotFound => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::ReceiptUnresolved => 409,
@@ -229,6 +238,7 @@ impl ProblemCode {
     pub const fn title(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => "Authentication refused",
+            Self::PlatformTaskGrantDevelopmentAssertion => "Development task assertion",
             Self::BookingDuplicateActive => "Duplicate active booking",
             Self::CancellationCutoffPassed => "Cancellation cutoff passed",
             Self::CapabilityUnmatched => "Capability unmatched",
@@ -236,6 +246,7 @@ impl ProblemCode {
             Self::CursorExpired => "Cursor expired",
             Self::CursorInvalid => "Cursor invalid",
             Self::EligibilityUnavailable => "Eligibility unavailable",
+            Self::GrantLifetimeTooLong => "Task grant lifetime too long",
             Self::HoldExpired => "Hold expired",
             Self::HoldReleased => "Hold released",
             Self::HookUnavailable => "Hook unavailable",
@@ -271,6 +282,7 @@ impl ProblemCode {
             Self::AuthenticationRefused => {
                 "The bearer credential is missing, invalid, or expired. Sign in again."
             }
+            Self::PlatformTaskGrantDevelopmentAssertion => "A production registry refuses task assertions issued in development.",
             Self::BookingDuplicateActive => {
                 "An active booking already holds this party's duplicate key. Cancel it, or wait until it has passed, before booking again."
             }
@@ -289,6 +301,9 @@ impl ProblemCode {
             Self::CursorInvalid => "The cursor is invalid for this request.",
             Self::EligibilityUnavailable => {
                 "A required eligibility check could not run. Retry; do not treat this as permission."
+            }
+            Self::GrantLifetimeTooLong => {
+                "The task grant has more than 900 seconds left before it expires. Present a task grant that expires within 900 seconds."
             }
             Self::HoldExpired => {
                 "The hold expired before confirmation. Its capacity is bookable again; start a new request."
@@ -368,7 +383,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 33);
+        assert_eq!(ProblemCode::ALL.len(), 35);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -429,6 +444,19 @@ mod tests {
             assert!(!code.title().is_empty(), "{}", code.code());
             assert!(!code.detail().is_empty(), "{}", code.code());
         }
+    }
+
+    #[test]
+    fn a_grant_with_too_much_lifetime_left_has_its_own_code_and_keeps_the_status() {
+        let code = ProblemCode::GrantLifetimeTooLong;
+        assert_eq!(code.code(), "grant.lifetime-too-long");
+        assert_eq!(code.http_status(), 403);
+        assert_eq!(
+            type_uri(code.code()),
+            format!("{SCHEDULING_PROBLEM_TYPE_BASE}grant/lifetime-too-long")
+        );
+        assert_eq!(code.title(), "Task grant lifetime too long");
+        assert!(code.detail().contains("900 seconds"));
     }
 
     /// The request-edge family is Casework's, pinned one status per code, so

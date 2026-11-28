@@ -5,7 +5,7 @@
 //! This crate owns the `adapterctl` binary. Its commands: `check`, the
 //! offline check over authored artifacts (project, profile, pack, fixtures,
 //! and with `--runtime` the runtime config); `job check`, the offline
-//! compile of one ingestion job; `job lock`, the job's pin rewriter; `mapping check`, `mapping generate`, and
+//! compile of one ingestion job; `provision`, the creation of the roles and the database the runtime file names; `job lock`, the job's pin rewriter; `mapping check`, `mapping generate`, and
 //! `mapping preview`, the checks, script generator, and offline preview of
 //! an `AdapterMapping` model; `project lock`, the pin rewriter; `schemas`, the generator and drift gate of the Adapter format
 //! JSON Schemas; `compile`, the per-deployment contract compiler;
@@ -19,17 +19,20 @@
 mod check;
 mod compile;
 mod fixtures;
+mod identity_facts;
 mod job;
 mod job_runtime;
 mod mapping;
 mod payment_fixtures;
 mod payments;
 mod project;
+mod provision;
 mod report;
 mod schemas;
 mod verify;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_adapter::engine::load::posture_member;
 use registry_platform_yaml::Report;
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
@@ -58,9 +61,17 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Write a local Adapter starter and its development plan.
+    Init {
+        /// New directory to create.
+        directory: std::path::PathBuf,
+    },
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Check an authored adapter project, its pinned profile and pack, and
     /// its fixtures, offline, and print the findings.
     Check(check::CheckArgs),
+    Generate(identity_facts::GenerateArgs),
     /// Operate one authored ingestion job.
     Job(job::JobArgs),
     /// Check a mapping model, generate its Rhai script, or preview the
@@ -70,6 +81,8 @@ enum Command {
     Project(project::ProjectArgs),
     /// Check typed payment connections or export their fixed operation contract.
     Payments(payments::PaymentsArgs),
+    /// Create the roles and the database the runtime file names, or print the SQL.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Write the generated JSON Schemas of every Adapter format, or
     /// check the committed ones for drift.
     Schemas(schemas::SchemasArgs),
@@ -144,8 +157,32 @@ where
         }
     };
     let Cli { format, command } = cli;
+    if let Command::Provision(args) = &command {
+        let declared = match check_posture(args.posture.as_deref(), false) {
+            Ok(declared) => declared,
+            Err((code, message, action)) => {
+                return write_posture_usage(
+                    "provision",
+                    format,
+                    stdout,
+                    stderr,
+                    code,
+                    message,
+                    action,
+                )
+                .unwrap_or_else(|()| output_failed(stderr));
+            }
+        };
+        return provision(args, format, declared);
+    }
+    if let Command::RstackDev(args) = command {
+        return registry_rstack_dev::run(args, stdout, stderr);
+    }
     let command_name = match &command {
+        Command::Init { .. } => "init",
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Check(_) => "check",
+        Command::Generate(args) => identity_facts::command_name(args),
         Command::Job(job) => match job.command {
             job::JobCommand::Check(_) => "job check",
             job::JobCommand::Lock(_) => "job lock",
@@ -154,6 +191,7 @@ where
         Command::Project(project) => match project.command {
             project::ProjectCommand::Lock(_) => "project lock",
         },
+        Command::Provision(_) => "provision",
         Command::Schemas(_) => "schemas",
         Command::Payments(args) => payments::command_name(&args.command),
         Command::Compile(_) => "compile",
@@ -163,7 +201,39 @@ where
         Command::Verify(_) => "verify",
     };
     let outcome = match command {
+        Command::Init { directory } => match init(&directory) {
+            Ok(()) => {
+                let checked = Report::new(vec![]);
+                let report = json!({
+                    "ok": true,
+                    "command": command_name,
+                    "status": "initialized",
+                    "directory": directory,
+                    "diagnostics": [],
+                    "nextStep": format!("rstack dev start {}", directory.display()),
+                });
+                write_success(&report, &checked, format, stdout)
+            }
+            Err(error) => {
+                let exit = DOMAIN_REFUSAL_EXIT;
+                let report = failure(
+                    command_name,
+                    exit,
+                    vec![json!({
+                        "severity": "error",
+                        "code": "adapterctl.init.refused",
+                        "artifact": "filesystem",
+                        "path": directory,
+                        "message": error,
+                        "suggestedAction": "Choose a new directory under an existing writable parent.",
+                    })],
+                );
+                write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
+            }
+        },
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Check(args) => check_command(args, format, command_name, stdout, stderr),
+        Command::Generate(args) => identity_facts::run(args, format, stdout, stderr),
         Command::Job(job) => match job.command {
             job::JobCommand::Check(args) => job_command(args, format, command_name, stdout, stderr),
             job::JobCommand::Lock(args) => {
@@ -172,6 +242,7 @@ where
         },
         Command::Mapping(args) => mapping_command(args, format, command_name, stdout, stderr),
         Command::Project(args) => project_command(args, format, command_name, stdout, stderr),
+        Command::Provision(_) => unreachable!("provision writes its own report above"),
         Command::Schemas(args) => schemas_command(args, format, command_name, stdout, stderr),
         Command::Payments(args) => payments_command(args, format, command_name, stdout, stderr),
         Command::Compile(args) => compile_command(args, format, command_name, stdout, stderr),
@@ -182,6 +253,67 @@ where
         Ok(exit) => exit,
         Err(()) => output_failed(stderr),
     }
+}
+
+fn init(directory: &std::path::Path) -> Result<(), String> {
+    registry_rstack_dev::write_starter(
+        directory,
+        &[
+            (
+                "project.yaml",
+                include_bytes!("../../../products/adapter/examples/facade-recovery/project.yaml"),
+            ),
+            (
+                "profile.yaml",
+                include_bytes!("../../../products/adapter/profiles/breg-records/profile.yaml"),
+            ),
+            (
+                "pack.yaml",
+                include_bytes!("../../../products/adapter/examples/facade-recovery/pack.yaml"),
+            ),
+            (
+                "fixtures/recovery.yaml",
+                include_bytes!("../../../products/adapter/examples/facade-recovery/fixture.yaml"),
+            ),
+            (
+                "runtime.example.yaml",
+                include_bytes!(
+                    "../../../products/adapter/examples/dev-starter/runtime.example.yaml"
+                ),
+            ),
+            (
+                "dev.yaml",
+                include_bytes!("../../../products/adapter/examples/dev-starter/dev.yaml"),
+            ),
+            (
+                "dev-scenarios.yaml",
+                include_bytes!("../../../products/adapter/examples/dev-starter/dev-scenarios.yaml"),
+            ),
+        ],
+    )
+    .map_err(|error| format!("{error:#}"))
+}
+
+/// Runs the shared `provision` command, which writes its own report and sets
+/// its own exit code. The global `--format` selects its report as it selects
+/// every other command's.
+fn provision(
+    args: &registry_platform_provision::ProvisionArgs,
+    format: OutputFormat,
+    declared: registry_platform_config::DeclaredPosture,
+) -> ExitCode {
+    let shared = match format {
+        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+    };
+    registry_platform_provision::run_provision(
+        "adapterctl",
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        args,
+        shared,
+        declared,
+        |path| provision::load(path, declared),
+    )
 }
 
 fn usage_failure(message: String) -> Value {
@@ -206,7 +338,40 @@ fn payments_command(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
-    let run = payments::run(&args.command);
+    let posture = match &args.command {
+        payments::PaymentsCommand::Check {
+            posture,
+            production,
+            ..
+        } => Some((posture.as_deref(), *production)),
+        payments::PaymentsCommand::Contract { posture, .. }
+        | payments::PaymentsCommand::Fixtures {
+            command: payments::PaymentsFixturesCommand::Replay { posture, .. },
+        } => Some((posture.as_deref(), false)),
+        payments::PaymentsCommand::CheckPack { .. } => None,
+    };
+    let declared = match posture
+        .map(|(flag, production)| check_posture(flag, production))
+        .transpose()
+    {
+        Ok(Some(declared)) => declared,
+        Ok(None) => registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+        Err((code, message, action)) => {
+            return write_posture_usage(
+                command_name,
+                format,
+                stdout,
+                stderr,
+                code,
+                message,
+                action,
+            );
+        }
+    };
+    let run = payments::run(&args.command, declared);
     let exit = if run.unavailable {
         OPERATIONAL_FAILURE_EXIT
     } else if refused(run.checked.diagnostics(), run.deny_warnings) {
@@ -215,6 +380,9 @@ fn payments_command(
         0
     };
     let mut value = run.value;
+    if posture.is_some() {
+        value["posture"] = posture_member(declared);
+    }
     value["ok"] = json!(exit == 0);
     value["status"] = json!(if exit == 0 {
         "complete"
@@ -237,10 +405,8 @@ fn payments_command(
 fn refused(diagnostics: &[registry_platform_yaml::Diagnostic], deny_warnings: bool) -> bool {
     diagnostics
         .iter()
-        .any(|diagnostic| match diagnostic.severity {
-            registry_platform_yaml::Severity::Error => true,
-            registry_platform_yaml::Severity::Warning => deny_warnings,
-        })
+        .any(|diagnostic| diagnostic.severity == registry_platform_yaml::Severity::Error)
+        || (deny_warnings && registry_platform_config::has_denied_warnings(diagnostics))
 }
 
 /// Run `check` and write its verdict: a complete report, a refusal carrying
@@ -252,11 +418,25 @@ fn check_command(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
-    let run = match check::run(&args) {
+    let declared = match check_posture(args.posture.as_deref(), args.production) {
+        Ok(declared) => declared,
+        Err((code, message, action)) => {
+            return write_posture_usage(
+                command_name,
+                format,
+                stdout,
+                stderr,
+                code,
+                message,
+                action,
+            );
+        }
+    };
+    let run = match check::run(&args, declared) {
         Ok(run) => run,
         Err(check::CheckFailure::Io { path, source }) => {
             let exit = OPERATIONAL_FAILURE_EXIT;
-            let report = failure(
+            let mut report = failure(
                 command_name,
                 exit,
                 vec![json!({
@@ -268,10 +448,12 @@ fn check_command(
                     "suggestedAction": "Correct the path or permissions, then retry.",
                 })],
             );
+            report["posture"] = posture_member(declared);
             return write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit));
         }
     };
     let errors = refused(&run.diagnostics, args.deny_warnings);
+    let settings = serde_json::to_value(run.explicit_production_settings).map_err(|_| ())?;
     if errors {
         let mut checked = Report::new(run.diagnostics);
         checked.set_files_checked(run.files_checked);
@@ -282,6 +464,8 @@ fn check_command(
             "status": failure_status(exit),
             "diagnostics": checked.to_json_value(),
             "filesChecked": run.files_checked,
+            "posture": posture_member(declared),
+            "explicitProductionSettings": settings,
         });
         return write_configuration_report(
             &checked,
@@ -300,6 +484,8 @@ fn check_command(
         "command": command_name,
         "status": "complete",
         "project": run.project,
+        "posture": posture_member(declared),
+        "explicitProductionSettings": settings,
         "filesChecked": run.files_checked,
         "diagnostics": checked.to_json_value(),
     });
@@ -312,6 +498,41 @@ fn check_command(
     write_success(&envelope, &checked, format, stdout)
 }
 
+fn check_posture(
+    flag: Option<&str>,
+    production: bool,
+) -> Result<registry_platform_config::DeclaredPosture, (&'static str, &'static str, &'static str)> {
+    if production && flag == Some("development") {
+        return Err((
+            "platform.posture.conflict",
+            "--production and --posture development contradict each other",
+            "Use one of them.",
+        ));
+    }
+    registry_platform_config::declared_with_production_alias(flag, production)
+        .map_err(|error| (error.code(), error.message(), error.suggested_action()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_posture_usage(
+    command: &str,
+    format: OutputFormat,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+    code: &str,
+    message: &str,
+    action: &str,
+) -> Result<ExitCode, ()> {
+    let report = failure(
+        command,
+        report::USAGE_EXIT,
+        vec![json!({
+            "severity": "error", "code": code, "message": message, "suggestedAction": action,
+        })],
+    );
+    write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(report::USAGE_EXIT))
+}
+
 /// Run `job check` and write its verdict: the compiled artifacts, a
 /// refusal carrying the compile's own diagnostics, or a failure naming
 /// the broken environment.
@@ -322,7 +543,21 @@ fn job_command(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
-    match job::run(&args) {
+    let declared = match check_posture(args.posture.as_deref(), false) {
+        Ok(declared) => declared,
+        Err((code, message, action)) => {
+            return write_posture_usage(
+                command_name,
+                format,
+                stdout,
+                stderr,
+                code,
+                message,
+                action,
+            );
+        }
+    };
+    match job::run(&args, declared) {
         Ok(run) if refused(&run.warnings, args.deny_warnings) => {
             let mut checked = Report::new(run.warnings);
             checked.set_files_checked(run.files_checked);
@@ -332,6 +567,7 @@ fn job_command(
             let envelope = json!({
                 "ok": false,
                 "command": command_name,
+                "posture": posture_member(declared),
                 "status": failure_status(exit),
                 "diagnostics": diagnostics,
             });
@@ -345,6 +581,7 @@ fn job_command(
             mapping::annotate(&mut diagnostics, &run.annotations);
             let mut report = json!({
                 "command": command_name,
+                "posture": posture_member(declared),
                 "pack": run.pack,
                 "job": run.job,
                 "runtime": run.runtime,
@@ -358,7 +595,7 @@ fn job_command(
         }
         Err(job::JobCheckFailure::Io { path, source }) => {
             let exit = OPERATIONAL_FAILURE_EXIT;
-            let report = failure(
+            let mut report = failure(
                 command_name,
                 exit,
                 vec![json!({
@@ -370,6 +607,7 @@ fn job_command(
                     "suggestedAction": "Correct the path or permissions, then retry.",
                 })],
             );
+            report["posture"] = posture_member(declared);
             write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
         }
         Err(job::JobCheckFailure::Refused { diagnostics, .. }) => {
@@ -379,6 +617,7 @@ fn job_command(
             let envelope = json!({
                 "ok": false,
                 "command": command_name,
+                "posture": posture_member(declared),
                 "status": failure_status(exit),
                 "diagnostics": checked.to_json_value(),
             });
@@ -738,12 +977,27 @@ fn verify_command(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
-    match verify::run(&args) {
+    let declared = match check_posture(args.posture.as_deref(), false) {
+        Ok(declared) => declared,
+        Err((code, message, action)) => {
+            return write_posture_usage(
+                command_name,
+                format,
+                stdout,
+                stderr,
+                code,
+                message,
+                action,
+            );
+        }
+    };
+    match verify::run(&args, declared) {
         Ok(run) => {
             let mut checked = Report::new(run.warnings);
             checked.set_files_checked(run.files_checked);
             let mut report = json!({
                 "command": command_name,
+                "posture": posture_member(declared),
                 "project": run.project,
                 "runtime": run.runtime,
                 "drove": run.drove,
@@ -758,7 +1012,7 @@ fn verify_command(
         }
         Err(verify::VerifyFailure::Io { path, source }) => {
             let exit = OPERATIONAL_FAILURE_EXIT;
-            let report = failure(
+            let mut report = failure(
                 command_name,
                 exit,
                 vec![json!({
@@ -770,6 +1024,7 @@ fn verify_command(
                     "suggestedAction": "Correct the path or permissions, then retry.",
                 })],
             );
+            report["posture"] = posture_member(declared);
             write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
         }
         Err(verify::VerifyFailure::Refused {
@@ -782,6 +1037,7 @@ fn verify_command(
             let envelope = json!({
                 "ok": false,
                 "command": command_name,
+                "posture": posture_member(declared),
                 "status": failure_status(exit),
                 "diagnostics": checked.to_json_value(),
                 "filesChecked": files_checked,
@@ -790,7 +1046,8 @@ fn verify_command(
                 .map(|()| ExitCode::from(exit))
         }
         Err(verify::VerifyFailure::Stopped { exit, diagnostics }) => {
-            let report = failure(command_name, exit, diagnostics);
+            let mut report = failure(command_name, exit, diagnostics);
+            report["posture"] = posture_member(declared);
             write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
         }
     }

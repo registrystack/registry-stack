@@ -74,6 +74,8 @@ pub const HOOK_REFUSALS: [&str; 8] = [
 ];
 
 pub struct JobMetrics {
+    #[cfg(feature = "job-hook")]
+    refusals: registry_platform_authcommon::RefusalRecorder,
     pass_failures: CounterVec,
     hook_refusals: CounterVec,
     sample_failures: CounterVec,
@@ -99,6 +101,9 @@ impl Default for JobMetrics {
         let failures = singles(&PASS_FAILURES);
         let refusals = singles(&HOOK_REFUSALS);
         Self {
+            #[cfg(feature = "job-hook")]
+            refusals: registry_platform_authcommon::RefusalRecorder::new("adapter_job")
+                .expect(DECLARATION),
             pass_failures: CounterVec::new(
                 "adapter_job_pass_failures_total",
                 "Loop passes that did not settle their page, by reason.",
@@ -158,6 +163,13 @@ impl JobMetrics {
         count(&self.hook_refusals, &[reason]);
     }
 
+    /// The recorder behind `adapter_job_request_refusals_total` and the
+    /// `request refused` log line of the hook ingress.
+    #[cfg(feature = "job-hook")]
+    pub(crate) fn refusals(&self) -> &registry_platform_authcommon::RefusalRecorder {
+        &self.refusals
+    }
+
     /// Count one scrape whose item counts could not be read.
     pub fn record_sample_failure(&self) {
         count(&self.sample_failures, &[]);
@@ -176,6 +188,8 @@ impl JobMetrics {
         ] {
             counter.write(&mut out).expect(DECLARATION);
         }
+        #[cfg(feature = "job-hook")]
+        self.refusals.counter().write(&mut out).expect(DECLARATION);
         out.header(
             "adapter_job_items",
             Some("Items in the job store by state, sampled at scrape. Absent when the store could not be read."),
@@ -333,6 +347,20 @@ struct ScrapeState {
 
 /// The router the metrics listener serves: the counters and nothing else.
 pub fn metrics_router(metrics: Arc<JobMetrics>, pool: Pool, job_id: &str) -> Router {
+    metrics_router_in_posture(
+        metrics,
+        pool,
+        job_id,
+        registry_platform_config::Posture::Production,
+    )
+}
+
+pub fn metrics_router_in_posture(
+    metrics: Arc<JobMetrics>,
+    pool: Pool,
+    job_id: &str,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         .route(METRICS_PATH, get(scrape))
         .with_state(ScrapeState {
@@ -341,6 +369,7 @@ pub fn metrics_router(metrics: Arc<JobMetrics>, pool: Pool, job_id: &str) -> Rou
             job_id: Arc::from(job_id),
             samples: Arc::new(SampleCache::new(SAMPLE_CACHE)),
         })
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 /// Serve the metrics router until `shutdown` resolves, then give open

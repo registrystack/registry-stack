@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -97,7 +97,7 @@ Inside the transaction, after every lock wait and immediately before commit, Reg
 A credential that expires after the status answer cannot take capacity through a delayed transaction.
 
 {/* Evidence: crates/registry-scheduling/src/service.rs
-    the_offline_path_accepts_only_an_unexpired_grant_with_at_most_fifteen_minutes_left;
+    the_offline_path_tells_a_grant_with_too_much_lifetime_from_an_expired_one;
     crates/registry-platform-oidc/src/authorization_claims.rs
     expiry_uses_earlier_token_or_grant_deadline_and_refuses_exact_deadline;
     crates/registry-scheduling/tests/postgres_commitments.rs
@@ -127,13 +127,17 @@ The answer is a fresh observation, not a distributed transaction with the author
 
 `taskGrantStatus: unchecked-final-fifteen-minutes` selects the offline path.
 No authority is asked, no revocation is observed, and Registry Scheduling accepts a grant only while it is unexpired with no more than 900 seconds remaining at request entry.
+An unexpired grant with more than 900 seconds remaining answers `grant.lifetime-too-long` when it creates a hold or an appointment, so the caller knows to present a grant that expires sooner. An expired grant answers `operation.not-authorized`.
+The lifetime answer follows the bounds match: a caller with no grant, or whose grant does not cover the offering, still answers `operation.not-authorized`. A listed authority never answers `grant.lifetime-too-long`.
+A route that names an existing hold or appointment, which is releasing a hold, confirming a hold, rescheduling, recording attendance, and cancelling, answers `operation.not-authorized` for that grant, the same answer an unknown identifier gives, so the answer never says whether the identifier exists.
+The appointment detail read needs a listed authority, and so does creating, releasing, confirming, rescheduling or cancelling a source-managed or assisted hold or appointment. None of them answers `grant.lifetime-too-long`. Recording attendance needs no listed authority: it takes the offline path for every appointment.
 A list of authorities disables that path for every source, including an unlisted one, which is refused even with less than 15 minutes left.
 The token does not name its authorisation mode, so the final 15 minutes of an originally deferred grant can use the offline path on a deployment that writes the keyword.
 List the task authorities for every deployment that accepts deferred grants.
 
 {/* Evidence: crates/registry-scheduling/src/service.rs
     listed_authorities_refuse_an_unlisted_source_and_an_unbound_grant_without_the_offline_path,
-    the_offline_path_accepts_only_an_unexpired_grant_with_at_most_fifteen_minutes_left;
+    the_offline_path_tells_a_grant_with_too_much_lifetime_from_an_expired_one;
     crates/registry-scheduling/src/config.rs a_missing_task_grant_status_is_refused_naming_both_choices;
     crates/registry-scheduling/tests/postgres_commitments.rs
     configured_task_status_is_fresh_for_a_capacity_commit_and_its_replay,
@@ -249,15 +253,17 @@ In the Registry Scheduling runtime, use that issuer and audience, admit the clie
 ```yaml
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:scheduling
-    scopeClaim: scope
     readsScope: scheduling:read
-    allowedClients:
-      - scheduling-agent
-    assertionIssuers:
-      scheduling-agent:
-        - https://casework.example.test/task-authority
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:scheduling
+        scopeClaim: scope
+        allowedClients:
+          - scheduling-agent
+        assertionIssuers:
+          scheduling-agent:
+            - https://casework.example.test/task-authority
 
 taskGrantStatus:
   - sourceIssuer: https://casework.example.test/task-authority

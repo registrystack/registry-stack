@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -46,8 +46,8 @@ Advisories:
     unavailable when diagnosing load
 ```
 
-`breg` logs the same advisories at startup. When the runtime file sets
-`authentication.oidc.allowInsecureHttp: true`, the list also carries an
+`breg` logs the same advisories at startup. When an issuer entry in the runtime file sets
+`allowInsecureHttp: true`, the list also carries an
 `authentication.insecure-http` warning; it stays until the issuer is served over HTTPS. Set the baseline once, before the registry takes
 traffic, then run `doctor` until only the connection budget remains. On a dedicated host, start
 from these values and adjust them against your own measurements:
@@ -128,17 +128,18 @@ and keep the old one published while its tokens are valid. If the issuer is unre
 key stays usable for the cache lifetime plus `outageToleranceSeconds` (900 seconds), counted from
 the last successful fetch. A static JWKS document rotates only by editing it and restarting.
 
-For a compromised key, list its identifier under `authentication.oidc.revokedKeyIds` and restart every
+For a compromised key, list its identifier under the issuer entry's `revokedKeyIds` and restart every
 replica; every token it signed is refused. The trap: once the last revoked key leaves the issuer,
 delete `revokedKeyIds` entirely. An empty list refuses the runtime file:
 
 ```text
-error config.invalid-value /authentication/oidc/revokedKeyIds
+error config.invalid-value /authentication/oidc/issuers/main/revokedKeyIds
 expected at least one key identifier; next: List at least one key identifier to refuse, or delete revokedKeyIds to refuse no key.
 ```
 
-The runtime trusts one issuer, read at startup, so changing it is a coordinated restart with no
-overlap. First resolve every write whose response was lost: idempotency keys are bound to issuer and
+The runtime reads the issuer set under `authentication.oidc.issuers.<id>` at startup.
+Restart the instances to apply changes to the set. Before switching a caller to a new issuer,
+resolve every write whose response was lost. Idempotency keys are bound to issuer and
 principal, so a retry under the new issuer is a fresh request and can write twice, as
 [idempotency](../../reference/breg-api/#idempotency) explains. Restart paginated queries from the
 first page.
@@ -161,11 +162,12 @@ curl -s http://127.0.0.1:9464/metrics
 ```
 
 After one readiness probe and two requests without a token, the scrape held these samples (help
-text and histogram lines omitted):
+text and histogram lines omitted, and the other 44 `breg_request_refusals_total` checks showing 0):
 
 ```text
 breg_http_requests_total{route="/ready",method="GET",status="success"} 1
 breg_http_requests_total{route="/v1/records/facilities",method="GET",status="client-error"} 2
+breg_request_refusals_total{check="credential-missing"} 2
 breg_pool_connections{state="maximum-size"} 4
 breg_pool_connections{state="size"} 3
 breg_pool_connections{state="available"} 3
@@ -338,6 +340,37 @@ with one of the `breg.external-refresh.*` codes in [Troubleshooting](#troublesho
     crates/registry-breg/src/subject_access_log.rs, run_retention();
     crates/registry-platform-hooks/src/delivery/service.rs, WORKER_POLL_INTERVAL. */}
 
+## Watch refused requests
+
+`breg_request_refusals_total{check}` counts the requests Base Registry Engine (BReg) refused, by the check that refused
+it, since the process started. Every `check` value is published from the first scrape at zero, so a
+rate needs no `absent()` guard. A missing or refused credential, a refused token, an unreachable
+key source and a refused review completion callback all count. So does a request answered
+`404 resource.not_found` because the caller may not see the target (a missing scope or purpose, a
+row outside the caller's boundary, a refused task grant, a field beyond the profile), and a write
+refused as outside the caller's boundary. A batch of Proposal review contexts answers `200`, and
+each concealed item counts once under its own check. A `412` for a stale version and a request for an unknown route are not counted. A failed field guard counts under `action-guard`, also when it answers the generic `412`.
+
+Each refusal also writes one `request refused` line at `INFO` level with `failed_check` and the
+request's trace id, at most five lines per check per minute across the process. At `BREG_LOG=warn`
+no line is written, and the counter still counts. The next line for that check carries
+`suppressed`, the number of refusals the minute counted but did not log, so alert on the counter,
+not the log. The counter and the line carry only a fixed check name, never a token, claim, client
+or subject value. Counting changes nothing the caller receives.
+
+A rising `credential-missing` or `credential-malformed` count usually means a caller sends no
+token or a broken one. A rising `key-source-unavailable` count means BReg cannot read or use the
+issuer's keys; check the issuer before the callers.
+
+{/* Evidence: crates/registry-breg/src/correlation.rs, finish_response();
+    crates/registry-breg/src/metrics.rs,
+    the_refusal_counter_declares_every_check_and_publishes_it_at_zero;
+    crates/registry-breg/tests/authentication_refusals.rs,
+    every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wire;
+    crates/registry-breg/tests/concealment_refusals.rs,
+    every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wire;
+    crates/registry-platform-authcommon/src/refusal.rs, the recorder's per-check window. */}
+
 ## Read audit records
 
 Each audit record names its schema.
@@ -430,9 +463,9 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `startup.runtime-role.grants-missing` | The runtime role lost a grant. | Apply the active package again. |
 | `startup.role-mode.changed` | The ledger records split roles; the file names one. | Restore the runtime role. |
 | `apply.successor.roles-differ` | The file names other roles than the active activation. | Apply the active package under the new roles, then the successor. |
-| `startup.audit.refused` | The audit destination or hash key was refused. | Secret files are regular, owned by the running user, mode `0400` or `0600`, with one link. The audit directory and its files are owned by the running user, the directory `0700`. |
+| `startup.audit.refused` | The audit destination or hash key was refused. | Secret files meet the [secret file rule](../../security/hardening-checklist/#secret-files), for example regular, owned by the running user, mode `0400` or `0600`, with one link. The audit directory and its files are owned by the running user, the directory `0700`. |
 | `startup.cursor.refused` | The cursor secret was refused. | As above. |
-| `startup.oidc.refused` | The issuer's key set could not be loaded. | Check that this host reaches and trusts the issuer. |
+| `startup.oidc.refused` | The issuer's key set could not be loaded, or a pinned static key set was refused. | Check that this host reaches and trusts the issuer. For a pinned key set refused by the shared key rules, the message names the rule and, for a rule about one key, its position: correct that key. A key set refused by BReg's own rules (`use`, `key_ops`, a denied `kid`, the algorithm, or the number of keys) gets the general OIDC message: check those members. |
 | `authentication.refused` | A token was refused. | Check [what a token must carry](../breg/#what-a-token-must-carry); `aud` may be a list of up to 16 that includes the audience. |
 | `breg.runtime.invalid-metrics-listener` | `metricsListener.bind` is invalid. | See [Scrape metrics](#scrape-metrics). |
 | `postgres.connections.pool-over-half` | One pool may take over half the connections. | Lower the pool or raise `max_connections`. |
@@ -458,7 +491,9 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.migration.statement-failed` | PostgreSQL refused a statement; the SQLSTATE is named. | Fix the cause and retry, or run `migration reconcile`. |
 | `apply.migration.failed` | The apply failed mid-maintenance. | Retry the same target, or run `migration reconcile`. |
 | `apply.hook-destinations.refused` | Destinations and bindings do not match. | Compare `destinations.hooks` with `bregctl explain events`. |
-| `startup.hook-destinations.refused` | A destination binding was refused. | Check the key file, the origin, and `allowedPrivateCidrs`. |
+| `startup.hook-destinations.refused` | A destination binding was refused. For key failures, the message names the key path. | Follow the action in the message or check the origin and `allowedPrivateCidrs`. |
+| `breg.runtime.invalid-delivery-key` | A review authority completion key could not be resolved or failed the key policy. | Correct the key reference or supply the exact bytes as the message directs. |
+| `breg.runtime.duplicate-completion-recipient` | Two review authority completion blocks select the same recipient. | Give each authority a distinct `completion.recipientBinding`. |
 | `startup.hook.retained-bindings` | Pending deliveries need a removed binding. | Restore it until `hook list` shows them drained. |
 | `startup.instance-id.pending-deliveries` | Pending deliveries carry the previous `identity.instanceId`. | Restore it until they drain. |
 | `migration.review.*` | The reviewed migration directory was refused. | See [write a reviewed migration descriptor](../breg-changes/#write-a-reviewed-migration-descriptor). |
@@ -512,13 +547,13 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
     crates/registry-bregctl/src/lib.rs, apply.package.already-active;
     crates/registry-breg/src/postgres/catalog.rs, pre_1_0_attachment_verification_present();
     crates/registry-bregctl/src/lib.rs, PRE_1_0_SCHEMA_RECOVERY and apply.database.pre-1-0-schema;
-    crates/registry-breg/src/package.rs, validate_deployment_identity();
+    crates/registry-breg/src/startup.rs, recorded_startup_identity();
     crates/registry-bregctl/src/lib.rs, apply.package.deployment-identity-refused;
     crates/registry-breg/src/postgres/config.rs, DatabaseConnectionCause;
     crates/registry-bregctl/src/lib.rs, data command failures, import_authority_failure(),
     instance_claim_failure(), apply_lifecycle_failure(); crates/registry-breg/src/migration.rs;
     crates/registry-breg/src/auth.rs, MAX_AUDIENCES;
-    crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
+    crates/registry-platform-config/src/secrets.rs, judge_file();
     crates/registry-breg/src/startup.rs, DynamicRuntimeReadiness;
     crates/registry-breg/src/postgres/context.rs, begin_registry_transaction();
     crates/registry-breg/tests/postgres_startup.rs,

@@ -89,5 +89,5 @@ contain the canonical contracts. The latter includes generated TypeScript and
 Python project types used by `facility/console/`; the console tests use metadata
 and generated clients rather than lifecycle URL construction.
 
-For a locally deployed service, the maintained [development runbook](https://docs.registrystack.org/reference/bregctl-dev/)
+For a locally deployed service, the maintained [development runbook](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)
 owns PostgreSQL, authentication and package activation. `rstack dev` runs a project locally.

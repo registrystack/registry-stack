@@ -1046,3 +1046,47 @@ fn ambiguous_action_can_require_explicit_profile_but_cannot_have_two_defaults() 
         .iter()
         .any(|diagnostic| diagnostic.code == "breg.action.route-access-default-multiple"));
 }
+
+#[test]
+fn current_revision_refuses_a_function_plan_that_writes_an_existing_record() {
+    use registry_breg::compiler::compile_project_with_assets;
+    use registry_breg::contract::ModuleAssetSource;
+    use serde_json::{json, Value};
+
+    let mut source: Value = serde_json::from_str(&household_contact_project("")).unwrap();
+    let effects = source["actions"]["register-household-contact"]["plan"]["effects"].take();
+    let writes = effects
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|effect| {
+            json!({
+                "id": effect["id"], "target": effect["target"], "operation": effect["operation"],
+                "fields": effect["set"].as_object().unwrap().keys().collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+    source["functions"] = json!({"contact-plan": {"runtime":"rhai","source":"scripts/handler.rhai","entrypoint":"handle","abi":"registry.action-plan/v1"}});
+    source["actions"]["register-household-contact"]["plan"] = json!({"type":"function","function":"contact-plan","inputs":["household","person-code","legal-name"],"writes":writes});
+    source["actions"]["register-household-contact"]["execution"] =
+        json!({"mode":"immediate","concurrency":"current-revision"});
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let failure = compile_project_with_assets(
+        &project,
+        &[],
+        &[ModuleAssetSource {
+            module: None,
+            path: "scripts/handler.rhai".to_owned(),
+            bytes: br#"fn handle(ctx) { #{effects:[]} }"#.to_vec(),
+        }],
+        CompileProfile::Authoring,
+    )
+    .expect_err("a function plan cannot write an existing record without a condition");
+    assert!(
+        failure
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "breg.action.concurrency-caller-value"),
+        "{failure:?}"
+    );
+}

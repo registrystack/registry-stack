@@ -74,6 +74,7 @@ pub(crate) struct HistoryErasureLifecycleOutcome {
 }
 
 pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     request: HistoryErasureLifecycleRequest<'_>,
 ) -> Result<HistoryErasureLifecycleOutcome, HistoryErasureLifecycleError> {
     if !request.runtime_config.is_absolute() {
@@ -82,7 +83,7 @@ pub(crate) fn run(
     let erasure = load_erasure_request(request.request_file)?;
     let record_id =
         Uuid::parse_str(&erasure.record_id).map_err(|_| HistoryErasureLifecycleError::Target)?;
-    let config = load_runtime_config(request.runtime_config)
+    let config = load_runtime_config(request.runtime_config, posture)
         .map_err(HistoryErasureLifecycleError::RuntimeConfig)?;
     let package = config
         .load_active_package()
@@ -101,7 +102,8 @@ pub(crate) fn run(
         .audit_profile()
         .map_err(HistoryErasureLifecycleError::RuntimeConfig)?;
     let lock_key = RegistryLockKey::derive(&package.manifest().package_id)
-        .map_err(|_| HistoryErasureLifecycleError::DatabaseConfiguration)?;
+        .map_err(|_| HistoryErasureLifecycleError::DatabaseConfiguration)?
+        .for_posture(config.posture());
     let timeouts = HistoryErasureTimeouts::new(
         bounded_timeout(config.operational_timeouts().migration_lock)?,
         bounded_timeout(config.operational_timeouts().migration_statement)?,

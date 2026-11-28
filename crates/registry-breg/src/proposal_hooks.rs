@@ -51,7 +51,7 @@ pub fn source_hooks(
     actions.iter().flat_map(|action| {
         let hooks = match &action.execution {
             ActionExecutionSource::Proposal { proposal } => proposal.hooks.as_slice(),
-            ActionExecutionSource::Immediate {} => &[],
+            ActionExecutionSource::Immediate { .. } => &[],
         };
         hooks.iter().map(move |hook| (action.id.as_str(), hook))
     })

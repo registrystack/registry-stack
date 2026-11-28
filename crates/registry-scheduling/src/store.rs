@@ -34,6 +34,7 @@
 //! dispatch lease: a claimed intent is not claimable again until its lease
 //! passes, and an outcome write only lands for the attempt that owns it.
 
+use registry_platform_config::{DatabaseTransport, DatabaseTransportError, DevelopmentWitness};
 use std::collections::HashMap;
 use std::str::FromStr;
 #[cfg(feature = "postgres-test")]
@@ -74,6 +75,7 @@ use crate::config::{describe_secret_failure, DatabaseConfig};
 use crate::hooks::{ActivatedHooks, HookCaptureError};
 
 mod activation;
+pub use activation::{posture_mismatch, POSTURE_MISMATCH};
 mod attempt_key;
 mod attendance;
 mod operational;
@@ -90,10 +92,12 @@ pub use resource_availability::{ResourceSupplyImpact, ResourceSupplyImpacts};
 pub use source_busy::{resource_interval_is_available, BusyStoreError};
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0200_scheduling.sql");
+const ACTIVATION_POSTURE_MIGRATION: &str =
+    include_str!("../migrations/0201_activation_posture.sql");
 /// Every schema version, in the order it is applied. The baseline is
 /// version [`BASELINE_SCHEMA_VERSION`], above every version an earlier
 /// release applied; each later migration takes the next number.
-const SCHEMA_VERSIONS: [i64; 1] = [200];
+const SCHEMA_VERSIONS: [i64; 2] = [200, 201];
 /// The baseline schema version. A ledger holding any version below it was
 /// left by an earlier pre-1.0 release, which this release refuses by name:
 /// version 100 is the v0.42.0 and v0.43.0 baseline, whose outbox and hook
@@ -178,6 +182,13 @@ async fn mark_allocation_writer(
 
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("{message}")]
+    PostureMismatch {
+        message: &'static str,
+        action: &'static str,
+    },
+    #[error(transparent)]
+    DatabaseTransport(#[from] DatabaseTransportError),
     #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]
     UnsupportedPostgres,
     #[error("the Scheduling database configuration is invalid")]
@@ -346,6 +357,7 @@ impl StoreError {
                 | Self::SchemaNewer { .. }
                 | Self::NotActivated
                 | Self::DatabaseIdMismatch
+                | Self::PostureMismatch { .. }
                 | Self::PackageAlreadyActive { .. }
                 | Self::PackageNotActive { .. }
                 | Self::RoleModeDrift
@@ -705,9 +717,25 @@ impl ClaimRow {
     /// Whether a commitment carries the authority that manages this claim.
     /// Source-bound claims never fall back to their creating actor.
     fn is_managed_by(&self, commitment: &Commitment<'_>) -> bool {
+        self.is_managed_by_caller(
+            commitment.actor_issuer,
+            commitment.actor_subject,
+            commitment.source_manager.as_ref(),
+        )
+    }
+
+    /// Whether the verified `issuer` and `subject`, with the source authority
+    /// they presented, manage this claim.
+    #[must_use]
+    pub fn is_managed_by_caller(
+        &self,
+        issuer: &str,
+        subject: &str,
+        source_manager: Option<&SourceBoundManager>,
+    ) -> bool {
         match &self.source_manager {
-            Some(expected) => commitment.source_manager.as_ref() == Some(expected),
-            None => self.is_owned_by(commitment.actor_issuer, commitment.actor_subject),
+            Some(expected) => source_manager == Some(expected),
+            None => self.is_owned_by(issuer, subject),
         }
     }
 
@@ -896,8 +924,18 @@ pub enum CommitError {
     KeyExpired,
     #[error("the caller holds more active holds than the hold policy allows")]
     HoldCeiling,
-    #[error("the task grant lapsed before the commitment")]
+    /// The target is not the caller's to change: another caller holds it, or
+    /// its source manager differs.
+    #[error("the target is not managed by this caller")]
     Unauthorized,
+    /// The appointment is absent or not in a state that takes attendance.
+    /// The caller may own it, so this is no ownership decision.
+    #[error("the appointment does not take attendance")]
+    NotAttendable,
+    /// The task grant, or the access token that carried it, lapsed before the
+    /// commitment.
+    #[error("the task grant lapsed before the commitment")]
+    GrantLapsed,
     #[error("the observed revision does not match the current revision")]
     RevisionMismatch,
     #[error("the attendance observation time is in the future")]
@@ -948,10 +986,12 @@ impl PostgresStore {
     pub fn connect_runtime(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.runtimeUrlRef",
             &config.runtime_url_ref,
         )
@@ -960,10 +1000,12 @@ impl PostgresStore {
     pub fn connect_migration(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.migrationUrlRef",
             &config.migration_url_ref,
         )
@@ -972,6 +1014,7 @@ impl PostgresStore {
     fn connect_reference(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
         field: &'static str,
         reference: &str,
     ) -> Result<Self, StoreError> {
@@ -980,30 +1023,20 @@ impl PostgresStore {
         })?;
         let url = std::str::from_utf8(protected.expose_secret())
             .map_err(|_| StoreError::Configuration)?;
-        let mut postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
-        if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
-            return Err(StoreError::Configuration);
-        }
+        let (postgres, verified_tls) = driver_config(
+            config,
+            url,
+            witness,
+            &registry_platform_config::resolve_database_host,
+        )?;
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
-        #[cfg(feature = "postgres-test")]
-        let manager = if config.test_only_plaintext {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
+        let manager = if verified_tls {
+            let connector = tls_connector(config, secrets)?;
+            Manager::from_config(postgres, connector, manager_config)
         } else {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
-        };
-        #[cfg(not(feature = "postgres-test"))]
-        let manager = {
-            if config.test_only_plaintext {
-                return Err(StoreError::Configuration);
-            }
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
+            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
         };
         let pool = Pool::builder(manager)
             .max_size(32)
@@ -1928,11 +1961,6 @@ impl PostgresStore {
         if hold.policy_revision != commitment.policy_revision {
             return Err(AdmissionRefusal::PolicyChanged.into());
         }
-        if !hold.is_managed_by(&commitment) {
-            // Confirming another caller's hold is never a state error: it is
-            // an authorization refusal the audit entries record.
-            return Err(CommitError::Unauthorized);
-        }
         let placement = supply.confirm(&hold, request, &locked.snapshot, &commitment)?;
         self.recheck_grant(&commitment)?;
         let mut claim = transaction
@@ -2040,14 +2068,11 @@ impl PostgresStore {
             transaction.commit().await?;
             return Ok(replay);
         }
-        let hold = active_claim(&transaction, hold_id, LedgerKind::Hold).await?;
+        let hold = managed_hold(&transaction, hold_id, &commitment).await?;
         guard_revisions(&transaction, &commitment).await?;
         evaluate_hold_state(&hold_ledger_claim(&hold), self.observed_now())?;
         if hold.policy_revision != commitment.policy_revision {
             return Err(AdmissionRefusal::PolicyChanged.into());
-        }
-        if !hold.is_managed_by(&commitment) {
-            return Err(CommitError::Unauthorized);
         }
         Err(StoreError::Corrupt.into())
     }
@@ -2065,16 +2090,7 @@ impl PostgresStore {
             transaction.commit().await?;
             return Ok(replay);
         }
-        let hold = transaction
-            .claim_in_transaction(hold_id)
-            .await?
-            .ok_or(AdmissionRefusal::HoldReleased)?;
-        if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
-            return Err(AdmissionRefusal::HoldReleased.into());
-        }
-        if !hold.is_managed_by(&commitment) {
-            return Err(CommitError::Unauthorized);
-        }
+        let hold = managed_hold(&transaction, hold_id, &commitment).await?;
         self.recheck_grant(&commitment)?;
         if !transaction
             .close_claim(hold_id, ClaimState::Released, None, hold.revision)
@@ -3165,9 +3181,7 @@ async fn lock_commitment(
             }
             None
         }
-        ClaimLock::Hold(hold_id) => {
-            Some(active_claim(transaction, hold_id, LedgerKind::Hold).await?)
-        }
+        ClaimLock::Hold(hold_id) => Some(managed_hold(transaction, hold_id, commitment).await?),
         ClaimLock::Appointment(appointment_id) => {
             Some(active_claim(transaction, appointment_id, LedgerKind::Booking).await?)
         }
@@ -3178,6 +3192,30 @@ async fn lock_commitment(
         claim,
         current_anchors,
     })
+}
+
+/// The active hold a commitment acts on, locked, once the caller is known to
+/// manage it. The caller is checked against the stored hold before its state
+/// is read, so a caller that does not manage a hold learns nothing of its
+/// state, whatever that state is. A hold that is closed or of another kind is
+/// answered as released to the caller that manages it. A row that is gone has
+/// no manager to check, so it is answered as released to every caller.
+async fn managed_hold(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    hold_id: Uuid,
+    commitment: &Commitment<'_>,
+) -> Result<ClaimRow, CommitError> {
+    let hold = transaction
+        .claim_in_transaction(hold_id)
+        .await?
+        .ok_or(AdmissionRefusal::HoldReleased)?;
+    if !hold.is_managed_by(commitment) {
+        return Err(CommitError::Unauthorized);
+    }
+    if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
+        return Err(AdmissionRefusal::HoldReleased.into());
+    }
+    Ok(hold)
 }
 
 /// The active claim of `kind` a commitment acts on, locked. A claim that is
@@ -3862,7 +3900,7 @@ fn check_grant_current_at(
 ) -> Result<(), CommitError> {
     match commitment.grant_exp_unix {
         Some(exp) if now.timestamp() < i64::try_from(exp).unwrap_or(i64::MAX) => Ok(()),
-        Some(_) => Err(CommitError::Unauthorized),
+        Some(_) => Err(CommitError::GrantLapsed),
         // A mutating commitment without a grant never reaches the store: the
         // service refuses it before the transaction opens.
         None => Ok(()),
@@ -5803,5 +5841,75 @@ mod retained_policy_tests {
             retained_policy(document),
             Err(StoreError::Corrupt)
         ));
+    }
+}
+
+/// The driver configuration the pool is built from, and whether it requires
+/// verified TLS. Under a plaintext transport every TCP host is replaced by
+/// the numeric addresses its check accepted, so the driver never resolves a
+/// name again.
+fn driver_config(
+    config: &DatabaseConfig,
+    url: &str,
+    witness: Option<&DevelopmentWitness>,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<(PgConfig, bool), StoreError> {
+    let postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
+    if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
+        return Err(StoreError::Configuration);
+    }
+    config.check(cfg!(feature = "postgres-test"))?;
+    let (transport, mut postgres) =
+        registry_platform_postgres::postgres_connection(config, postgres, witness, resolve)?;
+    let verified_tls = transport == DatabaseTransport::VerifiedTls && !config.test_only_plaintext;
+    postgres.ssl_mode(if verified_tls {
+        tokio_postgres::config::SslMode::Require
+    } else {
+        tokio_postgres::config::SslMode::Disable
+    });
+    Ok((postgres, verified_tls))
+}
+
+#[cfg(test)]
+mod driver_config_tests {
+    use registry_platform_config::Gated;
+
+    use super::*;
+
+    #[test]
+    fn a_loopback_name_reaches_the_pool_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        let config = DatabaseConfig {
+            runtime_url_ref: "secret:env/DB_RUNTIME".to_owned(),
+            migration_url_ref: "secret:env/DB_MIGRATION".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap()),
+        };
+        let (postgres, verified_tls) = driver_config(
+            &config,
+            "postgresql://app@localhost:5433/scheduling",
+            None,
+            &fixed,
+        )
+        .unwrap();
+        assert!(!verified_tls);
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
     }
 }

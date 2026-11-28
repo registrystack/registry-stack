@@ -16,5 +16,9 @@
     }
   ],
   "project": "products/casework/examples/standalone-decision",
+  "posture": {
+    "value": "production",
+    "source": "default"
+  },
   "diagnostics": []
 }

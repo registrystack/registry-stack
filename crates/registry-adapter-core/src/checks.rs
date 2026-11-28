@@ -4747,6 +4747,30 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 "Name a record type the project declares.",
             ));
         }
+        // The listener answers the effective-contract, health and ready routes
+        // itself, so a binding whose concrete path is one of them would be
+        // advertised and never served.
+        if let Some(operation) = operation {
+            let concrete = crate::concrete_facade_path(
+                &operation.path,
+                operation.record_type_parameter.as_str(),
+                binding.record_type.as_str(),
+            );
+            if [
+                WELL_KNOWN_PATH,
+                registry_platform_httputil::probe::HEALTH_PATH,
+                registry_platform_httputil::probe::READY_PATH,
+            ]
+            .contains(&concrete.as_str())
+            {
+                findings.push(finding(
+                    CheckCode::ProjectReservedFacadePath,
+                    &format!("{prefix}/recordType"),
+                    "the binding's concrete facade path is reserved for the effective-contract, health or ready route",
+                    "Rename the record type, or change the operation path, so the concrete path is not the effective-contract, health or ready path.",
+                ));
+            }
+        }
         // A search binding filters on declared fields of its bound record
         // type: the facade
         // offers exactly the declared list as typed equality query
@@ -5869,8 +5893,10 @@ fn direct_route_closure<'a>(
     (closure, unresolved)
 }
 
+/// The effective-contract route the Adapter serves on the facade listener.
+const WELL_KNOWN_PATH: &str = "/.well-known/registry-adapter/effective-contract";
+
 fn async_status_path_collision_checks(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
-    const WELL_KNOWN_PATH: &str = "/.well-known/registry-adapter/effective-contract";
     let mut findings = Vec::new();
     let statuses: Vec<(usize, &str, String)> = workspace
         .profile
@@ -5909,8 +5935,9 @@ fn async_status_path_collision_checks(workspace: &Workspace<'_>) -> Vec<Diagnost
         if operation.method != HttpMethod::Get {
             continue;
         }
-        let concrete = operation.path.replace(
-            &format!("{{{}}}", operation.record_type_parameter.as_str()),
+        let concrete = crate::concrete_facade_path(
+            &operation.path,
+            operation.record_type_parameter.as_str(),
             binding.record_type.as_str(),
         );
         let ordinary_shape = facade_path_shape(&concrete);
@@ -6764,10 +6791,9 @@ fn worst_body(
 
 /// The endpoint-binding checks every mode runs: endpoint
 /// coverage, credential-kind match, `none` confined to the numeric
-/// loopback or `https` with an mTLS identity, and the plain-HTTP
-/// confinement to the loopback exception and the declared private CIDRs, the rule load's own destination policy enforces on
-/// resolved addresses. The facade's runtime check adds its own members
-/// to these findings.
+/// loopback or `https` with an mTLS identity, and plain HTTP confined to
+/// the loopback exception, the rule load's own credential policy enforces.
+/// The facade's runtime check adds its own members to these findings.
 #[must_use]
 pub fn check_endpoint_bindings(
     workspace: &Workspace<'_>,
@@ -6789,6 +6815,9 @@ pub fn check_endpoint_bindings(
             continue;
         }
         let endpoint = endpoint.expect("checked");
+        // One finding per refused origin: the credential refusal already
+        // names the plain-HTTP origin.
+        let mut origin_reported = false;
         if let Err(fault) =
             crate::auth::endpoint_authentication_policy(&endpoint.authentication, binding)
         {
@@ -6825,6 +6854,15 @@ pub fn check_endpoint_bindings(
                     "a none credential reaches an origin without numeric-loopback, mTLS, or acknowledged HTTPS admission".to_owned(),
                     "Add an mTLS client identity over TLS, use numeric loopback, or set anonymousHttps to operator-approved for a reviewed HTTPS source.",
                 ),
+                crate::auth::EndpointAuthenticationPolicyFault::CredentialRequiresProtectedTransport => {
+                    origin_reported = true;
+                    (
+                        CheckCode::RuntimeInsecureOrigin,
+                        "baseUrl",
+                        "the endpoint's credential would travel over plain HTTP to a host that is not loopback".to_owned(),
+                        SOURCE_ORIGIN_FIX,
+                    )
+                }
             };
             findings.push(finding(
                 code,
@@ -6838,12 +6876,12 @@ pub fn check_endpoint_bindings(
                 check_token_endpoint(&prefix, credential, &mut findings);
             }
         }
-        if !plain_http_origin_admitted(&binding.base_url, &bindings.allowed_private_cidrs) {
+        if !origin_reported && !plain_http_origin_admitted(&binding.base_url) {
             findings.push(finding(
                 CheckCode::RuntimeInsecureOrigin,
                 &format!("{prefix}/baseUrl"),
-                "the endpoint's origin is plain HTTP outside the declared private CIDRs and the loopback exception",
-                "Serve the origin over TLS, name its address inside allowedPrivateCidrs, or use a loopback origin.",
+                "the endpoint's origin is plain HTTP to a host that is not loopback",
+                SOURCE_ORIGIN_FIX,
             ));
         }
         if carries_query_or_fragment(&binding.base_url) {
@@ -6897,13 +6935,16 @@ pub fn check_endpoint_bindings(
 #[must_use]
 pub fn check_runtime(workspace: &Workspace<'_>, runtime: &AdapterRuntimeConfig) -> Vec<Diagnostic> {
     let mut findings = check_endpoint_bindings(workspace, &runtime.endpoint_bindings());
-    if let Err(error) = runtime.oidc.check("oidc", true) {
-        findings.push(finding(
-            CheckCode::RuntimeInvalidOrigin,
-            "/oidc",
-            &format!("the OIDC issuer block was refused: {error}"),
-            "Declare an https issuer without credentials, query, or fragment, a bounded audience, and a key source the platform accepts; plain http beyond loopback needs allowInsecureHttp: true.",
-        ));
+    for (id, entry) in runtime.oidc.set.iter() {
+        let field = format!("oidc.issuers.{id}");
+        if let Err(error) = entry.core.provider.check(&field) {
+            findings.push(finding(
+                CheckCode::RuntimeInvalidOrigin,
+                &format!("/{}", error.field().replace('.', "/")),
+                &format!("the OIDC issuer block was refused: {error}"),
+                "Declare an https issuer without credentials, query, or fragment, a bounded audience, and a key source the platform accepts.",
+            ));
+        }
     }
     findings
 }
@@ -6995,7 +7036,7 @@ fn check_token_endpoint(
 /// address, so the parse below would read every IPv6 loopback as
 /// non-loopback.
 fn is_loopback_origin(url: &registry_platform_yaml::Url) -> bool {
-    literal_origin_address(url).is_some_and(|address| address.is_loopback())
+    literal_origin_address(url).is_some_and(registry_platform_httputil::loopback::loopback_address)
 }
 
 /// The address literal a bound origin's host carries, when it carries
@@ -7016,40 +7057,24 @@ fn literal_origin_address(url: &registry_platform_yaml::Url) -> Option<std::net:
 /// load cannot disagree about the exception.
 #[must_use]
 pub fn loopback_exception_origin(url: &registry_platform_yaml::Url) -> bool {
-    let parsed = url.to_url();
-    if parsed
+    url.to_url()
         .host_str()
-        .is_some_and(|host| host.eq_ignore_ascii_case("localhost"))
-    {
-        return true;
-    }
-    literal_origin_address(url).is_some_and(|address| address.is_loopback())
+        .is_some_and(|host| registry_platform_httputil::loopback::loopback_host(host).is_some())
 }
 
-/// The one plain-HTTP rule:
-/// plain HTTP is the contract inside the loopback exception and the declared private CIDRs, and refused everywhere
-/// else, for every authentication kind. The check evaluates the
-/// binding's host text; the send-time address resolution re-evaluates
-/// the same containment on the answers it gets, so a named host is
-/// admitted here exactly as the send admits it, by resolution.
+/// The one fix for a source origin the Adapter refuses.
+const SOURCE_ORIGIN_FIX: &str =
+    "Serve the source over https, or reach it on loopback through a sidecar that carries the connection over TLS.";
+
+/// The one plain-HTTP rule: Adapter sources are https or loopback only.
+/// Plain HTTP is admitted inside the loopback exception and refused
+/// everywhere else, for every authentication kind; a declared private
+/// range admits an https answer, never plain HTTP. A source a deployment
+/// reaches only over a private network is reached through a loopback
+/// sidecar that holds the TLS or the tunnel.
 #[must_use]
-pub fn plain_http_origin_admitted(
-    url: &registry_platform_yaml::Url,
-    allowed_private_cidrs: &[crate::runtime::Cidr],
-) -> bool {
-    if url.is_https() || loopback_exception_origin(url) {
-        return true;
-    }
-    match literal_origin_address(url) {
-        // A literal the allowlist names is the declared contract.
-        Some(address) => allowed_private_cidrs
-            .iter()
-            .any(|cidr| cidr.contains(address)),
-        // A named host resolves at send, where the same containment rule
-        // runs on the answers; the check cannot resolve, so it defers
-        // instead of refusing what the send admits.
-        None => true,
-    }
+pub fn plain_http_origin_admitted(url: &registry_platform_yaml::Url) -> bool {
+    url.is_https() || loopback_exception_origin(url)
 }
 
 /// Whether a bound origin is plain HTTP on a non-loopback host.
@@ -9248,6 +9273,67 @@ mod tests {
             &check_project(&workspace(&profile, &pack, &project)),
             CheckCode::ProfileAsyncStatusPathCollision,
         );
+    }
+
+    /// A binding whose concrete path is the effective-contract, health or
+    /// ready route is refused, because the listener answers those routes
+    /// itself and never serves the binding.
+    #[test]
+    fn a_binding_on_a_reserved_facade_path_is_refused() {
+        for (path, record_type, reserved) in [
+            ("/{type}", "health", true),
+            ("/{type}", "ready", true),
+            (
+                "/.well-known/registry-adapter/{type}",
+                "effective-contract",
+                true,
+            ),
+            ("/{type}", "cases", false),
+            ("/health/{type}", "health", false),
+        ] {
+            let (mut profile, mut pack, mut project) = async_workspace_parts();
+            let mut read = operation("cases-find", HttpMethod::Get);
+            read.path = path.to_string();
+            read.path_parameters = UniqueList::new(vec![local("type")]).expect("parameters");
+            read.record_type_parameter = local("type");
+            read.record_id_parameter = None;
+            profile.operations =
+                UniqueIdList::new(vec![profile.operations[0].clone(), read]).expect("operations");
+            let mut routes = pack.routes.into_vec();
+            routes.push(RouteDefinition {
+                id: local("find-case"),
+                from: RouteFrom {
+                    uri: direct("find-case"),
+                },
+                steps: vec![to_get("case-api")],
+            });
+            pack.routes = UniqueIdList::new(routes).expect("routes");
+            let mut record_types = project.record_types.into_vec();
+            record_types.push(RecordType {
+                name: local(record_type),
+                fields: record_types[0].fields.clone(),
+            });
+            project.record_types = UniqueIdList::new(record_types).expect("record types");
+            let mut bindings = project.bindings.into_vec();
+            bindings.push(Binding {
+                async_completion: None,
+                id: local("find-case"),
+                operation: id("cases-find"),
+                record_type: local(record_type),
+                route: id("find-case"),
+                filters: UniqueList::new(Vec::new()).expect("empty"),
+                maximum_upstream_calls: BoundedU64::new(1).expect("budget"),
+            });
+            project.bindings = UniqueIdList::new(bindings).expect("bindings");
+            let findings = check_project(&workspace(&profile, &pack, &project));
+            let reported = findings
+                .iter()
+                .any(|finding| finding.code == CheckCode::ProjectReservedFacadePath.code());
+            assert_eq!(
+                reported, reserved,
+                "{path} with {record_type}: {findings:?}"
+            );
+        }
     }
 
     /// A write operation needs a request envelope naming the record slot;
@@ -13739,12 +13825,7 @@ mod tests {
                 }"#,
             )
             .expect("database"),
-            oidc: serde_json::from_str(
-                r#"{ "issuer": "https://issuer.example.invalid", "audience": "case-api" }"#,
-            )
-            .expect("oidc"),
-            allowed_clients: UniqueList::new(vec![ExternalId::new("case-portal").expect("id")])
-                .expect("unique"),
+            oidc: crate::runtime::test_oidc("https://issuer.example.invalid"),
             audit: AuditRetention {
                 retention_days: BoundedU32::<1, 3_650>::new(90).expect("retention"),
             },
@@ -13753,6 +13834,40 @@ mod tests {
             cursor_ttl_seconds: None,
             idempotency: None,
         }
+    }
+
+    #[test]
+    fn a_second_issuer_error_is_located_at_its_issuer_member() {
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![], vec![]);
+        let project = project_builder(&pack);
+        let mut runtime = runtime_builder(vec![]);
+        let entry = |issuer: &str, client: &str| {
+            serde_json::json!({
+                "registry-platform-yaml/shared-block/oidc-issuer-core": {
+                    "registry-platform-yaml/shared-block/oidc-issuer": {
+                        "issuer": issuer, "audience": "case-api"
+                    },
+                    "allowedClients": [client]
+                }
+            })
+        };
+        runtime.oidc = serde_json::from_value(serde_json::json!({
+            "registry-platform-yaml/shared-block/oidc-issuers": {
+                "issuers": {
+                    "first": entry("https://first.example.invalid", "first-client"),
+                    "second": entry("https://second.example.invalid?query", "second-client")
+                }
+            }
+        }))
+        .unwrap();
+        let findings = check_runtime(&workspace(&profile, &pack, &project), &runtime);
+        let paths: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.code == CheckCode::RuntimeInvalidOrigin.code())
+            .map(|finding| finding.path.as_str())
+            .collect();
+        assert_eq!(paths, ["/oidc/issuers/second/issuer"]);
     }
 
     fn oauth_binding(base: &str) -> EndpointBinding {
@@ -13932,12 +14047,12 @@ mod tests {
         );
     }
 
-    /// The one plain-HTTP rule: a literal outside the declared
-    /// CIDRs refuses, a literal inside them and a loopback origin are
-    /// the declared contract, and a named host defers to the send-time
-    /// resolution that evaluates the same containment.
+    /// The one plain-HTTP rule: Adapter sources are https or loopback
+    /// only. A plain-HTTP origin beyond loopback refuses whether or not a
+    /// declared CIDR covers it, once, at `baseUrl`, and a binding with a
+    /// credential is refused because the credential would travel in clear.
     #[test]
-    fn runtime_plain_http_answers_the_declared_cidr_rule() {
+    fn runtime_plain_http_is_refused_beyond_loopback() {
         let profile = profile_builder(vec![]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let project = project_builder(&pack);
@@ -13947,35 +14062,80 @@ mod tests {
                 UniqueList::new(vec![Cidr::new("10.0.0.0/8").expect("cidr")]).expect("unique");
             runtime
         };
-        // A literal outside every declared CIDR refuses.
-        let outside = runtime_with_cidrs(vec![oauth_binding("http://192.0.2.9:8081")]);
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.runtime = Some(&outside);
-        assert_has(
-            &check_runtime(&ws, &outside),
-            CheckCode::RuntimeInsecureOrigin,
-        );
-        // The same literal inside the declared CIDR is the contract.
-        let inside = runtime_with_cidrs(vec![oauth_binding("http://10.0.0.7:8081")]);
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.runtime = Some(&inside);
-        assert!(
-            !codes(&check_runtime(&ws, &inside)).contains(&CheckCode::RuntimeInsecureOrigin.code())
-        );
+        // Outside the declared CIDR, inside it, a named host with a
+        // declared CIDR and a named host without one: each refuses once at
+        // `baseUrl`, as the credential refusal the load makes too.
+        for runtime in [
+            runtime_with_cidrs(vec![oauth_binding("http://192.0.2.9:8081")]),
+            runtime_with_cidrs(vec![oauth_binding("http://10.0.0.7:8081")]),
+            runtime_with_cidrs(vec![oauth_binding("http://cases.example.invalid")]),
+            runtime_builder(vec![oauth_binding("http://internal-api:8080")]),
+        ] {
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&runtime);
+            let findings = check_runtime(&ws, &runtime);
+            let origin = findings
+                .iter()
+                .filter(|finding| finding.code == CheckCode::RuntimeInsecureOrigin.code())
+                .collect::<Vec<_>>();
+            assert_eq!(origin.len(), 1, "{findings:?}");
+            assert_eq!(origin[0].path, "/endpoints/0/baseUrl");
+            assert!(
+                origin[0].message.contains("credential"),
+                "{}",
+                origin[0].message
+            );
+            assert_eq!(
+                origin[0].suggested_action,
+                "Serve the source over https, or reach it on loopback through a sidecar that carries the connection over TLS."
+            );
+        }
+        // A credential-free binding beyond loopback is refused at `baseUrl`
+        // too, inside a declared CIDR, beside its own admission finding.
+        let mut none_endpoint = oauth_endpoint();
+        none_endpoint.authentication = EndpointAuthentication::None {};
+        let none_pack = pack_builder(vec![none_endpoint], vec![]);
+        let none_project = project_builder(&none_pack);
+        let mut none_binding = oauth_binding("http://10.0.0.7:8081");
+        none_binding.credential = Some(RuntimeCredential::None {});
+        let none_runtime = runtime_with_cidrs(vec![none_binding]);
+        let mut ws = workspace(&profile, &none_pack, &none_project);
+        ws.runtime = Some(&none_runtime);
+        let findings = check_runtime(&ws, &none_runtime);
+        assert_has(&findings, CheckCode::AuthNoneNotLoopback);
+        assert_has(&findings, CheckCode::RuntimeInsecureOrigin);
         // The loopback exception holds without any declared CIDR.
         let loopback = runtime_builder(vec![oauth_binding("http://127.0.0.1:8081")]);
         let mut ws = workspace(&profile, &pack, &project);
         ws.runtime = Some(&loopback);
         assert!(!codes(&check_runtime(&ws, &loopback))
             .contains(&CheckCode::RuntimeInsecureOrigin.code()));
-        // A named host cannot be shown outside the CIDRs at check time;
-        // the send-time resolution of the same rule decides it.
-        let named = runtime_with_cidrs(vec![oauth_binding("http://cases.example.invalid")]);
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.runtime = Some(&named);
-        assert!(
-            !codes(&check_runtime(&ws, &named)).contains(&CheckCode::RuntimeInsecureOrigin.code())
-        );
+        // Every loopback spelling is the loopback exception; a name that only
+        // looks like it is a named host.
+        for origin in [
+            "http://localhost:8081",
+            "http://127.0.0.2:8081",
+            "http://[::1]:8081",
+            "http://[::ffff:127.0.0.1]:8081",
+        ] {
+            let spelled = runtime_builder(vec![oauth_binding(origin)]);
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&spelled);
+            assert!(
+                !codes(&check_runtime(&ws, &spelled))
+                    .contains(&CheckCode::RuntimeInsecureOrigin.code()),
+                "{origin}"
+            );
+        }
+        for origin in ["http://a.localhost:8081", "http://localhost.:8081"] {
+            let spelled = runtime_builder(vec![oauth_binding(origin)]);
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&spelled);
+            assert_has(
+                &check_runtime(&ws, &spelled),
+                CheckCode::RuntimeInsecureOrigin,
+            );
+        }
     }
 
     #[test]
@@ -13988,10 +14148,7 @@ mod tests {
             "http://issuer.example.invalid",
         ] {
             let mut runtime = runtime_builder(vec![oauth_binding("https://cases.example.invalid")]);
-            runtime.oidc = serde_json::from_str(&format!(
-                r#"{{ "issuer": "{issuer}", "audience": "case-api" }}"#
-            ))
-            .expect("oidc");
+            runtime.oidc = crate::runtime::test_oidc(issuer);
             let mut ws = workspace(&profile, &pack, &project);
             ws.runtime = Some(&runtime);
             assert_has(
@@ -13999,6 +14156,51 @@ mod tests {
                 CheckCode::RuntimeInvalidOrigin,
             );
         }
+    }
+
+    #[test]
+    fn production_runtime_accepts_a_loopback_http_issuer() {
+        use registry_platform_config::{
+            DeclaredPosture, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+        };
+
+        let profile = profile_builder(vec![]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+        let envelope = RuntimeEnvelope {
+            api_version: "id.registrystack.org/formats/adapter/runtime/v1alpha1",
+            kind: "AdapterRuntimeConfig",
+        };
+        let binding =
+            serde_json::to_string(&oauth_binding("https://cases.example.invalid")).unwrap();
+        let document = format!(
+            "apiVersion: {}
+kind: {}
+id: case-deployment
+endpoints: [{binding}]
+listener: {{bind: '127.0.0.1:8080'}}
+database: {{runtimeUrlRef: 'secret:env/DB_RUNTIME', migrationUrlRef: 'secret:env/DB_MIGRATION'}}
+oidc:
+  issuers:
+    primary: {{issuer: 'http://127.0.0.1:8082', audience: case-api, allowedClients: [portal]}}
+allowedPrivateCidrs: [10.0.0.0/8]
+audit: {{retentionDays: 90}}
+",
+            envelope.api_version, envelope.kind
+        );
+        let loaded = RuntimeConfigLoader::new(
+            envelope,
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Flag,
+            },
+        )
+        .parse_str::<AdapterRuntimeConfig>(&document, |_| None)
+        .expect("production reads the runtime with a loopback issuer");
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&loaded.config);
+        let findings = check_runtime(&ws, &loaded.config);
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     /// A binding naming a trust profile the runtime config does not declare

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 persona:
   - operator
@@ -46,8 +46,9 @@ occupied by the link; choose another unused, non-symbolic-link name under the re
 - **PostgreSQL 17 or newer**, reached over TLS, with two login roles: a migration role that owns
   the schema and applies packages, and a runtime role the serving process uses. A project with a
   `crs84-polygon` field always needs PostGIS 3.5 or newer. A `crs84-point` field needs PostGIS only
-  when an access profile grants bbox queries. Your administrator creates the roles, schemas, and
-  extensions. The product never creates any of them. SQLite is not a target.
+  when an access profile grants bbox queries. `bregctl provision` creates the roles, the database, the
+  schemas, and the extensions from an administrator's credentials. `breg` and `apply` create none
+  of them. SQLite is not a target.
   Ubuntu 24.04 ships PostgreSQL 16 and Debian 12 ships PostgreSQL 15, both too old: install 17
   from the PostgreSQL project's apt repository (PGDG), or run the `postgres:17` image
   (`postgis/postgis` at PostgreSQL 17 when the project requires PostGIS).
@@ -138,81 +139,6 @@ the tag. [Serve the container image](#serve-the-container-image) shows how to ru
 {/* Evidence: crates/registry-breg/install.sh; release/docker/Dockerfile.breg;
     release/scripts/release_candidate.py, BREG_RUNTIME_IMAGE_NAMES; release/VERIFY.md. */}
 
-## Provision PostgreSQL
-
-As a PostgreSQL administrator, create the two roles:
-
-```sql
-CREATE ROLE registry_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
-CREATE ROLE registry_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
-```
-
-Two separate roles are the split role mode, which production uses. The serving process then cannot
-write the activation ledger or registry state, and `apply` and startup both refuse a runtime role
-that could, naming the grant, ownership, membership, or trigger to remove. Keep the migration
-credential off the serving host when no activation is in progress.
-
-Create two databases with the same shape: the serving database and the schema-test database. In
-each, as the administrator (this is the serving database, `registry`):
-
-```sql
-CREATE DATABASE registry;
-REVOKE ALL ON DATABASE registry FROM PUBLIC;
-REVOKE CREATE ON DATABASE registry FROM registry_migration, registry_runtime;
-GRANT CONNECT ON DATABASE registry TO registry_migration, registry_runtime;
-\connect registry
-CREATE EXTENSION IF NOT EXISTS btree_gist;
-CREATE SCHEMA registry_internal AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_data AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_source AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_derived AUTHORIZATION registry_migration;
-CREATE SCHEMA registry_context AUTHORIZATION registry_migration;
-REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source,
-  registry_derived, registry_context FROM PUBLIC;
-```
-
-The package creates every table, function, and policy inside those five schemas. A missing
-prerequisite surfaces at `test` or `apply`, never at runtime.
-
-The migration role owns only those five schemas. It must not own the database (for example through
-`CREATE DATABASE registry OWNER registry_migration`) and must not hold `CREATE` on it, because an
-owner holds `CREATE` implicitly. `test` and `apply` check this before changing anything and refuse
-with `migration role has database-level administrative authority`, which is also the refusal for a
-role that is a superuser or has `BYPASSRLS`, `CREATEDB`, or `CREATEROLE`. If a managed PostgreSQL
-service created the database for you, check its owner and its grants first.
-
-For a project with polygon storage or bbox queries, install PostGIS in a schema neither registry
-role owns. If the project grants bbox queries, also add a bounding-box role named after the runtime
-role with the suffix `__spatial_bbox`:
-
-```sql
-CREATE ROLE registry_runtime__spatial_bbox NOLOGIN NOSUPERUSER NOCREATEDB
-  NOCREATEROLE NOINHERIT NOBYPASSRLS;
-GRANT registry_runtime__spatial_bbox TO registry_migration
-  WITH INHERIT FALSE, SET TRUE, ADMIN FALSE;
--- in each database
-CREATE SCHEMA registry_spatial_ext AUTHORIZATION postgres;
-CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext;
-REVOKE CREATE ON DATABASE registry FROM PUBLIC, registry_migration, registry_runtime;
-REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC;
-GRANT USAGE ON SCHEMA registry_spatial_ext
-  TO registry_migration, registry_runtime, registry_runtime__spatial_bbox;
-```
-
-A package that stores polygons and grants no bbox queries omits the bbox role, its membership, and
-its name from the final `GRANT USAGE`. Keep the PostGIS schema, extension, and grants to the
-migration and runtime roles.
-
-Size connections, timeouts, and statement statistics once the registry serves; see
-[Set a PostgreSQL baseline](../breg-monitor/#set-a-postgresql-baseline).
-
-{/* Evidence: crates/registry-breg/src/postgres/migration_ledger.rs, RoleMode;
-    crates/registry-breg/src/postgres/roles.rs, verify_migration_role,
-    find_runtime_write_authority and the __spatial_bbox role; crates/registry-breg/src/postgres/schema.rs,
-    refuse_existing_managed_objects(); crates/registry-breg/src/startup.rs, RuntimeWriteAuthority. */}
-
 ## Write the runtime configuration
 
 The runtime file binds one package to one database, one token issuer, and one listener. It is a
@@ -229,7 +155,6 @@ identity:
   environment: production
   instanceId: facility-registry
   databaseId: facility-registry-db
-  databaseInitializationEnvironment: production
 secretProviders:
   file:
     root: /etc/breg/secrets
@@ -246,15 +171,17 @@ package:
   root: /var/lib/breg/build-1/package
 authentication:
   oidc:
-    issuer: https://issuer.example.com
-    audience: urn:breg:facility-registry
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [operator-editor, registrar, reader]
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
+    issuers:
+      main:
+        issuer: https://issuer.example.com
+        audience: urn:breg:facility-registry
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [operator-editor, registrar, reader]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
@@ -279,18 +206,18 @@ schema cannot tell you:
 - **`package.root`** is the package directory `package` published. Once you have the package,
   you may add `package.expectedDigest` with the reported package digest, and startup then refuses
   any other package at that path.
-- **`authentication.oidc.allowedClients`** lists the OAuth clients whose tokens the registry
-  accepts, or `unrestricted`. A project that names clients itself, for example in a profile's
+- **`authentication.oidc.issuers.ISSUER_ID.allowedClients`** lists the OAuth clients whose
+  tokens the registry accepts, or `unrestricted`. A project that names clients itself, for example in a profile's
   `requesterClients`, needs each of them listed, so `unrestricted` does not start with such a
   project.
-- **`authentication.oidc.issuer`** must be `https`; plain `http` is accepted only on an IPv4
+- **`authentication.oidc.issuers.ISSUER_ID.issuer`** must be `https`; plain `http` is accepted only on an IPv4
   loopback host. The key set comes from the issuer's discovery document unless `jwksSource`
   names a URI or pins a static document.
 
 Three optional sections matter only for some projects. `taskGrantStatus` pins, per task-grant
 issuer such as Casework or a chat assistant's task authority, the endpoint and the registry's own credentials it uses to check that a task grant is still
 current. `wasmExecution` sets the backend and the module and guest-memory ceilings for WASM
-handlers. `authentication.oidc.assertionIssuers` lists, per client, the assertion authorities
+handlers. `authentication.oidc.issuers.ISSUER_ID.assertionIssuers` lists, per client, the assertion authorities
 that client may exchange a subject token from; once written, a client it does not list may
 exchange from none. Webhook destinations are bound in [Bind webhook receivers](../breg-webhooks/), field
 encryption in [Field encryption for restricted fields](../../configure/breg-field-encryption/), and
@@ -304,9 +231,9 @@ the metrics listener in [Scrape metrics](../breg-monitor/#scrape-metrics).
 
 ### Create the secret files
 
-Create the files as the user that runs `breg` and the operator commands, because the resolver
-refuses a file owned by anyone else. Each must be a regular file with mode `0400` or `0600`, with
-no other hard link and no symbolic link to it. A name starts with a lowercase letter and uses
+Create the files as the user that runs `breg` and the operator commands. Each must meet the
+[secret file rule](../../security/hardening-checklist/#secret-files): for example a regular file
+you own with mode `0400` or `0600` and no other hard link. A name starts with a lowercase letter and uses
 lowercase letters, digits, `.`, `_`, and `-`. The bytes are used exactly as written, so write them
 without a trailing newline:
 
@@ -329,10 +256,159 @@ In a container platform that injects secrets as environment variables, declare
 `secretProviders.environment` and write `secret:env/<NAME>` instead.
 
 {/* Evidence: crates/registry-platform-config/src/secrets.rs, read_secret_file(),
-    validate_file_metadata(), read_environment(); crates/registry-platform-yaml/src/secret.rs,
+    judge_file(), read_environment(); crates/registry-platform-yaml/src/secret.rs,
     valid_file_name(); crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES;
     crates/registry-breg/src/cursor.rs, ROOT_SECRET_MIN_BYTES;
     crates/registry-breg/src/runtime_config.rs, database_connection_config_for(). */}
+
+## Provision PostgreSQL
+
+Your runtime file already names the roles, their passwords, and the database. They are the URLs
+in `database.migrationUrlRef` and `database.runtimeUrlRef`, and the roles under `database.roles`.
+With the secret files in place, run `bregctl provision` once as a PostgreSQL role that can create
+roles and databases. The runtime file's `package.root` must be a readable directory, though
+`provision` reads nothing from it: create an empty one if the package does not exist yet.
+
+```sh
+bregctl provision --runtime-config /etc/breg/runtime.yaml --admin-url-file /etc/breg/admin-url
+```
+
+Pass `--posture` to declare the deployment posture. Provision lists all runtime
+configuration refusals before it prints SQL or opens a database connection.
+Its JSON report includes the resolved `posture` and its source.
+
+{/* Evidence: crates/registry-bregctl/tests/provision_cli.rs, print_sql_reports_all_production_posture_refusals. */}
+
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE`
+and `CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable
+instead, use `--admin-url-env NAME`. The connection requires TLS and verifies the server
+certificate. Set `database.caBundleRef` in the runtime file to trust a private CA. The command
+never prints the administrator URL or a password.
+
+The administrator URL must name the same host and port as the two product URLs, or `provision`
+refuses it as `platform.provision.target-mismatch`. It must also name a database other than the
+product database, such as `postgres`, or `provision` refuses it as `platform.provision.target-invalid`.
+Where the administrator may connect only to the product database, `provision` cannot run: add
+`--print-sql` and give the script to the person who administers the server.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Installs `btree_gist`.
+- Creates the five schemas the package fills, `registry_internal`, `registry_data`,
+  `registry_source`, `registry_derived`, and `registry_context`, each owned by the migration role
+  and closed to `PUBLIC`.
+
+Run it again at any time. It creates only what is missing. It refuses a role that exists with
+other attributes, and a role whose URL does not open a session, and tells you which.
+
+Two roles are the split role mode, which production uses. The serving process then cannot write
+the activation ledger or registry state, and `apply` and startup both refuse a runtime role that
+could, naming the grant, ownership, membership, or trigger to remove. Keep the migration
+credential off the serving host when no activation is in progress.
+
+The schema-test database that `test` needs has the same shape. Point a copy of the runtime file
+at it, as [Check, test, package](#check-test-package) describes, and run `provision` over that
+copy too.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
+`\password` line that prompts for the password in `psql`, so the script holds no password:
+
+```sql
+-- provision script, product breg. Nothing was run.
+-- For a server where these objects do not exist yet. Review, then run with psql as an
+-- administrator that has CREATEROLE and CREATEDB. It stops at the first error.
+\set ON_ERROR_STOP on
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "registry_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "registry_migration"
+CREATE ROLE "registry_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "registry_runtime"
+CREATE DATABASE "registry" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "registry" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "registry" TO "registry_migration", "registry_runtime";
+ALTER DATABASE "registry" ALLOW_CONNECTIONS true;
+\connect "registry"
+CREATE EXTENSION btree_gist;
+CREATE SCHEMA "registry_internal" AUTHORIZATION "registry_migration"; REVOKE ALL ON SCHEMA "registry_internal" FROM PUBLIC;
+CREATE SCHEMA "registry_data" AUTHORIZATION "registry_migration"; REVOKE ALL ON SCHEMA "registry_data" FROM PUBLIC;
+CREATE SCHEMA "registry_source" AUTHORIZATION "registry_migration"; REVOKE ALL ON SCHEMA "registry_source" FROM PUBLIC;
+CREATE SCHEMA "registry_derived" AUTHORIZATION "registry_migration"; REVOKE ALL ON SCHEMA "registry_derived" FROM PUBLIC;
+CREATE SCHEMA "registry_context" AUTHORIZATION "registry_migration"; REVOKE ALL ON SCHEMA "registry_context" FROM PUBLIC;
+```
+
+The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
+
+The migration role owns only those five schemas. It must not own the database (for example through
+`CREATE DATABASE registry OWNER registry_migration`) and must not hold `CREATE` on it, because an
+owner holds `CREATE` implicitly. `test` and `apply` check this before changing anything and refuse
+with `migration role has database-level administrative authority`, which is also the refusal for a
+role that is a superuser or has `BYPASSRLS`, `CREATEDB`, or `CREATEROLE`. If a managed PostgreSQL
+service created the database for you, check its owner and its grants first.
+
+`provision` grants the runtime role `CONNECT` on the database, and `USAGE` on the PostGIS schema
+when `--package` names a package that needs PostGIS. It grants no `USAGE` on `public`. `apply`
+grants the runtime role what serving needs. The package creates every table, function, and policy inside the five schemas. A missing
+prerequisite surfaces at `test` or `apply`, never at runtime.
+
+### Install PostGIS
+
+For a project with polygon storage or bbox queries, PostGIS lives in a schema neither registry
+role owns, and `CREATE EXTENSION postgis` needs a superuser. Pass the built package, and the
+command adds the PostGIS steps for a package that needs them:
+
+```sh
+bregctl provision --runtime-config /etc/breg/runtime.yaml \
+  --admin-url-file /etc/breg/superuser-url --package /var/lib/breg/build-1/package
+```
+
+Without `--package`, no PostGIS step is planned. As a role that is not a superuser, the command
+stops at that statement with `platform.provision.statement-needs-privilege` at `extension.postgis`.
+Run it with `--print-sql` and give the script to a superuser, or run it with a superuser URL, then
+run `provision` again.
+
+A package exists only after `test`, and `test` needs PostGIS in the schema-test database. For that
+one database, a superuser runs the PostGIS statements by hand once. If the project grants bbox
+queries, the statements also add a bounding-box role named after the runtime role with the suffix
+`__spatial_bbox`:
+
+```sql
+CREATE ROLE registry_runtime__spatial_bbox NOLOGIN NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOINHERIT NOBYPASSRLS;
+GRANT registry_runtime__spatial_bbox TO registry_migration
+  WITH INHERIT FALSE, SET TRUE, ADMIN FALSE;
+-- in each database
+CREATE SCHEMA registry_spatial_ext AUTHORIZATION postgres;
+CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext;
+REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC;
+GRANT USAGE ON SCHEMA registry_spatial_ext
+  TO registry_migration, registry_runtime, registry_runtime__spatial_bbox;
+```
+
+For a package that stores polygons and grants no bbox queries, the statements above may leave out
+the bbox role, its membership, and its name from the final `GRANT USAGE`. `provision --package`
+plans the bbox role for every package that needs PostGIS, including that one. The role is unused
+there: the runtime checks for it only when the package grants bbox queries. Keep the PostGIS
+schema, extension, and grants to the migration and runtime roles.
+
+If `provision` stops with `platform.provision.extension-incomplete` at `extension.postgis`, PostGIS
+exists in the database but outside `registry_spatial_ext`, or the migration role cannot `SET` the
+bbox role. As a superuser, drop a PostGIS installed in another schema, run the statements of the
+`extension.postgis` step that `--print-sql` prints, then run `provision` again.
+
+Size connections, timeouts, and statement statistics once the registry serves; see
+[Set a PostgreSQL baseline](../breg-monitor/#set-a-postgresql-baseline).
+
+{/* Evidence: crates/registry-bregctl/src/provision.rs; crates/registry-platform-provision/src/plan.rs;
+    crates/registry-breg/src/postgres/migration_ledger.rs, RoleMode;
+    crates/registry-breg/src/postgres/roles.rs, verify_migration_role,
+    find_runtime_write_authority and the __spatial_bbox role; crates/registry-breg/src/postgres/schema.rs,
+    refuse_existing_managed_objects(); crates/registry-breg/src/startup.rs, RuntimeWriteAuthority;
+    crates/registry-bregctl/tests/provision_postgres.rs. */}
 
 ## What a token must carry
 
@@ -398,7 +474,14 @@ bregctl check facility --runtime-config /etc/breg/runtime.yaml --production
 Production check passed; registry revision sha256:4877be0dd9ded0447278206d829445780bf93a6cee356bc1526773003acad158.
 ```
 
-Warnings follow the success line; read each one.
+Warnings follow the success line. Read each one.
+
+`check --production` declares production and checks package closure. A check
+without the flag still defaults to production for the runtime file. Use
+`--posture development` to report development settings as warnings in a laptop file.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs write_posture_usage;
+    crates/registry-bregctl/tests/cli.rs check_reports_local_key_custody_at_the_declared_severity. */}
 
 `test` compiles the project, applies it to an empty schema-test database, measures the schema it
 produces, runs every journey in `tests/journeys.yaml` over real HTTP with real tokens, and writes a
@@ -480,6 +563,33 @@ Planned the first activation on this registry; nothing was changed. Run `bregctl
   checks passed             migration-role, runtime-write-authority, prerequisites, uninitialized-database
 ```
 
+Use `--posture` to declare the deployment posture when you run
+`plan`, `apply`, `status` or `doctor`. Use `bregctl package --posture development` to build a
+laptop package with a placeholder `canonicalBaseIri`.
+
+The first activation records the database's posture. Startup, plan and apply
+refuse a mismatch with that posture. Reconciliation also refuses a
+posture that differs from the failed apply's recorded posture.
+{/* Evidence: crates/registry-breg/tests/postgres_migration.rs, real_postgres_reconcile_refuses_a_different_posture. */}
+
+Status reads the posture from the database state and exits 1 with
+`platform.activation.posture-mismatch` if it differs from the declaration.
+Databases activated before posture was recorded read as production.
+Use a fresh database and apply the package in the other posture if you
+need to switch.
+
+Doctor reports the mismatch as a finding. Startup refuses the database in
+the declared posture even if doctor exits 0. Doctor includes the finding
+alongside a maintenance refusal or a later dependency refusal.
+
+Successful development plans and applies list the development settings found
+in the runtime file and the selected package. If the selected `--package`
+directory cannot be verified while the runtime file has posture refusals,
+the package diagnostic points to the command arguments.
+
+{/* Evidence: crates/registry-bregctl/tests/cli.rs, startup_operators_report_runtime_and_selected_package_posture_together, posture_refusal_points_to_the_explicit_package_argument. */}
+{/* Evidence: crates/registry-bregctl/tests/cli/posture.rs, opposite_activation_posture_refuses_planning_and_apply_and_reports_findings, status_refuses_the_state_posture_when_the_ledger_disagrees, doctor_reports_maintenance_and_the_recorded_posture, development_plan_and_initial_apply_report_the_relaxed_custody. */}
+
 Then activate. `--initial` is for the first package in a database that has never had one:
 
 ```sh
@@ -530,7 +640,7 @@ The database runs its active package and is ready.
 
 Each later activation adds an entry with its own outcome.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, StatusArgs, StatusSuccessReport. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, StatusArgs, StatusReport. */}
 
 ### Check every dependency
 
@@ -551,9 +661,9 @@ Verified the package against the runtime it is bound to.
 ```
 
 `doctor` opens every startup dependency without binding the listener, stops at the first one that
-refuses, and otherwise lists them all, then its advisories. These include the PostgreSQL advisories
-and the `authentication.insecure-http` warning when the runtime file sets
-`authentication.oidc.allowInsecureHttp: true`. Advisories never change the exit status:
+refuses, and otherwise lists them all, then its advisories. PostgreSQL
+advisories leave the exit status unchanged. Production refuses
+`allowInsecureHttp: true` in any issuer entry of the runtime file.
 
 ```sh
 bregctl doctor --runtime-config /etc/breg/runtime.yaml
@@ -596,19 +706,46 @@ print.
 ### Start serving
 
 ```sh
-breg --runtime-config /etc/breg/runtime.yaml
+bregctl serve --runtime-config /etc/breg/runtime.yaml --posture production
 ```
 
-Startup refuses a package the ledger does not name as active, and logs the role mode it serves in.
+`bregctl serve` passes the resolved posture to `breg`. The `bregctl mcp`
+and `bregctl review` wrappers pass the declaration from `--posture` or
+`REGISTRY_STACK_POSTURE` to their `check` and `serve` commands.
+{/* Evidence: crates/registry-bregctl/tests/supporting_services.rs, service_wrappers_forward_the_resolved_posture. */}
+
+{/* Evidence: crates/registry-bregctl/tests/serve.rs unmanaged_serve_preserves_runtime_arguments_streams_process_and_exit. */}
+
+When you omit a declaration, BReg starts in production. For local development,
+declare development with `REGISTRY_STACK_POSTURE=development` or
+`--posture development`. When both
+declarations are present they must agree. Startup logs the posture and its
+source, counts development settings, and names each one by diagnostic code and
+configuration pointer. Startup checks that the package is active and logs the
+role mode it serves in. If production refuses development settings, the
+startup report lists findings from the runtime file and the verified package.
+{/* Evidence: crates/registry-breg/tests/postgres_field_encryption.rs, local_file_data_key_is_bound_during_apply_and_prepares_ready. */}
+
+Use one posture across a stack. In production, BReg refuses development
+task-grant, Evidence and Review peers. The `bregctl` data import, export,
+run recovery and statistics commands report development-peer refusals in production. If Render or Evidence signs
+using a local key file, run
+the stack in development. Use Transit for production signing.
+
+{/* Evidence: crates/registry-platform-httputil/src/lib.rs PeerPolicy;
+    crates/registry-breg/src/runtime_config.rs declared_posture_selects_task_grant_peer_policy, review_client_respects_the_runtime_posture;
+    crates/registry-breg/tests/postgres_action_evidence.rs real_evidence_service_resolves_exact_selector_and_commits_verified_postgres_result;
+    crates/registry-bregctl/src/data_lifecycle.rs export_http_refuses_a_development_peer_in_production, ingestion_and_statistics_commands_apply_the_declared_peer_policy. */}
+
 Check readiness before admitting traffic:
 
 ```sh
 curl -fsS http://127.0.0.1:8080/ready
 ```
 
-```text
-{"status":"ready"}
-```
+The successful response includes `status: ready`, `posture` and
+`developmentSettings`. Each selected development setting includes a code and
+configuration pointer.
 
 `GET /health` and `GET /healthz` report liveness only. Neither probe reflects the background
 workers that deliver webhooks and advance reviews: when one stops, `breg` exits with status 1, so
@@ -666,16 +803,18 @@ Do not edit managed tables to make a retry pass.
 ### Resolve signing keys
 
 OIDC key resolution is deployment configuration, not governed package content.
-If `authentication.oidc.jwksSource` is omitted, BReg uses discovery.
+If an issuer entry omits `jwksSource`, BReg uses discovery.
 Name the key set location directly with `type: uri` and an `https` `uri` (plain `http` only on an IPv4 loopback host), which the verifier fetches and refreshes the way it does a discovered key set.
 Or pin a static document through a protected secret reference:
 
 ```yaml
 authentication:
   oidc:
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
+    issuers:
+      main:
+        jwksSource:
+          type: static
+          documentRef: secret:file/oidc-jwks
 ```
 
 The static document must be a bounded, duplicate-free set of public keys that matches the configured algorithm, signature use, verification operation, key identifier policy, and key shape.
@@ -787,7 +926,7 @@ docker run --restart on-failure \
 restart policy's backoff bounds how often.
 
 {/* Evidence: release/docker/Dockerfile.breg; crates/registry-breg/src/runtime_config.rs,
-    ListenerConfig; crates/registry-platform-config/src/secrets.rs, validate_file_metadata();
+    ListenerConfig; crates/registry-platform-config/src/secrets.rs, judge_file();
     crates/registry-platform-config/src/loader.rs, require_trusted_runtime_path(),
     require_trusted_ownership();
     crates/registry-platform-audit/src/writer.rs, validate_directory(), validate_active_metadata(). */}
@@ -816,8 +955,10 @@ container's. `apply` writes audit entries beside `audit.path`, which is why the 
 writable here too.
 
 Kubernetes is outside the verified deployment profile. A ConfigMap or Secret volume mounted the
-default way presents each key as a symbolic link, which the runtime refuses for both the runtime
-file and secret files; inject secrets through `secret:env/<NAME>` instead.
+default way presents each key as a symbolic link, which the runtime refuses for the runtime file.
+Secret files accept the link chain Kubernetes writes under the
+[secret file rule](../../security/hardening-checklist/#secret-files), which gives the volume
+settings that rule needs.
 
 {/* Evidence: release/docker/Dockerfile.breg, the bregctl install line and the breg ENTRYPOINT;
     crates/registry-breg/src/audit.rs, RegistryAudit::open_companion();

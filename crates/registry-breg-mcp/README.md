@@ -233,14 +233,17 @@ private key is a private JWK. Every list (`algorithms`, `allowedClients`,
 number has the bound its schema states: `maximumTokenLifetimeSeconds` 1 to
 86400 (default 3600), `attemptTimeoutMilliseconds` 100 to 120000 (default
 10000), `requestsPerMinute` and `burst` 1 to 1000000, and `limits.maximumRequestBytes` 1 to 1048576
-(default 65536). Plain HTTP is accepted only with
-`tlsTermination: development-loopback` on a loopback address. `jwksSource`
-defaults to OIDC discovery; `type: uri` fetches the configured key set and
-`type: static` resolves a `documentRef` secret. Network key sources use the
-platform's strict URL policy, which refuses a
-loopback, private, or cloud-metadata address before connecting; only under
-`development-loopback` does the development policy also admit plain HTTP to
-loopback.
+(default 65536). The gateway defaults to production. For laptop runs, use
+`rstack dev`, set `REGISTRY_STACK_POSTURE=development`, or pass `--posture development`.
+Plain HTTP transport to a loopback endpoint works in either posture. Publishing an HTTP
+`resourceServer.resource`, `resourceServer.issuer` or `service.reviewBaseUrl`, setting
+`resourceServer.allowInsecureHttp: true`, a `test-issuer` key source, and
+`audit.hashKeyCustody: development-generated` each require development.
+`tlsTermination: loopback-plaintext` binds on loopback behind a TLS proxy on the same host.
+Production sends HSTS on every listener, including that one. Only development on a loopback
+listener omits it.
+`jwksSource` defaults to OIDC discovery. Use `type: static` with a `documentRef` secret
+for issuer keys that the gateway cannot fetch over its permitted network paths.
 
 The endpoint is served at `/mcp` over streamable HTTP, stateless, with JSON
 responses. Requests whose `Host` is not the resource's authority, and any

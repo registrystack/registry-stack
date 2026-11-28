@@ -6,6 +6,7 @@ mod project;
 mod project_types;
 mod provider_add;
 mod provider_pair;
+mod provision;
 mod report;
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -13,6 +14,7 @@ mod selected_binary;
 mod templates;
 use anyhow::Result;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_platform_config::{declared, DeclaredPosture};
 use serde_json::{json, Value};
 use std::{
     ffi::OsString,
@@ -42,6 +44,9 @@ enum Command {
     Serve(ServeArgs),
     /// Create a standalone or source-backed ReviewPolicy project.
     Init {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// New project directory; existing destinations are never overwritten.
         #[arg(value_name = "DIRECTORY")]
         project: PathBuf,
@@ -57,6 +62,9 @@ enum Command {
     Test(TestArgs),
     /// Generate policy bindings and context/request/task/result TypeScript and Python types.
     Types {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// Existing authored Casework project directory.
         #[arg(value_name = "PROJECT")]
         project: PathBuf,
@@ -75,10 +83,17 @@ enum Command {
         command: ProviderCommand,
     },
     /// Report the one review lifecycle.
-    Lifecycle,
+    Lifecycle {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
+    },
     /// Package the policy and its exact local schema and provider dependency closure.
     #[command(group(ArgGroup::new("package_output").required(true).multiple(false).args(["output", "dry_run"])))]
     Package {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// Existing authored Casework project directory.
         #[arg(value_name = "PROJECT")]
         project: PathBuf,
@@ -103,6 +118,9 @@ enum Command {
         /// Runtime configuration file
         #[arg(long, value_name = "FILE")]
         runtime_config: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// Operator change or approval reference recorded with activation.
         #[arg(long)]
         operator_reference: Option<String>,
@@ -110,10 +128,21 @@ enum Command {
         #[arg(long)]
         backup_reference: Vec<String>,
     },
+    /// Create the migration and runtime roles and the database named by the runtime file.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Call the Casework HTTP API with a saved connection or an explicit URL.
-    Api(Box<registry_cli_api::ApiArgs>),
+    Api {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
+        #[command(flatten)]
+        args: Box<registry_cli_api::ApiArgs>,
+    },
     /// Manage saved Casework API connections.
     Connection {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, global = true, value_name = "POSTURE")]
+        posture: Option<String>,
         #[command(subcommand)]
         command: registry_cli_api::ConnectionCommand,
     },
@@ -126,6 +155,9 @@ struct ServeArgs {
     /// Runtime configuration file passed unchanged to the Casework runtime.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    posture: Option<String>,
 
     /// Casework runtime executable for an unmanaged installation.
     #[arg(long, hide = true, env = "CASEWORK_BIN", value_name = "BINARY")]
@@ -141,6 +173,9 @@ enum GenerateCommand {
         /// Runtime configuration file; no secret in it is resolved.
         #[arg(long, value_name = "FILE")]
         runtime_config: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// New file for the facts; an existing file is never overwritten.
         #[arg(long, value_name = "FILE")]
         output: PathBuf,
@@ -150,6 +185,9 @@ enum GenerateCommand {
 enum ProviderCommand {
     /// Create an approval project from a Base Registry Engine (BReg) Action and print missing configuration.
     Add {
+        /// Declared posture: development or production. Unset means production. Generation requires development.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// New Casework directory, or a previously generated project to check without rewriting.
         #[arg(value_name = "DIRECTORY")]
         project: PathBuf,
@@ -174,6 +212,9 @@ enum ProviderCommand {
     },
     /// Verify native context and reader authority, then optionally retain its provider export.
     Pair {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// Existing Casework project with the exact vendored schema and context pin.
         #[arg(value_name = "PROJECT")]
         project: PathBuf,
@@ -196,15 +237,22 @@ enum ProviderCommand {
 }
 #[derive(Debug, Args)]
 struct ProjectArgs {
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long, value_name = "POSTURE")]
+    posture: Option<String>,
     /// Existing authored Casework project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
 }
 #[derive(Debug, Args)]
 struct TestArgs {
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long, value_name = "POSTURE")]
+    posture: Option<String>,
     /// Existing authored Casework project and its offline fixtures.
     project: PathBuf,
     /// Refuse authored warnings as well as errors.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
 }
@@ -213,6 +261,9 @@ struct OperatorArgs {
     /// Runtime configuration file
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    posture: Option<String>,
 }
 #[derive(Debug, Args)]
 struct CheckArgs {
@@ -223,6 +274,7 @@ struct CheckArgs {
     #[arg(long)]
     production: bool,
     /// Refuse authored warnings as well as errors.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
     /// Compare imported provider contracts with this native Base Registry Engine (BReg) deployment package.
@@ -237,6 +289,9 @@ struct CheckArgs {
     /// Runtime configuration file
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    posture: Option<String>,
     /// Resolve configured environment substitutions while checking the runtime file.
     #[arg(long, requires = "runtime_config")]
     environment: bool,
@@ -260,6 +315,17 @@ pub fn main_entry_from(
     args: impl IntoIterator<Item = OsString>,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
+) -> ExitCode {
+    main_entry_with_posture_resolver(args, stdout, stderr, declared)
+}
+
+fn main_entry_with_posture_resolver(
+    args: impl IntoIterator<Item = OsString>,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+    resolve: impl FnOnce(
+        Option<&str>,
+    ) -> Result<DeclaredPosture, registry_platform_config::PostureError>,
 ) -> ExitCode {
     let args: Vec<_> = args.into_iter().collect();
     let format_supplied = args
@@ -312,10 +378,46 @@ pub fn main_entry_from(
         }
     };
     let Cli { format, command } = cli;
+    let command_posture = match command.posture_flag() {
+        Some(Err(diagnostic)) => return posture_usage(diagnostic, format, stdout, stderr),
+        Some(Ok(flag)) => match resolve(flag) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                return posture_usage(
+                    registry_platform_yaml::Diagnostic::error(
+                        error.code(),
+                        "posture",
+                        error.message(),
+                        error.suggested_action(),
+                    ),
+                    format,
+                    stdout,
+                    stderr,
+                )
+            }
+        },
+        None => None,
+    };
     let command = match command {
-        Command::Serve(args) => return serve(args, format, format_supplied, stdout, stderr),
-        Command::Api(args) => return api(*args, format_supplied, stderr),
-        Command::Connection { command } => {
+        Command::Serve(args) => {
+            return serve(
+                args,
+                format,
+                format_supplied,
+                stdout,
+                stderr,
+                command_posture.expect("serve declares posture"),
+            )
+        }
+        Command::Provision(args) => {
+            return provision::run(
+                args,
+                matches!(format, OutputFormat::Json),
+                command_posture.expect("provision declares posture"),
+            );
+        }
+        Command::Api { args, .. } => return api(*args, format_supplied, stderr),
+        Command::Connection { command, .. } => {
             return connection(command, format, format_supplied, stderr);
         }
         Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
@@ -324,7 +426,7 @@ pub fn main_entry_from(
     let kind = command_kind(&command);
     let report_command = command.report_command();
     if report_command == "internal" {
-        return match run(command) {
+        return match run(command, command_posture) {
             Ok(_) => ExitCode::SUCCESS,
             Err(error) => {
                 let (exit, diagnostic) = classify_failure(kind, &error);
@@ -345,8 +447,8 @@ pub fn main_entry_from(
             }
         };
     }
-    let result =
-        run(command).and_then(|value| report::CliReport::from_value(report_command, value));
+    let result = run(command, command_posture)
+        .and_then(|value| report::CliReport::from_value(report_command, value));
     let (value, exit) = match result {
         Ok(value) => {
             let value =
@@ -361,8 +463,16 @@ pub fn main_entry_from(
             } else {
                 (
                     exit,
-                    configuration_report(&error)
-                        .map(|report| report.diagnostics().to_vec())
+                    error
+                        .chain()
+                        .find_map(|cause| {
+                            cause.downcast_ref::<registry_casework::RuntimeConfigError>()
+                        })
+                        .and_then(registry_casework::RuntimeConfigError::load_diagnostics)
+                        .map(<[_]>::to_vec)
+                        .or_else(|| {
+                            configuration_report(&error).map(|report| report.diagnostics().to_vec())
+                        })
                         .unwrap_or_else(|| {
                             vec![registry_platform_yaml::Diagnostic::error(
                                 diagnostic["code"].as_str().unwrap_or("caseworkctl.refused"),
@@ -393,12 +503,35 @@ pub fn main_entry_from(
     } else {
         stdout as &mut dyn Write
     };
+    // The lifecycle describes the review contract and has a closed report shape.
+    let report_posture = command_posture.filter(|_| report_command != "lifecycle");
     let written = match format {
-        OutputFormat::Json => report::write(&value, output),
+        OutputFormat::Json => report::write_with_posture(&value, output, report_posture),
         OutputFormat::Human => render_human(&value, output),
     };
     ExitCode::from(if written.is_ok() {
         exit
+    } else {
+        OPERATIONAL_FAILURE_EXIT
+    })
+}
+
+fn posture_usage(
+    diagnostic: registry_platform_yaml::Diagnostic,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let value =
+        report::CliReport::failure("usage", report::ReportStatus::UsageError, vec![diagnostic])
+            .and_then(|value| serde_json::to_value(value).map_err(Into::into))
+            .expect("a usage report serializes");
+    let result = match format {
+        OutputFormat::Json => report::write(&value, stdout),
+        OutputFormat::Human => render_human(&value, stderr),
+    };
+    ExitCode::from(if result.is_ok() {
+        report::USAGE_EXIT
     } else {
         OPERATIONAL_FAILURE_EXIT
     })
@@ -441,7 +574,7 @@ fn command_kind(command: &Command) -> CommandKind {
             | Command::Plan(_)
             | Command::Apply { .. }
             | Command::Status(_)
-            | Command::Api(_)
+            | Command::Api { .. }
             | Command::Connection { .. }
     ) {
         CommandKind::Operational
@@ -477,6 +610,21 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
         return (
             DOMAIN_REFUSAL_EXIT,
             json!({"severity":"error","code":code,"artifact":"provider-pair","path":path,"message":message,"suggestedAction":action}),
+        );
+    }
+    if let Some(registry_casework::StoreError::DatabaseTransport(transport)) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<registry_casework::StoreError>())
+    {
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({
+                "severity": "error",
+                "code": transport.code(),
+                "path": "runtime.yaml:/database/transport",
+                "message": transport.to_string(),
+                "suggestedAction": transport.suggested_action(),
+            }),
         );
     }
     if let Some(runtime) = error
@@ -550,8 +698,48 @@ fn activation_failure(
 }
 #[cfg(test)]
 mod operator_tests;
+#[cfg(test)]
+mod posture_dispatch_tests;
 
 impl Command {
+    fn posture_flag(&self) -> Option<Result<Option<&str>, registry_platform_yaml::Diagnostic>> {
+        let flag = match self {
+            Self::Serve(args) => args.posture.as_deref(),
+            Self::Provision(args) => args.posture.as_deref(),
+            Self::Apply { posture, .. }
+            | Self::Init { posture, .. }
+            | Self::Types { posture, .. }
+            | Self::Package { posture, .. }
+            | Self::Lifecycle { posture }
+            | Self::Api { posture, .. }
+            | Self::Connection { posture, .. }
+            | Self::Provider {
+                command:
+                    ProviderCommand::Add { posture, .. } | ProviderCommand::Pair { posture, .. },
+            }
+            | Self::Generate {
+                command: GenerateCommand::IdentityFacts { posture, .. },
+            } => posture.as_deref(),
+            Self::Doctor(args) | Self::Plan(args) | Self::Status(args) => args.posture.as_deref(),
+            Self::Explain(args) => args.posture.as_deref(),
+            Self::Test(args) => args.posture.as_deref(),
+            Self::Check(args) if args.production => {
+                if args.posture.as_deref() == Some("development") {
+                    return Some(Err(registry_platform_yaml::Diagnostic::error(
+                        "platform.posture.conflict",
+                        "posture",
+                        "--production and --posture development contradict each other",
+                        "Use one of them.",
+                    )));
+                }
+                args.posture.as_deref().or(Some("production"))
+            }
+            Self::Check(args) => args.posture.as_deref(),
+            _ => return None,
+        };
+        Some(Ok(flag))
+    }
+
     fn report_command(&self) -> &'static str {
         match self {
             Self::Init { .. } => "init",
@@ -567,23 +755,27 @@ impl Command {
                 ProviderCommand::Add { .. } => "provider-add",
                 ProviderCommand::Pair { .. } => "provider-pair",
             },
-            Self::Lifecycle => "lifecycle",
+            Self::Lifecycle { .. } => "lifecycle",
             Self::Package { .. } => "package",
             Self::Doctor(_) => "doctor",
             Self::Plan(_) => "plan",
             Self::Status(_) => "status",
             Self::Apply { .. } => "apply",
-            Self::Api(_) => "api",
+            Self::Provision(_) => "provision",
+            Self::Api { .. } => "api",
             Self::Connection { .. } => "connection",
             Self::RstackDev(_) => "rstack-dev",
         }
     }
 }
 
-fn run(command: Command) -> Result<Value> {
+fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
+    let posture = || posture.expect("runtime commands declare posture");
     match command {
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
-        Command::Init { project, template } => project::init(&project, &template),
+        Command::Init {
+            project, template, ..
+        } => project::init(&project, &template),
         Command::Check(args) => {
             let mut result = if args.runtime_config.is_some() {
                 project::check(&args.project, args.production, false)
@@ -597,6 +789,7 @@ fn run(command: Command) -> Result<Value> {
                     args.environment,
                     args.deny_warnings,
                     result,
+                    posture(),
                 );
             }
             let mut report = result?;
@@ -613,18 +806,22 @@ fn run(command: Command) -> Result<Value> {
         }
         Command::Explain(args) => project::explain(&args.project),
         Command::Test(args) => project::test(&args.project, args.deny_warnings),
-        Command::Types { project, output } => project_types::generate(&project, &output),
+        Command::Types {
+            project, output, ..
+        } => project_types::generate(&project, &output),
         Command::Generate {
             command:
                 GenerateCommand::IdentityFacts {
                     project,
                     runtime_config,
                     output,
+                    ..
                 },
-        } => identity::generate(&project, &runtime_config, &output),
+        } => identity::generate(&project, &runtime_config, &output, posture()),
         Command::Provider {
             command:
                 ProviderCommand::Add {
+                    posture: _,
                     project,
                     breg_project,
                     action,
@@ -643,6 +840,7 @@ fn run(command: Command) -> Result<Value> {
                 breg_package.as_deref(),
                 package_output.as_deref(),
                 &bregctl,
+                posture(),
             )
         }
         Command::Provider {
@@ -654,6 +852,7 @@ fn run(command: Command) -> Result<Value> {
                     action_id,
                     bregctl_bin,
                     apply,
+                    ..
                 },
         } => {
             let bregctl = bregctl_binary(bregctl_bin.as_deref())?;
@@ -666,7 +865,7 @@ fn run(command: Command) -> Result<Value> {
                 apply,
             )
         }
-        Command::Lifecycle => Ok(
+        Command::Lifecycle { .. } => Ok(
             json!({"ok":true,"command":"lifecycle","lifecycles":[registry_casework_core::review_lifecycle()]}),
         ),
         Command::Package {
@@ -674,6 +873,7 @@ fn run(command: Command) -> Result<Value> {
             output,
             revision,
             dry_run,
+            ..
         } => {
             if dry_run {
                 project::package_dry_run(&project, revision.as_deref())
@@ -685,15 +885,22 @@ fn run(command: Command) -> Result<Value> {
                 )
             }
         }
-        Command::Doctor(args) => project::doctor(&args.runtime_config),
-        Command::Plan(args) => project::plan(&args.runtime_config),
-        Command::Status(args) => project::status(&args.runtime_config),
+        Command::Doctor(args) => project::doctor(&args.runtime_config, posture()),
+        Command::Plan(args) => project::plan(&args.runtime_config, posture()),
+        Command::Status(args) => project::status(&args.runtime_config, posture()),
         Command::Apply {
             runtime_config,
             operator_reference,
             backup_reference,
-        } => project::apply(&runtime_config, operator_reference, backup_reference),
-        Command::Api(_) | Command::Connection { .. } => {
+            ..
+        } => project::apply(
+            &runtime_config,
+            operator_reference,
+            backup_reference,
+            posture(),
+        ),
+        Command::Provision(_) => unreachable!("provision writes its own report"),
+        Command::Api { .. } | Command::Connection { .. } => {
             unreachable!("raw API commands bypass report dispatch")
         }
         Command::RstackDev(_) => unreachable!("the rstack dev runner bypasses report dispatch"),
@@ -762,6 +969,7 @@ fn serve(
     format_supplied: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    declared: DeclaredPosture,
 ) -> ExitCode {
     if format_supplied {
         let diagnostic = registry_platform_yaml::Diagnostic::error(
@@ -807,6 +1015,7 @@ fn serve(
     command
         .arg("--runtime-config")
         .arg(args.runtime_config)
+        .args(["--posture", declared.posture.as_str()])
         .arg("serve");
     replace_with_service(command, "casework", stderr)
 }
@@ -949,9 +1158,16 @@ pub(crate) fn configuration_report(
             )
     })
 }
+fn trusted_tempdir_in(parent: &std::path::Path) -> io::Result<tempfile::TempDir> {
+    use std::os::unix::fs::PermissionsExt as _;
+    tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o755))
+        .tempdir_in(parent)
+}
+
 #[cfg(test)]
 pub(crate) fn canonical_tempdir() -> tempfile::TempDir {
-    tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
+    trusted_tempdir_in(&std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
 }
 /// Write an executable shell stub and return only once it can be exec'd.
 /// On Linux a concurrent test's fork can inherit the writer descriptor of a
@@ -1534,5 +1750,43 @@ taskTemplates:
         project::check(&project, false, false).unwrap();
         project::test(&project, false).unwrap();
         project_types::generate(&project, &temp.path().join("types")).unwrap();
+    }
+
+    #[test]
+    fn init_scaffolds_pass_runtime_check_at_default_production_posture() {
+        for template in templates::TEMPLATE_NAMES {
+            let temp = canonical_tempdir();
+            let project = temp.path().join(template);
+            project::init(&project, template).unwrap();
+            let runtime = project.join("runtime.example.yaml");
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let exit = main_entry_with_posture_resolver(
+                [
+                    OsString::from("caseworkctl"),
+                    OsString::from("--format"),
+                    OsString::from("json"),
+                    OsString::from("check"),
+                    project.as_os_str().to_owned(),
+                    OsString::from("--runtime-config"),
+                    runtime.as_os_str().to_owned(),
+                ],
+                &mut out,
+                &mut err,
+                |flag| registry_platform_config::declared_from(flag, None),
+            );
+            assert!(
+                err.is_empty(),
+                "{template}: {}",
+                String::from_utf8_lossy(&err)
+            );
+            let report: Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(exit, ExitCode::SUCCESS, "{template}: {report}");
+            assert_eq!(report["ok"], true, "{template}: {report}");
+            assert_eq!(
+                report["posture"]["value"], "production",
+                "{template}: {report}"
+            );
+            assert_eq!(report["diagnostics"], json!([]), "{template}: {report}");
+        }
     }
 }

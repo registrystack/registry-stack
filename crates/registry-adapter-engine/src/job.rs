@@ -111,7 +111,7 @@ impl fmt::Display for JobError {
         let rendered = self
             .diagnostics
             .iter()
-            .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.message))
+            .map(crate::load::located_reason)
             .collect::<Vec<_>>()
             .join("; ");
         write!(formatter, "the job was refused: {rendered}")
@@ -323,17 +323,32 @@ pub fn compile_job(
     job_path: &Path,
     runtime_path: &Path,
 ) -> Result<JobProgram, JobError> {
+    compile_job_in_posture(
+        pack_path,
+        job_path,
+        runtime_path,
+        crate::job_sources::PRODUCTION,
+    )
+}
+
+pub fn compile_job_in_posture(
+    pack_path: &Path,
+    job_path: &Path,
+    runtime_path: &Path,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<JobProgram, JobError> {
     let pack_directory = artifact_directory(pack_path)?;
     let profile_path = artifact_path(None, &pack_directory, "profile.yaml", "--profile")
         .map_err(|error| artifact_error(LoadError::Runtime(error.to_string())))?;
     let project_path = artifact_path(None, &pack_directory, "project.yaml", "--project")
         .map_err(|error| artifact_error(LoadError::Runtime(error.to_string())))?;
-    compile_job_with(
+    compile_job_with_in_posture(
         pack_path,
         job_path,
         runtime_path,
         &profile_path,
         &project_path,
+        declared,
     )
 }
 
@@ -352,9 +367,32 @@ pub fn compile_job_with(
     profile_path: &Path,
     project_path: &Path,
 ) -> Result<JobProgram, JobError> {
-    let job_runtime =
-        crate::job_sources::JobRuntimeConfig::load(runtime_path).map_err(|error| {
-            let mut diagnostics = error.diagnostics().to_vec();
+    compile_job_with_in_posture(
+        pack_path,
+        job_path,
+        runtime_path,
+        profile_path,
+        project_path,
+        crate::job_sources::PRODUCTION,
+    )
+}
+
+pub fn compile_job_with_in_posture(
+    pack_path: &Path,
+    job_path: &Path,
+    runtime_path: &Path,
+    profile_path: &Path,
+    project_path: &Path,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<JobProgram, JobError> {
+    let job_runtime = crate::job_sources::JobRuntimeConfig::load_in_posture(runtime_path, declared)
+        .map_err(|error| {
+            let mut diagnostics = error
+                .diagnostics()
+                .iter()
+                .cloned()
+                .map(crate::job_sources::job_runtime_diagnostic)
+                .collect::<Vec<_>>();
             if let Some(hint) =
                 crate::job_sources::JobRuntimeConfig::facade_kind_hint(runtime_path, &error)
             {
@@ -371,14 +409,24 @@ pub fn compile_job_with(
             .secret_resolver()
             .map_err(|error| secret_providers_refusal(&error))?,
     );
-    compile_job_with_runtime(
+    let mut program = compile_job_with_runtime(
         pack_path,
         job_path,
         &job_runtime,
         resolver,
         profile_path,
         project_path,
-    )
+    )?;
+    program.warnings.extend(located_in(
+        job_runtime
+            .posture
+            .diagnostics(runtime_path)
+            .into_iter()
+            .map(crate::job_sources::job_runtime_diagnostic)
+            .collect(),
+        ADAPTER_JOB_RUNTIME_KIND,
+    ));
+    Ok(program)
 }
 
 /// Compile from one host-supplied process-lifetime runtime snapshot and its
@@ -1876,6 +1924,24 @@ mod tests {
     use registry_adapter_core::{DestinationMapping, JobDestination};
     use registry_platform_config::sha256_uri;
     use serde_json::json;
+
+    /// The job refusal's display names each finding's pointer and the
+    /// migration `check` prints, not the code and message alone.
+    #[test]
+    fn a_job_refusal_displays_each_pointer_and_next_step() {
+        let error = job_error(vec![Diagnostic::error(
+            "adapter.runtime.insecure-origin",
+            "/endpoints/0/baseUrl",
+            "the endpoint's origin is plain HTTP to a host that is not loopback",
+            "Serve the source over https, or reach it on loopback.",
+        )]);
+        assert_eq!(
+            error.to_string(),
+            "the job was refused: adapter.runtime.insecure-origin at /endpoints/0/baseUrl: \
+             the endpoint's origin is plain HTTP to a host that is not loopback. \
+             Serve the source over https, or reach it on loopback."
+        );
+    }
 
     /// A runtime refusal names the runtime member and the fix, and the
     /// secret-provider start failure keeps the value-free cause.

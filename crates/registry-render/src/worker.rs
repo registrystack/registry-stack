@@ -527,6 +527,9 @@ fn worker_command(exe: &Path) -> tokio::process::Command {
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     isolate_environment(&mut command, std::env::vars_os());
+    // Typst lazily starts Rayon's global pool. One worker thread keeps its
+    // stack and allocator mappings within the per-render address-space cap.
+    command.env("RAYON_NUM_THREADS", "1");
     command
 }
 
@@ -614,7 +617,9 @@ mod tests {
         let unexpected: Vec<&String> = names
             .iter()
             .filter(|name| {
-                !WORKER_ENVIRONMENT.contains(&name.as_str()) && !from_nothing.contains(*name)
+                !WORKER_ENVIRONMENT.contains(&name.as_str())
+                    && !from_nothing.contains(*name)
+                    && name.as_str() != "RAYON_NUM_THREADS"
             })
             .collect();
         assert!(unexpected.is_empty(), "the worker inherited {unexpected:?}");
@@ -629,7 +634,12 @@ mod tests {
             .filter(|name| WORKER_ENVIRONMENT.contains(&name.as_str()))
             .collect();
         let command = worker_command(Path::new("/usr/bin/env"));
+        let mut expected = expected;
+        expected.insert("RAYON_NUM_THREADS".to_owned());
         assert_eq!(kept_names(&command), expected);
+        assert!(command.as_std().get_envs().any(|(name, value)| {
+            name == "RAYON_NUM_THREADS" && value == Some(std::ffi::OsStr::new("1"))
+        }));
     }
 
     /// A stand-in worker that answers with a framed `Failed` response and
@@ -945,6 +955,7 @@ pub(crate) mod seal_tests {
             signing_time: chrono::DateTime::from_timestamp(1_793_000_000, 0).expect("a time"),
             contents_capacity: 16 * 1024,
             field_name: "RegistrySeal".to_owned(),
+            test_only: false,
         };
         crate::pdf_signature::prepare(&first_revision, &field)
             .expect("the parent can prepare a single revision");

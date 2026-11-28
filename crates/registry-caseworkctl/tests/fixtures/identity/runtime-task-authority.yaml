@@ -6,7 +6,7 @@ package:
   root: /srv/registry-casework/package
 listener:
   bind: 127.0.0.1:8100
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
 secretProviders:
   file:
@@ -16,19 +16,17 @@ database:
   migrationUrlRef: secret:file/migration-database-url
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:casework
-    allowedClients:
-      - casework-staff
-      - task-agent
-      - task-status
-    assertionIssuers:
-      task-agent:
-        - https://casework.example.test
-    scopeClaim: scope
-    humanIdentity:
-      claim: registry_actor_kind
-      value: human
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:casework
+        allowedClients:
+          - casework-staff
+          - task-agent
+          - task-status
+        assertionIssuers:
+          task-agent:
+            - https://casework.example.test
 audit:
   path: /var/lib/registry-casework/audit.ndjson
   hashKeyRef: secret:file/casework-audit-key

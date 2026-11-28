@@ -41,7 +41,7 @@ with the caller's source of record.
 | `registry-messagingctl` | Adopter and local operator tooling, the `messagingctl` binary. |
 | `registry-messaging-client` | The bounded Rust client over the runtime's HTTP contract. |
 
-## Running locally
+## Start a development run
 
 `rstack dev` runs a package end to end on one machine from a development plan. It needs Docker for
 PostgreSQL and, when a provider is `smtp`, Mailpit. `messagingctl init` writes the plan, `dev.yaml`,
@@ -51,17 +51,19 @@ and a scenario file with the starter:
 messagingctl init ./notices
 rstack dev check ./notices
 rstack --format json dev start ./notices --ttl 2h > run.json
-RUN="$(jq -r .run_id run.json)"
-HEADERS="$(rstack dev token "$RUN" --as case-system | awk '$1 == "messaging" && $2 == "headers" {print $3}')"
+RUN="$(jq -er '.run_id' run.json)"
+ORIGIN="$(jq -er '.products.messaging' run.json)"
+HEADERS="$(rstack --format json dev token "$RUN" --as case-system |
+  jq -er '.credentials[] | select(.product == "messaging") | .header_file')"
 printf '%s\n' '{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}' |
-  rstack messaging api /v1/messages --url "$(jq -r .products.messaging run.json)" \
+  rstack messaging api /v1/messages --url "$ORIGIN" \
     --header @"$HEADERS" --idempotency-key first --input -
 rstack dev stop "$RUN"
 ```
 
 The run owns everything it starts: a PostgreSQL server, a pinned Mailpit container every `smtp`
 provider sends to, a mock gateway every `http` provider sends to, and the Messaging runtime on a
-`development-loopback` listener. The containers publish on 127.0.0.1 only and carry the run's label,
+`loopback-plaintext` listener. The containers publish on 127.0.0.1 only and carry the run's label,
 so `stop`, TTL expiry and `stop --recover` remove them with the run. The mock gateway answers each
 send with `queued` and about a quarter of a second later posts a delivery report, signed with the
 run's callback key, to the runtime's callback route, so an SMS reaches `delivered` and an email
@@ -188,15 +190,15 @@ artifact drift test, `messagingctl init` against the published starter,
 `messagingctl check` over the starter, a pinned digest, and five refusals,
 `messagingctl preview` byte stability, and `messagingctl messages` refusing a
 malformed id and an unreachable database. `test-dev.sh` needs Docker: it
-starts `messagingctl dev` on a starter whose SMS provider is the example mock
+starts `rstack dev` on a starter whose SMS provider is the example mock
 provider, sends one email and one SMS, requires the SMS to be `delivered`
 through one applied signed callback and the email to be `submitted` with one
 message in Mailpit, and requires the stopped session to leave no container.
-`test-dev-shared-issuer.sh` also needs Docker: it starts a BReg owner with the
-two Messaging requester clients and their explicit resource, runs the same
-Messaging journey with borrowed tokens, exercises retained-owner restart and
-replacement refusals, and requires Messaging cleanup to leave the owner
-running.
+`test-dev-shared-issuer.sh` uses a fixture-owned ThunderID issuer and verifies
+exact audience, operator submit refusal, SMS delivery, and one email in
+Mailpit. It starts a fresh Messaging run after issuer key rotation to verify
+key loading and refusal of stale tokens. That restart exercises fresh-start
+key loading only. Live JWKS refresh and issuer outages are outside this journey.
 The harness's `--messaging` mode needs Docker: it runs the starter under `rstack dev` with no other
 product, requires the scenario's SMS to reach the run's gateway, sends an email that reaches the
 run's Mailpit, and requires the stopped run to leave no container.

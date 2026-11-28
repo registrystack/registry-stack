@@ -312,11 +312,11 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/networkExposure
         whenOmitted: closed
-      - pointer: /authentication/oidc/allowedClients
+      - pointer: /authentication/oidc/issuers/*/allowedClients
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/issuers/*/allowInsecureHttp
         whenOmitted: closed
-      - pointer: /authentication/oidc/assertionIssuers
+      - pointer: /authentication/oidc/issuers/*/assertionIssuers
         whenOmitted: open
       - pointer: /attachmentVerification
         whenOmitted: open
@@ -324,7 +324,7 @@ formats:
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers]
   - id: breg/mcp-runtime
     product: breg
     title: Citizen MCP gateway runtime configuration
@@ -696,7 +696,7 @@ formats:
       apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
       kind: BRegDevClients
       checkedBy:
-        file: crates/registry-bregctl/src/dev/config.rs
+        file: crates/registry-bregctl/src/dev_clients.rs
         symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
@@ -709,8 +709,8 @@ formats:
       driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/config.rs
-      function: clients
+      file: crates/registry-bregctl/src/dev_clients.rs
+      function: check
       type: Clients
     check: bregctl check --file {file}
     example: products/breg/acceptance/facility/dev-clients.yaml
@@ -864,7 +864,7 @@ formats:
       apiVersion: id.registrystack.org/formats/breg/example-scenarios/v1alpha1
       kind: BRegExampleScenarios
       checkedBy:
-        file: crates/registry-bregctl/src/dev/examples.rs
+        file: crates/registry-bregctl/src/examples.rs
         symbol: API_VERSION
     target:
       apiVersion: id.registrystack.org/formats/breg/example-scenarios/v1alpha1
@@ -877,7 +877,7 @@ formats:
       driftCheck: products/breg/scripts/check-tool-schemas.sh
     reader:
       crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/examples.rs
+      file: crates/registry-bregctl/src/examples.rs
       function: catalogue
       type: Catalogue
     check: bregctl check --file {file}
@@ -989,99 +989,6 @@ formats:
       requiredText: /database
       optionalText: none
       integer: /maximumAgeSeconds
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: breg/dev-state
-    product: breg
-    title: Development environment state
-    files: [.breg/dev/state.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1
-      kind: BRegDevState
-      checkedBy:
-        file: crates/registry-bregctl/src/dev/mod.rs
-        symbol: STATE_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/breg/dev-state/v1alpha1
-      kind: BRegDevState
-    schema: none
-    reader:
-      crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/mod.rs
-      function: read_state
-      type: State
-    check: bregctl check --file {file}
-    example: products/breg/examples/formats/dev-session/.breg/dev/state.json
-    conformance:
-      requiredText: /project
-      optionalText: none
-      integer: /bregPort
-      boolean: /activated
-    securityMembers: []
-    restrictingMembers: []
-  - id: breg/dev-prepared-source
-    product: breg
-    title: Development prepared source record
-    files: [.breg/dev/source-prepared-*.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1
-      kind: BRegDevPreparedSource
-      checkedBy:
-        file: crates/registry-bregctl/src/dev/prepare_source.rs
-        symbol: PREPARED_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/breg/dev-prepared-source/v1alpha1
-      kind: BRegDevPreparedSource
-    schema: none
-    reader:
-      crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/prepare_source.rs
-      function: read_prepared
-      type: PreparedSource
-    check: bregctl check --file {file}
-    example: products/breg/examples/formats/dev-session/.breg/dev/source-prepared-source.json
-    conformance:
-      requiredText: /requestDigest
-      optionalText: none
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
-  - id: breg/dev-source-transition
-    product: breg
-    title: Development source transition journal
-    files: [.breg/dev/source-transition.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/breg/dev-source-transition/v1alpha1
-      kind: BRegDevSourceTransition
-      checkedBy:
-        file: crates/registry-bregctl/src/dev/prepare_source.rs
-        symbol: TRANSITION_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/breg/dev-source-transition/v1alpha1
-      kind: BRegDevSourceTransition
-    schema: none
-    reader:
-      crate: registry-bregctl
-      file: crates/registry-bregctl/src/dev/prepare_source.rs
-      function: read_transition
-      type: Transition
-    check: bregctl check --file {file}
-    example: products/breg/examples/formats/dev-session/.breg/dev/source-transition.json
-    conformance:
-      requiredText: /priorDigest
-      optionalText: none
-      integer: /sequence
       boolean: none
     securityMembers: []
     restrictingMembers: []
@@ -1584,10 +1491,10 @@ formats:
       file: crates/registry-casework/src/config.rs
       function: load
       type: RuntimeConfig
-    check: caseworkctl check {project} --runtime-config {file}
+    check: caseworkctl check {project} --runtime-config {file} --posture development
     example: products/casework/examples/canonical-review/runtime.example.yaml
     conformance:
-      requiredText: /authentication/oidc/audience
+      requiredText: /authentication/oidc/issuers/main/audience
       optionalText: /audit/path
       integer: none
       boolean: none
@@ -1598,19 +1505,25 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/networkExposure
         whenOmitted: closed
-      - pointer: /authentication/oidc/allowedClients
+      - pointer: /authentication/oidc/issuers/*/allowedClients
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/issuers/*/allowInsecureHttp
         whenOmitted: closed
-      - pointer: /authentication/oidc/revokedKeyIds
+      - pointer: /authentication/oidc/issuers/*/revokedKeyIds
         whenOmitted: open
-      - pointer: /authentication/oidc/maximumTokenLifetimeSeconds
+      - pointer: /authentication/oidc/issuers/*/maximumTokenLifetimeSeconds
         whenOmitted: open
-      - pointer: /authentication/oidc/assertionIssuers
+      - pointer: /authentication/oidc/issuers/*/assertionIssuers
         whenOmitted: open
+      - pointer: /authentication/oidc/issuers/*/actorKind
+        whenOmitted: closed
+      - pointer: /authentication/oidc/issuers/*/clientActorKinds
+        whenOmitted: closed
+      - pointer: /authentication/oidc/delegatedStaffReaders/*/representedHuman
+        whenOmitted: refused
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers, /authentication/oidc/delegatedStaffReaders/*/representedHuman]
   - id: casework/fixture
     product: casework
     title: Casework fixture
@@ -1861,7 +1774,7 @@ formats:
     check: schedulingctl check {project} --runtime-config {file}
     example: products/scheduling/examples/standalone-exact-time/runtime.example.yaml
     conformance:
-      requiredText: /authentication/oidc/audience
+      requiredText: /authentication/oidc/issuers/main/audience
       optionalText: /audit/path
       integer: /retention/hookPayloadRetentionDays
       boolean: none
@@ -1872,17 +1785,17 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/networkExposure
         whenOmitted: closed
-      - pointer: /authentication/oidc/allowedClients
+      - pointer: /authentication/oidc/issuers/*/allowedClients
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/issuers/*/allowInsecureHttp
         whenOmitted: closed
-      - pointer: /authentication/oidc/assertionIssuers
+      - pointer: /authentication/oidc/issuers/*/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
       - pointer: /taskGrantStatus
         whenOmitted: refused
-    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers, /taskGrantStatus]
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers, /taskGrantStatus]
   - id: scheduling/ctl-report
     product: scheduling
     title: schedulingctl --format json report
@@ -2057,11 +1970,11 @@ formats:
     check: messagingctl check --project {project} --runtime-config {file}
     example: products/messaging/examples/starter/runtime.example.yaml
     conformance:
-      requiredText: /authentication/oidc/audience
+      requiredText: /authentication/oidc/issuers/main/audience
       optionalText: /audit/path
       integer: /retention/recordRetentionDays
       boolean: none
-      set: /authentication/oidc/allowedClients
+      set: /authentication/oidc/issuers/main/allowedClients
     securityMembers:
       - pointer: /listener/bind
         whenOmitted: refused
@@ -2069,46 +1982,15 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/networkExposure
         whenOmitted: closed
-      - pointer: /authentication/oidc/allowedClients
+      - pointer: /authentication/oidc/issuers/*/allowedClients
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/issuers/*/allowInsecureHttp
         whenOmitted: closed
-      - pointer: /authentication/oidc/assertionIssuers
+      - pointer: /authentication/oidc/issuers/*/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers]
-  - id: messaging/dev-state
-    product: messaging
-    title: Development environment state
-    files: [.messaging/dev/session.json]
-    syntax: json
-    audience: generated
-    stability: unpromised
-    current:
-      apiVersion: id.registrystack.org/formats/messaging/dev-state/v1alpha1
-      kind: MessagingDevState
-      checkedBy:
-        file: crates/registry-messagingctl/src/dev/mod.rs
-        symbol: DEV_STATE_API_VERSION
-    target:
-      apiVersion: id.registrystack.org/formats/messaging/dev-state/v1alpha1
-      kind: MessagingDevState
-    schema: none
-    reader:
-      crate: registry-messagingctl
-      file: crates/registry-messagingctl/src/dev/mod.rs
-      function: read_session
-      type: SessionRecord
-    check: messagingctl check --dev-state {file}
-    example: products/messaging/examples/formats/dev-session/.messaging/dev/session.json
-    conformance:
-      requiredText: /owner
-      optionalText: /borrowedIssuer/clients/case-system/actorKind
-      integer: none
-      boolean: none
-    securityMembers: []
-    restrictingMembers: []
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers]
   - id: messaging/template-schema
     product: messaging
     title: Messaging template data schema
@@ -2319,6 +2201,7 @@ formats:
     syntax: json
     audience: generated
     stability: unpromised
+    buildArtifact: true
     current:
       apiVersion: id.registrystack.org/formats/discovery/index/v1alpha1
       kind: DiscoveryIndex
@@ -2335,7 +2218,7 @@ formats:
       differentialTest: crates/registry-discoveryctl/tests/schema_contract.rs
     reader:
       crate: registry-discovery
-      file: crates/registry-discovery/src/startup.rs
+      file: crates/registry-discovery/src/package.rs
       function: load_index
       type: DiscoveryIndex
     check: discoveryctl check --index {file}
@@ -2497,11 +2380,11 @@ formats:
         whenOmitted: closed
       - pointer: /authentication/apiKeyRef
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowedClients
+      - pointer: /authentication/oidc/issuers/*/allowedClients
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/issuers/*/allowInsecureHttp
         whenOmitted: closed
-      - pointer: /authentication/oidc/assertionIssuers
+      - pointer: /authentication/oidc/issuers/*/assertionIssuers
         whenOmitted: open
       - pointer: /package/expectedDigest
         whenOmitted: open
@@ -2527,7 +2410,7 @@ formats:
         whenOmitted: closed
       - pointer: /assuranceProfile
         whenOmitted: refused
-    restrictingMembers: [/authentication/oidc/allowedClients, /authentication/oidc/assertionIssuers, /signing/seals/*/allowedClients]
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers, /signing/seals/*/allowedClients]
   - id: render/data-schema
     product: render
     title: Render document data schema
@@ -2738,7 +2621,7 @@ formats:
       function: read_fixture
       # The registered example is coequal; read_fixture also decodes ReferenceFixture for reference-mode files.
       type: CoequalFixture
-    check: evidencectl test {project}
+    check: evidencectl test {project} --posture development
     example: products/evidence/examples/standalone/fixtures/adult-status.yaml
     conformance:
       requiredText: none
@@ -2827,7 +2710,7 @@ formats:
       file: crates/registry-evidence-authoring/src/target.rs
       function: read_target
       type: EvidenceTarget
-    check: evidencectl check {project} --target {file}
+    check: evidencectl check {project} --target {file} --posture development
     example: products/evidence/examples/standalone/local-target.yaml
     conformance:
       requiredText: /id
@@ -2876,7 +2759,7 @@ formats:
       file: crates/registry-evidence-authoring/src/target.rs
       function: read_authority
       type: EvidenceTargetAuthority
-    check: evidencectl check {project} --target {project}/local-target.yaml
+    check: evidencectl check {project} --target {project}/local-target.yaml --posture development
     example: products/evidence/examples/standalone/dev-authority.yaml
     conformance:
       requiredText: /project
@@ -3646,6 +3529,37 @@ formats:
     conformance: none
     securityMembers: []
     restrictingMembers: []
+  - id: platform/cli-database-provision-report
+    product: platform
+    title: Shared CLI database provision report
+    files: []
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/platform/cli-database-provision-report/v1alpha1
+      kind: PlatformCliDatabaseProvisionReport
+      checkedBy:
+        file: crates/registry-platform-provision/src/cli.rs
+        symbol: REPORT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/cli-database-provision-report/v1alpha1
+      kind: PlatformCliDatabaseProvisionReport
+    schema:
+      path: crates/registry-platform-provision/schema/provision-report.schema.json
+      id: https://id.registrystack.org/schemas/platform/cli-database-provision-report/cli-database-provision-report.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-platform-provision --features schema --example provision-report-schema -- --output crates/registry-platform-provision/schema/provision-report.schema.json
+      driftCheck: crates/registry-platform-provision/src/cli.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-platform-provision/src/cli.rs
+      symbol: run_provision
+    check: none
+    example: crates/registry-platform-provision/example/provision-report.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
   - id: platform/task-connection
     product: platform
     title: Task-grant operator connection file
@@ -3952,9 +3866,19 @@ formats:
         whenOmitted: closed
       - pointer: /deployment/authentication/policies
         whenOmitted: refused
-      - pointer: /deployment/authentication/assertionIssuers
+      - pointer: /deployment/authentication/issuers
+        whenOmitted: refused
+      - pointer: /deployment/authentication/issuers/*/allowedClients
+        whenOmitted: refused
+      - pointer: /deployment/authentication/issuers/*/assertionIssuers
         whenOmitted: closed
-      - pointer: /deployment/authentication/allowInsecureHttp
+      - pointer: /deployment/authentication/issuers/*/allowInsecureHttp
+        whenOmitted: closed
+      - pointer: /deployment/authentication/issuers/*/accessTokenType
+        whenOmitted: closed
+      - pointer: /deployment/authentication/issuers/*/actorKind
+        whenOmitted: closed
+      - pointer: /deployment/authentication/issuers/*/clientActorKinds
         whenOmitted: closed
       - pointer: /deployment/authentication/policies/*/actions
         whenOmitted: refused
@@ -3962,7 +3886,7 @@ formats:
         whenOmitted: refused
       - pointer: /deployment/packages/*/expectedDigest
         whenOmitted: refused
-    restrictingMembers: [/deployment/authentication/assertionIssuers, /deployment/authentication/policies/*/subjects]
+    restrictingMembers: [/deployment/authentication/issuers/*/allowedClients, /deployment/authentication/issuers/*/assertionIssuers, /deployment/authentication/policies/*/subjects]
   - id: coordinator/scenarios
     product: coordinator
     title: Coordinator offline scenarios
@@ -4132,11 +4056,11 @@ formats:
     check: documentsctl check --project {project} --runtime-config {file}
     example: products/documents/examples/starter/runtime.example.yaml
     conformance:
-      requiredText: /authentication/oidc/audience
+      requiredText: /authentication/oidc/issuers/main/audience
       optionalText: /audit/path
       integer: /retention/receiptRetentionDays
       boolean: none
-      set: /authentication/oidc/allowedClients
+      set: /authentication/oidc/issuers/main/allowedClients
     securityMembers:
       - pointer: /listener/bind
         whenOmitted: refused
@@ -4144,15 +4068,17 @@ formats:
         whenOmitted: closed
       - pointer: /metricsListener/networkExposure
         whenOmitted: closed
-      - pointer: /authentication/oidc/allowedClients
+      - pointer: /authentication/oidc/issuers/*/allowedClients
         whenOmitted: refused
-      - pointer: /authentication/oidc/allowInsecureHttp
+      - pointer: /authentication/oidc/issuers/*/allowInsecureHttp
         whenOmitted: closed
+      - pointer: /authentication/oidc/issuers/*/assertionIssuers
+        whenOmitted: open
       - pointer: /contentVerification
         whenOmitted: refused
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/allowedClients]
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers]
   - id: documents/ctl-report
     product: documents
     title: documentsctl --format json report
@@ -4489,12 +4415,26 @@ formats:
         whenOmitted: refused
       - pointer: /database/testOnlyPlaintext
         whenOmitted: closed
-      - pointer: /oidc/issuer
+      - pointer: /oidc/issuers
         whenOmitted: refused
-      - pointer: /oidc/audience
+      - pointer: /oidc/issuers/*/issuer
         whenOmitted: refused
-      - pointer: /oidc/allowInsecureHttp
+      - pointer: /oidc/issuers/*/audience
+        whenOmitted: refused
+      - pointer: /oidc/issuers/*/jwksSource
         whenOmitted: open
+      - pointer: /oidc/issuers/*/allowInsecureHttp
+        whenOmitted: closed
+      - pointer: /oidc/issuers/*/allowedClients
+        whenOmitted: refused
+      - pointer: /oidc/issuers/*/accessTokenType
+        whenOmitted: closed
+      - pointer: /oidc/issuers/*/scopeClaim
+        whenOmitted: closed
+      - pointer: /oidc/issuers/*/actorKind
+        whenOmitted: closed
+      - pointer: /oidc/issuers/*/clientActorKinds
+        whenOmitted: closed
       - pointer: /endpoints/*/baseUrl
         whenOmitted: refused
       - pointer: /endpoints/*/credential
@@ -4503,7 +4443,7 @@ formats:
         whenOmitted: closed
       - pointer: /allowedPrivateCidrs
         whenOmitted: closed
-    restrictingMembers: [/allowedPrivateCidrs, /oidc/audience, /oidc/issuer]
+    restrictingMembers: [/allowedPrivateCidrs, /oidc/issuers/*/audience, /oidc/issuers/*/issuer, /oidc/issuers/*/allowedClients]
 
   - id: adapter/payment-provider-fixture
     product: adapter
@@ -4532,7 +4472,7 @@ formats:
       file: crates/registry-adapterctl/src/payment_fixtures.rs
       function: read_fixture
       type: FixtureDocument
-    check: adapterctl payments check {payments} --provider-pack {pack} --fixtures {file}
+    check: adapterctl payments check {payments} --provider-pack {pack} --fixtures {file} --posture development
     example: products/adapter/examples/payment-provider-fixture.yaml
     conformance:
       # The shared type and direction fields use tag and enum diagnostics.
@@ -4570,7 +4510,7 @@ formats:
       file: crates/registry-adapter/src/payments/pack.rs
       function: from_yaml
       type: PaymentProviderPack
-    check: adapterctl payments check {payments} --provider-pack {file}
+    check: adapterctl payments check {payments} --provider-pack {file} --posture development
     example: products/adapter/packs/payment-simulator/pack.yaml
     conformance:
       requiredText: /id
@@ -4613,7 +4553,7 @@ formats:
       file: crates/registry-adapter/src/payments/http.rs
       function: load_config
       type: PaymentsConfig
-    check: adapterctl payments check {file}
+    check: adapterctl payments check {file} --posture development
     example: products/adapter/examples/payment-collections/payments.example.yaml
     conformance:
       requiredText: /connections/0/id

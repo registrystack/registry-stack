@@ -206,6 +206,12 @@ actions:
           set:
             status: {value: inactive}
 
+# Every grant in this file reaches the rows of the caller's own jurisdiction.
+# Each grant still writes its own rowBoundaries, here as a reference.
+rowBoundarySets:
+  same-jurisdiction:
+    - {field: jurisdiction, claim: jurisdiction, operator: equals}
+
 accessProfiles:
   operator-editor:
     principalClaim: registry_principal
@@ -217,8 +223,7 @@ accessProfiles:
           operations: [create, get, list, patch]
           readableFields: [operator-code, status, jurisdiction]
           writableFields: [operator-code, status, jurisdiction]
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          rowBoundaries: {rowBoundarySet: same-jurisdiction}
   facility-reader:
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:read"]
@@ -228,21 +233,18 @@ accessProfiles:
         - recordType: operator
           operations: [get, list]
           readableFields: [operator-code, status, jurisdiction]
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          rowBoundaries: {rowBoundarySet: same-jurisdiction}
         - recordType: facility
           operations: [get, list]
           readableFields: [facility-code, name, address-line, city, postal-code, status, jurisdiction]
           readPaths:
             - {path: operators, readableFields: [operator-code, status, jurisdiction]}
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          rowBoundaries: {rowBoundarySet: same-jurisdiction}
         - recordType: facility-assignment
           operations: [get, list]
           readableFields: [facility, operator, jurisdiction]
           filterableFields: [facility, operator]
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          rowBoundaries: {rowBoundarySet: same-jurisdiction}
   directory-editor:
     default: true
     principalClaim: registry_principal
@@ -254,8 +256,7 @@ accessProfiles:
           operations: [create, get, list, patch]
           readableFields: [name, email, jurisdiction]
           writableFields: [name, email, jurisdiction]
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          rowBoundaries: {rowBoundarySet: same-jurisdiction}
   facility-registrar:
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:register"]
@@ -266,14 +267,11 @@ accessProfiles:
           operations: [invoke]
           targets:
             - recordType: facility
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
             - recordType: facility-assignment
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
             - recordType: operator
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
           results: [facility, assignment]
   facility-correction-author:
     principalClaim: registry_principal
@@ -285,14 +283,12 @@ accessProfiles:
           operations: [start]
           targets:
             - recordType: facility
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
         - action: deactivate-facility
           operations: [start]
           targets:
             - recordType: facility
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
       proposals:
         - action: correct-address
           operations: [get, list, edit, submit, revise, rebase, retry, cancel, get-review-status]
@@ -302,16 +298,14 @@ accessProfiles:
           ownership: caller
           targets:
             - recordType: facility
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
         - action: deactivate-facility
           operations: [get, list, edit, submit, revise, rebase, retry, cancel, get-review-status]
           readableInputs: [facility]
           ownership: caller
           targets:
             - recordType: facility
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
   facility-correction-applier:
     principalClaim: registry_principal
     requiredScopes: ["registry:facility:correction:apply"]
@@ -322,14 +316,12 @@ accessProfiles:
           operations: [get, list, apply]
           targets:
             - recordType: facility
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
         - action: deactivate-facility
           operations: [get, list, apply]
           targets:
             - recordType: facility
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
   proposal-reviewer:
     principalClaim: registry_principal
     requiredScopes: ["registry:proposal:review"]
@@ -339,16 +331,14 @@ accessProfiles:
         - recordType: facility
           operations: [get]
           readableFields: [address-line, city, postal-code]
-          rowBoundaries:
-            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+          rowBoundaries: {rowBoundarySet: same-jurisdiction}
       proposals:
         - action: correct-address
           operations: [get-review-context]
           readableContextFields: [facilityId, currentAddressLine, changes, supportingDocument]
           targets:
             - recordType: facility
-              rowBoundaries:
-                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              rowBoundaries: {rowBoundarySet: same-jurisdiction}
 
   casework-review-status:
     actorKind: service

@@ -139,6 +139,19 @@ class DemoRecordsTest(unittest.TestCase):
         self.assertIn("kind: closure", demo.DEMO_RECORDS)
 
 
+class BookerTokenTest(unittest.TestCase):
+    def test_a_booker_token_carries_a_scope_beyond_the_openid_ones(self):
+        # A token with a grant and no scope, or only OpenID Connect scopes, is
+        # identity-only and the issuer set refuses it. A real booking agent
+        # asks for the commit scope.
+        stand_in = type("StandIn", (), {"signer": staticmethod(lambda data: b"signature")})()
+        token = demo.Verifier.booker_token(stand_in, demo.BOOKER_A, "booker-subject")
+        payload = json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "==="))
+        scopes = set(payload["scope"].split())
+        self.assertIn("scheduling:commit", scopes)
+        self.assertTrue(scopes - {"openid", "profile", "email", "offline_access"})
+
+
 class RuntimeConfigTest(unittest.TestCase):
     def test_the_runtime_config_pins_every_required_block(self):
         config = demo.runtime_config(
@@ -150,7 +163,7 @@ class RuntimeConfigTest(unittest.TestCase):
             "root: /run/package",
             "databaseId: scheduling-demo",
             "bind: 127.0.0.1:8105",
-            "tlsTermination: development-loopback",
+            "tlsTermination: loopback-plaintext",
             "root: /run/secrets",
             "runtimeUrlRef: secret:file/db-url",
             "migrationUrlRef: secret:file/db-url",

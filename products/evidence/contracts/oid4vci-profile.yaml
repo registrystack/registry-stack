@@ -258,7 +258,8 @@ endpoints:
     rule: >-
       Operational probes, not protocol surface. They report that the process is
       running and whether its required local audit destination can accept
-      entries. Readiness deliberately says nothing about the deployments this
+      entries. A successful readiness response includes posture and developmentSettings.
+      Readiness deliberately says nothing about the deployments this
       service calls outbound, because their transient failure does not make the
       process itself unready. Neither probe discloses anything about any offer,
       token, or credential, and both are named here so this endpoint list is the
@@ -302,7 +303,8 @@ operational_telemetry:
     delivery listener's binding. An operator may declare
     metricsListener.networkExposure: container-private to bind the wildcard
     address inside a container network it controls. Its route,
-    method, status, problem, and outcome labels come from closed vocabularies,
+    method, status, problem, outcome, and refused-check labels come from closed
+    vocabularies,
     state pressure and cleanup are unlabeled gauges or counters, and neither
     metrics nor request logs carry a request-derived or deployment-specific
     identifier.

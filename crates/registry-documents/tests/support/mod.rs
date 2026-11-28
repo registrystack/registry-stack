@@ -24,6 +24,12 @@ pub const STARTER_PROJECT: &str =
     include_str!("../../../../products/documents/examples/starter/documents.yaml");
 
 pub const DATABASE_STORAGE: &str = "storage:\n  type: database\n";
+pub const TEST_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
 pub const DISABLED_VERIFIER: &str = "contentVerification:\n  type: disabled\n";
 
 /// Where the starter hooks deliver until a suite binds a receiver: a
@@ -42,7 +48,10 @@ pub fn database_url() -> String {
 /// An independent in-memory audit sink for direct worker boundary tests.
 pub fn worker_audit() -> registry_documents::audit::DocumentsAudit {
     registry_documents::audit::DocumentsAudit::new(
-        registry_platform_audit::AuditWriter::from_line_sink(Box::new(Vec::<u8>::new())),
+        registry_platform_audit::AuditWriter::from_line_sink(
+            Box::new(Vec::<u8>::new()),
+            TEST_POSTURE.posture,
+        ),
         registry_platform_audit::AuditProfile::production_from_secret_bytes(
             zeroize::Zeroizing::new(b"documents-canary-audit-key-not-a-secret".to_vec()),
         )
@@ -66,6 +75,8 @@ pub struct Deployment {
     erasure: &'static str,
     extra: String,
     hooks_url: String,
+    allowed_clients: String,
+    jwks_source: String,
 }
 
 impl Deployment {
@@ -122,6 +133,10 @@ impl Deployment {
             erasure: "active",
             extra: String::new(),
             hooks_url: UNREACHABLE_HOOKS_URL.to_owned(),
+            allowed_clients:
+                "[civil-registry-app, citizen-portal, case-portal, partner-portal, partner-service]"
+                    .to_owned(),
+            jwks_source: "type: static\n          documentRef: secret:file/jwks.json".to_owned(),
         };
         deployment.secret("runtime-database-url", runtime_url.unwrap_or(&scoped_url));
         deployment.secret("migration-database-url", &scoped_url);
@@ -180,6 +195,27 @@ impl Deployment {
         self.write_runtime();
     }
 
+    /// Write `allowedClients: from-package`, so the runtime admits exactly the
+    /// requester clients the package names and the file lists none.
+    pub fn admit_package_clients(&mut self) {
+        self.allowed_clients = "from-package".to_owned();
+        self.write_runtime();
+    }
+
+    /// Write the clients the runtime admits as the flow list `clients`, such
+    /// as `[civil-registry-app]`.
+    pub fn admit_clients(&mut self, clients: &str) {
+        self.allowed_clients = clients.to_owned();
+        self.write_runtime();
+    }
+
+    /// Name the issuer's key set by `uri` in place of the static key set, so a
+    /// refusal to verify can be driven by a key source that does not answer.
+    pub fn fetch_keys_from(&mut self, uri: &str) {
+        self.jwks_source = format!("type: uri\n          uri: {uri}");
+        self.write_runtime();
+    }
+
     /// Append `block`, top-level runtime keys, to the runtime document.
     pub fn configure(&mut self, block: &str) {
         self.extra = block.to_owned();
@@ -197,7 +233,7 @@ package:
   root: {package}
 listener:
   bind: 127.0.0.1:0
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
 secretProviders:
   file:
@@ -208,13 +244,14 @@ database:
   testOnlyPlaintext: true
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:documents
-    scopeClaim: scope
-    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal, partner-service]
-    jwksSource:
-      type: static
-      documentRef: secret:file/jwks.json
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:documents
+        scopeClaim: scope
+        allowedClients: {allowed_clients}
+        jwksSource:
+          {jwks_source}
 audit:
   destination: file
   path: {audit}
@@ -237,6 +274,8 @@ destinations:
             erasure = self.erasure,
             extra = self.extra,
             hooks_url = self.hooks_url,
+            allowed_clients = self.allowed_clients,
+            jwks_source = self.jwks_source,
         );
         std::fs::write(&self.runtime, document).unwrap();
     }
@@ -244,8 +283,11 @@ destinations:
     /// Apply the schema and activate the package over the migration
     /// credential, as `documentsctl apply` does.
     pub async fn migrate(&self) {
-        let config = registry_documents::config::RuntimeConfig::load(&self.runtime)
-            .expect("the test runtime document loads");
+        let config = registry_documents::config::RuntimeConfig::load_with_posture(
+            &self.runtime,
+            TEST_POSTURE,
+        )
+        .expect("the test runtime document loads");
         registry_documents::runtime::apply_activation(
             &config,
             &registry_documents::activation::ApplyRequest::default(),

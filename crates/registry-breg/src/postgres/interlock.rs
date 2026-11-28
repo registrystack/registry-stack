@@ -6,7 +6,6 @@ use std::time::Duration;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
-#[cfg(feature = "postgres-test")]
 use tokio_postgres::NoTls;
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
@@ -90,6 +89,7 @@ pub(crate) struct MaintenanceTransition<'a> {
 /// under the exclusive apply lock.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MaintenanceSnapshot {
+    pub posture: registry_platform_config::Posture,
     pub identity: ExpectedRegistryIdentity,
     pub maintenance_status: String,
     pub maintenance_target_package_digest: Option<String>,
@@ -239,9 +239,13 @@ struct ReviewedChunkExecutionRequest<'a> {
 /// recomputed blind index, each absent when the row carries no value.
 type FieldEncryptionSeal = (Option<Vec<u8>>, Option<Vec<u8>>);
 
-/// Stable Registry-scoped PostgreSQL advisory lock key.
+/// Stable Registry-scoped PostgreSQL advisory lock key and the posture
+/// expected by transactions that use it to open the active Registry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegistryLockKey(i64);
+pub struct RegistryLockKey {
+    key: i64,
+    posture: registry_platform_config::Posture,
+}
 
 impl RegistryLockKey {
     pub fn derive(registry_id: &str) -> Result<Self> {
@@ -253,11 +257,24 @@ impl RegistryLockKey {
         let digest = Sha256::digest([b"breg/advisory-lock/v1/", registry_id.as_bytes()].concat());
         let mut bytes = [0_u8; 8];
         bytes.copy_from_slice(&digest[..8]);
-        Ok(Self(i64::from_be_bytes(bytes)))
+        Ok(Self {
+            key: i64::from_be_bytes(bytes),
+            posture: registry_platform_config::Posture::Production,
+        })
+    }
+
+    /// Attach the process posture without changing the PostgreSQL lock key.
+    #[must_use]
+    pub fn for_posture(self, posture: registry_platform_config::Posture) -> Self {
+        Self { posture, ..self }
     }
 
     pub fn get(self) -> i64 {
-        self.0
+        self.key
+    }
+
+    pub(crate) fn posture(self) -> registry_platform_config::Posture {
+        self.posture
     }
 }
 
@@ -2461,9 +2478,27 @@ impl DedicatedApplyConnection {
         in_flight_activation(&self.client, package_digest).await
     }
 
-    /// The role mode and runtime role the ledger records for the active
-    /// activation. A database whose active activation has no applied ledger
-    /// row answers none.
+    /// Read the active posture under the exclusive activation lock.
+    pub(crate) async fn active_activation_posture(
+        &mut self,
+    ) -> Result<Option<registry_platform_config::Posture>> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        let row = self
+            .client
+            .query_opt(
+                "SELECT coalesce(to_jsonb(m) ->> 'posture', 'production')
+             FROM registry_internal.registry_state s
+             JOIN registry_internal.registry_migrations m
+               ON m.activation_id = s.active_activation_id
+             WHERE s.singleton",
+                &[],
+            )
+            .await?;
+        row.map(|row| super::catalog::recorded_posture(row.try_get(0)?))
+            .transpose()
+    }
+
+    /// The roles of the active applied ledger row, when present.
     pub(crate) async fn active_activation_roles(&mut self) -> Result<Option<(String, String)>> {
         ensure_verified_package_session(self.locked, self.verified_migration_role)?;
         let row = self
@@ -2490,7 +2525,8 @@ impl DedicatedApplyConnection {
             .query_opt(
                 "SELECT package_id, database_id, active_package_digest,
                         active_activation_id::text, schema_fingerprint,
-                        maintenance_status, maintenance_target_package_digest
+                        maintenance_status, maintenance_target_package_digest,
+                        coalesce(to_jsonb(registry_state) ->> 'posture', 'production')
                  FROM registry_internal.registry_state
                  WHERE singleton",
                 &[],
@@ -2519,6 +2555,7 @@ impl DedicatedApplyConnection {
             },
             maintenance_status: row.try_get(5)?,
             maintenance_target_package_digest: row.try_get(6)?,
+            posture: super::catalog::recorded_posture(row.try_get(7)?)?,
         })
     }
 
@@ -2739,6 +2776,7 @@ async fn activate_verified_package_in(
     if current.is_some() {
         verify_complete_history_coverage(transaction).await?;
     }
+    super::catalog::ensure_activation_posture_columns(transaction).await?;
     record_applied(transaction, ledger).await?;
     // A registry that has never recorded a claim, as one upgraded from a
     // release before the claim, is claimed by the activation that runs in
@@ -2753,6 +2791,7 @@ async fn activate_verified_package_in(
                  SET active_package_digest = $1,
                      active_activation_id = $2,
                      schema_fingerprint = $3,
+                     posture = $9,
                      maintenance_status = 'ready',
                      maintenance_target_package_digest = NULL,
                      updated_at = transaction_timestamp()
@@ -2773,6 +2812,7 @@ async fn activate_verified_package_in(
                     &current.package_digest,
                     &current.activation_uuid()?,
                     &current.schema_fingerprint,
+                    &ledger.posture.as_str(),
                 ],
             )
             .await?
@@ -2942,13 +2982,14 @@ async fn begin_initial_in(
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
     install_registry_state_schema(transaction, runtime_role).await?;
+    super::catalog::ensure_activation_posture_columns(transaction).await?;
     let changed = transaction
         .execute(
             "INSERT INTO registry_internal.registry_state (
                  singleton, package_id, database_id, active_package_digest,
                  active_activation_id, schema_fingerprint,
-                 maintenance_status, maintenance_target_package_digest
-             ) VALUES (true, $1, $2, $3, $4, $5, 'applying', $3)
+                 maintenance_status, maintenance_target_package_digest, posture
+             ) VALUES (true, $1, $2, $3, $4, $5, 'applying', $3, $6)
              ON CONFLICT (singleton) DO NOTHING",
             &[
                 &target.package_id,
@@ -2956,6 +2997,7 @@ async fn begin_initial_in(
                 &target.package_digest,
                 &target.activation_uuid()?,
                 &target.schema_fingerprint,
+                &ledger.posture.as_str(),
             ],
         )
         .await?;
@@ -3088,6 +3130,7 @@ async fn begin_successor_in(
     verify_complete_history_coverage(transaction).await?;
     verify_retained_hook_delivery_bindings(transaction, event_destination_compatibility_inventory)
         .await?;
+    super::catalog::ensure_activation_posture_columns(transaction).await?;
     let fresh = transaction
         .query_opt(
             "SELECT 1
@@ -4788,6 +4831,7 @@ pub(crate) struct RecordedActivationStatus {
 /// backup references, or operator reference hash.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RecordedLedgerEntry {
+    pub posture: registry_platform_config::Posture,
     pub activation_id: String,
     pub apply_order: i64,
     pub package_digest: String,
@@ -4863,7 +4907,8 @@ async fn read_activation_status_in(
         .query_opt(
             "SELECT package_id, database_id, active_package_digest,
                     active_activation_id::text, schema_fingerprint,
-                    maintenance_status, maintenance_target_package_digest
+                    maintenance_status, maintenance_target_package_digest,
+                    coalesce(to_jsonb(registry_state) ->> 'posture', 'production')
              FROM registry_internal.registry_state
              WHERE singleton",
             &[],
@@ -4882,6 +4927,7 @@ async fn read_activation_status_in(
         },
         maintenance_status: row.try_get(5)?,
         maintenance_target_package_digest: row.try_get(6)?,
+        posture: super::catalog::recorded_posture(row.try_get(7)?)?,
     };
     let rows = transaction
         .query(
@@ -4890,8 +4936,9 @@ async fn read_activation_status_in(
                     migration_kind, outcome, role_mode,
                     to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
                     to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-                    to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
-             FROM registry_internal.registry_migrations
+                    to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                    coalesce(to_jsonb(m) ->> 'posture', 'production')
+             FROM registry_internal.registry_migrations m
              ORDER BY apply_order",
             &[],
         )
@@ -4904,6 +4951,7 @@ async fn read_activation_status_in(
                 return Err(PostgresKernelError::RegistryUnavailable);
             }
             Ok(RecordedLedgerEntry {
+                posture: super::catalog::recorded_posture(row.try_get(12)?)?,
                 activation_id: row.try_get(0)?,
                 apply_order: row.try_get(1)?,
                 package_digest: row.try_get(2)?,
@@ -4934,8 +4982,7 @@ async fn connect_dedicated(config: &ConnectionConfig) -> Result<(Client, JoinHan
             });
             Ok((client, task))
         }
-        #[cfg(feature = "postgres-test")]
-        ConnectionTls::TestOnlyPlaintext => {
+        ConnectionTls::Plaintext => {
             let (client, connection) = config.postgres().connect(NoTls).await?;
             let task = tokio::spawn(async move {
                 let _ = connection.await;

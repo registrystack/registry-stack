@@ -3,7 +3,7 @@
 # under the name `docker`. It appends each invocation's arguments, one
 # invocation per line, to argv.log in its state directory and answers the
 # verbs a managed run uses: version, image inspect, pull, run, port, exec,
-# cp, ps and rm.
+# cp, ps, rm and volume.
 #
 # The state directory is $FAKE_DOCKER_STATE, else a fake-docker-state
 # directory beside the invoked path. Without either it answers as a Docker
@@ -11,6 +11,7 @@
 #
 # Files a test may place in the state directory:
 #   port-answer  the exact `docker port` answer (default 127.0.0.1:5432)
+#   replace-volume-on-run  simulate Docker creating an unlabelled mount
 #   never-ready  pg_isready never succeeds
 #
 # Files it leaves for a test to read:
@@ -30,7 +31,7 @@ if [[ -z "$state" ]]; then
 	printf 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n' >&2
 	exit 1
 fi
-mkdir -p "$state/containers" "$state/copied"
+mkdir -p "$state/containers" "$state/copied" "$state/volumes"
 printf '%s\n' "$*" >>"$state/argv.log"
 
 verb="${1:-}"
@@ -38,6 +39,14 @@ if [[ $# -gt 0 ]]; then
 	shift
 fi
 case "$verb" in
+info)
+	if [[ -f "$state/daemon-id" ]]; then
+		cat "$state/daemon-id"
+	else
+		printf 'fixture-daemon
+'
+	fi
+	;;
 version)
 	printf '27.0.0\n'
 	;;
@@ -53,6 +62,31 @@ image)
 pull)
 	printf '%s\n' "${*: -1}" >>"$state/pulled"
 	;;
+volume)
+    case "$1" in
+    create)
+        volume="${*: -1}"
+        if [[ ! -f "$state/volumes/$volume" ]]; then
+            printf '%s\n' "$3" "$5" >"$state/volumes/$volume"
+        fi
+        printf '%s\n' "$volume"
+        ;;
+    ls)
+        filter="${*: -1}"
+        for record in "$state/volumes"/*; do
+            if [[ -f "$record" && "$(head -n 1 "$record")" == "${filter#label=}" ]]; then
+                basename "$record"
+            fi
+        done
+        ;;
+    inspect)
+        tail -n 1 "$state/volumes/${*: -1}" | cut -d= -f2-
+        ;;
+    rm)
+        rm "$state/volumes/$2"
+        ;;
+    esac
+    ;;
 run)
 	label=""
 	env_file=""
@@ -64,6 +98,12 @@ run)
 			;;
 		--env-file)
 			env_file="$2"
+			shift 2
+			;;
+		-v)
+			if [[ -f "$state/replace-volume-on-run" ]]; then
+				: >"$state/volumes/${2%%:*}"
+			fi
 			shift 2
 			;;
 		--name | --publish | --platform)
@@ -116,7 +156,11 @@ exec)
 		if [[ "$script" == *"SHOW hba_file"* ]]; then
 			printf '/var/lib/postgresql/18/docker/pg_hba.conf\n'
 		elif [[ "$script" == *"SHOW ssl"* ]]; then
-			printf 'on\n'
+			cat "$state/tls"
+		elif [[ "$script" == *"SET ssl = 'off'"* ]]; then
+			printf 'off\n' >"$state/tls"
+		elif [[ "$script" == *"SET ssl = 'on'"* ]]; then
+			printf 'on\n' >"$state/tls"
 		fi
 		;;
 	esac
@@ -139,6 +183,10 @@ ps)
 			;;
 		esac
 	done
+	if [[ "$filter" == volume=* && -f "$state/volume-holder" ]]; then
+		cat "$state/volume-holder"
+		exit 0
+	fi
 	for record in "$state/containers"/*; do
 		if [[ -f "$record" && "$(cat "$record")" == "$filter" ]]; then
 			basename "$record"

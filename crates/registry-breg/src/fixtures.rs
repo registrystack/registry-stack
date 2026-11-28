@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, Method, Request, Response, StatusCode};
 use axum::Router;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httpsec::{response_trace_id, TraceId};
-use registry_platform_oidc::{JwksFetcher, TokenVerifier};
+use registry_platform_oidc::JwksFetcher;
 use registry_platform_yaml::{
     shape_union, tagged_union, ApiVersion, Diagnostic, EnvelopeRule, Expect, FormatSpec, Node,
     RemovedKey, Report, RetiredApiVersion, Severity, Source, UniqueList,
@@ -36,7 +36,7 @@ use proposals::ProposalJourneyOperation;
 
 use crate::api::{HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture};
 use crate::api::{VerifiedClaimValue, VerifiedRequestClaims};
-use crate::auth::RegistryAuthenticator;
+use crate::auth::{AuthenticatorIssuer, RegistryAuthenticator};
 use crate::compiler::{compile_project_with_assets, module_digest_with_assets, CompileProfile};
 use crate::contract::{parse_module_yaml, parse_project_yaml, ModuleAssetSource};
 use crate::contract::{AccessProfileSource, ConstraintSource, LookupValueOrigin, Operation};
@@ -62,7 +62,7 @@ use crate::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
     PreparedSchemaTestCatalogVerifier, PreparedSchemaTestDatabase, RuntimePool,
 };
-use crate::runtime_config::RuntimeConfig;
+use crate::runtime_config::{RuntimeConfig, RuntimeConfigError};
 #[cfg(feature = "postgres-test")]
 use crate::startup::PreparedServer;
 
@@ -153,6 +153,7 @@ pub enum SchemaTestRuntimeSetupError {
     EventDestinations(EventDestinationActivationError),
     Evidence,
     ReviewAuthorities,
+    ReviewAuthorityKey(String),
     WasmExecution,
 }
 
@@ -169,6 +170,7 @@ impl fmt::Display for SchemaTestRuntimeSetupError {
             Self::ReviewAuthorities => {
                 formatter.write_str("schema-test review authority activation failed")
             }
+            Self::ReviewAuthorityKey(message) => formatter.write_str(message),
             Self::WasmExecution => formatter.write_str("schema-test WASM execution setup failed"),
         }
     }
@@ -380,7 +382,7 @@ impl fmt::Display for FixtureError {
             Self::AuthorityWideningRefused => "the fixture authority reference was refused",
             Self::RequestConstructionRefused => "the fixture request could not be constructed",
             Self::AuthenticationActorKindMissing => {
-                "the fixture credential is missing the configured actor-kind claim"
+                "the fixture credential grants no scope and no actor kind is declared for its issuer or client"
             }
             Self::AuthenticationCredentialRefused => {
                 "the fixture credential failed token verification; check its signing key, signature, issuer, audience, validity period, and client"
@@ -1106,6 +1108,9 @@ struct ValidatedStep {
 #[derive(Clone, Default)]
 struct FixtureProblemBindings {
     refusal_label: Option<String>,
+    /// The `(reason, label)` pairs of the Action's guards, so a refusal may
+    /// carry a guard's authored label as its `detail`.
+    guard_labels: BTreeSet<(String, String)>,
     refusal_field_paths: BTreeSet<String>,
     request_field_paths: BTreeSet<String>,
     /// A record step's refusal may name one closed record location instead
@@ -3034,6 +3039,15 @@ fn compile_problem_bindings(
             }
         }
     }
+    if expectation.problem_code.as_deref() == Some("action.guard_failed") {
+        if let Some(action) = action {
+            bindings.guard_labels = action
+                .requires
+                .iter()
+                .filter_map(|guard| Some((guard.reason.clone()?, guard.label.clone()?)))
+                .collect();
+        }
+    }
     if matches!(
         expectation.problem_code.as_deref(),
         Some("action.refused" | "action.handler_failed" | "action.evidence_failed")
@@ -3273,6 +3287,7 @@ fn observed_condition_if_match(
 pub struct PostgresFixtureTestRunner {
     pool: RuntimePool,
     app: Router,
+    posture: registry_platform_config::Posture,
     bearer_tokens: Vec<String>,
     bearer_index: usize,
     suite: ValidatedFixtureJourneys,
@@ -3292,7 +3307,7 @@ impl PostgresFixtureTestRunner {
         prepared: &PreparedServer,
         bearer_tokens: Vec<String>,
     ) -> Result<Self, FixtureError> {
-        let (app, pool) = prepared
+        let (app, pool, posture) = prepared
             .fixture_runtime()
             .ok_or(FixtureError::ExecutionRefused)?;
         let step_count = suite
@@ -3318,6 +3333,7 @@ impl PostgresFixtureTestRunner {
         Ok(Self {
             pool,
             app,
+            posture,
             bearer_tokens,
             bearer_index: 0,
             suite: suite.clone(),
@@ -3396,9 +3412,15 @@ impl PostgresFixtureTestRunner {
                 }),
             );
         }
-        accept_response(&step, response, &mut self.observations, Some(&self.pool))
-            .await
-            .map_err(|error| self.current_step_failure(error))?;
+        accept_response(
+            &step,
+            response,
+            &mut self.observations,
+            Some(&self.pool),
+            self.posture == registry_platform_config::Posture::Development,
+        )
+        .await
+        .map_err(|error| self.current_step_failure(error))?;
         self.bearer_index += 1;
         self.step_index += 1;
         let journey = self
@@ -3597,12 +3619,11 @@ pub async fn execute_schema_test(
     suite: &ValidatedFixtureJourneys,
     credentials: SchemaTestCredentialBindings,
 ) -> Result<SchemaTestReceipt, FixtureError> {
-    let key_source = config
-        .oidc_key_source()
+    let issuers = config
+        .authenticator_issuers()
         .await
         .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?;
-    execute_schema_test_with_key_source(database, config, package, suite, credentials, key_source)
-        .await
+    execute_schema_test_with_issuers(database, config, package, suite, credentials, issuers).await
 }
 
 #[cfg(feature = "postgres-test")]
@@ -3615,17 +3636,22 @@ pub async fn execute_schema_test_with_key_source_for_test(
     credentials: SchemaTestCredentialBindings,
     key_source: Arc<JwksFetcher>,
 ) -> Result<SchemaTestReceipt, FixtureError> {
-    execute_schema_test_with_key_source(database, config, package, suite, credentials, key_source)
-        .await
+    let issuers = config
+        .authentication()
+        .oidc()
+        .issuers()
+        .map(|entry| entry.authenticator_issuer(Arc::clone(&key_source)))
+        .collect();
+    execute_schema_test_with_issuers(database, config, package, suite, credentials, issuers).await
 }
 
-async fn execute_schema_test_with_key_source(
+async fn execute_schema_test_with_issuers(
     database: PreparedSchemaTestDatabase,
     config: &RuntimeConfig,
     package: &PreparedPackage,
     suite: &ValidatedFixtureJourneys,
     credentials: SchemaTestCredentialBindings,
-    key_source: Arc<JwksFetcher>,
+    issuers: Vec<AuthenticatorIssuer>,
 ) -> Result<SchemaTestReceipt, FixtureError> {
     // Credential coverage and mode are pure preflight. Keep this before even
     // reading candidate database facts so malformed inputs cannot trigger I/O.
@@ -3634,14 +3660,8 @@ async fn execute_schema_test_with_key_source(
     let initial_facts = database_execution_facts(&pool).await?;
     let (candidate, compiled) =
         validate_prepared_schema_test_candidate(package, &initial_facts, suite)?;
-    let mut runtime = SchemaTestRuntime::new(
-        database,
-        config,
-        compiled,
-        key_source,
-        initial_facts.clone(),
-    )
-    .await?;
+    let mut runtime =
+        SchemaTestRuntime::new(database, config, compiled, issuers, initial_facts.clone()).await?;
 
     let mut bearer_index = 0usize;
     let mut observations = BTreeMap::new();
@@ -3684,9 +3704,15 @@ async fn execute_schema_test_with_key_source(
                     problem_detail,
                 }));
             }
-            accept_response(step, response, &mut observations, Some(&runtime.pool))
-                .await
-                .map_err(step_failure)?;
+            accept_response(
+                step,
+                response,
+                &mut observations,
+                Some(&runtime.pool),
+                false,
+            )
+            .await
+            .map_err(step_failure)?;
             bearer_index += 1;
         }
         observations.clear();
@@ -3747,7 +3773,6 @@ struct SchemaTestRuntime {
     pool: RuntimePool,
     initial_facts: SchemaTestExecutionFacts,
     authenticator: Arc<RegistryAuthenticator>,
-    verifier: TokenVerifier,
     readiness: Arc<SchemaTestReadiness>,
     registry: Arc<CompiledRegistry>,
     package_revision: String,
@@ -3762,13 +3787,18 @@ impl SchemaTestRuntime {
         database: PreparedSchemaTestDatabase,
         config: &RuntimeConfig,
         compiled: CompiledRegistry,
-        key_source: Arc<JwksFetcher>,
+        issuers: Vec<AuthenticatorIssuer>,
         initial_facts: SchemaTestExecutionFacts,
     ) -> Result<Self, FixtureError> {
-        key_source
-            .ensure_key_set()
-            .await
-            .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?;
+        let key_sources = issuers
+            .iter()
+            .map(|issuer| Arc::clone(issuer.key_source()))
+            .collect::<Vec<_>>();
+        for key_source in &key_sources {
+            key_source.ensure_key_set().await.map_err(|_| {
+                FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication)
+            })?;
+        }
         let pool = database.pool();
         let registry = Arc::new(compiled);
         // The schema test runs from operator tooling beside the runtime, so it
@@ -3782,28 +3812,45 @@ impl SchemaTestRuntime {
                 .cursor_codec()
                 .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Cursor))?,
         );
-        let event_destinations = Arc::new(config.activate_event_destinations(&registry).map_err(
-            |error| {
-                FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::EventDestinations(error))
-            },
-        )?);
+        // A reviewed submission records its pending authority delivery in the
+        // same transaction, so the rehearsal activates the operator's review
+        // authority bindings exactly as the server does. No review worker runs
+        // here: the rehearsal never contacts the authority.
+        let review_authorities =
+            config
+                .activate_review_authorities(&registry)
+                .map_err(|error| {
+                    FixtureError::RuntimeSetup(match error {
+                        RuntimeConfigError::InvalidDeliveryKey { .. } => {
+                            SchemaTestRuntimeSetupError::ReviewAuthorityKey(error.to_string())
+                        }
+                        _ => SchemaTestRuntimeSetupError::ReviewAuthorities,
+                    })
+                })?;
+        let event_destinations = Arc::new(
+            config
+                .activate_event_destinations_with_review_authorities(
+                    &registry,
+                    review_authorities.as_deref(),
+                )
+                .map_err(|error| {
+                    FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::EventDestinations(
+                        error,
+                    ))
+                })?,
+        );
         let authenticator = Arc::new(
-            RegistryAuthenticator::new(
+            RegistryAuthenticator::with_issuers(
                 &registry,
-                config.authentication().oidc().token_verifier_config(),
-                Arc::clone(&key_source),
+                issuers,
                 config.authentication().authority_claim_config(),
             )
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Authentication))?,
         );
-        let verifier = TokenVerifier::new(
-            config.authentication().oidc().token_verifier_config(),
-            Arc::clone(&key_source),
-        );
         let readiness = Arc::new(SchemaTestReadiness {
             pool: pool.clone(),
             catalog_verifier: database.catalog_verifier(),
-            key_source,
+            key_sources,
         });
         if !readiness.is_ready().await {
             return Err(FixtureError::CandidateBindingRefused);
@@ -3847,13 +3894,6 @@ impl SchemaTestRuntime {
         let evidence = config
             .activate_evidence(&registry)
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::Evidence))?;
-        // A reviewed submission records its pending authority delivery in the
-        // same transaction, so the rehearsal activates the operator's review
-        // authority bindings exactly as the server does. No review worker runs
-        // here: the rehearsal never contacts the authority.
-        let review_authorities = config.activate_review_authorities(&registry).map_err(|_| {
-            FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::ReviewAuthorities)
-        })?;
         #[cfg(feature = "wasm")]
         let wasm_runtime = crate::wasm_runtime::install_configured(*config.wasm_execution())
             .map_err(|_| FixtureError::RuntimeSetup(SchemaTestRuntimeSetupError::WasmExecution))?;
@@ -3898,7 +3938,6 @@ impl SchemaTestRuntime {
             pool,
             initial_facts,
             authenticator,
-            verifier,
             readiness,
             registry,
             package_revision: expected.package_digest,
@@ -3915,8 +3954,8 @@ impl SchemaTestRuntime {
         token: &str,
     ) -> Result<(), FixtureError> {
         let verified = self
-            .verifier
-            .verify(token)
+            .authenticator
+            .verify_token(token)
             .await
             .map_err(fixture_verification_error)?;
         let mapped = self
@@ -4096,16 +4135,16 @@ fn fixture_verification_error(error: registry_platform_oidc::OidcError) -> Fixtu
         | OidcError::InvalidToken
         | OidcError::InvalidTimeClaims
         | OidcError::ClientNotAllowed
-        | OidcError::AssertionIssuerNotAllowed => FixtureError::AuthenticationCredentialRefused,
+        | OidcError::AssertionIssuerNotAllowed
+        | OidcError::ActorKindConflict
+        | OidcError::ActorKindMalformed => FixtureError::AuthenticationCredentialRefused,
+        OidcError::IdentityOnly => FixtureError::AuthenticationActorKindMissing,
         _ => FixtureError::RequestConstructionRefused,
     }
 }
 
 fn fixture_authentication_error(error: crate::auth::AuthenticationError) -> FixtureError {
     match error {
-        crate::auth::AuthenticationError::MissingActorKind => {
-            FixtureError::AuthenticationActorKindMissing
-        }
         crate::auth::AuthenticationError::VerificationRefused => {
             FixtureError::AuthenticationCredentialRefused
         }
@@ -4175,7 +4214,8 @@ fn assert_exact_claims(
 struct SchemaTestReadiness {
     pool: RuntimePool,
     catalog_verifier: PreparedSchemaTestCatalogVerifier,
-    key_source: Arc<JwksFetcher>,
+    /// The key source of every issuer entry.
+    key_sources: Vec<Arc<JwksFetcher>>,
 }
 
 impl SchemaTestReadiness {
@@ -4203,10 +4243,12 @@ impl SchemaTestReadiness {
             .verify()
             .await
             .map_err(|_| FixtureError::CandidateBindingRefused)?;
-        self.key_source
-            .ensure_key_set()
-            .await
-            .map_err(|_| FixtureError::ExecutionRefused)?;
+        for key_source in &self.key_sources {
+            key_source
+                .ensure_key_set()
+                .await
+                .map_err(|_| FixtureError::ExecutionRefused)?;
+        }
         Ok(())
     }
 }
@@ -4565,6 +4607,7 @@ async fn accept_response(
     response: Response<Body>,
     observations: &mut BTreeMap<String, Observation>,
     _pool: Option<&RuntimePool>,
+    allow_development_failed_check: bool,
 ) -> Result<(), FixtureError> {
     let status = response.status();
     let headers = response.headers().clone();
@@ -4572,7 +4615,13 @@ async fn accept_response(
         .await
         .map_err(|_| FixtureError::ResponseTooLarge)?;
     let document = parse_json_strict(&bytes).map_err(|_| FixtureError::ResponseShapeRefused)?;
-    assert_response_with_observations(step, status, &document, observations)?;
+    assert_response_with_observations_for_posture(
+        step,
+        status,
+        &document,
+        observations,
+        allow_development_failed_check,
+    )?;
     if matches!(step.expect.outcome, ExpectedOutcome::Refusal) {
         let header_trace =
             response_trace_id(&headers).map_err(|_| FixtureError::ResponseShapeRefused)?;
@@ -4676,11 +4725,22 @@ fn assert_response(
     assert_response_with_observations(step, status, document, &BTreeMap::new())
 }
 
+#[cfg(test)]
 fn assert_response_with_observations(
     step: &ValidatedStep,
     status: StatusCode,
     document: &Value,
     observations: &BTreeMap<String, Observation>,
+) -> Result<(), FixtureError> {
+    assert_response_with_observations_for_posture(step, status, document, observations, false)
+}
+
+fn assert_response_with_observations_for_posture(
+    step: &ValidatedStep,
+    status: StatusCode,
+    document: &Value,
+    observations: &BTreeMap<String, Observation>,
+    allow_development_failed_check: bool,
 ) -> Result<(), FixtureError> {
     if status.as_u16() != step.expect.status {
         return Err(FixtureError::ExpectationMismatch);
@@ -4723,14 +4783,22 @@ fn assert_response_with_observations(
                 )
             } else if code == "action.guard_failed" && document.get("guardReason").is_some() {
                 keys.push("guardReason");
-                if document
+                let Some(reason) = document
                     .get("guardReason")
                     .and_then(Value::as_str)
-                    .is_none_or(|reason| registry_platform_yaml::LocalId::new(reason).is_err())
-                {
+                    .filter(|reason| registry_platform_yaml::LocalId::new(*reason).is_ok())
+                else {
                     return Err(FixtureError::ResponseShapeRefused);
-                }
-                None
+                };
+                // A guard that authors a label answers with it as the detail.
+                document
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .filter(|detail| {
+                        step.problem_bindings
+                            .guard_labels
+                            .contains(&(reason.to_owned(), (*detail).to_owned()))
+                    })
             } else if let Some((entity, field)) = &step.problem_bindings.pattern_field {
                 keys.extend(["recordType", "fieldId"]);
                 if document.get("recordType").and_then(Value::as_str) != Some(entity.as_str())
@@ -4780,6 +4848,20 @@ fn assert_response_with_observations(
                 {
                     return Err(FixtureError::ExpectationMismatch);
                 }
+            }
+            if allow_development_failed_check && document.get("failedCheck").is_some() {
+                let valid = document
+                    .get("failedCheck")
+                    .and_then(Value::as_str)
+                    .is_some_and(|label| {
+                        registry_platform_authcommon::FailedCheck::ALL
+                            .iter()
+                            .any(|check| check.as_str() == label)
+                    });
+                if !valid {
+                    return Err(FixtureError::ResponseShapeRefused);
+                }
+                keys.push("failedCheck");
             }
             let object = exact_object(document, &keys)?;
             let trace_id = object
@@ -6386,9 +6468,9 @@ mod tests {
     };
 
     #[test]
-    fn fixture_authentication_diagnostics_distinguish_missing_claim_from_refused_credential() {
+    fn fixture_refusals_distinguish_missing_claim_from_refused_credential() {
         assert_eq!(
-            fixture_authentication_error(crate::auth::AuthenticationError::MissingActorKind),
+            fixture_verification_error(registry_platform_oidc::OidcError::IdentityOnly),
             FixtureError::AuthenticationActorKindMissing
         );
         // Every verification refusal that describes the token itself is a
@@ -7310,7 +7392,7 @@ journeys:
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                database_initialization_environment: "local",
+                posture: registry_platform_config::Posture::Development,
             },
         )
         .expect("planner package verifies");
@@ -7429,7 +7511,7 @@ journeys:
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                database_initialization_environment: "local",
+                posture: registry_platform_config::Posture::Development,
             },
         )
         .unwrap();
@@ -8053,9 +8135,54 @@ journeys:
             .expect("problem response builds");
         let mut observations = BTreeMap::new();
         assert_eq!(
-            accept_response(refusal, mismatched_trace, &mut observations, None).await,
+            accept_response(refusal, mismatched_trace, &mut observations, None, false).await,
             Err(FixtureError::ResponseShapeRefused),
             "the fixture executor refuses disagreement between body and header trace IDs"
+        );
+        let development_refusal = json!({
+            "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found",
+            "title": "Not Found",
+            "status": 404,
+            "detail": "The requested resource was not found.",
+            "code": "resource.not_found",
+            "traceId": "11111111111111111111111111111111",
+            "failedCheck": "visibility"
+        });
+        assert_eq!(
+            assert_response(refusal, StatusCode::NOT_FOUND, &development_refusal),
+            Err(FixtureError::ResponseShapeRefused),
+            "production refusal assertions reject development failedCheck"
+        );
+        assert_eq!(
+            assert_response_with_observations_for_posture(
+                refusal,
+                StatusCode::NOT_FOUND,
+                &development_refusal,
+                &BTreeMap::new(),
+                true,
+            ),
+            Ok(()),
+            "development refusal assertions accept a closed FailedCheck label"
+        );
+        let invalid_failed_check = json!({
+            "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found",
+            "title": "Not Found",
+            "status": 404,
+            "detail": "The requested resource was not found.",
+            "code": "resource.not_found",
+            "traceId": "11111111111111111111111111111111",
+            "failedCheck": "not-a-registered-check"
+        });
+        assert_eq!(
+            assert_response_with_observations_for_posture(
+                refusal,
+                StatusCode::NOT_FOUND,
+                &invalid_failed_check,
+                &BTreeMap::new(),
+                true,
+            ),
+            Err(FixtureError::ResponseShapeRefused),
+            "development refusal assertions reject unknown failedCheck labels"
         );
 
         let malformed_list = json!({
@@ -8248,7 +8375,7 @@ journeys:
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                database_initialization_environment: "local",
+                posture: registry_platform_config::Posture::Development,
             },
         )
         .expect("fixture package rederives and verifies");
@@ -8613,6 +8740,59 @@ journeys:
         );
         validate_fixture_journeys(journeys.as_bytes(), &registry)
             .expect("constraint journeys validate")
+    }
+
+    #[test]
+    fn guard_failed_problem_accepts_a_bound_guard_label_as_its_detail() {
+        let suite = row_local_constraint_suite(
+            "jurisdiction, label, note, quantity, valid-from, valid-to",
+            "validFrom: 2, validTo: 1",
+        );
+        let label = "Only an active parent takes a child.";
+        let mut guard_step = suite.journeys[0].steps[0].clone();
+        guard_step.expect.status = 412;
+        guard_step.expect.problem_code = Some("action.guard_failed".to_owned());
+        guard_step
+            .problem_bindings
+            .guard_labels
+            .insert(("parent-inactive".to_owned(), label.to_owned()));
+        let problem = |reason: &str, detail: &str| {
+            json!({
+                "type": crate::problem::type_uri("action.guard_failed"),
+                "title": "Precondition Failed",
+                "status": 412,
+                "detail": detail,
+                "code": "action.guard_failed",
+                "traceId": "11111111111111111111111111111111",
+                "guardReason": reason
+            })
+        };
+        assert_response(
+            &guard_step,
+            StatusCode::PRECONDITION_FAILED,
+            &problem("parent-inactive", label),
+        )
+        .expect("a bound label is the detail of the refusal that names its reason");
+        assert_response(
+            &guard_step,
+            StatusCode::PRECONDITION_FAILED,
+            &problem("parent-inactive", "The action guard was not satisfied."),
+        )
+        .expect("the generic detail stays admitted");
+        for (reason, detail) in [
+            ("other-reason", label),
+            ("parent-inactive", "Some other text."),
+        ] {
+            assert!(
+                assert_response(
+                    &guard_step,
+                    StatusCode::PRECONDITION_FAILED,
+                    &problem(reason, detail),
+                )
+                .is_err(),
+                "a detail that is no bound label for its reason is refused"
+            );
+        }
     }
 
     #[test]

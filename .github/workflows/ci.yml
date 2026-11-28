@@ -71,6 +71,7 @@ jobs:
       breg_contracts_lanes: ${{ steps.filter.outputs.breg_contracts_lanes }}
       casework_postgres: ${{ steps.filter.outputs.casework_postgres }}
       scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}
+      evidence_doctor: ${{ steps.filter.outputs.evidence_doctor }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       evidence_assurance: ${{ steps.filter.outputs.evidence_assurance }}
       evidence_postgres: ${{ steps.filter.outputs.evidence_postgres }}
@@ -86,6 +87,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       docs_archives: ${{ steps.filter.outputs.docs_archives }}
       client_bindings: ${{ steps.filter.outputs.client_bindings }}
+      typescript_clients: ${{ steps.filter.outputs.typescript_clients }}
       release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
       breg_tutorial: ${{ steps.filter.outputs.breg_tutorial }}
@@ -95,6 +97,7 @@ jobs:
       render_tutorial: ${{ steps.filter.outputs.render_tutorial }}
       scheduling_tutorial: ${{ steps.filter.outputs.scheduling_tutorial }}
       breg_evidence_composition: ${{ steps.filter.outputs.breg_evidence_composition }}
+      acceptance_journeys: ${{ steps.filter.outputs.acceptance_journeys }}
       identifiers: ${{ steps.filter.outputs.identifiers }}
     steps:
       - name: Checkout
@@ -122,6 +125,23 @@ jobs:
         uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: "0.11.16"
+
+      # Our signatures are what an independent Standard Webhooks receiver computes.
+      # Platform owns this gate. Remove it when the shared crate stops signing deliveries.
+      - name: Test Standard Webhooks signature vectors
+        run: uv run --no-project --with standardwebhooks==1.3.0 python -m unittest products/platform/scripts/test_standard_webhooks_vectors.py
+
+      # The public Go receiver example verifies the committed vectors, and the
+      # delivery signing page quotes its verifier.
+      # Platform owns this gate. Remove it when the delivery signing page drops the Go receiver example.
+      - name: Install Go for the receiver example
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: 1.27.2
+          cache: false
+
+      - name: Test the Go delivery receiver example
+        run: go -C products/platform/examples/delivery-receiver-go test ./...
 
       - name: Test CI classifier
         run: uv run --no-project --with PyYAML==6.0.2 python .github/scripts/test_ci_changes.py
@@ -155,11 +175,19 @@ jobs:
       - name: Check feature-gated Base Registry Engine tests are selected
         run: python3 .github/scripts/check_breg_gated_tests.py
 
+      - name: Test the README start path
+        run: python3 -I -m unittest discover -s products/platform/scripts -p test_readme_start_path.py
+
       - name: Test platform fuzz runner
         run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_fuzz_smoke.py
 
       - name: Test evidence fuzz runner
         run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/evidence/scripts/test_run_fuzz_smoke.py
+
+      # The acceptance journeys run in the heavy tier; their tables are
+      # checked on every pull request.
+      - name: Test the acceptance journey tables
+        run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/journeys/test_journey_tables.py
 
       - name: Install pinned actionlint
         shell: bash
@@ -300,7 +328,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # --all-features enables the dispatch and activation PostgreSQL tests,
-    # which fail rather than skip without their disposable database.
+    # which fail rather than skip without their disposable database. It also
+    # enables the provisioning suite, which fails rather than skips without a
+    # PostgreSQL 17 superuser with PostGIS over TLS and a server below the
+    # floor signed by a CA it trusts.
     services:
       postgres:
         image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
@@ -315,6 +346,20 @@ jobs:
           --health-retries 5
         ports:
           - 5432/tcp
+      postgis:
+        # The PostgreSQL 17 / PostGIS 3.5.2 image breg-contracts pins.
+        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+        env:
+          POSTGRES_DB: provision
+          POSTGRES_USER: provision
+          POSTGRES_PASSWORD: provision_test
+        options: >-
+          --health-cmd "pg_isready -U provision -d provision"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -322,6 +367,105 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           submodules: false
+
+      # The contracts-journeys lane's TLS script, in setup-only mode, gives
+      # the service a throwaway CA and makes it TLS-only.
+      - name: Serve the provisioning PostGIS service over TLS
+        shell: bash
+        env:
+          SERVICE_CONTAINER_ID: ${{ job.services.postgis.id }}
+          SERVICE_PORT: ${{ job.services.postgis.ports['5432'] }}
+          SERVICE_CA_PEM_PATH: ${{ runner.temp }}/provision-postgres-ca.pem
+        run: |
+          set -euo pipefail
+          BREG_TEST_TLS_SETUP_ONLY=1 \
+            BREG_TEST_TLS_POSTGRES_CONTAINER_ID="${SERVICE_CONTAINER_ID}" \
+            BREG_TEST_TLS_DATABASE_HOST=localhost \
+            BREG_TEST_TLS_DATABASE_URL="postgresql://provision:provision_test@localhost:${SERVICE_PORT}/postgres" \
+            BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL="postgresql://provision:provision_test@127.0.0.1:${SERVICE_PORT}/postgres" \
+            BREG_TEST_TLS_CA_DER_PATH='' \
+            BREG_TEST_TLS_CA_PEM_PATH="${SERVICE_CA_PEM_PATH}" \
+            products/breg/scripts/test-postgres-tls.sh
+
+      # The same PostgreSQL 16 steps as the contracts-journeys lane, which
+      # test_ci_changes.py holds equal.
+      - name: Start PostgreSQL 16 for the provisioning floor test
+        id: provision-postgres-16
+        shell: bash
+        run: |
+          set -euo pipefail
+          # PostgreSQL 16.15, verified 2026-11-27.
+          image='docker.io/library/postgres:16.15@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657'
+          container_name="provision-postgres-16-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container_id="$(
+            docker run --detach \
+              --name "${container_name}" \
+              --label org.registrystack.ci.postgres-service=true \
+              --env POSTGRES_USER=provision \
+              --env POSTGRES_PASSWORD=provision_test \
+              --health-cmd 'pg_isready -U provision -d provision' \
+              --health-interval 10s \
+              --health-timeout 5s \
+              --health-retries 5 \
+              --publish 127.0.0.1::5432 \
+              "${image}"
+          )"
+          printf 'container_id=%s\n' "${container_id}" >> "${GITHUB_OUTPUT}"
+
+          for _ in $(seq 1 30); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")"
+            if [[ "${health}" == healthy ]]; then
+              break
+            fi
+            if [[ "${health}" == unhealthy ]]; then
+              docker logs "${container_id}"
+              exit 1
+            fi
+            sleep 2
+          done
+          if [[ "$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")" != healthy ]]; then
+            docker logs "${container_id}"
+            exit 1
+          fi
+
+          endpoint="$(docker port "${container_id}" 5432/tcp)"
+          port="${endpoint##*:}"
+          [[ "${port}" =~ ^[0-9]+$ ]]
+          printf 'port=%s\n' "${port}" >> "${GITHUB_OUTPUT}"
+
+      - name: Serve PostgreSQL 16 over TLS for the provisioning floor test
+        shell: bash
+        env:
+          OLD_CONTAINER_ID: ${{ steps.provision-postgres-16.outputs.container_id }}
+          OLD_PORT: ${{ steps.provision-postgres-16.outputs.port }}
+          OLD_CA_PEM_PATH: ${{ runner.temp }}/provision-old-postgres-ca.pem
+        run: |
+          set -euo pipefail
+          BREG_TEST_TLS_SETUP_ONLY=1 \
+            BREG_TEST_TLS_POSTGRES_CONTAINER_ID="${OLD_CONTAINER_ID}" \
+            BREG_TEST_TLS_DATABASE_HOST=localhost \
+            BREG_TEST_TLS_DATABASE_URL="postgresql://provision:provision_test@localhost:${OLD_PORT}/postgres" \
+            BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL="postgresql://provision:provision_test@127.0.0.1:${OLD_PORT}/postgres" \
+            BREG_TEST_TLS_CA_DER_PATH='' \
+            BREG_TEST_TLS_CA_PEM_PATH="${OLD_CA_PEM_PATH}" \
+            products/breg/scripts/test-postgres-tls.sh
+
+      # One bundle trusts both servers' throwaway CAs.
+      - name: Bundle the provisioning servers' CAs
+        shell: bash
+        env:
+          SERVICE_CA_PEM_PATH: ${{ runner.temp }}/provision-postgres-ca.pem
+          OLD_CA_PEM_PATH: ${{ runner.temp }}/provision-old-postgres-ca.pem
+          BUNDLE_PATH: ${{ runner.temp }}/provision-postgres-ca-bundle.pem
+        run: |
+          set -euo pipefail
+          for ca in "${SERVICE_CA_PEM_PATH}" "${OLD_CA_PEM_PATH}"; do
+            if [[ ! -s "${ca}" ]]; then
+              echo "::error::the provisioning suite needs the CA file ${ca}"
+              exit 1
+            fi
+          done
+          cat "${SERVICE_CA_PEM_PATH}" "${OLD_CA_PEM_PATH}" > "${BUNDLE_PATH}"
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
@@ -338,6 +482,9 @@ jobs:
         env:
           DISPATCH_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
           ACTIVATION_TEST_DATABASE_URL: postgresql://dispatch:dispatch_test@localhost:${{ job.services.postgres.ports['5432'] }}/dispatch
+          PROVISION_TEST_DATABASE_URL: postgresql://provision:provision_test@localhost:${{ job.services.postgis.ports['5432'] }}/postgres?sslmode=verify-full
+          PROVISION_TEST_DATABASE_CA: ${{ runner.temp }}/provision-postgres-ca-bundle.pem
+          PROVISION_TEST_OLD_DATABASE_URL: postgresql://provision:provision_test@localhost:${{ steps.provision-postgres-16.outputs.port }}/postgres?sslmode=verify-full
         run: >-
           cargo llvm-cov --locked
           -p 'registry-platform-*'
@@ -362,6 +509,21 @@ jobs:
           path: target/platform-coverage/platform.lcov
           if-no-files-found: error
           retention-days: 1
+
+      - name: Stop PostgreSQL 16 for the provisioning floor test
+        if: always() && steps.provision-postgres-16.outputs.container_id != ''
+        env:
+          CONTAINER_ID: ${{ steps.provision-postgres-16.outputs.container_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          label="$(
+            docker inspect \
+              --format '{{ index .Config.Labels "org.registrystack.ci.postgres-service" }}' \
+              "${CONTAINER_ID}"
+          )"
+          [[ "${label}" == true ]]
+          docker rm --force "${CONTAINER_ID}"
 
   platform-coverage-upload:
     name: Upload platform coverage
@@ -418,6 +580,12 @@ jobs:
 
       - name: Enforce the YAML reader boundary
         run: products/platform/scripts/check-yaml-reader-boundary.sh
+
+      - name: Test the cross-origin check
+        run: python3 -m unittest products/platform/scripts/test_check_no_cross_origin.py
+
+      - name: Enforce that no product answers a cross-origin request
+        run: products/platform/scripts/check-no-cross-origin.sh
 
       - name: Test the rstack dependency boundary check
         run: python3 -m unittest products/platform/scripts/test_check_rstack_dependencies.py
@@ -615,6 +783,12 @@ jobs:
         # Coordinator crate is refused wherever it lives.
         run: python3 products/coordinator/scripts/check_dependency_direction.py
 
+      - name: Development runner reach
+        run: python3 products/platform/scripts/check_dev_runner_reach.py
+
+      - name: Development runner reach tests
+        run: python3 -m unittest discover -s products/platform/scripts -p test_dev_runner_reach.py
+
       - name: Cargo deny
         run: cargo deny check
 
@@ -709,12 +883,31 @@ jobs:
         if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-rstack')
         run: cargo build --locked -p registry-bregctl -p registry-caseworkctl -p registry-evidencectl -p registry-evidence --bins
 
+      - name: Build the additional rstack dev hosts
+        if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-rstack')
+        run: |
+          cargo build --locked -p registry-messagingctl -p registry-schedulingctl --bins
+          cargo build --locked -p registry-documentsctl -p registry-coordinator -p registry-adapterctl --bins
+          cargo build --locked -p registry-render -p registry-discoveryctl --bins
+
       - name: Test affected packages
         run: python3 .github/scripts/run_cargo_packages.py test
 
       - name: Test the synthetic authorization server
         if: matrix.name == 'platform' && contains(matrix.packages, 'registry-platform-testing')
         run: cargo test --locked -p registry-platform-testing --features test-authorization-server --test test_authorization_server
+
+      # The corpus test needs token-fixtures, which no platform crate enables,
+      # so the shard's own run skips it.
+      - name: Test the token fixture corpus
+        if: matrix.name == 'platform' && contains(matrix.packages, 'registry-platform-testing')
+        run: cargo test --locked -p registry-platform-testing --features token-fixtures --test token_fixtures
+
+      # The refusal trace id impl and the failedCheck layer sit behind refusal-trace-id, which no
+      # platform crate enables, so the shard's own run skips its test.
+      - name: Test the refusal trace id implementation
+        if: matrix.name == 'platform' && contains(matrix.packages, 'registry-platform-httpsec')
+        run: cargo test --locked -p registry-platform-httpsec --features refusal-trace-id --lib
 
       - name: Check Casework schemas against their generators
         if: matrix.name == 'casework'
@@ -817,6 +1010,38 @@ jobs:
 
       - name: Enforce Evidence configuration reference parity
         run: uv run --no-project --with PyYAML==6.0.2 products/evidence/scripts/check-config-key-paths.sh
+
+  evidence-doctor:
+    name: Evidence runtime doctor
+    needs: changes
+    if: needs.changes.outputs.evidence_doctor == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Verify Evidence doctor preserves diagnostics from the runtime
+        shell: bash
+        env:
+          EVIDENCECTL_BIN: ${{ github.workspace }}/target/debug/evidencectl
+        run: |
+          set -euo pipefail
+          cargo build --locked -p registry-evidencectl --bin evidencectl
+          cargo test --locked -p registry-evidence --test cli -- \
+            --ignored --exact doctor_preserves_real_posture_and_audit_diagnostics_without_opening_a_writer \
+            | tee "${RUNNER_TEMP}/evidence-doctor.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-doctor.log"
 
   evidence-postgres:
     name: Evidence PostgreSQL status ledger and store
@@ -1287,9 +1512,17 @@ jobs:
       - name: Verify messagingctl messages commands
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
-        run: cargo test --locked -p registry-messagingctl --features postgres-test --tests
-      - name: Send one email and one SMS through messagingctl dev
+        # The provisioning journey needs a TLS server and runs in the
+        # contracts-journeys lane.
+        run: >-
+          cargo test --locked -p registry-messagingctl --features postgres-test --tests
+          -- --skip provision_then_apply_then_serve_with_split_roles
+      - name: Build the Messaging development runner
+        run: cargo build --locked -p registry-rstack -p registry-messaging -p registry-messagingctl
+      - name: Send one email and one SMS through rstack dev
         env:
+          RSTACK_BIN: ${{ github.workspace }}/target/debug/rstack
+          MESSAGING_BIN: ${{ github.workspace }}/target/debug/messaging
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: products/messaging/scripts/test-dev.sh
 
@@ -1737,6 +1970,169 @@ jobs:
         if: matrix.lane == 'contracts-journeys'
         run: products/breg/quickstart/run.sh --spatial --smoke
 
+      # The provisioning suite needs a PostgreSQL 17 superuser with PostGIS
+      # over TLS, which this lane's service is once the TLS proof has run, and
+      # a server below the floor signed by a CA the suite also trusts. It
+      # fails, never skips, when one of its variables is missing.
+      - name: Start PostgreSQL 16 for the provisioning floor test
+        id: provision-postgres-16
+        if: matrix.lane == 'contracts-journeys'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # PostgreSQL 16.15, verified 2026-11-27.
+          image='docker.io/library/postgres:16.15@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657'
+          container_name="provision-postgres-16-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container_id="$(
+            docker run --detach \
+              --name "${container_name}" \
+              --label org.registrystack.ci.postgres-service=true \
+              --env POSTGRES_USER=provision \
+              --env POSTGRES_PASSWORD=provision_test \
+              --health-cmd 'pg_isready -U provision -d provision' \
+              --health-interval 10s \
+              --health-timeout 5s \
+              --health-retries 5 \
+              --publish 127.0.0.1::5432 \
+              "${image}"
+          )"
+          printf 'container_id=%s\n' "${container_id}" >> "${GITHUB_OUTPUT}"
+
+          for _ in $(seq 1 30); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")"
+            if [[ "${health}" == healthy ]]; then
+              break
+            fi
+            if [[ "${health}" == unhealthy ]]; then
+              docker logs "${container_id}"
+              exit 1
+            fi
+            sleep 2
+          done
+          if [[ "$(docker inspect --format '{{.State.Health.Status}}' "${container_id}")" != healthy ]]; then
+            docker logs "${container_id}"
+            exit 1
+          fi
+
+          endpoint="$(docker port "${container_id}" 5432/tcp)"
+          port="${endpoint##*:}"
+          [[ "${port}" =~ ^[0-9]+$ ]]
+          printf 'port=%s\n' "${port}" >> "${GITHUB_OUTPUT}"
+
+      # Setup-only mode gives this server its own throwaway CA and makes it
+      # TLS-only, the way the proof above does for the lane's service.
+      - name: Serve PostgreSQL 16 over TLS for the provisioning floor test
+        if: matrix.lane == 'contracts-journeys'
+        shell: bash
+        env:
+          OLD_CONTAINER_ID: ${{ steps.provision-postgres-16.outputs.container_id }}
+          OLD_PORT: ${{ steps.provision-postgres-16.outputs.port }}
+          OLD_CA_PEM_PATH: ${{ runner.temp }}/provision-old-postgres-ca.pem
+        run: |
+          set -euo pipefail
+          BREG_TEST_TLS_SETUP_ONLY=1 \
+            BREG_TEST_TLS_POSTGRES_CONTAINER_ID="${OLD_CONTAINER_ID}" \
+            BREG_TEST_TLS_DATABASE_HOST=localhost \
+            BREG_TEST_TLS_DATABASE_URL="postgresql://provision:provision_test@localhost:${OLD_PORT}/postgres" \
+            BREG_TEST_TLS_HOSTNAME_MISMATCH_DATABASE_URL="postgresql://provision:provision_test@127.0.0.1:${OLD_PORT}/postgres" \
+            BREG_TEST_TLS_CA_DER_PATH='' \
+            BREG_TEST_TLS_CA_PEM_PATH="${OLD_CA_PEM_PATH}" \
+            products/breg/scripts/test-postgres-tls.sh
+
+      - name: Provisioning PostgreSQL suite
+        if: matrix.lane == 'contracts-journeys'
+        shell: bash
+        env:
+          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
+          OLD_PORT: ${{ steps.provision-postgres-16.outputs.port }}
+          OLD_CA_PEM_PATH: ${{ runner.temp }}/provision-old-postgres-ca.pem
+        run: |
+          set -euo pipefail
+          if [[ ! "${DATABASE_PORT}" =~ ^[0-9]+$ || ! "${OLD_PORT}" =~ ^[0-9]+$ ]]; then
+            echo "::error::the provisioning suite needs the port of both PostgreSQL servers"
+            exit 1
+          fi
+          for ca in "${BREG_TEST_TLS_CA_PEM_PATH}" "${OLD_CA_PEM_PATH}"; do
+            if [[ ! -s "${ca}" ]]; then
+              echo "::error::the provisioning suite needs the CA file ${ca}"
+              exit 1
+            fi
+          done
+          # One bundle trusts both servers' throwaway CAs.
+          bundle="${RUNNER_TEMP}/provision-postgres-ca-bundle.pem"
+          cat "${BREG_TEST_TLS_CA_PEM_PATH}" "${OLD_CA_PEM_PATH}" > "${bundle}"
+          export PROVISION_TEST_DATABASE_URL="postgresql://breg:breg_test@localhost:${DATABASE_PORT}/postgres?sslmode=verify-full"
+          export PROVISION_TEST_DATABASE_CA="${bundle}"
+          export PROVISION_TEST_OLD_DATABASE_URL="postgresql://provision:provision_test@localhost:${OLD_PORT}/postgres?sslmode=verify-full"
+          # With cli on, the library's command tests also run against the
+          # first server. No rust-tests shard enables cli.
+          cargo test --locked -p registry-platform-provision --features postgres-test,cli --lib \
+            | tee "${RUNNER_TEMP}/provision-postgres-lib.log"
+          cargo test --locked -p registry-platform-provision --features postgres-test,cli --test postgres \
+            | tee "${RUNNER_TEMP}/provision-postgres-suite.log"
+          # A run that selected no test still exits 0, so each target needs a
+          # pass count and no ignored test.
+          for target in lib suite; do
+            grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored' "${RUNNER_TEMP}/provision-postgres-${target}.log" || { echo "::error::expected the provisioning PostgreSQL ${target} tests to pass with no test ignored"; exit 1; }
+          done
+
+      - name: Product provisioning PostgreSQL journeys
+        if: matrix.lane == 'contracts-journeys'
+        shell: bash
+        env:
+          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${DATABASE_PORT}" =~ ^[0-9]+$ ]]; then
+            echo "::error::the provisioning journeys need the port of the TLS PostgreSQL service"
+            exit 1
+          fi
+          if [[ ! -s "${BREG_TEST_TLS_CA_PEM_PATH}" ]]; then
+            echo "::error::the provisioning journeys need the CA file ${BREG_TEST_TLS_CA_PEM_PATH}"
+            exit 1
+          fi
+          # Each journey provisions its product's database and roles on the
+          # TLS-only service, applies as the owner role and serves as the
+          # runtime role. The Adapter applies inside `adapter serve`.
+          export PROVISION_TEST_DATABASE_URL="postgresql://breg:breg_test@localhost:${DATABASE_PORT}/postgres?sslmode=verify-full"
+          export PROVISION_TEST_DATABASE_CA="${BREG_TEST_TLS_CA_PEM_PATH}"
+          cargo test --locked -p registry-adapterctl --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-adapterctl.log"
+          cargo test --locked -p registry-bregctl --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-bregctl.log"
+          cargo test --locked -p registry-caseworkctl --features postgres-test --test provision \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-caseworkctl.log"
+          cargo test --locked -p registry-coordinator --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-coordinator.log"
+          cargo test --locked -p registry-documentsctl --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-documentsctl.log"
+          cargo test --locked -p registry-messagingctl --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-messagingctl.log"
+          cargo test --locked -p registry-schedulingctl --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-schedulingctl.log"
+          # A run that selected no test still exits 0, so every log needs a
+          # pass count, no ignored test, and the journey's own line.
+          for package in registry-adapterctl registry-bregctl registry-caseworkctl registry-coordinator registry-documentsctl registry-messagingctl registry-schedulingctl; do
+            log="${RUNNER_TEMP}/provision-journey-${package}.log"
+            grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored' "${log}" || { echo "::error::expected the ${package} provisioning journey tests to pass with no test ignored"; exit 1; }
+            grep -Eq '^test ([a-z_]+::)?provision_then_(apply_then_)?serve_with_[a-z_]+ \.\.\. ok$' "${log}" || { echo "::error::expected the ${package} provisioning journey to run and pass"; exit 1; }
+          done
+
+      - name: Stop PostgreSQL 16 for the provisioning floor test
+        if: always() && matrix.lane == 'contracts-journeys' && steps.provision-postgres-16.outputs.container_id != ''
+        env:
+          CONTAINER_ID: ${{ steps.provision-postgres-16.outputs.container_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          label="$(
+            docker inspect \
+              --format '{{ index .Config.Labels "org.registrystack.ci.postgres-service" }}' \
+              "${CONTAINER_ID}"
+          )"
+          [[ "${label}" == true ]]
+          docker rm --force "${CONTAINER_ID}"
+
   breg-postgres-18:
     name: Base Registry Engine PostgreSQL 18 portability
     needs: changes
@@ -2059,6 +2455,7 @@ jobs:
       - rust-tests
       - discovery-contracts
       - evidence-contracts
+      - evidence-doctor
       - evidence-postgres
       - breg-contracts
       - breg-postgres-18
@@ -2143,6 +2540,9 @@ jobs:
 
       - name: Test supporting release image packaging
         run: python3 -m unittest release/scripts/test_release_supporting_images.py
+
+      - name: Test release image build command
+        run: python3 -m unittest release/scripts/test_build_release_image.py
 
       - name: Test release candidate manifest and promotion verifier
         run: python3 -m unittest release/scripts/test_release_candidate.py
@@ -2623,27 +3023,31 @@ jobs:
             -p registry-breg --features registry-breg/runtime \
             -p registry-bregctl -p registry-rstack --bins
 
-      - name: Verify native retained development lifecycle
+      - name: Verify retained BReg development lifecycle
         if: matrix.shard == '2/2'
         shell: bash
         run: |
           set -euo pipefail
-          # Each retained lifecycle owns PostgreSQL, ThunderID and BREG.
-          # Run complete sessions serially on the bounded CI runner.
-          cargo test --locked -p registry-bregctl \
-            --test dev_lifecycle -- --ignored --test-threads=1
+          python3 products/platform/scripts/test-rstack-dev.py \
+            --bin-dir "${GITHUB_WORKSPACE}/target/debug" \
+            --scratch-parent "${RUNNER_TEMP}" \
+            --restart breg
 
       - name: Verify retained example recovery after process exit
         if: matrix.shard == '2/2'
+        env:
+          BREG_EXAMPLE_BIN_DIR: ${{ github.workspace }}/target/debug
         # An inexact name filter that selects nothing still exits 0, so the
         # step names each test exactly and fails unless it reports one pass.
         shell: bash
         run: |
           set -euo pipefail
           for test in \
-            dev::examples::tests::native_create_recovers_after_process_exit_without_duplicate_records \
-            dev::examples::tests::native_invoke_recovers_original_conditions_after_restart; do
-            cargo test --locked -p registry-bregctl --lib \
+            examples::recovery_tests::native_create_recovers_after_process_exit_without_duplicate_records \
+            examples::recovery_tests::native_invoke_recovers_original_conditions_after_restart \
+            examples::recovery_tests::native_proposal_recovers_start_submit_and_apply_after_restart \
+            examples::recovery_tests::live_run_examples_replay_the_same_attempt; do
+            cargo test --locked --manifest-path "${GITHUB_WORKSPACE}/Cargo.toml" -p registry-bregctl --lib \
               "$test" -- --ignored --exact \
               | tee "${RUNNER_TEMP}/breg-example-recovery-${test}.log"
             grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-example-recovery-${test}.log" || { echo "::error::expected exactly one passing test for ${test}"; exit 1; }
@@ -3083,6 +3487,103 @@ jobs:
             --evidencectl "$GITHUB_WORKSPACE/target/debug/evidencectl" \
             --evidence "$GITHUB_WORKSPACE/target/debug/evidence"
 
+  acceptance-journeys:
+    # The first-hour journeys of products/platform/journeys/ in ratchet mode:
+    # a leg passes when every product's outcome equals expected-failures.yaml,
+    # and --strict fails it when a listed failure no longer fails, so the
+    # change that fixes a cell deletes its row. Owner: platform. A leg that
+    # passes this 40 minute limit, or fails for harness reasons more than
+    # twice in a week, moves to the nightly sweep and ci:full only. No step
+    # retries.
+    name: Acceptance journeys (${{ matrix.title }})
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.acceptance_journeys == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: own-provider
+            title: own-provider and promote
+          - leg: rstack-dev
+            title: rstack dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The digest products/platform/journeys/products.yaml pins. No other
+      # job pulls from quay.io, so a registry outage fails here, before any
+      # product step runs.
+      - name: Pull the Keycloak issuer image
+        if: matrix.leg == 'own-provider'
+        run: docker pull quay.io/keycloak/keycloak:26.7.3@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
+
+      # Every package and feature in the journeys' product column, and rstack.
+      - name: Build the journey binaries
+        run: >-
+          cargo build --locked
+          -p registry-adapter -p registry-adapter-job -p registry-adapterctl
+          -p registry-breg -p registry-breg-mcp -p registry-breg-review -p registry-bregctl
+          -p registry-casework -p registry-caseworkctl
+          -p registry-coordinator
+          -p registry-discovery -p registry-discoveryctl
+          -p registry-documents -p registry-documentsctl
+          -p registry-evidence -p registry-evidence-oid4vci -p registry-evidence-oid4vp -p registry-evidencectl
+          -p registry-mcp
+          -p registry-messaging -p registry-messagingctl
+          -p registry-render
+          -p registry-rstack
+          -p registry-scheduling -p registry-schedulingctl
+          --features registry-breg/runtime,registry-discovery/server
+          --bins
+
+      - name: Run the own-provider journey
+        if: matrix.leg == 'own-provider'
+        run: >-
+          products/platform/journeys/own-provider.sh --all
+          --bin-dir "${GITHUB_WORKSPACE}/target/debug"
+          --expected products/platform/journeys/expected-failures.yaml --strict
+          --keep
+          --out "${RUNNER_TEMP}/journeys/own-provider"
+
+      # Promote takes over the containers and run directory the own-provider
+      # journey kept, and its cleanup removes them.
+      - name: Run the promote journey
+        if: matrix.leg == 'own-provider'
+        run: >-
+          products/platform/journeys/promote.sh --all
+          --from "${RUNNER_TEMP}/journeys/own-provider"
+          --bin-dir "${GITHUB_WORKSPACE}/target/debug"
+          --expected products/platform/journeys/expected-failures.yaml --strict
+          --out "${RUNNER_TEMP}/journeys/promote"
+
+      - name: Run the rstack dev journey
+        if: matrix.leg == 'rstack-dev'
+        run: >-
+          products/platform/journeys/rstack-dev.sh --all
+          --bin-dir "${GITHUB_WORKSPACE}/target/debug"
+          --expected products/platform/journeys/expected-failures.yaml --strict
+          --out "${RUNNER_TEMP}/journeys/rstack-dev"
+
+      - name: Report disk usage
+        if: always()
+        run: |
+          df -h /
+          du -sh target 2>/dev/null || true
+
   evidence-anchors:
     # The documentation anchors cite source across the whole workspace, so this check
     # runs on every pull request rather than behind the changed-path classifier: a
@@ -3501,9 +4002,9 @@ jobs:
           mkdir -p "${smoke}/node_modules/@registrystack"
           mkdir -p "${client_dir}/node_modules/@registrystack"
           ln -s "${platform_dir}" \
-            "${client_dir}/node_modules/@registrystack/client-${{ matrix.napi_platform }}"
+            "${client_dir}/node_modules/@registrystack/client-node-${{ matrix.napi_platform }}"
           ln -s "${client_dir}" \
-            "${smoke}/node_modules/@registrystack/client"
+            "${smoke}/node_modules/@registrystack/client-node"
           cp "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.js" \
             "${GITHUB_WORKSPACE}/release/scripts/smoke-registry-client-package.mjs" \
             "${smoke}/"
@@ -3532,6 +4033,58 @@ jobs:
             exit 1
           fi
 
+  # The TypeScript clients still match the OpenAPI documents they generate
+  # from, and their types, tests and build pass.
+  # Clients owns this gate. Remove it when the TypeScript clients leave the repository.
+  typescript-clients:
+    name: TypeScript clients
+    needs: changes
+    if: needs.changes.outputs.typescript_clients == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.11.0
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix clients/typescript ci
+
+      - name: Test the client assumptions check
+        run: python3 -m unittest products/platform/scripts/test_check_client_assumptions.py
+
+      - name: Check the product documents against what the clients assume
+        run: python3 products/platform/scripts/check-client-assumptions.py
+
+      - name: Check generated clients
+        run: npm --prefix clients/typescript run check:generated
+
+      - name: Check types
+        run: npm --prefix clients/typescript run check:types
+
+      - name: Test
+        run: npm --prefix clients/typescript test
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: 2.9.7
+
+      - name: Test under Deno
+        run: npm --prefix clients/typescript run test:deno
+
+      - name: Build
+        run: npm --prefix clients/typescript run build
+
   ci-result:
     name: CI result
     if: always()
@@ -3546,6 +4099,7 @@ jobs:
       - rust-tests
       - discovery-contracts
       - evidence-contracts
+      - evidence-doctor
       - evidence-postgres
       - evidence-fuzz
       - breg-contracts
@@ -3574,9 +4128,11 @@ jobs:
       - render-tutorial
       - scheduling-tutorial
       - breg-evidence-composition
+      - acceptance-journeys
       - evidence-anchors
       - docs
       - client-bindings
+      - typescript-clients
       - release-linux-node-clients
       - deployment
     runs-on: ubuntu-slim
@@ -3609,6 +4165,7 @@ jobs:
               "breg-tutorial": "breg_tutorial",
               "casework-tutorial": "casework_tutorial",
               "breg-evidence-composition": "breg_evidence_composition",
+              "acceptance-journeys": "acceptance_journeys",
               "deployment": "deployment",
           }
           selection = jobs["changes"].get("outputs", {})

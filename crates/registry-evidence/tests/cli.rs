@@ -325,6 +325,18 @@ fn set_burst(project: &ReferenceProject, burst: u32) {
     fs::write(&path, rewritten).expect("write staged bundle");
 }
 
+#[test]
+fn check_deny_warnings_accepts_development_settings() {
+    let project = ReferenceProject::stage();
+    let output = project.sealed(|runtime| invoke(runtime, &["check", "--deny-warnings"]));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("evidence.posture.local-assurance"));
+}
+
 /// A burst below the largest request cost the bundle admits makes some
 /// requests permanently unadmittable. `check` says so, naming the ceiling and
 /// the key to change, and still passes: a smaller burst is a legitimate way to
@@ -338,7 +350,7 @@ fn check_warns_when_the_burst_cannot_hold_the_largest_request_cost() {
     assert!(below.status.success(), "a low burst is not a refusal");
     let stdout = std::str::from_utf8(&below.stdout).expect("stdout is UTF-8");
     assert!(stdout.ends_with(" passed check (3 requirements)\n"));
-    let stderr = std::str::from_utf8(&below.stderr).expect("stderr is UTF-8");
+    let stderr = legacy_diagnostics(&below.stderr);
     let lines = stderr.lines().collect::<Vec<_>>();
     let bundle = project.root.path().join("bundle/evidence.yaml");
     assert_eq!(lines.len(), 4, "one warning and the summary: {stderr}");
@@ -377,6 +389,8 @@ fn check_warns_when_the_burst_cannot_hold_the_largest_request_cost() {
         "Evidence package ",
         " passed check (3 requirements)\n",
     );
+    assert!(String::from_utf8_lossy(&denied.stderr)
+        .contains("evidence.bundle.burst-below-largest-request"));
 }
 
 /// The offline check reads no secret material and asks nothing of the file
@@ -470,7 +484,11 @@ fn check_as_json_reports_the_envelope_on_success_and_refusal() {
             .is_some_and(|files| files > 1),
         "the runtime file and the package were checked: {report}"
     );
-    assert_eq!(report["diagnostics"], json!([]));
+    assert_eq!(report["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.posture.local-assurance"
+    );
 
     deployment.append("runtime.yaml", "unknownField: true\n");
     let refused = invoke(&runtime, &["check", "--format", "json"]);
@@ -543,7 +561,9 @@ fn check_skips_value_checks_on_substituted_members_unless_asked_for_the_environm
     let check = |arguments: &[&str], variables: &[(&str, &Path)]| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
         command
-            .args(arguments)
+            .args(["check", "--posture", "development"])
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .args(&arguments[1..])
             .arg("--runtime-config")
             .arg(&runtime)
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -1044,6 +1064,7 @@ async fn dependency_check_fails_when_an_audit_writer_already_holds_the_destinati
         AuditDestination::File(destination),
         b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
         1,
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("first audit writer initializes");
@@ -1080,6 +1101,7 @@ async fn dependency_check_without_the_audit_lock_passes_beside_a_running_writer(
         ),
         b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
         1,
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("first audit writer initializes");
@@ -1175,6 +1197,7 @@ async fn dependency_check_without_the_audit_lock_still_refuses_an_unusable_audit
                     ),
                     b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
                     1,
+                    registry_platform_config::Posture::Production,
                 )
                 .await
                 .expect("first audit writer initializes"),
@@ -2800,13 +2823,77 @@ fn activate_authority_with_reference(
     reference: &str,
 ) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_evidence"))
-        .args(["authority", "activate", "--runtime-config"])
+        .args([
+            "authority",
+            "activate",
+            "--posture",
+            "development",
+            "--runtime-config",
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg(deployment.path("runtime.yaml"))
         .arg("--document")
         .arg(document)
         .args(["--operator-reference", reference])
         .output()
         .unwrap()
+}
+
+#[test]
+fn authority_activation_requires_development_for_a_local_bundle() {
+    let (deployment, document, _) = stage_activation(false);
+    let run = |posture| {
+        Command::new(env!("CARGO_BIN_EXE_evidence"))
+            .args([
+                "authority",
+                "activate",
+                "--posture",
+                posture,
+                "--runtime-config",
+            ])
+            .arg(deployment.path("runtime.yaml"))
+            .arg("--document")
+            .arg(&document)
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .output()
+            .unwrap()
+    };
+    let production = run("production");
+    let refusal = String::from_utf8_lossy(&production.stderr);
+    assert!(!production.status.success(), "{refusal}");
+    assert!(
+        refusal.contains("evidence.posture.local-assurance"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("/assuranceProfile"), "{refusal}");
+    assert!(activation_audit_entries(&deployment, &production, false).is_empty());
+
+    let development = run("development");
+    assert!(
+        development.status.success(),
+        "{}",
+        String::from_utf8_lossy(&development.stderr)
+    );
+    let entries = activation_audit_entries(&deployment, &development, false);
+    assert!(!entries.is_empty());
+    assert!(entries
+        .iter()
+        .all(|entry| entry["posture"] == "development"));
+    let history = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args([
+            "authority",
+            "history",
+            "--posture",
+            "production",
+            "--runtime-config",
+        ])
+        .arg(deployment.path("runtime.yaml"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert!(history.status.success());
+    assert_eq!(String::from_utf8_lossy(&history.stdout).lines().count(), 1);
+    deployment.unseal();
 }
 
 /// The activation audit entries a command wrote: the companion file beside a
@@ -2880,6 +2967,7 @@ fn authority_activation_uses_configured_audit_without_source_or_signer_initializ
         );
         let history = Command::new(env!("CARGO_BIN_EXE_evidence"))
             .args(["authority", "history", "--runtime-config"])
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg(deployment.path("runtime.yaml"))
             .output()
             .unwrap();
@@ -2969,6 +3057,7 @@ async fn authority_activation_succeeds_while_the_service_holds_the_audit_lock() 
         ),
         b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
         1,
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("the service writer initializes");
@@ -3007,6 +3096,7 @@ async fn authority_activation_reports_why_the_companion_audit_is_unavailable() {
         .expect("the companion destination is valid"),
         b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
         1,
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("the other activation writer initializes");
@@ -3065,7 +3155,8 @@ fn bundle_check_validates_complete_target_authority_without_fixtures_or_effects(
     deployment.seal();
     let check = || {
         Command::new(env!("CARGO_BIN_EXE_evidence"))
-            .args(["bundle-check", "--bundle"])
+            .args(["bundle-check", "--posture", "development", "--bundle"])
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg(deployment.path("bundle"))
             .arg("--authority-document")
             .arg(&authority_path)
@@ -3474,7 +3565,7 @@ fn check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_class() 
         let output = deployment.check();
 
         let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
-        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        let stderr = legacy_diagnostics(&output.stderr);
         assert!(
             !stdout.contains(CANARY) && !stderr.contains(CANARY),
             "{}: diagnostic disclosed a document value",
@@ -3537,11 +3628,23 @@ fn bundle_check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_c
             "{}: bundle-check wrote output",
             case.label
         );
-        assert!(
-            stderr.starts_with(case.prefix) && stderr.ends_with(case.suffix),
-            "{}: unexpected diagnostic {stderr:?}",
-            case.label
-        );
+        if stderr.contains("warning[evidence.posture.local-assurance]") {
+            let diagnostic = legacy_diagnostics(&output.stderr);
+            let (code, message) = case.check;
+            assert!(
+                diagnostic.contains(&format!("error[{code}]"))
+                    && diagnostic.contains(message)
+                    && diagnostic.contains("  next: "),
+                "{}: unexpected diagnostic {stderr:?}",
+                case.label
+            );
+        } else {
+            assert!(
+                stderr.starts_with(case.prefix) && stderr.ends_with(case.suffix),
+                "{}: unexpected diagnostic {stderr:?}",
+                case.label
+            );
+        }
         assert!(
             !stdout.contains(CANARY) && !stderr.contains(CANARY),
             "{}: diagnostic disclosed a document value",
@@ -3822,6 +3925,10 @@ fn invalid_acquisition_limits_are_reported_once_by_check_and_bundle_check() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON diagnostic report");
     let diagnostics = report["diagnostics"].as_array().expect("diagnostic array");
+    let diagnostics = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic["severity"] == "error")
+        .collect::<Vec<_>>();
     assert_eq!(
         diagnostics.len(),
         1,
@@ -3960,7 +4067,7 @@ fn check_passes_the_signing_boundary_with_a_chain_that_certifies_the_governed_ke
     let with_chain = deployment.check_with_runtime_dependencies();
 
     for output in [&without_chain, &with_chain] {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = legacy_diagnostics(&output.stderr);
         assert!(
             stderr.contains("error[evidence.deployment.dependency-unavailable]"),
             "{stderr}"
@@ -4067,8 +4174,24 @@ fn serve_names_why_the_audit_boundary_refused_to_initialize() {
             case.label
         );
         let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        let mut lines = stderr.split_inclusive('\n');
+        let declaration: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(declaration["fields"]["message"], "posture declared");
+        assert_eq!(declaration["fields"]["posture"], "development");
+        assert_eq!(declaration["fields"]["development_settings"], 1);
+        let setting: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
         assert_eq!(
-            stderr, case.expected,
+            setting["fields"]["message"],
+            "development-only setting in use; production refuses it"
+        );
+        assert_eq!(
+            setting["fields"]["error_code"],
+            "evidence.posture.local-assurance"
+        );
+        assert_eq!(setting["fields"]["pointer"], "/assuranceProfile");
+        assert_eq!(
+            lines.collect::<String>(),
+            case.expected,
             "{}: unexpected diagnostic",
             case.label
         );
@@ -5496,6 +5619,558 @@ fn probe(port: u16, path: &str) -> Option<String> {
 
 /// A staged deployment: one acceptance bundle, one operator runtime file, and
 /// one private secret root under a single temporary directory.
+#[test]
+fn posture_local_bundle_requires_development() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.seal();
+    for flag in [None, Some("production"), Some("development")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        command
+            .args(["check", "--runtime-config"])
+            .arg(deployment.path("runtime.yaml"))
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(flag) = flag {
+            command.args(["--posture", flag]);
+        }
+        let output = command.output().expect("evidence check runs");
+        let rendered = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            output.status.success(),
+            flag == Some("development"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("evidence.posture.local-assurance"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("/assuranceProfile"), "{rendered}");
+        if flag != Some("development") {
+            assert!(rendered.contains("rstack dev"), "{rendered}");
+            assert!(
+                rendered.contains("REGISTRY_STACK_POSTURE=development"),
+                "{rendered}"
+            );
+
+            let mut serve = Command::new(env!("CARGO_BIN_EXE_evidence"));
+            serve
+                .args(["serve", "--runtime-config"])
+                .arg(deployment.path("runtime.yaml"))
+                .env_remove("REGISTRY_STACK_POSTURE");
+            if let Some(flag) = flag {
+                serve.args(["--posture", flag]);
+            }
+            let output = serve.output().expect("Evidence startup exits");
+            assert!(!output.status.success());
+            let refusal = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                refusal.contains("evidence.posture.local-assurance"),
+                "{refusal}"
+            );
+            assert!(refusal.contains("/assuranceProfile"), "{refusal}");
+        }
+    }
+}
+#[test]
+// The decode-failure test below guards preserving package findings when the
+// runtime cannot be decoded. These settings both come from the package.
+fn production_reports_package_development_settings_together() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "    issuer: https://identity.invalid",
+        "    issuer: https://identity.invalid\n    allowInsecureHttp: true",
+    );
+    deployment.seal();
+
+    for command in ["check", "serve", "bundle-check"] {
+        let mut process = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        process
+            .args([command, "--posture", "production", "--runtime-config"])
+            .arg(deployment.path("runtime.yaml"))
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if command == "bundle-check" {
+            process.arg("--bundle").arg(deployment.path("bundle"));
+        }
+        let output = process.output().unwrap();
+        let refusal = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{command}: {refusal}");
+        for (code, pointer) in [
+            (
+                "platform.posture.insecure-issuer-http",
+                "/authentication/oidc/allowInsecureHttp",
+            ),
+            ("evidence.posture.local-assurance", "/assuranceProfile"),
+        ] {
+            assert!(
+                refusal.contains(code) && refusal.contains(pointer),
+                "{command}: {refusal}"
+            );
+        }
+    }
+    deployment.unseal();
+}
+
+#[test]
+fn cli_reports_deployable_http_opt_in_as_both_semantic_and_posture_errors() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "assuranceProfile: local",
+        "assuranceProfile: production",
+    );
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "    issuer: https://identity.invalid",
+        "    issuer: https://identity.invalid\n    allowInsecureHttp: true",
+    );
+    deployment.seal();
+    for name in ["serve", "check", "bundle-check"] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        command.arg(name).env_remove("REGISTRY_STACK_POSTURE");
+        if name == "bundle-check" {
+            command.arg("--bundle").arg(deployment.path("bundle"));
+        } else {
+            command
+                .arg("--runtime-config")
+                .arg(deployment.path("runtime.yaml"));
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for expected in [
+            "only the local assurance profile accepts",
+            "platform.posture.insecure-issuer-http",
+            "/authentication/oidc/allowInsecureHttp",
+            "rstack dev",
+            "REGISTRY_STACK_POSTURE=development",
+        ] {
+            assert!(stderr.contains(expected), "{name}, {expected}: {stderr}");
+        }
+    }
+    deployment.unseal();
+}
+
+#[test]
+fn refused_packages_keep_their_diagnostic_and_development_settings() {
+    for code in [
+        "evidence.bundle.invalid-script",
+        "evidence.bundle.invalid-configuration",
+        "evidence.bundle.invalid-authentication",
+    ] {
+        let deployment = Deployment::stage("adult-status");
+        deployment.replace_line(
+            "bundle/evidence.yaml",
+            "    issuer: ",
+            "    issuer: https://identity.invalid\n    allowInsecureHttp: true\n",
+        );
+        match code {
+            "evidence.bundle.invalid-script" => {
+                deployment.append("bundle/derivations/adult-status.rhai", "\nfn broken(\n");
+            }
+            "evidence.bundle.invalid-configuration" => {
+                deployment.mutate_yaml("bundle/evidence.yaml", |document| {
+                    document["project"] = json!("adult-status");
+                    document["requirements"][0]["grantCeiling"] = json!({
+                        "authorities": ["statutory"],
+                        "actorKinds": ["service"],
+                        "valueOrigins": ["request"],
+                        "audiences": ["urn:example:audience:fixture"]
+                    });
+                    document["requirements"][0]["representations"] = json!(["signed-jws"]);
+                });
+            }
+            _ => deployment.replace_line(
+                "bundle/evidence.yaml",
+                "      uri: https://identity.invalid",
+                "      uri: http://127.0.0.1:8082/jwks\n    tlsTrustProfile: issuer-ca\n",
+            ),
+        }
+        deployment.seal();
+        for name in ["check", "serve", "bundle-check"] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+            command
+                .args([name, "--posture", "production"])
+                .env_remove("REGISTRY_STACK_POSTURE");
+            if name == "bundle-check" {
+                command.arg("--bundle").arg(deployment.path("bundle"));
+            } else {
+                command
+                    .arg("--runtime-config")
+                    .arg(deployment.path("runtime.yaml"));
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(1));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            for expected in [
+                code,
+                "evidence.posture.local-assurance",
+                "platform.posture.insecure-issuer-http",
+                "REGISTRY_STACK_POSTURE=development",
+            ] {
+                assert!(stderr.contains(expected), "{name}, {expected}: {stderr}");
+            }
+            if code != "evidence.bundle.invalid-authentication" {
+                assert!(stderr.contains("evidencectl package"), "{name}: {stderr}");
+            }
+        }
+        deployment.unseal();
+    }
+}
+
+#[test]
+fn check_refuses_offline_dependency_proof_without_a_posture_refusal() {
+    let deployment = Deployment::stage_production("adult-status");
+    deployment.seal();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["check", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .args([
+            "--require-runtime-dependencies",
+            "--offline-dependencies-only",
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    deployment.unseal();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("only after a posture refusal"));
+    assert!(!deployment.path("audit.jsonl").exists());
+}
+
+#[test]
+fn startup_keeps_posture_findings_after_runtime_validation_refuses() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.replace(
+        "runtime.yaml",
+        &format!("path: {}", deployment.path("audit.jsonl").display()),
+        "path: relative-audit.jsonl",
+    );
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "    issuer: https://identity.invalid",
+        "    issuer: https://identity.invalid\n    allowInsecureHttp: true",
+    );
+    deployment.seal();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["serve", "--posture", "production", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    let refusal = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{refusal}");
+    assert!(
+        refusal.contains("absolute operator path is invalid"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("evidence.posture.local-assurance"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("platform.posture.insecure-issuer-http"),
+        "{refusal}"
+    );
+    deployment.unseal();
+}
+
+#[test]
+fn startup_keeps_package_faults_with_a_listener_refusal() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.replace(
+        "runtime.yaml",
+        "trustProxyIdentityHeaders: false",
+        "trustProxyIdentityHeaders: true",
+    );
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "    issuer: https://identity.invalid",
+        "    issuer: https://identity.invalid\n    allowInsecureHttp: true",
+    );
+    deployment.append("bundle/derivations/adult-status.rhai", "\nlet = ;\n");
+    deployment.seal_and_pin();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["serve", "--posture", "production", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    let refusal = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{refusal}");
+    for expected in [
+        "evidence.bundle.invalid-script",
+        "derivations/adult-status.rhai",
+        "platform.posture.insecure-issuer-http",
+        "/authentication/oidc/allowInsecureHttp",
+        "evidence.posture.local-assurance",
+        "/assuranceProfile",
+        "--posture development",
+        "REGISTRY_STACK_POSTURE=development",
+        "proxy identity headers must not be trusted",
+    ] {
+        assert!(refusal.contains(expected), "missing {expected}: {refusal}");
+    }
+}
+
+#[test]
+fn activation_keeps_posture_findings_when_authority_binding_is_missing() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "    issuer: https://identity.invalid",
+        "    issuer: https://identity.invalid\n    allowInsecureHttp: true",
+    );
+    deployment.seal();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args([
+            "authority",
+            "activate",
+            "--posture",
+            "production",
+            "--runtime-config",
+        ])
+        .arg(deployment.path("runtime.yaml"))
+        .arg("--document")
+        .arg(deployment.path("authority.yaml"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    let refusal = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{refusal}");
+    assert!(
+        refusal.contains("runtime authority binding is required"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("evidence.posture.local-assurance"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("platform.posture.insecure-issuer-http"),
+        "{refusal}"
+    );
+    deployment.unseal();
+}
+
+#[test]
+fn offline_fixture_commands_enforce_posture_before_evaluation() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.seal();
+    for name in ["bundle-evaluate", "bundle-record-fixture-facts"] {
+        for posture in [None, Some("production"), Some("development")] {
+            let expected_success = posture == Some("development");
+            let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+            command
+                .args([name, "--bundle"])
+                .arg(deployment.path("bundle"))
+                .args(["--fixture", "fixtures/cases.yaml"])
+                .env_remove("REGISTRY_STACK_POSTURE");
+            if let Some(posture) = posture {
+                command.args(["--posture", posture]);
+            }
+            let output = command.output().unwrap();
+            let refusal = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                output.status.success(),
+                expected_success,
+                "{name}: {refusal}"
+            );
+            assert!(
+                refusal.contains("evidence.posture.local-assurance"),
+                "{name}: {refusal}"
+            );
+            if expected_success {
+                assert!(!output.stdout.is_empty(), "{name}: missing fixture payload");
+            } else {
+                assert!(
+                    refusal.contains("--posture development"),
+                    "{name}: {refusal}"
+                );
+                assert!(output.stdout.is_empty());
+            }
+        }
+    }
+    deployment.unseal();
+}
+
+#[test]
+fn bundle_check_keeps_package_posture_when_runtime_decode_fails() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.append("runtime.yaml", "unexpectedKey: true\n");
+    deployment.seal();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["bundle-check", "--posture", "production", "--bundle"])
+        .arg(deployment.path("bundle"))
+        .arg("--runtime-config")
+        .arg(deployment.path("runtime.yaml"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    let refusal = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{refusal}");
+    assert!(refusal.contains("/unexpectedKey"), "{refusal}");
+    assert!(
+        refusal.contains("evidence.posture.local-assurance"),
+        "{refusal}"
+    );
+    deployment.unseal();
+}
+
+#[test]
+fn local_helpers_keep_value_free_posture_refusals() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.seal();
+    for helper in [
+        "prepare-local-relying-procedure",
+        "local-audit-last-operation",
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        command
+            .args([helper, "--runtime-config"])
+            .arg(deployment.path("runtime.yaml"))
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if helper == "prepare-local-relying-procedure" {
+            command
+                .arg("--input")
+                .arg(deployment.path("procedure.json"));
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for expected in [
+            "evidence.posture.local-assurance",
+            "/assuranceProfile",
+            "rstack dev",
+            "REGISTRY_STACK_POSTURE=development",
+        ] {
+            assert!(stderr.contains(expected), "{helper}: {stderr}");
+        }
+    }
+    deployment.unseal();
+}
+
+#[test]
+#[ignore = "requires a matching evidencectl binary in EVIDENCECTL_BIN"]
+fn doctor_preserves_real_posture_and_audit_diagnostics_without_opening_a_writer() {
+    let evidencectl = std::env::var_os("EVIDENCECTL_BIN").expect("matching evidencectl binary");
+    for (profile, posture, code) in [
+        (
+            "production",
+            Some("development"),
+            "evidence.posture.assurance-profile-conflict",
+        ),
+        ("local", None, "evidence.posture.local-assurance"),
+    ] {
+        let deployment = if profile == "production" {
+            let deployment = Deployment::stage_production("adult-status");
+            deployment.append("bundle/derivations/adult-status.rhai", "\nlet = ;\n");
+            deployment
+        } else {
+            Deployment::stage("adult-status")
+        };
+        deployment.seal_and_pin();
+        let mut command = Command::new(&evidencectl);
+        command
+            .args(["--format", "json", "doctor", "--runtime-config"])
+            .arg(deployment.path("runtime.yaml"))
+            .arg("--evidence-bin")
+            .arg(env!("CARGO_BIN_EXE_evidence"))
+            .arg("--require-audit-under")
+            .arg(deployment.path("secrets"))
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(posture) = posture {
+            command.args(["--posture", posture]);
+        }
+        let output = command.output().unwrap();
+        deployment.unseal();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        for (code, path, artifact) in [
+            (code, "/assuranceProfile", "EvidenceBundle"),
+            (
+                "evidence.deployment.audit-outside-root",
+                "",
+                "EvidenceRuntimeConfig",
+            ),
+        ] {
+            assert!(
+                diagnostics.iter().any(|entry| {
+                    entry["code"] == code && entry["path"] == path && entry["artifact"] == artifact
+                }),
+                "{profile}: {report}"
+            );
+        }
+        if profile == "production" {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|entry| entry["code"] == "evidence.bundle.invalid-script"),
+                "{profile}: {report}"
+            );
+        }
+        assert_eq!(
+            diagnostics.len(),
+            if profile == "production" { 3 } else { 2 },
+            "{profile}: {report}"
+        );
+        assert!(!deployment.path("audit.jsonl").exists());
+        assert!(!deployment.path("audit.jsonl.lock").exists());
+    }
+}
+
+#[test]
+fn posture_development_refuses_an_evidence_grade_package() {
+    let deployment = Deployment::stage("all-definitions");
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "assuranceProfile: local",
+        "assuranceProfile: evidence-grade",
+    );
+    deployment.seal();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["check", "--posture", "development", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .expect("run Evidence check");
+    assert_eq!(output.status.code(), Some(1));
+    let refusal = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        refusal.contains("evidence.posture.assurance-profile-conflict"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("/assuranceProfile"), "{refusal}");
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["check", "--posture", "development", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .args([
+            "--require-runtime-dependencies",
+            "--offline-dependencies-only",
+            "--require-audit-under",
+        ])
+        .arg(deployment.path("secrets"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    let refusal = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{refusal}");
+    assert!(
+        refusal.contains("evidence.posture.assurance-profile-conflict"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("evidence.deployment.audit-outside-root"),
+        "{refusal}"
+    );
+    assert!(!deployment.path("audit.jsonl").exists());
+}
+
 struct Deployment {
     root: tempfile::TempDir,
     port: u16,
@@ -5504,6 +6179,21 @@ struct Deployment {
 impl Deployment {
     fn stage(case: &str) -> Self {
         Self::stage_on_port(case, 8080)
+    }
+
+    fn stage_production(case: &str) -> Self {
+        let deployment = Self::stage(case);
+        deployment.replace(
+            "bundle/evidence.yaml",
+            "assuranceProfile: local",
+            "assuranceProfile: production",
+        );
+        deployment.replace(
+            "runtime.yaml",
+            "signer:\n  type: local-jwk\n  privateKeyRef: secret:file/signing-key",
+            "signer:\n  type: transit\n  unixSocketPath: /run/evidence-test/transit.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  attemptTimeoutMilliseconds: 2000",
+        );
+        deployment
     }
 
     fn stage_on_port(case: &str, port: u16) -> Self {
@@ -5815,6 +6505,8 @@ outboundTls:
     fn serve(&self) -> Child {
         Command::new(env!("CARGO_BIN_EXE_evidence"))
             .arg("serve")
+            .args(["--posture", "development"])
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg("--runtime-config")
             .arg(self.path("runtime.yaml"))
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -5829,6 +6521,8 @@ outboundTls:
     fn serve_capturing(&self) -> CapturedService {
         let mut child = Command::new(env!("CARGO_BIN_EXE_evidence"))
             .arg("serve")
+            .args(["--posture", "development"])
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg("--runtime-config")
             .arg(self.path("runtime.yaml"))
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -5932,6 +6626,24 @@ outboundTls:
             .expect("seal runtime");
     }
 
+    fn seal_and_pin(&self) {
+        let bundle = self.path("bundle");
+        refresh_package_envelope(&bundle);
+        let verified = registry_platform_config::verify_package(
+            &bundle,
+            &registry_evidence::bundle::evidence_package_limits(),
+            "evidencectl package",
+        )
+        .unwrap();
+        let pin = format!("  root: {}", bundle.display());
+        self.replace(
+            "runtime.yaml",
+            &pin,
+            &format!("{pin}\n  expectedDigest: {}", verified.digest()),
+        );
+        self.seal();
+    }
+
     fn unseal(&self) {
         set_tree_mode(&self.path("bundle"), 0o755, 0o644);
         fs::set_permissions(self.path("runtime.yaml"), fs::Permissions::from_mode(0o644))
@@ -5979,6 +6691,8 @@ fn write_private_json(path: &Path, value: &Value) {
 fn invoke_local_relying_procedure(runtime: &Path, input: &Path, stdin: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_evidence"))
         .arg("prepare-local-relying-procedure")
+        .args(["--posture", "development"])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--runtime-config")
         .arg(runtime)
         .arg("--input")
@@ -6039,10 +6753,68 @@ fn the_removed_runtime_inputs_are_refused_with_their_replacement_named() {
 }
 
 /// Run one runtime subcommand, `arguments[0]`, against `runtime`.
+// Several CLI tests assert the exact text of a separate diagnostic. The
+// posture-specific tests assert the local warning and its source directly.
+fn legacy_diagnostics(stderr: &[u8]) -> String {
+    let stderr = std::str::from_utf8(stderr).expect("stderr is UTF-8");
+    let mut lines = stderr.lines();
+    let mut result = String::new();
+    let mut count = 0;
+    while let Some(line) = lines.next() {
+        if line.starts_with("warning[evidence.posture.local-assurance] ") {
+            assert!(lines.next().unwrap().contains("production refuses it"));
+            assert!(lines.next().unwrap().starts_with("  next: "));
+            count += 1;
+            continue;
+        }
+        if count > 0 {
+            if let Some((error_count, warnings)) = line.split_once(", ") {
+                if let Some((warnings_count, files)) = warnings.split_once(" in ") {
+                    if let Some(actual) = warnings_count
+                        .split_whitespace()
+                        .next()
+                        .and_then(|n| n.parse::<usize>().ok())
+                    {
+                        let remaining = actual - count;
+                        let label = if remaining == 1 {
+                            "warning"
+                        } else {
+                            "warnings"
+                        };
+                        result
+                            .push_str(&format!("{error_count}, {remaining} {label} in {files}\n"));
+                        continue;
+                    }
+                }
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
+}
+
+fn fixture_posture(bundle_config: &Path) -> &'static str {
+    if fs::read_to_string(bundle_config).is_ok_and(|text| {
+        text.contains("assuranceProfile: local")
+            || text.contains("assuranceProfile: 'local'")
+            || text.contains("assuranceProfile: \"local\"")
+    }) {
+        "development"
+    } else {
+        "production"
+    }
+}
+
 fn invoke(runtime: &Path, arguments: &[&str]) -> Output {
     let (command, rest) = arguments.split_first().expect("a subcommand is named");
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .arg(command)
+        .args([
+            "--posture",
+            fixture_posture(&runtime.with_file_name("bundle/evidence.yaml")),
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--runtime-config")
         .arg(runtime)
         .args(rest)
@@ -6056,6 +6828,8 @@ fn invoke(runtime: &Path, arguments: &[&str]) -> Output {
 fn invoke_bundle_check(bundle: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .arg("bundle-check")
+        .args(["--posture", fixture_posture(&bundle.join("evidence.yaml"))])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--bundle")
         .arg(bundle)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -6066,6 +6840,8 @@ fn invoke_bundle_check(bundle: &Path) -> Output {
 fn invoke_bundle_check_with_runtime(bundle: &Path, runtime: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .arg("bundle-check")
+        .args(["--posture", fixture_posture(&bundle.join("evidence.yaml"))])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--bundle")
         .arg(bundle)
         .arg("--runtime-config")
@@ -6078,9 +6854,9 @@ fn invoke_bundle_check_with_runtime(bundle: &Path, runtime: &Path) -> Output {
 
 fn assert_success(output: &Output, prefix: &str, suffix: &str) {
     assert!(output.status.success(), "evidence command failed");
-    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    let stderr = legacy_diagnostics(&output.stderr);
     assert!(
-        stderr.is_empty() || is_clean_check_summary(stderr),
+        stderr.is_empty() || is_clean_check_summary(&stderr),
         "evidence command wrote diagnostics: {stderr}"
     );
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
@@ -6103,7 +6879,7 @@ fn is_clean_check_summary(stderr: &str) -> bool {
 /// reported exactly one error: `code` on its position line, then `message`, a
 /// `next:` action, and the summary line.
 fn assert_one_check_error(output: &Output, exit: i32, code: &str, message: &str) {
-    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    let stderr = legacy_diagnostics(&output.stderr);
     assert_eq!(
         output.status.code(),
         Some(exit),
@@ -6323,7 +7099,8 @@ fn bundle_check_json_retains_fixture_unknown_duplicate_and_bounded_diagnostics()
         deployment.write("bundle/fixtures/cases.yaml", &text);
         deployment.seal();
         let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
-            .args(["bundle-check", "--bundle"])
+            .args(["bundle-check", "--posture", "development", "--bundle"])
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg(deployment.path("bundle"))
             .arg("--json")
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -6353,7 +7130,17 @@ fn bundle_check_json_retains_fixture_unknown_duplicate_and_bounded_diagnostics()
             assert_eq!(diagnostic["related"][0]["line"], 5);
         }
         if code == "config.too-many-problems" {
-            assert_eq!(diagnostics.len(), 101);
+            assert_eq!(
+                diagnostics
+                    .iter()
+                    .filter(|item| item["severity"] == "error")
+                    .count(),
+                101
+            );
+            assert!(diagnostics
+                .iter()
+                .any(|item| item["code"] == "evidence.posture.local-assurance"
+                    && item["severity"] == "warning"));
         }
     }
 }

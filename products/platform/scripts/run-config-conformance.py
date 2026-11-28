@@ -7,11 +7,13 @@ a format's registered minimal valid example (the `example` of its entry in
 products/platform/config-formats.yaml), so one case applies to every format
 without a per-format copy. For every registered format with a `check` command
 and an example, the runner first checks the unmutated example (the `baseline`
-case: exit 0, no diagnostics), then applies each case that applies to the
+case: exit 0, no diagnostics other than allowed posture listings), then applies each case that applies to the
 format, runs the check command with `--format json` against a temporary copy
 of the example's project, and asserts the exit status, every diagnostic's
 code, path, line, and column, the diagnostic shape, and that the planted
-marker value appears nowhere in the output.
+marker value appears nowhere in the output. A check row with `--posture development`
+allows warning diagnostics whose codes start with `<product>.posture.` or
+`platform.posture.`. Those listings still undergo the diagnostic shape check.
 
 A case file (`cases/<id>.yaml`) has these members:
 
@@ -123,7 +125,8 @@ order in the work directory after each mutation write and before the check,
 each program taken from the binary directory, such as a lock that re-pins
 the project from the artifact a mutation just rewrote), `digests` (a
 SHA256SUMS file in the project copy to refresh), `removedKeys`,
-`retiredApiVersions`, and `init`
+`retiredApiVersions`, `postureWarningArtifacts` (a map from development
+warning code to the kind of an auxiliary document the check reads), and `init`
 ({command, file}: the command that starts a project in `{directory}`, and the
 file of this format it writes there, relative to that directory). A format
 with an `init` command gets its `run: init` cells even when its check is not
@@ -1296,7 +1299,7 @@ def parse_report(stdout: str) -> tuple[list[Any] | None, list[str]]:
 
 
 REQUIRED_MEMBERS = ("severity", "code", "path", "message", "suggestedAction")
-ALLOWED_MEMBERS = REQUIRED_MEMBERS + ("artifact", "source", "related", "rank")
+ALLOWED_MEMBERS = REQUIRED_MEMBERS + ("artifact", "source", "related", "rank", "scope", "acceptedReason")
 RELATED_MEMBERS = ("file", "line", "column", "path", "message")
 FINDING_RANKS = ("widens-access", "performance", "hygiene")
 
@@ -1332,6 +1335,22 @@ def shape_problems(diag: Any, kind: str | None) -> list[str]:
             problems.append("artifact is not text")
         elif kind is not None and diag["artifact"] != kind:
             problems.append(f"artifact is not {kind}")
+    if "scope" in diag:
+        scope = diag["scope"]
+        if diag.get("severity") != "warning":
+            problems.append("scope is present on an error")
+        if not isinstance(scope, dict) or set(scope) != {"file", "path"}:
+            problems.append("scope must contain file and path")
+        else:
+            file, path = scope["file"], scope["path"]
+            if not isinstance(file, str) or not file or Path(file).is_absolute() or ".." in Path(file).parts:
+                problems.append("scope.file is not a project-relative path")
+            if not isinstance(path, str) or (path and not path.startswith("/")):
+                problems.append("scope.path is not a JSON pointer")
+    if "acceptedReason" in diag:
+        accepted = diag["acceptedReason"]
+        if "scope" not in diag or not isinstance(accepted, str) or not accepted.strip():
+            problems.append("acceptedReason requires a scope and nonblank text")
     if "source" in diag:
         problems += source_problems(diag["source"])
     if "related" in diag:
@@ -1460,7 +1479,9 @@ def plural(count: int, word: str) -> str:
     return f"{count} {word}{'' if count == 1 else 's'}"
 
 
-def human_problems(expected: list[dict[str, Any]], output: str) -> list[str]:
+def human_problems(
+    expected: list[dict[str, Any]], output: str, posture_warnings: int = 0
+) -> list[str]:
     """Expected diagnostics the human output does not show position first."""
     lines = output.splitlines()
     problems = []
@@ -1484,7 +1505,7 @@ def human_problems(expected: list[dict[str, Any]], output: str) -> list[str]:
             if not any(note_matches(line, related) for line in lines):
                 problems.append(f"human output has no note for {related['path']} {related['line']}:{related['column']}")
     errors = sum(1 for item in expected if item["severity"] == "error")
-    warnings = sum(1 for item in expected if item["severity"] == "warning")
+    warnings = posture_warnings + sum(1 for item in expected if item["severity"] == "warning")
     summary = f"{plural(errors, 'error')}, {plural(warnings, 'warning')}"
     if not any(line.startswith(summary) for line in lines):
         problems.append(f"human output has no summary line starting `{summary}`")
@@ -1751,7 +1772,7 @@ def load_registry(path: Path) -> list[Format]:
 
 
 HARNESS_KEYS = {
-    "project", "copies", "set", "write", "values", "prepare", "afterWrite", "digests", "removedKeys", "retiredApiVersions", "init"
+    "project", "copies", "set", "write", "values", "prepare", "afterWrite", "digests", "removedKeys", "retiredApiVersions", "postureWarningArtifacts", "init"
 }
 
 
@@ -1771,6 +1792,13 @@ def load_harness(path: Path) -> dict[str, dict[str, Any]]:
         after_write = harness.get("afterWrite", [])
         if not isinstance(after_write, list) or not all(isinstance(command, str) for command in after_write):
             raise HarnessError(f"{path.name}: {format_id}: `afterWrite` is not a list of commands")
+        warning_artifacts = harness.get("postureWarningArtifacts", {})
+        if not isinstance(warning_artifacts, dict) or not all(
+            isinstance(code, str) and CODE.fullmatch(code) and code.partition(".")[2].startswith("posture.")
+            and isinstance(kind, str) and kind
+            for code, kind in warning_artifacts.items()
+        ):
+            raise HarnessError(f"{path.name}: {format_id}: invalid posture warning artifact map")
         init = harness.get("init")
         if init is not None and not (
             isinstance(init, dict)
@@ -1986,6 +2014,13 @@ def absolute(diag: Any, work: Path) -> Any:
     return diag
 
 
+def posture_listing(diagnostic: Any) -> bool:
+    if not isinstance(diagnostic, dict) or diagnostic.get("severity") != "warning":
+        return False
+    code = diagnostic.get("code")
+    return isinstance(code, str) and code.partition(".")[2].startswith("posture.")
+
+
 def check_variant(
     fmt: Format, case: Case, argv: list[str], staged: Staged, env: dict[str, str], expected: list[dict[str, Any]]
 ) -> list[str]:
@@ -1993,19 +2028,28 @@ def check_variant(
     code, stdout, stderr = run_command([*argv, "--format", "json", *case.args], staged.work, env)
     problems = exit_problem(code, wanted, stderr)
     problems += marker_problems(stdout, stderr)
+    posture_warnings = 0
     if case.expect.get("report", True):
         diagnostics, report = parse_report(stdout.decode("utf-8", "replace"))
         problems += report
         if diagnostics is not None:
-            problems += match_problems(expected, [absolute(d, staged.work) for d in diagnostics])
+            compared = diagnostics
+            development = any(argv[index:index + 2] == ["--posture", "development"] for index in range(len(argv)))
+            if development:
+                compared = [diag for diag in diagnostics if not posture_listing(diag)]
+                posture_warnings = len(diagnostics) - len(compared)
+            problems += match_problems(expected, [absolute(d, staged.work) for d in compared])
             for index, diag in enumerate(diagnostics):
-                problems += [f"diagnostic {index}: {p}" for p in shape_problems(diag, fmt.kind)]
+                kind = fmt.kind
+                if development and posture_listing(diag):
+                    kind = fmt.harness.get("postureWarningArtifacts", {}).get(diag["code"], kind)
+                problems += [f"diagnostic {index}: {p}" for p in shape_problems(diag, kind)]
     if case.human:
         code, stdout, stderr = run_command([*argv, *case.args], staged.work, env)
         problems += exit_problem(code, wanted, stderr, "human run: ")
         problems += marker_problems(stdout, stderr)
         output = stdout.decode("utf-8", "replace") + "\n" + stderr.decode("utf-8", "replace")
-        problems += human_problems(expected, output)
+        problems += human_problems(expected, output, posture_warnings)
     return problems
 
 

@@ -3,6 +3,7 @@
 
 use registry_payment_protocol::{CollectionState, Money, MAX_MINOR_UNITS};
 use registry_platform_httputil::client::{build_client, BearerToken, OutboundOptions};
+use registry_platform_httputil::loopback::loopback_address;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use std::time::Duration;
@@ -67,9 +68,10 @@ impl SimulatorConnection {
         registry_platform_yaml::Url::new(self.callback_url.clone())
             .map_err(|_| ConnectorError::Configuration)?;
         let url = Url::parse(&self.base_url).map_err(|_| ConnectorError::Configuration)?;
+        // An address literal only: the name `localhost` is refused.
         let loopback = match url.host() {
-            Some(Host::Ipv4(ip)) => ip.is_loopback(),
-            Some(Host::Ipv6(ip)) => ip.is_loopback(),
+            Some(Host::Ipv4(ip)) => loopback_address(ip.into()),
+            Some(Host::Ipv6(ip)) => loopback_address(ip.into()),
             _ => false,
         };
         if !loopback

@@ -1428,7 +1428,8 @@ mod tests {
         let resolved =
             resolve_offline_fixture_authorization(&bundle, requirement, common, case, AUDIENCE)
                 .expect("fixture authorization resolves");
-        let programs = compile_sources(&bundle).expect("source packs compile");
+        let programs = compile_sources(&bundle, crate::config::Posture::Production)
+            .expect("source packs compile");
         let program = programs
             .get(requirement.acquisition.initial_source())
             .expect("source program exists");
@@ -1538,7 +1539,8 @@ mod tests {
                 )
                 .expect("fixture is captured");
             let common = fixture.get("common").and_then(Value::as_object);
-            let programs = compile_sources(&bundle).expect("source packs compile");
+            let programs = compile_sources(&bundle, crate::config::Posture::Production)
+                .expect("source packs compile");
             let program = programs
                 .get(requirement.acquisition.initial_source())
                 .expect("requirement source exists");
@@ -1759,7 +1761,8 @@ mod tests {
         let resolved =
             resolve_offline_fixture_authorization(&bundle, requirement, common, case, AUDIENCE)
                 .expect("fixture authorization resolves");
-        let programs = compile_sources(&bundle).expect("source packs compile");
+        let programs = compile_sources(&bundle, crate::config::Posture::Production)
+            .expect("source packs compile");
         let program = programs
             .get(requirement.acquisition.initial_source())
             .expect("source program exists");

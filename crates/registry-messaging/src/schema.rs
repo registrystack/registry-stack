@@ -343,6 +343,25 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                 "bearer": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
             },
             "schemas": {
+                "ReadyStatus": {
+                    "type": "object",
+                    "required": ["status", "posture", "developmentSettings"],
+                    "properties": {
+                        "status": {"const": "ready"},
+                        "posture": {"enum": ["development", "production"]},
+                        "developmentSettings": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["code", "pointer"],
+                                "properties": {
+                                    "code": {"type": "string"},
+                                    "pointer": {"type": "string"}
+                                }
+                            }
+                        }
+                    }
+                },
                 "Problem": {
                     "type": "object",
                     "additionalProperties": false,
@@ -681,21 +700,27 @@ fn install_runtime_constraints(schema: &mut Value) {
         set_definition_property(schema, definition, property, "pattern", json!("^/"));
     }
     // Every access profile resolves its caller from the matched client, so
-    // a Messaging deployment always lists the clients it admits. The shared
-    // block requires the member and also admits the keyword `unrestricted`,
-    // which this runtime refuses in every mode, so the member is restated
-    // as the list alone and the shared definition is dropped.
-    if let Some(clients) = schema.pointer_mut("/$defs/OidcConfig/properties/allowedClients") {
+    // every issuer entry states the clients it admits. The shared block
+    // requires the member and also admits the keyword `unrestricted`, which
+    // this runtime refuses in every mode, so the member is restated as
+    // `from-package` or the list, and the shared definition is dropped.
+    if let Some(clients) = schema.pointer_mut("/$defs/IssuerConfig/properties/allowedClients") {
         *clients = json!({
-            "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, an empty or repeated client, and\n`unrestricted` are refused.",
-            "type": "array",
-            "items": {"type": "string", "minLength": 1},
-            "minItems": 1,
-            "uniqueItems": true,
+            "description": "The clients whose access tokens this issuer admits. Required in every\nentry: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client admits those clients.\nA client belongs to one issuer, and the lists of all entries together must\ncover every client a profile names. An omitted or empty list, an empty or\nrepeated client, and `unrestricted` are refused.",
+            "oneOf": [
+                {"type": "string", "const": "from-package"},
+                {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                    "uniqueItems": true,
+                },
+            ],
         });
     }
     if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
         definitions.remove("OidcAllowedClients");
+        definitions.remove("OidcPackageAllowedClients");
     }
     if let Some(profiles) = schema
         .pointer_mut("/properties/tlsTrustProfiles")
@@ -810,9 +835,10 @@ mod tests {
             document["$defs"]["RetentionConfig"]["properties"]["payloadRetentionDays"]["maximum"],
             MAXIMUM_PAYLOAD_RETENTION_DAYS
         );
-        // `allowedClients` is decided in every file, and only as a list:
-        // the runtime refuses `unrestricted` in every mode.
-        let oidc = &document["$defs"]["OidcConfig"];
+        // `allowedClients` is decided in every file: the keyword
+        // `from-package` or a non-empty list. The runtime refuses
+        // `unrestricted` in every mode, so the schema does not offer it.
+        let oidc = &document["$defs"]["IssuerConfig"];
         assert_eq!(
             oidc["required"]
                 .as_array()
@@ -825,14 +851,24 @@ mod tests {
         let clients = &oidc["properties"]["allowedClients"];
         assert!(clients.get("default").is_none());
         assert!(clients.get("$ref").is_none(), "{clients}");
-        assert_eq!(clients["type"], "array");
-        assert_eq!(clients["minItems"], 1);
-        assert_eq!(clients["uniqueItems"], true);
-        assert_eq!(clients["items"]["minLength"], 1);
+        let forms = clients["oneOf"].as_array().expect("two written forms");
+        assert_eq!(forms.len(), 2, "{clients}");
+        assert_eq!(forms[0], json!({"type": "string", "const": "from-package"}));
+        assert_eq!(forms[1]["type"], "array");
+        assert_eq!(forms[1]["minItems"], 1);
+        assert_eq!(forms[1]["uniqueItems"], true);
+        assert_eq!(forms[1]["items"]["minLength"], 1);
         assert!(document["$defs"].get("OidcAllowedClients").is_none());
+        assert!(document["$defs"].get("OidcPackageAllowedClients").is_none());
+        for definition in ["OidcConfig", "IssuerConfig"] {
+            assert_eq!(
+                document["$defs"][definition]["additionalProperties"], false,
+                "{definition} refuses unknown keys"
+            );
+        }
         assert_eq!(
-            document["$defs"]["OidcConfig"]["additionalProperties"], false,
-            "unknown keys are refused"
+            document["$defs"]["OidcConfig"]["properties"]["issuers"]["minProperties"], 1,
+            "at least one issuer entry"
         );
         for definition in ["MetricsListenerConfig", "PrivateListenerConfig"] {
             assert!(

@@ -14,7 +14,7 @@ use super::{
     },
     provider_mapping::{PaymentMappingProgram, PaymentMappingRegistry},
     registry::BregBridge,
-    service::{PaymentService, SyntheticProvider},
+    service::{PaymentFailure, PaymentService, SyntheticProvider},
     store::{migrate, PaymentStore},
 };
 use crate::serve::{Authenticator, Caller, CallerRefusal, ServeError};
@@ -22,6 +22,7 @@ use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Path as RoutePath, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -32,6 +33,7 @@ use registry_payment_protocol::{
     PaymentProblem, PaymentProblemCode as Error, ProviderConfirmation, RecordProviderConfirmation,
     RecordReceipt, RequestCollection, RequestDisbursement,
 };
+use registry_platform_authcommon::{DeclaredScope, FailedCheck, RefusalNote};
 use registry_platform_config::{
     RuntimeConfigLoader, RuntimeEnvelope, SecretProvider, SecretResolver,
 };
@@ -105,23 +107,35 @@ pub fn contract(config: &PaymentsConfig) -> serde_json::Value {
     })
 }
 
-pub fn load_config(path: &Path) -> Result<PaymentsConfig, ServeError> {
-    let absolute = std::fs::canonicalize(path)
-        .map_err(|_| refused("payment configuration could not be read"))?;
-    let config = RuntimeConfigLoader::new(RuntimeEnvelope {
-        api_version: API_VERSION,
-        kind: KIND,
-    })
-    .load::<PaymentsConfig>(&absolute)
-    .map_err(|_| refused("payment configuration was refused"))?
-    .config;
-    config.validate().map_err(|error| {
-        ServeError::Configuration(format!(
-            "{}: payment connections were refused",
-            error.code()
-        ))
-    })?;
-    Ok(config)
+/// Read the payment file for the combined startup decision.
+pub(crate) fn load_config(
+    path: &Path,
+    declared: registry_platform_config::DeclaredPosture,
+) -> registry_platform_config::RuntimeFileCheck<PaymentsConfig> {
+    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: API_VERSION,
+            kind: KIND,
+        },
+        declared,
+    )
+    .check_offline(&absolute, true, |_| "")
+}
+
+fn validate_payments(
+    loaded: &registry_platform_config::LoadedRuntimeConfig<PaymentsConfig>,
+) -> Result<(), ServeError> {
+    loaded
+        .config
+        .validate(loaded.development.as_ref())
+        .map_err(|error| {
+            ServeError::Configuration(format!(
+                "{}: payment connections were refused",
+                error.code()
+            ))
+        })?;
+    Ok(())
 }
 
 fn resolver(runtime: &AdapterRuntimeConfig) -> Result<SecretResolver, ServeError> {
@@ -224,157 +238,239 @@ fn load_provider_packs(paths: &[PathBuf]) -> Result<LoadedPaymentPacks, ServeErr
     })
 }
 
-pub async fn load_router(
-    runtime: &AdapterRuntimeConfig,
-    path: &Path,
-    provider_pack_paths: &[PathBuf],
-    pool: deadpool_postgres::Pool,
-) -> Result<Router, ServeError> {
-    let config = load_config(path)?;
-    let packs = load_provider_packs(provider_pack_paths)?;
-    for connection in &config.connections {
-        let Some(pin) = connection.binding.provider_pack.as_ref() else {
-            if connection.binding.simulation {
-                continue;
-            }
-            return Err(refused("payment connection must pin the provider pack"));
-        };
-        let pack = packs.for_pin(pin)?;
-        if pack.connector != connection.binding.connector_kind()
-            || !pack.capabilities.contains(&PaymentCapability::Collection)
-        {
-            return Err(refused(
-                "payment provider pack lacks collection capability or connector",
-            ));
-        }
-        if matches!(
-            &connection.binding.provider,
-            super::config::CollectionProvider::Http { .. }
-        ) && !mapping_auth_matches(
-            pack.mapping
-                .as_ref()
-                .and_then(|mapping| mapping.collection.as_ref()),
-            PaymentProviderAuth::Bearer,
-        ) {
-            return Err(refused(
-                "payment provider collection mapping requires unsupported authentication",
-            ));
-        }
+/// A payment configuration whose packs, mapping and credentials are settled,
+/// before any database work: the caller migrates and grants, then builds the
+/// router over the runtime pool.
+pub(crate) struct PreparedPayments {
+    config: PaymentsConfig,
+    packs: LoadedPaymentPacks,
+    resolver: Arc<SecretResolver>,
+    authenticator: Authenticator,
+    g2p_provider: HttpG2pProvider,
+    peer_policy: registry_platform_httputil::PeerPolicy,
+    posture: registry_platform_config::Posture,
+    development: Option<registry_platform_config::DevelopmentWitness>,
+    deployment: String,
+}
+
+pub(super) fn payment_peer_policy(
+    posture: registry_platform_config::Posture,
+) -> registry_platform_httputil::PeerPolicy {
+    use registry_platform_config::Posture;
+    use registry_platform_httputil::PeerPolicy;
+    match posture {
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
     }
-    for connection in &config.disbursements {
-        let pack = packs.for_pin(&connection.binding.provider_pack)?;
-        if pack.connector != ConnectorKind::AdapterPaymentHttpV1
-            || !pack.capabilities.contains(&PaymentCapability::Disbursement)
-        {
-            return Err(refused(
-                "payment provider pack lacks generic HTTP disbursement capability",
-            ));
+}
+
+impl PreparedPayments {
+    pub(crate) async fn prepare(
+        runtime: &AdapterRuntimeConfig,
+        loaded: registry_platform_config::LoadedRuntimeConfig<PaymentsConfig>,
+        provider_pack_paths: &[PathBuf],
+    ) -> Result<Self, ServeError> {
+        let posture = loaded.posture.posture();
+        let peer_policy = payment_peer_policy(posture);
+        validate_payments(&loaded)?;
+        let config = loaded.config;
+        let development = loaded.development;
+        let packs = load_provider_packs(provider_pack_paths)?;
+        for connection in &config.connections {
+            let Some(pin) = connection.binding.provider_pack.as_ref() else {
+                if connection.binding.simulation {
+                    continue;
+                }
+                return Err(refused("payment connection must pin the provider pack"));
+            };
+            let pack = packs.for_pin(pin)?;
+            if pack.connector
+                != connection
+                    .binding
+                    .connector_kind(development.as_ref())
+                    .map_err(|_| refused("the payment provider was refused"))?
+                || !pack.capabilities.contains(&PaymentCapability::Collection)
+            {
+                return Err(refused(
+                    "payment provider pack lacks collection capability or connector",
+                ));
+            }
+            if matches!(
+                connection
+                    .binding
+                    .provider(development.as_ref())
+                    .map_err(|_| refused("the payment provider was refused"))?,
+                super::config::CollectionProvider::Http { .. }
+            ) && !mapping_auth_matches(
+                pack.mapping
+                    .as_ref()
+                    .and_then(|mapping| mapping.collection.as_ref()),
+                PaymentProviderAuth::Bearer,
+            ) {
+                return Err(refused(
+                    "payment provider collection mapping requires unsupported authentication",
+                ));
+            }
         }
-        if !mapping_auth_matches(
-            pack.mapping
-                .as_ref()
-                .and_then(|mapping| mapping.disbursement.as_ref()),
-            connection.binding.provider.auth_profile(),
-        ) {
-            return Err(refused(
+        for connection in &config.disbursements {
+            let pack = packs.for_pin(&connection.binding.provider_pack)?;
+            if pack.connector != ConnectorKind::AdapterPaymentHttpV1
+                || !pack.capabilities.contains(&PaymentCapability::Disbursement)
+            {
+                return Err(refused(
+                    "payment provider pack lacks generic HTTP disbursement capability",
+                ));
+            }
+            if !mapping_auth_matches(
+                pack.mapping
+                    .as_ref()
+                    .and_then(|mapping| mapping.disbursement.as_ref()),
+                connection.binding.provider.auth_profile(),
+            ) {
+                return Err(refused(
                 "payment provider disbursement mapping authentication differs from the connection",
             ));
-        }
-        if !live_disbursement_auth_supported(connection.binding.provider.auth_profile()) {
-            return Err(refused(
+            }
+            if !live_disbursement_auth_supported(connection.binding.provider.auth_profile()) {
+                return Err(refused(
                 "payment provider disbursement authentication is not implemented by the live host",
             ));
+            }
         }
-    }
-    let resolver = Arc::new(resolver(runtime)?);
-    for connection in &config.connections {
-        for reference in [
-            &connection.binding.provider_credential_ref,
-            &connection.binding.registry.credential_ref,
-        ] {
-            let value = resolver
-                .resolve(reference.as_str())
-                .map_err(|_| refused("a payment credential could not be resolved"))?;
-            let value = std::str::from_utf8(value.expose_secret())
-                .map_err(|_| refused("a payment credential was refused"))?;
-            registry_platform_httputil::client::BearerToken::new(value.to_owned())
-                .map_err(|_| refused("a payment credential was refused"))?;
+        let resolver = Arc::new(resolver(runtime)?);
+        for connection in &config.connections {
+            for reference in [
+                &connection.binding.provider_credential_ref,
+                &connection.binding.registry.credential_ref,
+            ] {
+                let value = resolver
+                    .resolve(reference.as_str())
+                    .map_err(|_| refused("a payment credential could not be resolved"))?;
+                let value = std::str::from_utf8(value.expose_secret())
+                    .map_err(|_| refused("a payment credential was refused"))?;
+                registry_platform_httputil::client::BearerToken::new(value.to_owned())
+                    .map_err(|_| refused("a payment credential was refused"))?;
+            }
         }
-    }
-    for connection in &config.disbursements {
-        let references = [
-            connection.binding.provider.credential_ref(),
-            &connection.binding.registry.credential_ref,
-        ];
-        for reference in references {
-            let value = resolver
-                .resolve(reference.as_str())
-                .map_err(|_| refused("a payment credential could not be resolved"))?;
-            let value = std::str::from_utf8(value.expose_secret())
-                .map_err(|_| refused("a payment credential was refused"))?;
-            registry_platform_httputil::client::BearerToken::new(value.to_owned())
-                .map_err(|_| refused("a payment credential was refused"))?;
+        for connection in &config.disbursements {
+            let references = [
+                connection.binding.provider.credential_ref(),
+                &connection.binding.registry.credential_ref,
+            ];
+            for reference in references {
+                let value = resolver
+                    .resolve(reference.as_str())
+                    .map_err(|_| refused("a payment credential could not be resolved"))?;
+                let value = std::str::from_utf8(value.expose_secret())
+                    .map_err(|_| refused("a payment credential was refused"))?;
+                registry_platform_httputil::client::BearerToken::new(value.to_owned())
+                    .map_err(|_| refused("a payment credential was refused"))?;
+            }
         }
-    }
-    let authenticator = crate::serve::authenticator(runtime, &resolver).await?;
-    let migration = crate::serve::pool(&runtime.database, &resolver, true)?;
-    {
-        let mut client = migration
-            .get()
+        let authenticator = crate::serve::authenticator(runtime, &resolver).await?;
+        // Transit signer and verifier setup reads no database, so a wrong
+        // socket, mount or key refuses here, before any grant.
+        let g2p_provider_bindings = config
+            .disbursements
+            .iter()
+            .map(|connection| connection.binding.provider.clone())
+            .collect::<Vec<_>>();
+        let g2p_provider = HttpG2pProvider::initialize(resolver.clone(), &g2p_provider_bindings)
             .await
-            .map_err(|_| refused("payment migration database unavailable"))?;
-        migrate(&mut client)
+            .map_err(|_| refused("payment disbursement authentication initialization failed"))?;
+        Ok(Self {
+            config,
+            packs,
+            resolver,
+            authenticator,
+            g2p_provider: g2p_provider.with_peer_policy(peer_policy),
+            peer_policy,
+            posture,
+            development,
+            deployment: runtime.id.as_str().to_owned(),
+        })
+    }
+
+    /// Create the collection and G2P tables as the migration role.
+    pub(crate) async fn migrate(client: &mut deadpool_postgres::Client) -> Result<(), ServeError> {
+        migrate(client)
             .await
             .map_err(|_| refused("payment database migration failed"))?;
-        migrate_g2p(&mut client)
+        migrate_g2p(client)
             .await
-            .map_err(|_| refused("G2P database migration failed"))?;
+            .map_err(|_| refused("G2P database migration failed"))
     }
-    let store = PaymentStore::new(pool.clone(), runtime.id.as_str().to_owned());
-    store
-        .check_privileges()
-        .await
-        .map_err(|_| refused("payment runtime role lacks required table or sequence privileges"))?;
-    let g2p_store = G2pStore::new(pool.clone(), runtime.id.as_str().to_owned());
-    if !config.disbursements.is_empty() {
-        g2p_store
-            .check_privileges()
-            .await
-            .map_err(|_| refused("G2P runtime role lacks required table or sequence privileges"))?;
+
+    /// What the runtime role must hold: the collection tables, and the G2P
+    /// tables when a disbursement connection is declared.
+    pub(crate) fn requirements(&self) -> crate::serve::Requirements {
+        crate::serve::Requirements::payments(!self.config.disbursements.is_empty())
     }
-    let g2p_provider_bindings = config
-        .disbursements
-        .iter()
-        .map(|connection| connection.binding.provider.clone())
-        .collect::<Vec<_>>();
-    let g2p_provider = HttpG2pProvider::initialize(resolver.clone(), &g2p_provider_bindings)
-        .await
-        .map_err(|_| refused("payment disbursement authentication initialization failed"))?;
-    let g2p = G2pService::new(
-        g2p_store,
-        Arc::new(BregG2pBridge::new(resolver.clone())),
-        Arc::new(g2p_provider),
-    );
-    let g2p = if let Some(mapping) = packs.mapping.clone() {
-        g2p.with_mapping(mapping)
-    } else {
-        g2p
-    };
-    let disbursements = config.disbursements.clone();
-    let service = PaymentService::new(
-        config,
-        store,
-        Arc::new(BregBridge::new(resolver.clone())),
-        Arc::new(SyntheticProvider::new(resolver, packs.mapping)),
-    )
-    .map_err(|_| refused("payment service was refused"))?;
-    let state = Arc::new(HttpState {
-        authenticator,
-        service,
-        g2p,
-        disbursements,
-    });
-    Ok(Router::new()
+
+    pub(crate) async fn into_router(
+        self,
+        pool: deadpool_postgres::Pool,
+    ) -> Result<Router, ServeError> {
+        let Self {
+            config,
+            packs,
+            resolver,
+            authenticator,
+            g2p_provider,
+            peer_policy,
+            posture,
+            development,
+            deployment,
+        } = self;
+        let store = PaymentStore::new(pool.clone(), deployment.clone(), posture)
+            .with_development(development);
+        store.check_privileges().await.map_err(|_| {
+            refused("payment runtime role lacks required table or sequence privileges")
+        })?;
+        let g2p_store = G2pStore::new(pool.clone(), deployment.clone(), posture);
+        if !config.disbursements.is_empty() {
+            g2p_store.check_privileges().await.map_err(|_| {
+                refused("G2P runtime role lacks required table or sequence privileges")
+            })?;
+        }
+        let g2p = G2pService::new(
+            g2p_store,
+            Arc::new(BregG2pBridge::new(resolver.clone(), peer_policy)),
+            Arc::new(g2p_provider),
+        );
+        let g2p = if let Some(mapping) = packs.mapping.clone() {
+            g2p.with_mapping(mapping)
+        } else {
+            g2p
+        };
+        let disbursements = config.disbursements.clone();
+        let service = PaymentService::new(
+            config,
+            store,
+            Arc::new(BregBridge::new(resolver.clone(), peer_policy)),
+            Arc::new(
+                // The development-only simulator is the only admitted collection
+                // provider. Its connector applies no peer posture policy. A
+                // mapped collection provider uses the same policy as disbursement.
+                SyntheticProvider::new(resolver, packs.mapping)
+                    .with_peer_policy(peer_policy)
+                    .with_development(development),
+            ),
+        )
+        .map_err(|_| refused("payment service was refused"))?;
+        let state = Arc::new(HttpState {
+            authenticator,
+            service,
+            g2p,
+            disbursements,
+        });
+        Ok(payment_router(state))
+    }
+}
+
+/// The payment routes over `state`, with the refusal recording layer.
+fn payment_router(state: Arc<HttpState>) -> Router {
+    Router::new()
         .route("/v1/payments/{connection}/collections", post(request))
         .route(
             "/v1/payments/{connection}/collections/receipt",
@@ -405,27 +501,57 @@ pub async fn load_router(
             post(record_provider_confirmation),
         )
         .layer(DefaultBodyLimit::max(MAX_PAYMENT_BODY_BYTES))
-        .with_state(state))
+        .layer(middleware::from_fn_with_state(
+            crate::metrics::refusal_recorder(),
+            crate::metrics::record_refusals,
+        ))
+        .with_state(state)
 }
 
 pub async fn run_only(
     runtime_path: &Path,
     payments_path: &Path,
     provider_pack_paths: &[PathBuf],
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<(), ServeError> {
-    let absolute = std::fs::canonicalize(runtime_path)
-        .map_err(|_| refused("runtime configuration could not be read"))?;
-    let runtime = RuntimeConfigLoader::new(RuntimeEnvelope {
-        api_version: registry_adapter_core::ADAPTER_RUNTIME_API_VERSION,
-        kind: registry_adapter_core::ADAPTER_RUNTIME_KIND,
-    })
-    .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS)
-    .load::<AdapterRuntimeConfig>(&absolute)
-    .map_err(|_| refused("runtime configuration was refused"))?
-    .config;
+    let (loaded, payments, _) =
+        crate::serve::load_serve_configuration(runtime_path, Some(payments_path), declared)?;
+    let runtime = loaded.config;
+    crate::serve::check_database(&runtime.database)?;
     let resolver = resolver(&runtime)?;
-    let pool = crate::serve::pool(&runtime.database, &resolver, false)?;
-    let router = load_router(&runtime, payments_path, provider_pack_paths, pool).await?;
+    let prepared = PreparedPayments::prepare(
+        &runtime,
+        payments.ok_or_else(|| refused("the payment configuration could not be loaded"))?,
+        provider_pack_paths,
+    )
+    .await?;
+    let pool = crate::serve::pool(
+        &runtime.database,
+        &resolver,
+        false,
+        loaded.development.as_ref(),
+    )?;
+    {
+        let migration = crate::serve::pool(
+            &runtime.database,
+            &resolver,
+            true,
+            loaded.development.as_ref(),
+        )?;
+        let mut client = migration
+            .get()
+            .await
+            .map_err(|_| refused("payment migration database unavailable"))?;
+        PreparedPayments::migrate(&mut client).await?;
+        // When the grant step makes no grant, the privilege check in
+        // `into_router` refuses a role that lacks one.
+        crate::serve::grant_when_split(&mut client, &pool, &prepared.requirements()).await?;
+    }
+    let router = prepared
+        .into_router(pool)
+        .await?
+        .layer(registry_platform_httpsec::refusal_detail::name_failed_check(declared.posture))
+        .layer(registry_platform_httpsec::posture_mark(declared.posture));
     let shutdown = crate::serve::shutdown_signal()?;
     let listener = tokio::net::TcpListener::bind(runtime.listener.bind.0)
         .await
@@ -438,28 +564,46 @@ pub async fn run_only(
 }
 
 async fn caller(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
-    let value =
-        single_header(headers, "authorization").map_err(|_| HttpError(Error::Unauthenticated))?;
-    let bearer = value
-        .strip_prefix("Bearer ")
-        .ok_or(HttpError(Error::Unauthenticated))?;
+    let mut values = headers.get_all("authorization").iter();
+    let value = match (values.next(), values.next()) {
+        (Some(value), None) => value.to_str().ok(),
+        (None, _) => {
+            return Err(HttpError::refused(
+                Error::Unauthenticated,
+                FailedCheck::CredentialMissing,
+            ))
+        }
+        _ => None,
+    }
+    .ok_or(HttpError::refused(
+        Error::Unauthenticated,
+        FailedCheck::CredentialMalformed,
+    ))?;
+    let bearer = value.strip_prefix("Bearer ").ok_or(HttpError::refused(
+        Error::Unauthenticated,
+        FailedCheck::CredentialMissing,
+    ))?;
     state
         .authenticator
         .authenticate(bearer)
         .await
-        .map_err(|error| {
-            HttpError(match error {
-                CallerRefusal::Unauthenticated => Error::Unauthenticated,
+        .map_err(|error| HttpError {
+            code: match error {
+                CallerRefusal::Unauthenticated(_) => Error::Unauthenticated,
                 CallerRefusal::Unavailable => Error::Unavailable,
-            })
+            },
+            check: Some(error.note()),
+            declared: None,
         })
 }
 
 fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, HttpError> {
     let mut values = headers.get_all(name).iter();
     match (values.next(), values.next()) {
-        (Some(value), None) => value.to_str().map_err(|_| HttpError(Error::InvalidRequest)),
-        _ => Err(HttpError(Error::InvalidRequest)),
+        (Some(value), None) => value
+            .to_str()
+            .map_err(|_| HttpError::plain(Error::InvalidRequest)),
+        _ => Err(HttpError::plain(Error::InvalidRequest)),
     }
 }
 fn body<T: DeserializeOwned>(headers: &HeaderMap, uri: &Uri, bytes: &[u8]) -> Result<T, HttpError> {
@@ -467,24 +611,25 @@ fn body<T: DeserializeOwned>(headers: &HeaderMap, uri: &Uri, bytes: &[u8]) -> Re
         || uri.query().is_some()
         || single_header(headers, "content-type")? != "application/json"
     {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     // The payment wire contract requires named fields in a JSON object.
     if !bytes.trim_ascii_start().starts_with(b"{") {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
-    let request = T::deserialize(&mut decoder).map_err(|_| HttpError(Error::InvalidRequest))?;
+    let request =
+        T::deserialize(&mut decoder).map_err(|_| HttpError::plain(Error::InvalidRequest))?;
     decoder
         .end()
-        .map_err(|_| HttpError(Error::InvalidRequest))?;
+        .map_err(|_| HttpError::plain(Error::InvalidRequest))?;
     Ok(request)
 }
 fn collection(value: &str) -> Result<Uuid, HttpError> {
     Uuid::parse_str(value)
         .ok()
         .filter(|id| !id.is_nil())
-        .ok_or(HttpError(Error::InvalidRequest))
+        .ok_or(HttpError::plain(Error::InvalidRequest))
 }
 
 async fn request(
@@ -546,7 +691,7 @@ async fn read(
 ) -> Result<Response, HttpError> {
     let caller = caller(&state, &headers).await?;
     if uri.query().is_some() || !bytes.is_empty() {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let id = collection(&id)?;
     let result = state.service.read(&connection, &caller, id).await;
@@ -572,7 +717,7 @@ async fn record_receipt(
     let id = collection(&id)?;
     let request: RecordReceipt = body(&headers, &uri, &bytes)?;
     if request.collection_id != id {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let key = single_header(&headers, "idempotency-key")?;
     let result = state
@@ -601,39 +746,46 @@ async fn g2p_connection<'a>(
         .disbursements
         .iter()
         .find(|entry| entry.id == id)
-        .ok_or(Error::NotFound)
+        .ok_or(PaymentFailure::concealing(Error::NotFound))
         .and_then(|connection| {
-            if !connection.allowed_clients.contains(&caller.client_id)
-                || !caller.scopes.contains(&connection.required_scope)
-            {
-                Err(Error::Forbidden)
+            if !connection.allowed_clients.contains(&caller.client_id) {
+                Err(PaymentFailure::refused(
+                    Error::Forbidden,
+                    FailedCheck::RequesterClient,
+                ))
+            } else if !caller.scopes.contains(&connection.required_scope) {
+                Err(PaymentFailure::scope_refused(
+                    &connection.id,
+                    &connection.required_scope,
+                    &caller.scope_claim,
+                ))
             } else {
                 Ok(connection)
             }
         });
-    if let Err(error) = selected {
+    if let Err(failure) = &selected {
         state
             .service
-            .audit_access(caller, operation, None, Some(error))
+            .audit_access(caller, operation, None, Some(failure.code))
             .await
-            .map_err(|_| HttpError(Error::Unavailable))?;
+            .map_err(|_| HttpError::plain(Error::Unavailable))?;
     }
-    selected.map_err(HttpError)
+    selected.map_err(HttpError::from)
 }
 
 fn g2p_principal(caller: &Caller) -> Result<String, Error> {
     super::model::digest(&[&caller.issuer, &caller.client_id, &caller.reference])
 }
 
-fn g2p_error(error: G2pError) -> Error {
-    match error {
+fn g2p_error(error: G2pError) -> PaymentFailure {
+    PaymentFailure::concealing(match error {
         G2pError::InvalidRequest => Error::InvalidRequest,
         G2pError::Conflict => Error::Conflict,
         G2pError::NotFound => Error::NotFound,
         G2pError::Unavailable => Error::Unavailable,
         G2pError::OutcomeUnknown => Error::OutcomeUnknown,
         G2pError::RecoveryHeld => Error::RecoveryHeld,
-    }
+    })
 }
 
 fn disbursement_accepted(attempt: &G2pAttempt) -> Result<DisbursementAccepted, Error> {
@@ -704,17 +856,17 @@ async fn request_disbursement(
     let request: RequestDisbursement = body(&headers, &uri, &bytes)?;
     request
         .validate()
-        .map_err(|_| HttpError(Error::InvalidRequest))?;
+        .map_err(|_| HttpError::plain(Error::InvalidRequest))?;
     let key = single_header(&headers, "idempotency-key")?;
     if !super::config::text(key, 128) {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let selected = g2p_connection(&state, &connection, &caller, "request-disbursement").await?;
     let result = state
         .g2p
         .request_disbursement(
             &connection,
-            &g2p_principal(&caller).map_err(HttpError)?,
+            &g2p_principal(&caller).map_err(HttpError::plain)?,
             key,
             request.instruction_record_id,
             request.instruction_version,
@@ -723,7 +875,7 @@ async fn request_disbursement(
         )
         .await
         .map_err(g2p_error)
-        .and_then(|attempt| disbursement_accepted(&attempt));
+        .and_then(|attempt| disbursement_accepted(&attempt).map_err(PaymentFailure::from));
     finish(
         &state,
         &caller,
@@ -747,24 +899,24 @@ async fn disbursement_receipt(
     let request: RequestDisbursement = body(&headers, &uri, &bytes)?;
     request
         .validate()
-        .map_err(|_| HttpError(Error::InvalidRequest))?;
+        .map_err(|_| HttpError::plain(Error::InvalidRequest))?;
     let key = single_header(&headers, "idempotency-key")?;
     if !super::config::text(key, 128) {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     g2p_connection(&state, &connection, &caller, "request-disbursement-receipt").await?;
     let result = state
         .g2p
         .request_receipt(
             &connection,
-            &g2p_principal(&caller).map_err(HttpError)?,
+            &g2p_principal(&caller).map_err(HttpError::plain)?,
             key,
             request.instruction_record_id,
             request.instruction_version,
         )
         .await
         .map_err(g2p_error)
-        .and_then(|attempt| disbursement_accepted(&attempt));
+        .and_then(|attempt| disbursement_accepted(&attempt).map_err(PaymentFailure::from));
     finish(
         &state,
         &caller,
@@ -786,16 +938,20 @@ async fn read_disbursement(
 ) -> Result<Response, HttpError> {
     let caller = caller(&state, &headers).await?;
     if uri.query().is_some() || !bytes.is_empty() {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     g2p_connection(&state, &connection, &caller, "read-disbursement").await?;
     let id = collection(&id)?;
     let result = state
         .g2p
-        .disbursement_status(&connection, &g2p_principal(&caller).map_err(HttpError)?, id)
+        .disbursement_status(
+            &connection,
+            &g2p_principal(&caller).map_err(HttpError::plain)?,
+            id,
+        )
         .await
         .map_err(g2p_error)
-        .and_then(|attempt| disbursement_status(&attempt));
+        .and_then(|attempt| disbursement_status(&attempt).map_err(PaymentFailure::from));
     finish(
         &state,
         &caller,
@@ -819,26 +975,26 @@ async fn record_provider_confirmation(
     let id = collection(&id)?;
     let request: RecordProviderConfirmation = body(&headers, &uri, &bytes)?;
     if request.disbursement_id != id {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     let key = single_header(&headers, "idempotency-key")?;
     if !super::config::text(key, 128) {
-        return Err(HttpError(Error::InvalidRequest));
+        return Err(HttpError::plain(Error::InvalidRequest));
     }
     g2p_connection(&state, &connection, &caller, "record-provider-confirmation").await?;
     let result = state
         .g2p
         .record_provider_confirmation(
             &connection,
-            &g2p_principal(&caller).map_err(HttpError)?,
+            &g2p_principal(&caller).map_err(HttpError::plain)?,
             key,
             id,
         )
         .await
         .map_err(g2p_error)
-        .and_then(|attempt| {
+        .and_then(|attempt| -> Result<_, PaymentFailure> {
             if attempt.state != G2pAttemptState::ConfirmationRecorded {
-                return Err(Error::RecoveryHeld);
+                return Err(Error::RecoveryHeld.into());
             }
             let status = disbursement_status(&attempt)?;
             let confirmation = ProviderConfirmation {
@@ -875,14 +1031,19 @@ async fn finish<T: Serialize>(
     id: Option<Uuid>,
     mutation: bool,
     status: StatusCode,
-    result: Result<T, Error>,
+    result: Result<T, PaymentFailure>,
 ) -> Result<Response, HttpError> {
     state
         .service
-        .audit_access(caller, operation, id, result.as_ref().err().copied())
+        .audit_access(
+            caller,
+            operation,
+            id,
+            result.as_ref().err().map(|failure| failure.code),
+        )
         .await
         .map_err(|_| {
-            HttpError(if mutation {
+            HttpError::plain(if mutation {
                 Error::OutcomeUnknown
             } else {
                 Error::Unavailable
@@ -890,7 +1051,7 @@ async fn finish<T: Serialize>(
         })?;
     result
         .map(|value| headers((status, Json(value)).into_response()))
-        .map_err(HttpError)
+        .map_err(HttpError::from)
 }
 
 /// The attempt an accepted request names, recorded in its audit event.
@@ -907,21 +1068,64 @@ impl AuditedAttempt for DisbursementAccepted {
         self.disbursement_id
     }
 }
-fn audited_attempt<T: AuditedAttempt>(result: &Result<T, Error>) -> Option<Uuid> {
+fn audited_attempt<T: AuditedAttempt, E>(result: &Result<T, E>) -> Option<Uuid> {
     result.as_ref().ok().map(AuditedAttempt::attempt_id)
 }
 
-struct HttpError(Error);
+/// A payment error with, for a refused caller, the check it failed.
+struct HttpError {
+    code: Error,
+    check: Option<RefusalNote>,
+    declared: Option<DeclaredScope>,
+}
+impl HttpError {
+    fn plain(code: Error) -> Self {
+        Self {
+            code,
+            check: None,
+            declared: None,
+        }
+    }
+    fn refused(code: Error, check: FailedCheck) -> Self {
+        Self {
+            code,
+            check: Some(RefusalNote::new(check)),
+            declared: None,
+        }
+    }
+}
+impl From<PaymentFailure> for HttpError {
+    fn from(failure: PaymentFailure) -> Self {
+        Self {
+            code: failure.code,
+            check: failure.check.map(RefusalNote::new),
+            declared: failure.declared,
+        }
+    }
+}
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
-        let problem = PaymentProblem::from(self.0);
+        let problem = PaymentProblem::from(self.code);
         let status =
             StatusCode::from_u16(problem.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        crate::facade::require_refusal_check(status, self.check.map(|note| note.check));
         let mut response = (status, Json(problem)).into_response();
         response.headers_mut().insert(
             "content-type",
             HeaderValue::from_static("application/problem+json"),
         );
+        if status == StatusCode::UNAUTHORIZED {
+            response.headers_mut().insert(
+                axum::http::header::WWW_AUTHENTICATE,
+                registry_platform_httpsec::bearer_challenge(),
+            );
+        }
+        if let Some(note) = self.check {
+            response.extensions_mut().insert(note);
+        }
+        if let Some(declared) = self.declared {
+            response.extensions_mut().insert(declared);
+        }
         headers(response)
     }
 }
@@ -948,9 +1152,55 @@ fn refused(message: &str) -> ServeError {
     ServeError::Configuration(format!("adapter.payment.configuration: {message}"))
 }
 
+#[cfg(all(test, feature = "postgres-test"))]
+mod refusal_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_401_carries_a_bearer_challenge() {
+        let response = HttpError::refused(Error::Unauthenticated, FailedCheck::CredentialMissing)
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers().get(axum::http::header::WWW_AUTHENTICATE),
+            Some(&registry_platform_httpsec::bearer_challenge())
+        );
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal was built without its failed check")]
+    fn a_forbidden_payment_answer_without_its_check_is_not_built() {
+        let _ = HttpError::plain(Error::Forbidden).into_response();
+    }
+
+    #[test]
+    fn a_payment_scope_refusal_carries_the_connection_and_its_declared_scope() {
+        let response = HttpError::from(PaymentFailure::scope_refused(
+            "mifos-main",
+            "payments.write",
+            "scp",
+        ))
+        .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let declared = response
+            .extensions()
+            .get::<DeclaredScope>()
+            .expect("the declared scope values");
+        assert_eq!(declared.scope_claim(), "scp");
+        assert_eq!(declared.required_scope(), Some("payments.write"));
+        assert_eq!(declared.access_profile(), Some("mifos-main"));
+    }
+
+    #[test]
+    fn a_forbidden_payment_answer_carries_its_check() {
+        let response = HttpError::refused(Error::Forbidden, FailedCheck::Scope).into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(response.extensions().get::<RefusalNote>().is_some());
+    }
 
     #[test]
     fn payment_body_requires_a_closed_json_object() {
@@ -980,7 +1230,10 @@ mod tests {
             assert!(
                 matches!(
                     body::<RequestCollection>(&headers, &uri, invalid.as_bytes()),
-                    Err(HttpError(Error::InvalidRequest))
+                    Err(HttpError {
+                        code: Error::InvalidRequest,
+                        ..
+                    })
                 ),
                 "unexpected result for {invalid}"
             );
@@ -992,7 +1245,10 @@ mod tests {
         at_limit.push(b' ');
         assert!(matches!(
             body::<RequestCollection>(&headers, &uri, &at_limit),
-            Err(HttpError(Error::InvalidRequest))
+            Err(HttpError {
+                code: Error::InvalidRequest,
+                ..
+            })
         ));
     }
 
@@ -1014,15 +1270,15 @@ mod tests {
             simulation: false,
         };
         assert_eq!(
-            audited_attempt(&Ok(collection.clone())),
+            audited_attempt::<_, Error>(&Ok(collection.clone())),
             Some(collection.collection_id)
         );
         assert_eq!(
-            audited_attempt(&Ok(disbursement.clone())),
+            audited_attempt::<_, Error>(&Ok(disbursement.clone())),
             Some(disbursement.disbursement_id)
         );
         assert_eq!(
-            audited_attempt::<CollectionAccepted>(&Err(Error::OutcomeUnknown)),
+            audited_attempt::<CollectionAccepted, Error>(&Err(Error::OutcomeUnknown)),
             None
         );
     }

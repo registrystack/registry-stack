@@ -29,6 +29,7 @@ use registry_documents_core::{
     ReservationView, ReserveDocumentRequest, Reserver, Standing, UploadState, VerificationState,
     MAXIMUM_PAGE_SIZE, UPLOAD_CONTENT_PATH,
 };
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_dispatch::postgres::{enqueue, JobKey, JobTable};
 use registry_platform_objectstore::ObjectStoreError;
@@ -218,10 +219,197 @@ fn checked<T: std::fmt::Display>(parsed: Option<T>) -> String {
     parsed.map_or_else(|| UNPARSED.to_owned(), |value| value.to_string())
 }
 
+/// The problem codes that refuse a caller's authority, or conceal a target
+/// the caller may not see. A refusal is built with the check it failed
+/// ([`ServiceError::Refused`]), never from the bare code, so the operator's
+/// counter and log line can name the check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RefusalCode {
+    AuthenticationRefused,
+    CustodyNotPermitted,
+    ProfileNotAuthorized,
+    ResourceNotFound,
+}
+
+impl RefusalCode {
+    /// The problem this refusal answers with.
+    #[must_use]
+    pub const fn problem(self) -> ProblemCode {
+        match self {
+            Self::AuthenticationRefused => ProblemCode::AuthenticationRefused,
+            Self::CustodyNotPermitted => ProblemCode::CustodyNotPermitted,
+            Self::ProfileNotAuthorized => ProblemCode::ProfileNotAuthorized,
+            Self::ResourceNotFound => ProblemCode::ResourceNotFound,
+        }
+    }
+
+    /// Sort a problem into a refusal or a plain answer. The match names every
+    /// code, so a code added to the vocabulary does not compile until it
+    /// declares which side it is on.
+    #[must_use]
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub const fn of(problem: ProblemCode) -> Option<Self> {
+        match problem {
+            ProblemCode::AuthenticationRefused => Some(Self::AuthenticationRefused),
+            ProblemCode::CustodyNotPermitted => Some(Self::CustodyNotPermitted),
+            ProblemCode::ProfileNotAuthorized => Some(Self::ProfileNotAuthorized),
+            ProblemCode::ResourceNotFound => Some(Self::ResourceNotFound),
+            ProblemCode::CustodyQuotaExceeded
+            | ProblemCode::DocumentGrantExpiryOutOfRange
+            | ProblemCode::DocumentPolicyUnknown
+            | ProblemCode::DocumentVersionNotReleasable
+            | ProblemCode::DocumentContentTypeNotAllowed
+            | ProblemCode::DocumentTooLarge
+            | ProblemCode::IdempotencyExpired
+            | ProblemCode::IdempotencyKeyReused
+            | ProblemCode::RequestBodyTooLarge
+            | ProblemCode::RequestInvalid
+            | ProblemCode::RequestMethodNotAllowed
+            | ProblemCode::RequestNotFound
+            | ProblemCode::RequestUnprocessable
+            | ProblemCode::RequestUnsupportedMediaType
+            | ProblemCode::ServiceUnavailable
+            | ProblemCode::UploadContentTypeMismatch
+            | ProblemCode::UploadDigestMismatch
+            | ProblemCode::UploadExpired
+            | ProblemCode::UploadFinalized
+            | ProblemCode::UploadLengthMismatch => None,
+        }
+    }
+}
+
+/// A problem code that is not a refusal of authority. The only way to build
+/// one is [`PlainProblem::new`], which refuses a code [`RefusalCode::of`]
+/// maps, so a refusal cannot be answered without the check it failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlainProblem(ProblemCode);
+
+impl PlainProblem {
+    /// `problem` as a plain problem, or `None` when it is a refusal code.
+    #[must_use]
+    pub fn new(problem: ProblemCode) -> Option<Self> {
+        match RefusalCode::of(problem) {
+            None => Some(Self(problem)),
+            Some(_) => None,
+        }
+    }
+
+    /// The problem the caller is answered with.
+    #[must_use]
+    pub const fn problem(self) -> ProblemCode {
+        self.0
+    }
+}
+
+/// Why an operation answered a problem.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceError {
+    /// A problem that is not a refusal of authority: validation, a conflict,
+    /// an idempotency answer, or an outage. A refusal code is built as
+    /// `Refused`.
+    Problem(PlainProblem),
+    /// A refusal of authority, with the check it failed.
+    Refused {
+        code: RefusalCode,
+        check: FailedCheck,
+    },
+    /// The verifier could not reach or use its key source. The caller is
+    /// answered `service.unavailable`, and the operator's record names the
+    /// check.
+    KeySourceUnavailable,
+}
+
+impl ServiceError {
+    /// A refusal that conceals a target the caller may not see: the row is
+    /// absent or foreign, and the answer does not say which.
+    #[must_use]
+    pub const fn concealed(check: FailedCheck) -> Self {
+        Self::Refused {
+            code: RefusalCode::ResourceNotFound,
+            check,
+        }
+    }
+
+    /// A refusal of a caller that sees the target but may not act on it.
+    #[must_use]
+    pub const fn not_authorized(check: FailedCheck) -> Self {
+        Self::Refused {
+            code: RefusalCode::ProfileNotAuthorized,
+            check,
+        }
+    }
+
+    /// A refusal to place a document in custody.
+    #[must_use]
+    pub const fn custody(check: FailedCheck) -> Self {
+        Self::Refused {
+            code: RefusalCode::CustodyNotPermitted,
+            check,
+        }
+    }
+
+    /// A refusal of a credential or of the identity claims it carries.
+    #[must_use]
+    pub const fn unauthenticated(check: FailedCheck) -> Self {
+        Self::Refused {
+            code: RefusalCode::AuthenticationRefused,
+            check,
+        }
+    }
+
+    /// The problem the caller is answered with.
+    #[must_use]
+    pub const fn problem(&self) -> ProblemCode {
+        match self {
+            Self::Problem(problem) => problem.problem(),
+            Self::Refused { code, .. } => code.problem(),
+            Self::KeySourceUnavailable => ProblemCode::ServiceUnavailable,
+        }
+    }
+
+    /// The check this answer failed, when it is a refusal.
+    #[must_use]
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub const fn failed_check(&self) -> Option<FailedCheck> {
+        match self {
+            Self::Problem(_) => None,
+            Self::Refused { check, .. } => Some(*check),
+            Self::KeySourceUnavailable => Some(FailedCheck::KeySourceUnavailable),
+        }
+    }
+}
+
+impl From<ProblemCode> for ServiceError {
+    /// A problem that is not a refusal. A refusal code reaching this
+    /// conversion has no check to record, which is a defect in the caller:
+    /// it is logged and answered `service.unavailable`, never as a refusal
+    /// the operator cannot account for.
+    fn from(problem: ProblemCode) -> Self {
+        if let Some(plain) = PlainProblem::new(problem) {
+            return Self::Problem(plain);
+        }
+        tracing::error!(
+            code = problem.code(),
+            "a refusal was built without the check it failed"
+        );
+        Self::Problem(PlainProblem(ProblemCode::ServiceUnavailable))
+    }
+}
+
+/// The answer to a custody placement the policy refused. Every refusal of
+/// [`place_custody`] is one of the caller's profile or request naming custody
+/// it may not place, so the check is the operation.
+fn custody_refusal(problem: ProblemCode) -> ServiceError {
+    match RefusalCode::of(problem) {
+        Some(RefusalCode::CustodyNotPermitted) => ServiceError::custody(FailedCheck::Operation),
+        Some(_) | None => problem.into(),
+    }
+}
+
 /// Log a failure the caller is answered `service.unavailable` for.
-fn unavailable(stage: &'static str, error: &dyn std::fmt::Display) -> ProblemCode {
+fn unavailable(stage: &'static str, error: &dyn std::fmt::Display) -> ServiceError {
     tracing::error!(stage, error = %error, "a document operation failed");
-    ProblemCode::ServiceUnavailable
+    ServiceError::Problem(PlainProblem(ProblemCode::ServiceUnavailable))
 }
 
 fn timestamp(value: DateTime<Utc>) -> String {
@@ -455,7 +643,7 @@ fn key_digest(caller: &Caller, operation: &str, key: &str) -> String {
 }
 
 /// The digest of a request body in canonical JSON.
-fn request_digest(body: &impl serde::Serialize) -> Result<String, ProblemCode> {
+fn request_digest(body: &impl serde::Serialize) -> Result<String, ServiceError> {
     let value =
         serde_json::to_value(body).map_err(|error| unavailable("request digest", &error))?;
     let canonical =
@@ -479,7 +667,7 @@ async fn replay(
     transaction: &tokio_postgres::Transaction<'_>,
     key: &str,
     request: &str,
-) -> Result<Replay, ProblemCode> {
+) -> Result<Replay, ServiceError> {
     transaction
         .execute(
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 1))",
@@ -503,10 +691,10 @@ async fn replay(
     let resource: Uuid = row.try_get(1).map_err(read)?;
     let expired: bool = row.try_get(2).map_err(read)?;
     if expired {
-        return Err(ProblemCode::IdempotencyExpired);
+        return Err(ProblemCode::IdempotencyExpired.into());
     }
     if recorded != request {
-        return Err(ProblemCode::IdempotencyKeyReused);
+        return Err(ProblemCode::IdempotencyKeyReused.into());
     }
     Ok(Replay::Repeat(resource))
 }
@@ -520,7 +708,7 @@ async fn record_key(
     request: &str,
     resource: Uuid,
     days: i32,
-) -> Result<(), ProblemCode> {
+) -> Result<(), ServiceError> {
     transaction
         .execute(
             "INSERT INTO documents_idempotency
@@ -600,7 +788,7 @@ impl DocumentService {
         &self.settings.budget
     }
 
-    fn actor_reference(&self, caller: &Caller) -> Result<String, ProblemCode> {
+    fn actor_reference(&self, caller: &Caller) -> Result<String, ServiceError> {
         self.audit
             .actor_reference(&caller.issuer, &caller.subject, caller.kind)
             .map_err(|error| unavailable("audit actor reference", &error))
@@ -610,7 +798,7 @@ impl DocumentService {
         &self,
         event: &'static str,
         record: Value,
-    ) -> Result<registry_platform_audit::AuditRequest, ProblemCode> {
+    ) -> Result<registry_platform_audit::AuditRequest, ServiceError> {
         self.audit
             .begin(event, record)
             .await
@@ -620,15 +808,15 @@ impl DocumentService {
     async fn finish<T>(
         audit: registry_platform_audit::AuditRequest,
         event: &'static str,
-        result: &Result<T, ProblemCode>,
+        result: &Result<T, ServiceError>,
         success: Value,
-    ) -> Result<(), ProblemCode> {
+    ) -> Result<(), ServiceError> {
         let record = match result {
             Ok(_) => success,
             Err(problem) => json!({
                 "event": event,
                 "outcome": "refused",
-                "code": problem.code(),
+                "code": problem.problem().code(),
             }),
         };
         audit
@@ -655,7 +843,7 @@ impl DocumentService {
         policy
     }
 
-    async fn client(&self) -> Result<deadpool_postgres::Client, ProblemCode> {
+    async fn client(&self) -> Result<deadpool_postgres::Client, ServiceError> {
         self.store
             .client()
             .await
@@ -664,7 +852,7 @@ impl DocumentService {
 
     /// A protected request is admitted only while this runtime's package
     /// remains active. Mutations additionally fence their own transaction.
-    pub(crate) async fn admit(&self) -> Result<(), ProblemCode> {
+    pub(crate) async fn admit(&self) -> Result<(), ServiceError> {
         self.store
             .admit()
             .await
@@ -674,7 +862,7 @@ impl DocumentService {
     async fn record_in<C: tokio_postgres::GenericClient>(
         client: &C,
         document_id: Uuid,
-    ) -> Result<Option<Record>, ProblemCode> {
+    ) -> Result<Option<Record>, ServiceError> {
         client
             .query_opt(
                 &format!(
@@ -690,14 +878,14 @@ impl DocumentService {
             .transpose()
     }
 
-    async fn record(&self, document_id: Uuid) -> Result<Option<Record>, ProblemCode> {
+    async fn record(&self, document_id: Uuid) -> Result<Option<Record>, ServiceError> {
         let client = self.client().await?;
         Self::record_in(&**client, document_id).await
     }
 
     /// Whether `caller`, by issuer, subject, and actor kind, holds an
     /// active grant on `version_id`.
-    async fn holds_grant(&self, caller: &Caller, version_id: Uuid) -> Result<bool, ProblemCode> {
+    async fn holds_grant(&self, caller: &Caller, version_id: Uuid) -> Result<bool, ServiceError> {
         let client = self.client().await?;
         let row = client
             .query_one(
@@ -719,7 +907,7 @@ impl DocumentService {
     }
 
     /// Decide what `caller` is to `record`.
-    async fn access(&self, caller: &Caller, record: &Record) -> Result<Access, ProblemCode> {
+    async fn access(&self, caller: &Caller, record: &Record) -> Result<Access, ServiceError> {
         let Some(policy) = self.policy(&record.policy_id) else {
             return Ok(Access::default());
         };
@@ -739,7 +927,7 @@ impl DocumentService {
     /// The view `access` shows of `record`. A version approved under
     /// another verifier binding, or whose approval names other content, is
     /// shown `suspended`: it is not releasable now.
-    fn present(&self, record: &Record, access: Access) -> Result<DocumentView, ProblemCode> {
+    fn present(&self, record: &Record, access: Access) -> Result<DocumentView, ServiceError> {
         let mut status = record.status;
         if status.is_releasable()
             && record
@@ -792,7 +980,7 @@ impl DocumentService {
         caller: &Caller,
         key: &str,
         request: &ReserveDocumentRequest,
-    ) -> Result<ReservationView, ProblemCode> {
+    ) -> Result<ReservationView, ServiceError> {
         let reference = self.actor_reference(caller)?;
         let audit = self
             .begin(
@@ -826,7 +1014,7 @@ impl DocumentService {
         caller: &Caller,
         key: &str,
         request: &ReserveDocumentRequest,
-    ) -> Result<ReservationView, ProblemCode> {
+    ) -> Result<ReservationView, ServiceError> {
         let admitted = admit_reservation(
             &self.project,
             ReservationAsk {
@@ -839,10 +1027,14 @@ impl DocumentService {
             admitted.policy,
             caller,
             CustodyAsk {
-                subject: request.custodian.subject.as_str(),
+                subject: request
+                    .custodian
+                    .as_ref()
+                    .map(|custodian| custodian.subject.as_str()),
                 issuing_institution: request.issuing_institution.as_ref().map(ExternalId::as_str),
             },
-        )?;
+        )
+        .map_err(custody_refusal)?;
         let binding = admitted
             .policy
             .binding(admitted.policy_id)
@@ -991,7 +1183,7 @@ impl DocumentService {
         &self,
         caller: &Caller,
         record: &Record,
-    ) -> Result<ReservationView, ProblemCode> {
+    ) -> Result<ReservationView, ServiceError> {
         let access = self.access(caller, record).await?;
         Ok(ReservationView {
             document: self.present(record, access)?,
@@ -1014,7 +1206,7 @@ impl DocumentService {
         content_type: Option<&str>,
         content_length: Option<u64>,
         body: S,
-    ) -> Result<UploadOutcome, ProblemCode>
+    ) -> Result<UploadOutcome, ServiceError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
     {
@@ -1062,7 +1254,7 @@ impl DocumentService {
         &self,
         caller: &Caller,
         upload_id: Uuid,
-    ) -> Result<Reservation, ProblemCode> {
+    ) -> Result<Reservation, ServiceError> {
         let client = self.client().await?;
         let row = client
             .query_opt(
@@ -1071,14 +1263,14 @@ impl DocumentService {
             )
             .await
             .map_err(|error| unavailable("reservation read", &error))?
-            .ok_or(ProblemCode::ResourceNotFound)?;
+            .ok_or_else(|| ServiceError::concealed(FailedCheck::Visibility))?;
         let record =
             Record::from_row(&row).map_err(|error| unavailable("reservation decode", &error))?;
         if record.reserver_issuer != caller.issuer
             || record.reserver_subject != caller.subject
             || record.reserver_kind != caller.kind
         {
-            return Err(ProblemCode::ResourceNotFound);
+            return Err(ServiceError::concealed(FailedCheck::Visibility));
         }
         Ok(Reservation { record })
     }
@@ -1090,7 +1282,7 @@ impl DocumentService {
         content_type: Option<&str>,
         content_length: Option<u64>,
         body: S,
-    ) -> Result<UploadOutcome, ProblemCode>
+    ) -> Result<UploadOutcome, ServiceError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
     {
@@ -1103,31 +1295,33 @@ impl DocumentService {
                 || record.upload_lapsed
                 || record.status.is_erasing())
         {
-            return Err(ProblemCode::UploadExpired);
+            return Err(ProblemCode::UploadExpired.into());
         }
         if content_type != Some(record.media_type.as_str()) {
             return Err(if finalized {
                 ProblemCode::UploadFinalized
             } else {
                 ProblemCode::UploadContentTypeMismatch
-            });
+            }
+            .into());
         }
         match content_length {
             Some(length) if length > self.settings.ceiling => {
-                return Err(ProblemCode::RequestBodyTooLarge)
+                return Err(ProblemCode::RequestBodyTooLarge.into())
             }
             Some(length) if length != record.length => {
                 return Err(if finalized {
                     ProblemCode::UploadFinalized
                 } else {
                     ProblemCode::UploadLengthMismatch
-                })
+                }
+                .into())
             }
             _ => {}
         }
         let Some(_permit) = self.settings.budget.try_reserve(record.length) else {
             tracing::warn!("the transfer budget is spent; the upload was refused");
-            return Err(ProblemCode::ServiceUnavailable);
+            return Err(ProblemCode::ServiceUnavailable.into());
         };
         let deadline = self.settings.deadline.for_length(record.length);
         let body = match tokio::time::timeout(deadline, read_hashing(body, record.length)).await {
@@ -1137,12 +1331,13 @@ impl DocumentService {
                     ProblemCode::UploadFinalized
                 } else {
                     ProblemCode::UploadLengthMismatch
-                })
+                }
+                .into())
             }
-            Ok(Err(BodyRefusal::Unreadable)) => return Err(ProblemCode::RequestInvalid),
+            Ok(Err(BodyRefusal::Unreadable)) => return Err(ProblemCode::RequestInvalid.into()),
             Err(_) => {
                 tracing::warn!("an upload body did not arrive within its transfer deadline");
-                return Err(ProblemCode::ServiceUnavailable);
+                return Err(ProblemCode::ServiceUnavailable.into());
             }
         };
         let digest = body.digest();
@@ -1152,11 +1347,11 @@ impl DocumentService {
                     self.current_view(caller, record.document_id).await?,
                 ))
             } else {
-                Err(ProblemCode::UploadFinalized)
+                Err(ProblemCode::UploadFinalized.into())
             };
         }
         if digest != record.expected_digest {
-            return Err(ProblemCode::UploadDigestMismatch);
+            return Err(ProblemCode::UploadDigestMismatch.into());
         }
         let sha256 = body.sha256_hex;
         let stored = match self.storage.as_ref() {
@@ -1178,7 +1373,7 @@ impl DocumentService {
         &self,
         caller: &Caller,
         document_id: Uuid,
-    ) -> Result<DocumentView, ProblemCode> {
+    ) -> Result<DocumentView, ServiceError> {
         let record = self
             .record(document_id)
             .await?
@@ -1196,7 +1391,7 @@ impl DocumentService {
         record: &Record,
         sha256: &str,
         bytes: Vec<u8>,
-    ) -> Result<Uuid, ProblemCode> {
+    ) -> Result<Uuid, ServiceError> {
         let object_id = Uuid::new_v4();
         let store = self
             .storage
@@ -1275,7 +1470,7 @@ impl DocumentService {
         record: &Record,
         digest: &str,
         stored: Stored,
-    ) -> Result<bool, ProblemCode> {
+    ) -> Result<bool, ServiceError> {
         let version_id = record.version_id;
         let mut client = self.client().await?;
         let transaction = client
@@ -1302,9 +1497,9 @@ impl DocumentService {
         let erasing: bool = row.try_get(3).map_err(read)?;
         match state.as_str() {
             "finalized" if computed.as_deref() == Some(digest) => return Ok(false),
-            "finalized" => return Err(ProblemCode::UploadFinalized),
-            "expired" => return Err(ProblemCode::UploadExpired),
-            _ if lapsed || erasing => return Err(ProblemCode::UploadExpired),
+            "finalized" => return Err(ProblemCode::UploadFinalized.into()),
+            "expired" => return Err(ProblemCode::UploadExpired.into()),
+            _ if lapsed || erasing => return Err(ProblemCode::UploadExpired.into()),
             _ => {}
         }
         if !pin_storage(&*transaction, &self.storage)
@@ -1386,14 +1581,14 @@ impl DocumentService {
         &self,
         caller: &Caller,
         document_id: Uuid,
-    ) -> Result<DocumentView, ProblemCode> {
+    ) -> Result<DocumentView, ServiceError> {
         let record = self
             .record(document_id)
             .await?
-            .ok_or(ProblemCode::ResourceNotFound)?;
+            .ok_or_else(|| ServiceError::concealed(FailedCheck::Visibility))?;
         let access = self.access(caller, &record).await?;
         if !access.sees() {
-            return Err(ProblemCode::ResourceNotFound);
+            return Err(ServiceError::concealed(FailedCheck::Visibility));
         }
         self.present(&record, access)
     }
@@ -1403,7 +1598,7 @@ impl DocumentService {
         &self,
         caller: &Caller,
         page: &PageRequest,
-    ) -> Result<DocumentPage, ProblemCode> {
+    ) -> Result<DocumentPage, ServiceError> {
         let (after, after_id) = Cursor::bounds(page.cursor);
         let rows = {
             let client = self.client().await?;
@@ -1464,7 +1659,7 @@ impl DocumentService {
         caller: &Caller,
         document_id: Uuid,
         version_id: Uuid,
-    ) -> Result<ReleasedContent, ProblemCode> {
+    ) -> Result<ReleasedContent, ServiceError> {
         let started = Instant::now();
         let reference = self.actor_reference(caller)?;
         let audit = self
@@ -1502,7 +1697,7 @@ impl DocumentService {
                 json!({
                     "event": CONTENT_DOWNLOAD_EVENT,
                     "outcome": "refused",
-                    "code": problem.code(),
+                    "code": problem.problem().code(),
                 }),
                 Err(problem),
             ),
@@ -1512,7 +1707,7 @@ impl DocumentService {
                     "outcome": "storage-integrity",
                     "byteCount": 0,
                 }),
-                Err(ProblemCode::ServiceUnavailable),
+                Err(ProblemCode::ServiceUnavailable.into()),
             ),
             Err(Release::Unavailable) => (
                 json!({
@@ -1520,7 +1715,7 @@ impl DocumentService {
                     "outcome": "storage-unavailable",
                     "byteCount": 0,
                 }),
-                Err(ProblemCode::ServiceUnavailable),
+                Err(ProblemCode::ServiceUnavailable.into()),
             ),
         };
         audit
@@ -1545,7 +1740,7 @@ impl DocumentService {
             .record(document_id)
             .await?
             .filter(|record| record.version_id == version_id)
-            .ok_or(ProblemCode::ResourceNotFound)?;
+            .ok_or_else(|| ServiceError::concealed(FailedCheck::Visibility))?;
         let access = self.access(caller, &record).await?;
         let digest = self.releasable(&record, access)?;
         let Some(permit) = self.settings.budget.try_reserve(record.length) else {
@@ -1570,13 +1765,17 @@ impl DocumentService {
 
     /// The digest `access` may be released of `record`, or the answer to a
     /// caller that may not have its content.
-    fn releasable<'a>(&self, record: &'a Record, access: Access) -> Result<&'a str, ProblemCode> {
+    fn releasable<'a>(&self, record: &'a Record, access: Access) -> Result<&'a str, ServiceError> {
         match record.releasable_digest(&self.settings.verifier_binding) {
             Some(digest) if access.standing.custodian || access.released_by_grant => Ok(digest),
-            None if access.standing.custodian => Err(ProblemCode::DocumentVersionNotReleasable),
+            None if access.standing.custodian => {
+                Err(ProblemCode::DocumentVersionNotReleasable.into())
+            }
             // The owning system sees the document but is never released it.
-            _ if access.standing.sees() => Err(ProblemCode::ProfileNotAuthorized),
-            _ => Err(ProblemCode::ResourceNotFound),
+            _ if access.standing.sees() => {
+                Err(ServiceError::not_authorized(FailedCheck::Ownership))
+            }
+            _ => Err(ServiceError::concealed(FailedCheck::Visibility)),
         }
     }
 
@@ -1633,22 +1832,117 @@ fn integrity(version: Uuid, error: &StorageError) -> Release {
 
 /// Why a release did not happen.
 enum Release {
-    Refused(ProblemCode),
+    Refused(ServiceError),
     /// The stored content failed its integrity check.
     Integrity,
     /// The content storage could not be read.
     Unavailable,
 }
 
+impl From<ServiceError> for Release {
+    fn from(error: ServiceError) -> Self {
+        Self::Refused(error)
+    }
+}
+
 impl From<ProblemCode> for Release {
     fn from(problem: ProblemCode) -> Self {
-        Self::Refused(problem)
+        Self::Refused(problem.into())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_problem_is_sorted_into_a_refusal_or_a_plain_answer() {
+        let refusals: Vec<ProblemCode> = ProblemCode::ALL
+            .iter()
+            .copied()
+            .filter(|problem| RefusalCode::of(*problem).is_some())
+            .collect();
+        assert_eq!(
+            refusals,
+            [
+                ProblemCode::AuthenticationRefused,
+                ProblemCode::CustodyNotPermitted,
+                ProblemCode::ProfileNotAuthorized,
+                ProblemCode::ResourceNotFound,
+            ]
+        );
+        for problem in ProblemCode::ALL {
+            if let Some(code) = RefusalCode::of(*problem) {
+                assert_eq!(code.problem(), *problem);
+            }
+        }
+    }
+
+    #[test]
+    fn a_plain_problem_converts_and_a_bare_refusal_code_does_not_become_a_refusal() {
+        for problem in ProblemCode::ALL {
+            let error = ServiceError::from(*problem);
+            match RefusalCode::of(*problem) {
+                None => assert_eq!(
+                    error,
+                    ServiceError::Problem(PlainProblem::new(*problem).unwrap())
+                ),
+                Some(_) => assert_eq!(
+                    error,
+                    ServiceError::from(ProblemCode::ServiceUnavailable),
+                    "{problem:?}"
+                ),
+            }
+            assert_eq!(error.failed_check(), None);
+        }
+    }
+
+    #[test]
+    fn a_refusal_answers_its_code_and_names_its_check() {
+        let cases = [
+            (
+                ServiceError::unauthenticated(FailedCheck::TokenClaims),
+                ProblemCode::AuthenticationRefused,
+                FailedCheck::TokenClaims,
+            ),
+            (
+                ServiceError::not_authorized(FailedCheck::Ownership),
+                ProblemCode::ProfileNotAuthorized,
+                FailedCheck::Ownership,
+            ),
+            (
+                ServiceError::custody(FailedCheck::Operation),
+                ProblemCode::CustodyNotPermitted,
+                FailedCheck::Operation,
+            ),
+            (
+                ServiceError::concealed(FailedCheck::Visibility),
+                ProblemCode::ResourceNotFound,
+                FailedCheck::Visibility,
+            ),
+            (
+                ServiceError::KeySourceUnavailable,
+                ProblemCode::ServiceUnavailable,
+                FailedCheck::KeySourceUnavailable,
+            ),
+        ];
+        for (error, problem, check) in cases {
+            assert_eq!(error.problem(), problem);
+            assert_eq!(error.failed_check(), Some(check));
+        }
+    }
+
+    #[test]
+    fn a_custody_refusal_names_the_operation() {
+        assert_eq!(
+            custody_refusal(ProblemCode::CustodyNotPermitted),
+            ServiceError::custody(FailedCheck::Operation)
+        );
+        assert_eq!(
+            custody_refusal(ProblemCode::DocumentPolicyUnknown),
+            ServiceError::from(ProblemCode::DocumentPolicyUnknown)
+        );
+    }
 
     #[test]
     fn the_upload_path_names_the_upload() {

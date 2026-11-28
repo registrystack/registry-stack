@@ -120,6 +120,38 @@ class ReleaseRosterTest(TestCase):
         self.assertTrue(release_roster.coordinator_binaries_in_release((0, 44, 0)))
         self.assertFalse(release_roster.coordinator_in_release((0, 44, 0)))
 
+    def test_adapter_image_is_held_until_its_release_prerequisites_are_ready(self) -> None:
+        self.assertIsNone(release_roster.ADAPTER_IMAGE_FIRST_RELEASE)
+        for version in ((0, 46, 0), (0, 48, 0), (1, 0, 0)):
+            self.assertFalse(release_roster.adapter_image_in_release(version))
+        with mock.patch.object(release_roster, "ADAPTER_IMAGE_FIRST_RELEASE", (0, 49, 0)):
+            self.assertFalse(release_roster.adapter_image_in_release((0, 48, 99)))
+            self.assertTrue(release_roster.adapter_image_in_release((0, 49, 0)))
+        # The image gate is independent of the binary gate.
+        with mock.patch.object(release_roster, "ADAPTER_FIRST_RELEASE", (0, 50, 0)):
+            self.assertTrue(release_roster.adapter_in_release((0, 50, 0)))
+            self.assertFalse(release_roster.adapter_image_in_release((0, 50, 0)))
+
+    def test_verify_guide_names_the_held_adapter_image_gate(self) -> None:
+        verify = (SCRIPT_DIR.parent / "VERIFY.md").read_text(encoding="utf-8")
+        self.assertIn("`ADAPTER_IMAGE_FIRST_RELEASE`", verify)
+        self.assertIn("Its image is authored and remains held", verify)
+
+    def test_adapter_image_command_prints_the_held_answer(self) -> None:
+        for version, expected in (("0.48.0", "false\n"), ("v1.0.0", "false\n")):
+            with self.subTest(version=version):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                    result = release_roster.main(["adapter-image-in-release", version])
+                self.assertEqual(0, result)
+                self.assertEqual(expected, stdout.getvalue())
+        with mock.patch.object(release_roster, "ADAPTER_IMAGE_FIRST_RELEASE", (0, 49, 0)):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                result = release_roster.main(["adapter-image-in-release", "0.49.0"])
+            self.assertEqual(0, result)
+            self.assertEqual("true\n", stdout.getvalue())
+
     def test_adapter_binaries_join_the_stack_train_from_v0_46_0(self) -> None:
         self.assertEqual((0, 46, 0), release_roster.ADAPTER_FIRST_RELEASE)
         self.assertFalse(release_roster.adapter_in_release((0, 45, 0)))
@@ -177,6 +209,9 @@ class ReleaseRosterTest(TestCase):
         self.assertEqual("cp310-abi3", release_roster.python_wheel_abi_tag((0, 40, 99)))
         self.assertEqual("cp311-abi3", release_roster.python_wheel_abi_tag((0, 41, 0)))
         self.assertEqual("cp311-abi3", release_roster.python_wheel_abi_tag((1, 0, 0)))
+
+    def test_messaging_issuer_set_is_introduced_in_v0_49(self) -> None:
+        self.assertEqual((0, 49, 0), release_roster.MESSAGING_ISSUER_SET_INTRODUCED)
 
     def test_cli_reports_the_version_selected_roster(self) -> None:
         for command in (

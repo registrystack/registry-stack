@@ -2,10 +2,34 @@
 use registry_adapter::payments::config::{ConfigError, PaymentsConfig};
 use serde_json::{json, Value};
 
+fn development() -> Option<registry_platform_config::DevelopmentWitness> {
+    use registry_adapter::payments::config::{API_VERSION, KIND};
+    use registry_platform_config::{
+        DeclaredPosture, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+    };
+    let loader = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: API_VERSION,
+            kind: KIND,
+        },
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        },
+    );
+    loader
+        .parse_str::<PaymentsConfig>(
+            &format!("apiVersion: {API_VERSION}\nkind: {KIND}\nconnections: []\n"),
+            |_| None,
+        )
+        .unwrap()
+        .development
+}
+
 fn refusal(value: Value) -> ConfigError {
     serde_json::from_value::<PaymentsConfig>(value)
         .unwrap()
-        .validate()
+        .validate(development().as_ref())
         .unwrap_err()
 }
 
@@ -82,13 +106,13 @@ fn mapped_http_collection_providers_are_refused_as_simulation_only() {
 #[test]
 fn connections_are_explicit_scoped_and_synthetic() {
     let valid: PaymentsConfig = serde_json::from_value(config()).unwrap();
-    assert!(valid.validate().is_ok());
+    assert!(valid.validate(development().as_ref()).is_ok());
     for pointer in ["/connections/0/allowedClients", "/connections"] {
         let mut value = config();
         *value.pointer_mut(pointer).unwrap() = json!([]);
         assert!(serde_json::from_value::<PaymentsConfig>(value)
             .unwrap()
-            .validate()
+            .validate(development().as_ref())
             .is_err());
     }
     let mut live = config();
@@ -132,7 +156,10 @@ fn live_mifos_collections_are_refused_as_simulation_only() {
 #[test]
 fn routing_or_credential_identity_changes_the_frozen_binding() {
     let original: PaymentsConfig = serde_json::from_value(config()).unwrap();
-    let digest = original.connections[0].binding.revision().unwrap();
+    let digest = original.connections[0]
+        .binding
+        .revision(development().as_ref())
+        .unwrap();
     for pointer in [
         "/connections/0/binding/provider/connection/tenant",
         "/connections/0/binding/provider/connection/biller",
@@ -142,14 +169,23 @@ fn routing_or_credential_identity_changes_the_frozen_binding() {
         let mut changed = config();
         *changed.pointer_mut(pointer).unwrap() = json!("changed");
         let parsed: PaymentsConfig = serde_json::from_value(changed).unwrap();
-        assert_ne!(digest, parsed.connections[0].binding.revision().unwrap());
+        assert_ne!(
+            digest,
+            parsed.connections[0]
+                .binding
+                .revision(development().as_ref())
+                .unwrap()
+        );
     }
 }
 
 #[test]
 fn the_reviewed_provider_pack_is_part_of_the_frozen_binding() {
     let original: PaymentsConfig = serde_json::from_value(config()).unwrap();
-    let original_revision = original.connections[0].binding.revision().unwrap();
+    let original_revision = original.connections[0]
+        .binding
+        .revision(development().as_ref())
+        .unwrap();
     let mut pinned = config();
     pinned["connections"][0]["binding"]["providerPack"] = json!({
         "id": "mifos-payment-hub",
@@ -157,10 +193,13 @@ fn the_reviewed_provider_pack_is_part_of_the_frozen_binding() {
         "digest": format!("sha256:{}", "a".repeat(64))
     });
     let pinned: PaymentsConfig = serde_json::from_value(pinned).unwrap();
-    assert!(pinned.validate().is_ok());
+    assert!(pinned.validate(development().as_ref()).is_ok());
     assert_ne!(
         original_revision,
-        pinned.connections[0].binding.revision().unwrap()
+        pinned.connections[0]
+            .binding
+            .revision(development().as_ref())
+            .unwrap()
     );
 }
 
@@ -193,8 +232,10 @@ fn attempt() -> registry_adapter::payments::model::Attempt {
         connection: "fees".into(),
         principal: "caller".into(),
         bill_snapshot_digest: bill.digest().unwrap(),
-        binding_revision: binding.revision().unwrap(),
-        provider_command: bill.provider_command(&binding).unwrap(),
+        binding_revision: binding.revision(development().as_ref()).unwrap(),
+        provider_command: bill
+            .provider_command(&binding, development().as_ref())
+            .unwrap(),
         provider_command_digest: None,
         bill,
         binding,
@@ -219,12 +260,16 @@ fn provider_identity_is_stable_bounded_and_independent_of_store_or_credentials()
     independent.binding.provider_credential_ref =
         serde_json::from_value(json!("secret:env/ROTATED_TOKEN")).unwrap();
     independent.binding.replay_window_seconds = 1;
-    independent.binding.simulator_mut().unwrap().base_url.pop(); // Equivalent root URL without its slash.
+    {
+        let mut provider = serde_json::to_value(&independent.binding.provider).unwrap();
+        provider["connection"]["baseUrl"] = json!("http://127.0.0.1:8099");
+        independent.binding.provider = serde_json::from_value(provider).unwrap();
+    } // Equivalent root URL without its slash.
     assert_eq!(
         first.provider_command,
         independent
             .bill
-            .provider_command(&independent.binding)
+            .provider_command(&independent.binding, development().as_ref())
             .unwrap()
     );
     let command = first.provider_command.simulator().unwrap();
@@ -235,7 +280,9 @@ fn provider_identity_is_stable_bounded_and_independent_of_store_or_credentials()
     other_bill.bill_id = uuid::Uuid::new_v4();
     assert_ne!(
         first.provider_command,
-        other_bill.provider_command(&first.binding).unwrap()
+        other_bill
+            .provider_command(&first.binding, development().as_ref())
+            .unwrap()
     );
 }
 
@@ -243,14 +290,24 @@ fn provider_identity_is_stable_bounded_and_independent_of_store_or_credentials()
 fn v1_provider_identity_matches_the_retained_command_golden_vector() {
     let mut saved = attempt();
     saved.bill.bill_id = "9303e1c2-9c2c-4c1e-8ecb-06bfa02d70cf".parse().unwrap();
-    let command = saved.bill.provider_command(&saved.binding).unwrap();
+    let command = saved
+        .bill
+        .provider_command(&saved.binding, development().as_ref())
+        .unwrap();
     let simulator = command.simulator().unwrap();
     assert_eq!(simulator.request_id, "90RVxEyflgHP");
     assert_eq!(simulator.bill_id, "emwUe0iT0w");
     assert_eq!(simulator.rtp_id, 1_364_251_476_903_812);
-    saved.binding.simulator_mut().unwrap().base_url.pop();
+    {
+        let mut provider = serde_json::to_value(&saved.binding.provider).unwrap();
+        provider["connection"]["baseUrl"] = json!("http://127.0.0.1:8099");
+        saved.binding.provider = serde_json::from_value(provider).unwrap();
+    }
     assert_eq!(
-        saved.bill.provider_command(&saved.binding).unwrap(),
+        saved
+            .bill
+            .provider_command(&saved.binding, development().as_ref())
+            .unwrap(),
         command
     );
 }
@@ -265,7 +322,7 @@ fn sequence_based_development_snapshots_are_held_without_rewriting_the_command()
     command.bill_id = "1".into();
     let prior = serde_json::to_value(&saved).unwrap();
     assert_eq!(
-        saved.validate_integrity(),
+        saved.validate_integrity(development().as_ref()),
         Err(PaymentProblemCode::Unavailable)
     );
     assert_eq!(serde_json::to_value(&saved).unwrap(), prior);
@@ -318,7 +375,7 @@ fn restored_http_attempt_refuses_tampered_prepared_request_bytes_or_authority() 
         connection: "fees".into(),
         principal: "caller".into(),
         bill_snapshot_digest: bill.digest().unwrap(),
-        binding_revision: binding.revision().unwrap(),
+        binding_revision: binding.revision(development().as_ref()).unwrap(),
         provider_command_digest: Some(digest(&provider_command).unwrap()),
         provider_command,
         bill,
@@ -333,7 +390,7 @@ fn restored_http_attempt_refuses_tampered_prepared_request_bytes_or_authority() 
         receipt_digest: None,
         receipt: None,
     };
-    assert!(saved.validate_integrity().is_ok());
+    assert!(saved.validate_integrity(development().as_ref()).is_ok());
 
     if let CollectionProviderCommand::Http(command) = &mut saved.provider_command {
         command
@@ -345,7 +402,7 @@ fn restored_http_attempt_refuses_tampered_prepared_request_bytes_or_authority() 
     }
     saved.provider_command_digest = Some(digest(&saved.provider_command).unwrap());
     assert_eq!(
-        saved.validate_integrity(),
+        saved.validate_integrity(development().as_ref()),
         Err(registry_payment_protocol::PaymentProblemCode::Unavailable)
     );
 
@@ -357,7 +414,7 @@ fn restored_http_attempt_refuses_tampered_prepared_request_bytes_or_authority() 
     }
     saved.provider_command_digest = Some(digest(&saved.provider_command).unwrap());
     assert_eq!(
-        saved.validate_integrity(),
+        saved.validate_integrity(development().as_ref()),
         Err(registry_payment_protocol::PaymentProblemCode::Unavailable)
     );
 }
@@ -389,7 +446,8 @@ fn mifos_command_uses_only_the_frozen_bill_and_provider_mapping() {
         },
         simulation: false,
     };
-    let CollectionProviderCommand::Mifos(command) = bill.provider_command(binding).unwrap() else {
+    let CollectionProviderCommand::Mifos(command) = bill.provider_command(binding, None).unwrap()
+    else {
         panic!("live Mifos binding must create a Mifos command");
     };
     assert_eq!(
@@ -422,7 +480,7 @@ fn mifos_command_uses_only_the_frozen_bill_and_provider_mapping() {
     changed.money.value = "25.01".into();
     assert_ne!(
         CollectionProviderCommand::Mifos(command),
-        changed.provider_command(binding).unwrap()
+        changed.provider_command(binding, None).unwrap()
     );
 }
 
@@ -431,7 +489,7 @@ fn persisted_command_cannot_be_borrowed_by_another_bill_or_provider_namespace() 
     use registry_adapter::payments::model::Attempt;
     use registry_payment_protocol::PaymentProblemCode;
     let original = attempt();
-    original.validate_integrity().unwrap();
+    original.validate_integrity(development().as_ref()).unwrap();
     for (pointer, replacement) in [
         ("/bill/billId", json!(uuid::Uuid::new_v4())),
         ("/bill/billVersion", json!(2)),
@@ -457,9 +515,9 @@ fn persisted_command_cannot_be_borrowed_by_another_bill_or_provider_namespace() 
         *document.pointer_mut(pointer).unwrap() = replacement;
         let mut changed: Attempt = serde_json::from_value(document).unwrap();
         changed.bill_snapshot_digest = changed.bill.digest().unwrap();
-        changed.binding_revision = changed.binding.revision().unwrap();
+        changed.binding_revision = changed.binding.revision(development().as_ref()).unwrap();
         assert_eq!(
-            changed.validate_integrity(),
+            changed.validate_integrity(development().as_ref()),
             Err(PaymentProblemCode::Unavailable),
             "{pointer}"
         );
@@ -488,7 +546,7 @@ fn authored_connections_are_simulation_only_and_require_scope() {
     assert!(compiled.is_valid(&value));
     assert!(serde_json::from_value::<PaymentsConfig>(value)
         .unwrap()
-        .validate()
+        .validate(development().as_ref())
         .is_err());
     for provider_type in [None, Some("unknown")] {
         let mut value = mifos_config();
@@ -504,5 +562,94 @@ fn authored_connections_are_simulation_only_and_require_scope() {
             }
         }
         assert!(!compiled.is_valid(&value));
+    }
+}
+
+#[test]
+fn simulator_is_declared_by_the_file_and_requires_a_development_witness() {
+    use registry_adapter::payments::config::{API_VERSION, KIND};
+    use registry_platform_config::{
+        DeclaredPosture, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+    };
+    let mut document = config();
+    document["apiVersion"] = json!(API_VERSION);
+    document["kind"] = json!(KIND);
+    let document = document.to_string();
+    for (posture, source) in [
+        (Posture::Production, PostureSource::Default),
+        (Posture::Production, PostureSource::Flag),
+        (Posture::Development, PostureSource::Flag),
+    ] {
+        let loader = RuntimeConfigLoader::new(
+            RuntimeEnvelope {
+                api_version: API_VERSION,
+                kind: KIND,
+            },
+            DeclaredPosture { posture, source },
+        );
+        let loaded = loader.parse_str::<PaymentsConfig>(&document, |_| None);
+        if posture == Posture::Production {
+            let Err(refusal) = loaded else {
+                panic!("production must refuse the simulator");
+            };
+            let exactly = refusal
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == "adapter.posture.payment-simulator")
+                .unwrap();
+            assert_eq!(exactly.path, "/connections/0/binding/provider");
+            assert!(exactly.suggested_action.contains("rstack dev"));
+            assert!(exactly
+                .suggested_action
+                .contains("REGISTRY_STACK_POSTURE=development"));
+        } else {
+            let loaded = loaded.expect("development must load the simulator");
+            assert!(loaded.config.validate(loaded.development.as_ref()).is_ok());
+            assert_eq!(
+                loaded.posture.ready_member()["developmentSettings"][0]["code"],
+                "adapter.posture.payment-simulator"
+            );
+            assert!(loaded.config.connections[0].binding.provider(None).is_err());
+        }
+    }
+}
+
+#[test]
+fn disbursement_configuration_loads_in_both_postures() {
+    use registry_adapter::payments::config::{API_VERSION, KIND};
+    use registry_platform_config::{
+        DeclaredPosture, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+    };
+    let input = include_str!(
+        "../../../products/adapter/examples/payment-collections/payments.mifos.example.yaml"
+    );
+    let envelope = RuntimeEnvelope {
+        api_version: API_VERSION,
+        kind: KIND,
+    };
+    let loader = |posture| {
+        RuntimeConfigLoader::new(
+            envelope,
+            DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            },
+        )
+    };
+    let mut mixed = loader(Posture::Development)
+        .parse_str::<PaymentsConfig>(input, |_| None)
+        .expect("the maintained payment fixture decodes")
+        .config;
+    assert!(!mixed.disbursements.is_empty());
+    mixed.connections.clear();
+    let mut document = serde_json::to_value(mixed).unwrap();
+    document["apiVersion"] = json!(API_VERSION);
+    document["kind"] = json!(KIND);
+    for posture in [Posture::Production, Posture::Development] {
+        let loaded = loader(posture)
+            .parse_str::<PaymentsConfig>(&document.to_string(), |_| None)
+            .expect("disbursement alone decodes in either posture");
+        assert!(loaded.config.validate(loaded.development.as_ref()).is_ok());
+        assert!(loaded.posture.settings().is_empty());
     }
 }

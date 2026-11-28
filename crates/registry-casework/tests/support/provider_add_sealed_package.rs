@@ -82,10 +82,9 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
     let bregctl = PathBuf::from(bregctl);
     let facility =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/facility");
-    // A temporary child of the test's working directory lets the public CLI
-    // receive equivalent relative and absolute paths without changing cwd.
-    let working_directory = std::env::current_dir().unwrap().canonicalize().unwrap();
-    let temporary = tempfile::tempdir_in(&working_directory).unwrap();
+    // A private temporary directory gives the operator files trusted ancestors.
+    // Relative cases run only the child CLI from that directory.
+    let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let source = root.join("facility");
     copy_tree(&facility, &source);
@@ -139,6 +138,8 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
             "provider",
             "add",
             project.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             source.to_str().unwrap(),
             "--action",
@@ -154,7 +155,14 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
         if let Some(output) = output {
             arguments.extend(["--package-output", output.to_str().unwrap()]);
         }
-        caseworkctl(&arguments)
+        if project.is_absolute() && output.is_none_or(Path::is_absolute) {
+            caseworkctl(&arguments)
+        } else {
+            cli::caseworkctl_command(&arguments)
+                .current_dir(&root)
+                .output()
+                .expect("caseworkctl starts")
+        }
     };
     let stale_package = root.join("old-breg-package");
     seal(&stale_package);
@@ -172,7 +180,8 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
     let created = compose(&existing, None, None);
     assert!(
         created.status.success(),
-        "changed source remains ready for review"
+        "changed source remains ready for review: {}",
+        json(&created)
     );
     assert_eq!(
         fs::read(existing.join("schemas/correct-address.schema.json")).unwrap(),
@@ -222,7 +231,7 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
             project.join("custom/sealed")
         };
         let project_argument = if matches!(layout, "relative" | "relative-project") {
-            project.strip_prefix(&working_directory).unwrap()
+            project.strip_prefix(&root).unwrap()
         } else {
             &project
         };
@@ -230,7 +239,7 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
             layout,
             "relative" | "relative-output" | "relative-external-missing-parent"
         ) {
-            output.strip_prefix(&working_directory).unwrap()
+            output.strip_prefix(&root).unwrap()
         } else {
             &output
         };
@@ -248,8 +257,15 @@ fn sealed_authority_and_runtime_bindings_agree_with_the_inspected_project() {
         let runtime = read_yaml(&project.join("runtime.example.yaml"));
         assert_eq!(runtime["package"]["root"], json!(output));
         assert!(output.join("SHA256SUMS").is_file());
-        let loaded = registry_casework::RuntimeConfig::load(project.join("runtime.example.yaml"))
-            .expect("the generated runtime document loads its selected sealed package");
+        let loaded = registry_casework::RuntimeConfig::load(
+            project.join("runtime.example.yaml"),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the generated runtime document loads its selected sealed package")
+        .config;
         loaded
             .load_package()
             .expect("the runtime captures and checks the selected package");

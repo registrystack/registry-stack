@@ -14,7 +14,25 @@ async fn main() {
     initialize_logging(level);
 
     let matches = registry_casework::command().get_matches();
-    if let Err(error) = registry_casework::run(&matches).await {
+    if registry_platform_config::has_repeated_posture_flag() {
+        eprintln!("casework: [platform.posture.conflict] Declare --posture only once.");
+        std::process::exit(2);
+    }
+    let declared = match registry_platform_config::declared(
+        matches.get_one::<String>("posture").map(String::as_str),
+    ) {
+        Ok(declared) => declared,
+        Err(error) => {
+            eprintln!(
+                "casework: [{}] {}\n  next: {}",
+                error.code(),
+                error.message(),
+                error.suggested_action()
+            );
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) = registry_casework::run(&matches, declared).await {
         eprintln!("casework: {error}");
         if let Some(report) = error.configuration_report() {
             eprint!("{}", report.render_human());
@@ -26,7 +44,8 @@ async fn main() {
 fn initialize_logging(level: LevelFilter) {
     let filter = Targets::new()
         .with_target("registry_casework", level)
-        .with_target("registry_casework_breg", level);
+        .with_target("registry_casework_breg", level)
+        .with_target("registry_platform_config::posture", level);
     tracing_subscriber::registry()
         .with(filter)
         .with(

@@ -125,7 +125,7 @@ async fn serve_fixture(
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let config = PaymentClientConfig::new(
+    let config = PaymentClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/adapter")).expect("fixture URL"),
         "bill-payments",
     );
@@ -586,7 +586,10 @@ fn connection_and_request_values_are_rejected_before_io() {
     let base = Url::parse("https://adapter.example.invalid/root").unwrap();
     for connection in ["", "UPPER", "two/segments", ".", &"a".repeat(65)] {
         assert!(matches!(
-            PaymentClient::new(PaymentClientConfig::new(base.clone(), connection)),
+            PaymentClient::new(PaymentClientConfig::new_without_peer_policy(
+                base.clone(),
+                connection
+            )),
             Err(PaymentClientError::Configuration { .. })
         ));
     }

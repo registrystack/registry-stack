@@ -200,7 +200,7 @@ mod tests {
             });
             let token = Arc::new(CountingToken::default());
             let client = BaseRegistryClient::new(
-                BaseRegistryClientConfig::new(
+                BaseRegistryClientConfig::new_without_peer_policy(
                     url::Url::parse(&format!("http://{address}/tenant/base")).unwrap(),
                 )
                 .with_token_provider(token.clone()),

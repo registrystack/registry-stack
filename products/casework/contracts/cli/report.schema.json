@@ -90,6 +90,10 @@
         "planKind": {
           "$ref": "#/$defs/PlanKind"
         },
+        "posture": {
+          "description": "The posture the activating process declared.",
+          "type": "string"
+        },
         "predecessorPackageDigest": {
           "anyOf": [
             {
@@ -121,7 +125,8 @@
         "appliedAt",
         "operatorReferenceHash",
         "backupReferences",
-        "roleMode"
+        "roleMode",
+        "posture"
       ],
       "type": "object"
     },
@@ -954,6 +959,52 @@
         "negativeDecisions",
         "excludeInitiator",
         "excludePreviousStageReviewers"
+      ],
+      "type": "object"
+    },
+    "ExplicitSettingData": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "column": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pointer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "summary"
       ],
       "type": "object"
     },
@@ -2535,6 +2586,29 @@
         "ok": {
           "type": "boolean"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
         },
@@ -2580,6 +2654,11 @@
               {
                 "required": [
                   "databaseAccess"
+                ]
+              },
+              {
+                "required": [
+                  "explicitProductionSettings"
                 ]
               },
               {
@@ -2648,6 +2727,15 @@
           },
           "type": "array"
         },
+        "explicitProductionSettings": {
+          "items": {
+            "$ref": "#/$defs/ExplicitSettingData"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "filesChecked": {
           "format": "uint",
           "maximum": 18446744073709551615,
@@ -2669,6 +2757,29 @@
             "$ref": "#/$defs/ReviewPolicyIdentity"
           },
           "type": "array"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "project": {
           "type": "string"
@@ -2824,6 +2935,29 @@
         "ok": {
           "type": "boolean"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "project": {
           "$ref": "#/$defs/ProjectIdentity"
         },
@@ -2948,6 +3082,29 @@
         "ok": {
           "type": "boolean"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "productionClosure": {
           "type": "boolean"
         },
@@ -3038,6 +3195,29 @@
         },
         "output": {
           "type": "string"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "status": {
           "$ref": "#/$defs/ReportStatus"
@@ -3153,6 +3333,29 @@
         },
         "output": {
           "type": "string"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "product": {
           "type": "string"
@@ -3391,6 +3594,29 @@
         "policyId": {
           "type": "string"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "project": {
           "type": "string"
         },
@@ -3535,6 +3761,29 @@
         },
         "ok": {
           "type": "boolean"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "providerId": {
           "type": "string"
@@ -3750,6 +3999,29 @@
         "packageDigest": {
           "$ref": "#/$defs/Digest"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "revision": {
           "type": [
             "string",
@@ -3859,6 +4131,29 @@
         "packageDigest": {
           "$ref": "#/$defs/Digest"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "runtimeConfig": {
           "type": "string"
         },
@@ -3940,6 +4235,29 @@
         },
         "plan": {
           "$ref": "#/$defs/ActivationPlan"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "runtimeConfig": {
           "type": "string"
@@ -4044,6 +4362,29 @@
         "ok": {
           "type": "boolean"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "runtimeConfig": {
           "type": "string"
         },
@@ -4146,6 +4487,29 @@
         },
         "ok": {
           "type": "boolean"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "runtimeConfig": {
           "type": "string"

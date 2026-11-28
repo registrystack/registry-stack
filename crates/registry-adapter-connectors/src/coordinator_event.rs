@@ -2,24 +2,21 @@
 
 //! A platform-signed event admission to Registry Coordinator. This
 //! connector deliberately links no Coordinator crate or client: it uses
-//! the shared hook envelope, Version 1 signature, and fixed event
+//! the shared hook envelope, Standard Webhooks signature, and fixed event
 //! destination transport that the Coordinator receiver verifies.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields, SigningError};
+use registry_platform_crypto::delivery_signature::{sign, DeliveryKeys};
 use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use registry_platform_httputil::destination::{
-    DestinationDeliveryCertainty, EventDeliveryHeaders, EventDestinationPolicy,
-    EventDestinationRequestTemplate, MAX_DESTINATION_REQUEST_HEADER_BYTES,
-    MAX_DESTINATION_TARGET_BYTES,
+    DestinationDeliveryCertainty, EventDestinationPolicy, EventDestinationRequestTemplate,
+    SignedEventHeaders, MAX_DESTINATION_REQUEST_HEADER_BYTES, MAX_DESTINATION_TARGET_BYTES,
 };
 use serde_json::Value;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 const MAX_PROBLEM_BYTES: usize = 65_536;
 const MAX_REQUEST_BYTES: usize = registry_platform_hooks::MAX_ENVELOPE_BYTES
@@ -32,7 +29,7 @@ const CANONICAL_BODY_IDENTITY_DOMAIN: &[u8] = b"registry-adapter/coordinator-can
 pub enum CoordinatorEventOutcome {
     /// Coordinator admitted or recovered the event's one Run.
     Admitted { run_id: String },
-    /// The item cannot produce one valid Version 1 signed event. Nothing was
+    /// The item cannot produce one valid Standard Webhooks event. Nothing was
     /// sent, so the job may record an item-scoped refusal and continue.
     Unsignable,
     /// The event itself does not satisfy the reviewed trigger contract.
@@ -92,7 +89,7 @@ pub enum CoordinatorEventConfigError {
 /// destination authority and authenticated source.
 pub struct CoordinatorEventReceiver {
     template: EventDestinationRequestTemplate,
-    target: String,
+    keys: DeliveryKeys,
     event_type: String,
     data_schema: String,
 }
@@ -105,13 +102,14 @@ impl std::fmt::Debug for CoordinatorEventReceiver {
 
 impl CoordinatorEventReceiver {
     /// Freeze one workflow trigger, its exact request target, and its event
-    /// contract. Binding, source, and credentials remain shared connector
-    /// state, so a revised receiver cannot substitute another authority.
+    /// contract and its delivery keys. The destination policy and source
+    /// remain shared connector state.
     pub fn new(
         workflow: &str,
         trigger: &str,
         event_type: &str,
         data_schema: &str,
+        keys: DeliveryKeys,
     ) -> Result<Self, CoordinatorEventConfigError> {
         if !local_id(workflow)
             || !local_id(trigger)
@@ -121,7 +119,7 @@ impl CoordinatorEventReceiver {
             return Err(CoordinatorEventConfigError::Invalid);
         }
         let target = format!("/v1/events/{workflow}/{trigger}");
-        let template = EventDestinationRequestTemplate::event_delivery(
+        let template = EventDestinationRequestTemplate::signed_event_delivery(
             &target,
             registry_platform_hooks::MAX_ENVELOPE_BYTES,
             MAX_REQUEST_BYTES,
@@ -129,20 +127,19 @@ impl CoordinatorEventReceiver {
         .map_err(|_| CoordinatorEventConfigError::Invalid)?;
         Ok(Self {
             template,
-            target,
+            keys,
             event_type: event_type.to_string(),
             data_schema: data_schema.to_string(),
         })
     }
 }
 
-/// One frozen destination authority and its host-owned HMAC key. One
+/// One frozen destination authority and source. One
 /// connector may serve the primary and optional revised trigger of the same
 /// workflow without duplicating or widening that authority.
 pub struct CoordinatorEventConnector {
     policy: Arc<EventDestinationPolicy>,
     source: String,
-    signing_key: Zeroizing<Vec<u8>>,
     timeout: Duration,
 }
 
@@ -156,16 +153,12 @@ impl CoordinatorEventConnector {
     /// Freeze a reviewed workflow trigger on an already validated event
     /// destination policy. The path and complete header shape cannot vary
     /// per item.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         policy: Arc<EventDestinationPolicy>,
         source: &str,
-        signing_key: Vec<u8>,
         timeout: Duration,
     ) -> Result<Self, CoordinatorEventConfigError> {
         if !visible_bounded(source, 2_048)
-            || signing_key.len()
-                < registry_platform_crypto::delivery_signature::MIN_HMAC_SHA256_KEY_BYTES
             || timeout.is_zero()
             || timeout > registry_platform_httputil::destination::MAX_DESTINATION_OPERATION_TIMEOUT
         {
@@ -174,7 +167,6 @@ impl CoordinatorEventConnector {
         Ok(Self {
             policy,
             source: source.to_string(),
-            signing_key: Zeroizing::new(signing_key),
             timeout,
         })
     }
@@ -222,7 +214,9 @@ impl CoordinatorEventConnector {
     }
 
     /// Sign and send one canonical envelope. A retry reuses `event.id` and
-    /// body, while delivery time and signature are fresh transport fields.
+    /// body, while send time and signature are fresh transport fields.
+    /// Generation and delivery attempt are checked for the caller's
+    /// positive-counter invariant only.
     pub async fn admit(
         &self,
         receiver: &CoordinatorEventReceiver,
@@ -239,60 +233,20 @@ impl CoordinatorEventConnector {
             Ok(envelope) => envelope,
             Err(_) => return CoordinatorEventOutcome::Unsignable,
         };
-        let wire = match serde_json::to_value(&envelope) {
-            Ok(wire) => wire,
-            Err(_) => return CoordinatorEventOutcome::Unsignable,
+        let Ok(send_time) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
+            return CoordinatorEventOutcome::Stop {
+                code: "coordinator.event.signing-unavailable",
+            };
         };
-        let Some(event_time) = wire.get("time").and_then(Value::as_str) else {
+        let timestamp = send_time.as_secs();
+        let Ok(signature) = sign(&receiver.keys, &envelope.id, timestamp, &body) else {
             return CoordinatorEventOutcome::Unsignable;
         };
-        let generation = generation.to_string();
-        let attempt = delivery_attempt.to_string();
-        let delivery_time = match OffsetDateTime::now_utc().format(&Rfc3339) {
-            Ok(time) => time,
-            Err(_) => {
-                return CoordinatorEventOutcome::Stop {
-                    code: "coordinator.event.signing-unavailable",
-                };
-            }
-        };
-        let signature = match sign_v1(
-            self.signing_key.as_slice(),
-            SignatureFields {
-                id: &envelope.id,
-                source: &envelope.source,
-                event_type: &envelope.event_type,
-                time: event_time,
-                data_schema: &envelope.dataschema,
-                generation: &generation,
-                attempt: &attempt,
-                delivery_time: &delivery_time,
-                method: "POST",
-                request_target: &receiver.target,
-                content_type: "application/json",
-                idempotency_key: &envelope.id,
-                body: &body,
-            },
-        ) {
-            Ok(signature) => signature,
-            Err(SigningError::InputTooLarge) => return CoordinatorEventOutcome::Unsignable,
-            Err(SigningError::InvalidKey) => {
-                return CoordinatorEventOutcome::Stop {
-                    code: "coordinator.event.signing-unavailable",
-                };
-            }
-        };
-        let request = match receiver.template.render_event(
-            EventDeliveryHeaders {
+        let timestamp = timestamp.to_string();
+        let request = match receiver.template.render_signed_event(
+            SignedEventHeaders {
                 id: envelope.id.as_bytes(),
-                source: envelope.source.as_bytes(),
-                event_type: envelope.event_type.as_bytes(),
-                time: event_time.as_bytes(),
-                dataschema: envelope.dataschema.as_bytes(),
-                generation: generation.as_bytes(),
-                attempt: attempt.as_bytes(),
-                delivery_time: delivery_time.as_bytes(),
-                idempotency_key: envelope.id.as_bytes(),
+                timestamp: timestamp.as_bytes(),
                 signature: signature.as_bytes(),
             },
             body,
@@ -416,9 +370,6 @@ fn classify_problem(status: u16, code: Option<&str>) -> CoordinatorEventOutcome 
         (503, Some("audit.response-unavailable")) => CoordinatorEventOutcome::Stop {
             code: "audit.response-unavailable",
         },
-        (503, Some("event.source-unavailable")) => CoordinatorEventOutcome::Stop {
-            code: "event.source-unavailable",
-        },
         (503, Some("service.unavailable")) => CoordinatorEventOutcome::Stop {
             code: "service.unavailable",
         },
@@ -452,11 +403,11 @@ mod tests {
 
     use axum::body::{to_bytes, Body};
     use axum::extract::State;
-    use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode};
+    use axum::http::{HeaderMap, HeaderValue, Request, Response, StatusCode};
     use axum::routing::any;
     use axum::Router;
     use registry_platform_crypto::delivery_signature::{
-        verify_v1_authenticity, MIN_HMAC_SHA256_KEY_BYTES,
+        verify, DeliveryKey, DeliveryKeys, SignedContent, DELIVERY_TOLERANCE,
     };
     use registry_platform_httputil::destination::{DestinationProfile, EventDestinationPolicy};
     use serde_json::json;
@@ -604,20 +555,21 @@ mod tests {
         let policy = EventDestinationPolicy::new(
             "coordinator-test",
             &fixture.origin,
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("the fixture origin is permitted");
-        let connector = CoordinatorEventConnector::new(
-            Arc::new(policy),
-            SOURCE,
-            KEY.to_vec(),
-            Duration::from_secs(2),
+        let connector =
+            CoordinatorEventConnector::new(Arc::new(policy), SOURCE, Duration::from_secs(2))
+                .expect("the connector configuration is valid");
+        let receiver = CoordinatorEventReceiver::new(
+            "case-ingestion",
+            "submitted",
+            EVENT_TYPE,
+            DATA_SCHEMA,
+            keys(KEY, None),
         )
-        .expect("the connector configuration is valid");
-        let receiver =
-            CoordinatorEventReceiver::new("case-ingestion", "submitted", EVENT_TYPE, DATA_SCHEMA)
-                .expect("the receiver contract is valid");
+        .expect("the receiver contract is valid");
         (connector, receiver)
     }
 
@@ -630,27 +582,6 @@ mod tests {
             data,
         )
         .expect("the event is valid")
-    }
-
-    #[test]
-    fn a_short_signing_key_is_refused_before_any_delivery() {
-        let policy = EventDestinationPolicy::new(
-            "coordinator-test",
-            "http://127.0.0.1:9/",
-            DestinationProfile::LoopbackDevelopmentHttp,
-            &[],
-        )
-        .expect("the loopback origin is permitted");
-        assert_eq!(
-            CoordinatorEventConnector::new(
-                Arc::new(policy),
-                SOURCE,
-                vec![0x41; MIN_HMAC_SHA256_KEY_BYTES - 1],
-                Duration::from_secs(1),
-            )
-            .expect_err("the short key must be refused"),
-            CoordinatorEventConfigError::Invalid
-        );
     }
 
     #[tokio::test]
@@ -670,7 +601,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retries_keep_event_bytes_and_refresh_attempt_metadata_and_signature() {
+    async fn a_signed_event_carries_the_envelope_id_as_webhook_id_on_every_attempt() {
         let fixture = FixtureReceiver::start(vec![Answer::admitted(), Answer::admitted()]).await;
         let (connector, receiver) = connector(&fixture);
         let event = event(json!({"item": {"age": "045"}}));
@@ -680,7 +611,6 @@ mod tests {
                 run_id: RUN_ID.to_string()
             }
         );
-        tokio::time::sleep(Duration::from_millis(2)).await;
         assert_eq!(
             connector.admit(&receiver, event, 1, 2).await,
             CoordinatorEventOutcome::Admitted {
@@ -692,45 +622,131 @@ mod tests {
         assert_eq!(requests[0].body, requests[1].body);
         assert_eq!(requests[0].method, "POST");
         assert_eq!(requests[0].target, "/v1/events/case-ingestion/submitted");
-        assert_eq!(requests[0].headers["x-registry-delivery-attempt"], "1");
-        assert_eq!(requests[1].headers["x-registry-delivery-attempt"], "2");
-        assert_ne!(
-            requests[0].headers["x-registry-delivery-time"],
-            requests[1].headers["x-registry-delivery-time"]
-        );
-        assert_ne!(
-            requests[0].headers["x-registry-signature"],
-            requests[1].headers["x-registry-signature"]
-        );
         for request in &requests {
-            let header = |name: &str| {
-                request.headers[name]
-                    .to_str()
-                    .expect("the delivery header is text")
-            };
-            verify_v1_authenticity(
-                KEY,
-                SignatureFields {
-                    id: header("ce-id"),
-                    source: header("ce-source"),
-                    event_type: header("ce-type"),
-                    time: header("ce-time"),
-                    data_schema: header("ce-dataschema"),
-                    generation: header("x-registry-event-generation"),
-                    attempt: header("x-registry-delivery-attempt"),
-                    delivery_time: header("x-registry-delivery-time"),
-                    method: &request.method,
-                    request_target: &request.target,
-                    content_type: header("content-type"),
-                    idempotency_key: header("idempotency-key"),
-                    body: &request.body,
-                },
-                header("x-registry-signature"),
-            )
-            .expect("the shared cryptographic verifier accepts the attempt");
-            assert_eq!(header("ce-id"), EVENT_ID);
-            assert_eq!(header("ce-source"), SOURCE);
+            assert_eq!(request.headers["webhook-id"], EVENT_ID);
+            let envelope =
+                HookEnvelope::from_canonical_bytes(&request.body, &EnvelopeLimits::default())
+                    .unwrap();
+            assert_eq!(envelope.id, EVENT_ID);
         }
+    }
+
+    #[tokio::test]
+    async fn a_signed_event_signs_id_timestamp_and_the_exact_body() {
+        let fixture = FixtureReceiver::start(vec![Answer::admitted()]).await;
+        let (connector, receiver) = connector(&fixture);
+        connector
+            .admit(&receiver, event(json!({"item": "value"})), 1, 1)
+            .await;
+        let requests = fixture.requests();
+        let request = &requests[0];
+        let header = |name: &str| request.headers[name].to_str().unwrap();
+        assert_eq!(header("accept"), "application/json");
+        assert_eq!(header("content-type"), "application/json");
+        let mut application_headers = request
+            .headers
+            .keys()
+            .map(|name| name.as_str())
+            .filter(|name| !matches!(*name, "host" | "content-length"))
+            .collect::<Vec<_>>();
+        application_headers.sort_unstable();
+        assert_eq!(
+            application_headers,
+            [
+                "accept",
+                "content-type",
+                "webhook-id",
+                "webhook-signature",
+                "webhook-timestamp",
+            ]
+        );
+        verify(
+            &keys(KEY, None),
+            SignedContent {
+                id: header("webhook-id"),
+                timestamp: header("webhook-timestamp"),
+                signature: header("webhook-signature"),
+                body: &request.body,
+            },
+            SystemTime::now(),
+            DELIVERY_TOLERANCE,
+        )
+        .expect("the signature covers the id, timestamp and exact body");
+    }
+
+    #[tokio::test]
+    async fn a_revised_trigger_signs_with_its_own_key() {
+        let fixture = FixtureReceiver::start(vec![Answer::admitted()]).await;
+        let (connector, _) = connector(&fixture);
+        let revised_key = &[0x6a; 32];
+        let receiver = CoordinatorEventReceiver::new(
+            "case-ingestion",
+            "revised",
+            EVENT_TYPE,
+            DATA_SCHEMA,
+            keys(revised_key, None),
+        )
+        .unwrap();
+        connector
+            .admit(&receiver, event(json!({"item": "value"})), 1, 1)
+            .await;
+        let requests = fixture.requests();
+        let request = &requests[0];
+        assert_eq!(request.target, "/v1/events/case-ingestion/revised");
+        let content = || SignedContent {
+            id: request.headers["webhook-id"].to_str().unwrap(),
+            timestamp: request.headers["webhook-timestamp"].to_str().unwrap(),
+            signature: request.headers["webhook-signature"].to_str().unwrap(),
+            body: &request.body,
+        };
+        let now = SystemTime::now();
+        assert!(verify(&keys(KEY, None), content(), now, DELIVERY_TOLERANCE).is_err());
+        verify(&keys(revised_key, None), content(), now, DELIVERY_TOLERANCE).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_rotating_trigger_sends_the_current_signature_first() {
+        let fixture = FixtureReceiver::start(vec![Answer::admitted()]).await;
+        let (connector, _) = connector(&fixture);
+        let previous_key = &[0x7a; 32];
+        let receiver = CoordinatorEventReceiver::new(
+            "case-ingestion",
+            "submitted",
+            EVENT_TYPE,
+            DATA_SCHEMA,
+            keys(KEY, Some(previous_key)),
+        )
+        .unwrap();
+        connector
+            .admit(&receiver, event(json!({"item": "value"})), 1, 1)
+            .await;
+        let requests = fixture.requests();
+        let request = &requests[0];
+        let timestamp = request.headers["webhook-timestamp"]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let current = sign(&keys(KEY, None), EVENT_ID, timestamp, &request.body).unwrap();
+        let previous = sign(
+            &keys(previous_key, None),
+            EVENT_ID,
+            timestamp,
+            &request.body,
+        )
+        .unwrap();
+        assert_eq!(
+            request.headers["webhook-signature"],
+            format!("{current} {previous}")
+        );
+    }
+
+    fn keys(current: &[u8], previous: Option<&[u8]>) -> DeliveryKeys {
+        DeliveryKeys::new(
+            DeliveryKey::new(current).unwrap(),
+            previous.map(|key| DeliveryKey::new(key).unwrap()),
+        )
+        .unwrap()
     }
 
     #[tokio::test]
@@ -756,7 +772,6 @@ mod tests {
             (413, "request.body-too-large"),
             (500, "runtime.failure"),
             (503, "audit.response-unavailable"),
-            (503, "event.source-unavailable"),
             (503, "service.unavailable"),
         ];
         let answers = item_refusals
@@ -791,6 +806,7 @@ mod tests {
         let fixture = FixtureReceiver::start(vec![
             Answer::problem(409, "event.invalid"),
             Answer::problem(409, "future.problem"),
+            Answer::problem(503, "future.problem"),
             Answer {
                 status: StatusCode::BAD_REQUEST,
                 content_type: "application/json",
@@ -800,7 +816,7 @@ mod tests {
         ])
         .await;
         let (connector, receiver) = connector(&fixture);
-        for _ in 0..3 {
+        for _ in 0..4 {
             assert_eq!(
                 connector
                     .admit(&receiver, event(json!({"item": true})), 1, 1)
@@ -815,35 +831,20 @@ mod tests {
     #[test]
     fn event_receiver_validation_is_value_free_and_bounded() {
         assert_eq!(
-            CoordinatorEventReceiver::new("Bad", "trigger", EVENT_TYPE, DATA_SCHEMA)
-                .expect_err("the workflow id is invalid"),
+            CoordinatorEventReceiver::new(
+                "Bad",
+                "trigger",
+                EVENT_TYPE,
+                DATA_SCHEMA,
+                keys(KEY, None)
+            )
+            .expect_err("the workflow id is invalid"),
             CoordinatorEventConfigError::Invalid
         );
         assert_eq!(
-            CoordinatorEventReceiver::new("workflow", "trigger", "", DATA_SCHEMA)
+            CoordinatorEventReceiver::new("workflow", "trigger", "", DATA_SCHEMA, keys(KEY, None))
                 .expect_err("the event type is empty"),
             CoordinatorEventConfigError::Invalid
         );
-    }
-
-    #[test]
-    fn the_fixture_captures_only_the_twelve_closed_delivery_headers() {
-        let expected = [
-            "ce-specversion",
-            "ce-id",
-            "ce-source",
-            "ce-type",
-            "ce-time",
-            "ce-dataschema",
-            "x-registry-event-generation",
-            "x-registry-delivery-attempt",
-            "x-registry-delivery-time",
-            "content-type",
-            "idempotency-key",
-            "x-registry-signature",
-        ];
-        for name in expected {
-            HeaderName::from_bytes(name.as_bytes()).expect("a valid header name");
-        }
     }
 }

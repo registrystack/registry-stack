@@ -61,7 +61,7 @@ def check_fixtures(project: Path, binaries: dict[str, Path], environment: dict[s
                    *, target: Path, expected: dict[str, int]) -> dict:
     report = json.loads(run(
         binaries["evidencectl"], "--format", "json", "test", project,
-        "--target", target, environment=environment,
+        "--target", target, "--posture", "development", environment=environment,
     ))
     assert report["passed"], report
     actual = {item["path"]: item["evaluatedCases"] for item in report["fixtures"]}
@@ -204,12 +204,12 @@ def verify_public_check(workspace: Path, binaries: dict[str, Path],
     authority["publicCheck"] = {"definition": "record-check"}
     write(authority_path, authority)
     run(binaries["evidencectl"], "check", project, "--target", target,
-        environment=environment)
+        "--posture", "development", environment=environment)
     fixtures = check_fixtures(project, binaries, environment, target=target, expected={
         **offline_cases, "fixtures/record-check.yaml": 10,
     })
     run(binaries["evidencectl"], "package", project, "--target", target,
-        "--output", candidate, environment=environment)
+        "--posture", "development", "--output", candidate, environment=environment)
     bundle = read(candidate / "bundle/evidence.yaml")
     source = bundle["sources"]["registry-check"]
     assert source["pack"]["version"] == revisions[1]
@@ -219,7 +219,8 @@ def verify_public_check(workspace: Path, binaries: dict[str, Path],
     }
     assert facts_schema(candidate / "bundle" / source["pack"]["artifactPrefix"]) == facts
     report = json.loads(run(binaries["evidence"], "bundle-check", "--bundle",
-                            candidate / "bundle", "--json", environment=environment))
+                            candidate / "bundle", "--json", "--posture", "development",
+                            environment=environment))
     assert len(report["requirements"]) == 2
     return {
         "publicCheckBehaviorRevision": revisions[1],
@@ -314,13 +315,13 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         shutil.copytree(INPUTS / "starter" / directory, project / directory, dirs_exist_ok=True)
     new_local_target(project, target, binaries, environment)
     run(binaries["evidencectl"], "check", project, "--target", target,
-        environment=environment)
+        "--posture", "development", environment=environment)
     fixtures = check_fixtures(project, binaries, environment, target=target, expected={
         **offline_cases, "fixtures/record-active.yaml": 12,
         "fixtures/record-status-pair.yaml": 12,
     })
     run(binaries["evidencectl"], "package", project, "--target", target,
-        "--output", candidate, environment=environment)
+        "--posture", "development", "--output", candidate, environment=environment)
     bundle_path = candidate / "bundle"
     bundle = read(bundle_path / "evidence.yaml")
     assert set(bundle["sources"]) == {"record-status", "registry-status"}
@@ -359,7 +360,7 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         "breg-8-registry-6-record-22-by-registration-number",
     }
     report = json.loads(run(binaries["evidence"], "bundle-check", "--bundle", bundle_path,
-                            "--json", environment=environment))
+                            "--json", "--posture", "development", environment=environment))
     assert len(report["requirements"]) == 3
 
     public_check = verify_public_check(workspace, binaries, environment, offline_cases)
@@ -392,7 +393,8 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     shutil.copytree(target, logged_target)
     bind_logged_fixture_headers(logged_project)
     run(binaries["evidencectl"], "source", "update", logged_export,
-        "--project", logged_project, "--target", logged_target, environment=environment)
+        "--project", logged_project, "--target", logged_target, "--posture", "development",
+        environment=environment)
     logged_fixtures = check_fixtures(
         logged_project, binaries, environment, target=logged_target,
         expected={
@@ -415,7 +417,8 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     assert unrelated_manifest["provenance"]["registryRevision"] != manifest["provenance"]["registryRevision"]
     assert unrelated_manifest["provenance"]["behaviorRevision"] == source["pack"]["version"]
     unrelated = json.loads(run(binaries["evidencectl"], "--format", "json", "source", "diff",
-        unrelated_export, "--project", project, "--target", target, environment=environment))
+        unrelated_export, "--project", project, "--target", target, "--posture", "development",
+        environment=environment))
     assert unrelated["provenanceChanged"] == ["registry-status"]
     assert not unrelated["affectedDefinitions"]
     assert len(unrelated["definitionRevisions"]) == 3
@@ -429,7 +432,8 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
         environment=environment)
     for command in ["diff", "update"]:
         changed = json.loads(run(binaries["evidencectl"], "--format", "json", "source", command,
-            changed_export, "--project", project, "--target", target, environment=environment))
+            changed_export, "--project", project, "--target", target, "--posture", "development",
+            environment=environment))
         assert not changed["conflicts"]
         assert set(changed["affectedDefinitions"]) == BREG_DEFINITIONS
         changes = {item["requirement"]: item["change"] for item in changed["definitionRevisions"]}
@@ -455,7 +459,8 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
     before = authored_snapshot(project)
     for command in ["diff", "update"]:
         refused = run(binaries["evidencectl"], "source", command, renamed_export,
-                      "--project", project, "--target", target, environment=environment, refused=True)
+                      "--project", project, "--target", target, "--posture", "development",
+                      environment=environment, refused=True)
         assert "reads fact `status`" in refused, refused
         assert authored_snapshot(project) == before
     return {

@@ -95,7 +95,8 @@ async function serve(context, answer) {
     request.on('data', (chunk) => { body += chunk; });
     request.on('end', () => {
       requests.push({ method: request.method, path: request.url, headers: request.headers, body });
-      const { status, document, contentType = status === 200 ? 'application/json' : 'application/problem+json' } = answer(request);
+      const { status, document, posture, contentType = status === 200 ? 'application/json' : 'application/problem+json' } = answer(request);
+      if (posture) response.setHeader('registry-posture', posture);
       response.writeHead(status, { 'content-type': contentType, traceparent: TRACEPARENT });
       response.end(JSON.stringify(document));
     });
@@ -114,8 +115,8 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof client.CoordinatorClientError, 'function');
 });
 
-test('start preserves the caller token, key, and input', async (context) => {
-  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: STATUS }));
+test('start accepts a development peer and preserves the caller token, key, and input', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, document: STATUS, posture: 'development' }));
   const { CoordinatorClient } = require('../client');
   const client = new CoordinatorClient({ baseUrl });
   const request = { workflow: 'decision-follow-up', "workflowRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", input: { record: 'case-42', priority: 2 } };
@@ -985,4 +986,16 @@ test('list refuses received runs outside the intersected state and attention fil
   }
   empty = true;
   assert.deepEqual(await client.list('token', 1, null, 'attention', false), {kind: 'complete', value: {runs: []}});
+});
+
+test('strict development-peer policy is an explicit boolean option', () => {
+  const { CoordinatorClient } = require('../client');
+  const baseUrl = 'https://coordinator.example.invalid/';
+  for (const refuseDevelopmentPeer of [false, true]) {
+    assert.ok(new CoordinatorClient({ baseUrl, refuseDevelopmentPeer }));
+  }
+  assert.throws(
+    () => new CoordinatorClient({ baseUrl, refuseDevelopmentPeer: 'true' }),
+    (error) => error.kind === 'configuration',
+  );
 });

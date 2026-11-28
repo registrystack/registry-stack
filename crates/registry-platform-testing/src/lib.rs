@@ -24,6 +24,17 @@ pub use migration_pins::{assert_migration_pins, verify_migration_pins, MIGRATION
 #[cfg(feature = "postgres-catalog")]
 mod postgres_catalog;
 
+#[cfg(feature = "token-fixtures")]
+mod token_fixtures;
+
+#[cfg(feature = "token-fixtures")]
+pub use token_fixtures::{
+    Against, Basis, BindTarget, Binding, ClaimValue, Comparison, Configuration, Expectations,
+    ExpectedCell, ExpectedRow, FixtureCase, FixtureClass, FixtureHeader, Outcome, ProductReport,
+    RowConfiguration, RowReport, SignedToken, Stage, TokenCorpus, TokenFixture, TokenFixtureError,
+    TokenSigner,
+};
+
 #[cfg(feature = "postgres-catalog")]
 pub use postgres_catalog::verify_postgres_schema_equivalence;
 
@@ -518,7 +529,7 @@ mod tests {
                 discovery_timeout: Duration::from_secs(5),
                 max_doc_bytes: 16 * 1024,
             },
-            &FetchUrlPolicy::dev(),
+            &FetchUrlPolicy::https_or_loopback(),
         )
         .await
         .expect("discovery fetch succeeds");
@@ -534,7 +545,7 @@ mod tests {
                 request_timeout: Duration::from_secs(5),
                 outage_tolerance: Duration::from_secs(900),
             },
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
         let mut config = oidc_verifier_config(idp.issuer(), vec!["registry-api".to_string()]);
         config.allowed_clients = vec!["client-a".to_string()];

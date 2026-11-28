@@ -1,0 +1,450 @@
+{
+  "act-claim-is-not-an-object": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "actor-is-not-the-trusted-actor": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "actor-kind-is-not-a-string": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "actor-without-a-matched-client": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "basic-scheme": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "double-space-separator": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "expired-token": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "extractor-without-authentication-context": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "identity-only-token": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "key-source-unreachable": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "no-authorization-header": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "principal-claim-is-an-object": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "repeated-authorization-header": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "review-completion-expired-signature": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
+  },
+  "review-completion-malformed-timestamp": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
+  },
+  "review-completion-with-two-signatures": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
+  },
+  "review-completion-without-recipient": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
+  },
+  "review-completion-without-signature": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
+  },
+  "review-completion-wrong-key": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
+  },
+  "review-completion-wrong-recipient": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
+  },
+  "tampered-signature": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "task-grant-bound-to-another-client": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "task-grant-bound-to-another-resource": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "task-grant-claims-malformed": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "task-grant-expired": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "task-grant-token-issued-for-too-long": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "task-grant-token-issued-in-the-future": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "token-not-compact": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "token-type-is-not-admitted": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "unknown-key-id": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "wrong-audience": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  },
+  "wrong-issuer": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer token or delivery signature was not accepted.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": "Bearer"
+  }
+}

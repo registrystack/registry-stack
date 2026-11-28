@@ -1,0 +1,441 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use super::*;
+
+#[test]
+fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings() {
+    check_activation_posture(None);
+}
+
+#[derive(Clone, Copy)]
+enum Regression {
+    Status,
+    Doctor,
+    ActivationFindings,
+}
+
+#[test]
+fn status_refuses_the_state_posture_when_the_ledger_disagrees() {
+    check_activation_posture(Some(Regression::Status));
+}
+
+#[test]
+fn doctor_reports_maintenance_and_the_recorded_posture() {
+    check_activation_posture(Some(Regression::Doctor));
+}
+
+#[test]
+fn development_plan_and_initial_apply_report_the_relaxed_custody() {
+    check_activation_posture(Some(Regression::ActivationFindings));
+}
+
+fn check_activation_posture(regression: Option<Regression>) {
+    let root_url = std::env::var("BREG_TEST_DATABASE_URL")
+        .expect("set BREG_TEST_DATABASE_URL for the posture PostgreSQL test");
+    let root_url = url::Url::parse(&root_url).expect("the test PostgreSQL URL parses");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (admin, connection) = tokio_postgres::connect(root_url.as_str(), tokio_postgres::NoTls)
+            .await
+            .expect("connect to disposable PostgreSQL");
+        let owner = tokio::spawn(connection);
+        for (recorded, declared) in [("production", "development"), ("development", "production")] {
+            if regression.is_some() && recorded != "development" {
+                continue;
+            }
+            let database = format!("breg_ctl_posture_{}", uuid::Uuid::new_v4().simple());
+            let role = format!("{database}_role");
+            admin
+                .batch_execute(&format!(
+                    "CREATE ROLE {role} LOGIN PASSWORD 'synthetic-posture-fixture';"
+                ))
+                .await
+                .unwrap();
+            admin
+                .batch_execute(&format!("CREATE DATABASE {database}"))
+                .await
+                .unwrap();
+            admin
+                .batch_execute(&format!(
+                    "GRANT CONNECT, TEMPORARY ON DATABASE {database} TO {role}"
+                ))
+                .await
+                .unwrap();
+            let mut database_url = root_url.clone();
+            database_url.set_path(&format!("/{database}"));
+            let (database_admin, connection) =
+                tokio_postgres::connect(database_url.as_str(), tokio_postgres::NoTls)
+                    .await
+                    .unwrap();
+            let database_owner = tokio::spawn(connection);
+            registry_breg::postgres::provision_managed_schemas(
+                &database_admin,
+                &registry_breg::postgres::SqlIdentifier::parse(&role).unwrap(),
+            )
+            .await
+            .unwrap();
+            drop(database_admin);
+            database_owner.await.unwrap().unwrap();
+            let database_admin_url = database_url.clone();
+            database_url.set_username(&role).unwrap();
+            database_url
+                .set_password(Some("synthetic-posture-fixture"))
+                .unwrap();
+            let result = std::panic::catch_unwind(|| {
+                let project = packaging_project();
+                let package = project.path().join("package");
+                fs::create_dir(&package).unwrap();
+                let config_root = tempfile::tempdir().unwrap();
+                let config = write_runtime_config(
+                    config_root.path(),
+                    &package,
+                    "127.0.0.1:1".parse().unwrap(),
+                );
+                let source = fs::read_to_string(&config).unwrap();
+                fs::write(
+                    &config,
+                    source
+                        .replace(
+                            "  runtimeUrlRef:",
+                            "  transport: loopback-plaintext\n  runtimeUrlRef:",
+                        )
+                        .replace(
+                            "migration: registry_migration",
+                            &format!("migration: {role}"),
+                        )
+                        .replace("runtime: registry_runtime", &format!("runtime: {role}"))
+                        .replace("principal: registry_principal", "principal: principal")
+                        .replace("    purpose: registry_purpose\n", "")
+                        .replacen(
+                            "\n        jwksCache:\n",
+                            "\n        jwksSource:\n          type: static\n          documentRef: secret:file/oidc-jwks\n        jwksCache:\n",
+                            1,
+                        ),
+                )
+                .unwrap();
+                use std::io::Write as _;
+                use std::os::unix::fs::OpenOptionsExt as _;
+                fs::create_dir(config_root.path().join("audit")).unwrap();
+                fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(
+                        config_root
+                            .path()
+                            .join("secrets")
+                            .join(PACKAGE_VALUE_CANARY),
+                    )
+                    .unwrap()
+                    .write_all(&[7; 32])
+                    .unwrap();
+                fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(config_root.path().join("secrets/oidc-jwks"))
+                    .unwrap()
+                    .write_all(br#"{"keys":[{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"synthetic-doctor-jwks"}]}"#)
+                    .unwrap();
+                let run = |args: &[&str]| {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+                    if !args.contains(&"--format") {
+                        command.args(["--format", "json"]);
+                    }
+                    command.args(args)
+                        .env_remove("REGISTRY_STACK_POSTURE")
+                        .env(
+                            VERIFY_MIGRATION_DATABASE_SECRET_CANARY,
+                            database_url.as_str(),
+                        )
+                        .env(VERIFY_RUNTIME_DATABASE_SECRET_CANARY, database_url.as_str())
+                        .output()
+                        .unwrap()
+                };
+                let measured = run(&[
+                    "test",
+                    path(project.path()),
+                    "--runtime-config",
+                    path(&config),
+                    "--fingerprint-only",
+                ]);
+                assert!(measured.status.success(), "{}", json_stdout(&measured));
+                let measured = json_stdout(&measured);
+                let prepared = prepare_packaging_candidate(
+                    &project,
+                    measured["schemaFingerprint"].as_str().unwrap(),
+                );
+                fs::remove_dir(&package).unwrap();
+                prepared.publish_to_directory(&package).unwrap();
+                let planned = if matches!(regression, Some(Regression::ActivationFindings)) {
+                    let source = fs::read_to_string(&config).unwrap().replace(
+                        "audit:\n",
+                        "audit:\n  hashKeyCustody: development-generated\n",
+                    );
+                    fs::write(&config, source).unwrap();
+                    Some(run(&[
+                        "plan", "--runtime-config", path(&config), "--package",
+                        path(&package), "--posture", recorded,
+                    ]))
+                } else {
+                    None
+                };
+                let before = run(&[
+                    "apply",
+                    "--initial",
+                    "--runtime-config",
+                    path(&config),
+                    "--package",
+                    path(&package),
+                    "--posture",
+                    recorded,
+                ]);
+                assert!(before.status.success(), "{}", json_stdout(&before));
+                if let Some(planned) = planned {
+                    let mut missing = Vec::new();
+                    for output in [&planned, &before] {
+                        let report = json_stdout(output);
+                        assert!(output.status.success(), "{report}");
+                        if !report["diagnostics"].as_array().unwrap().iter().any(|item| {
+                            item["code"] == "platform.posture.generated-audit-key"
+                                && item["path"] == "/audit/hashKeyCustody"
+                        }) {
+                            missing.push(report);
+                        }
+                    }
+                    assert!(missing.is_empty(), "{missing:?}");
+                    return;
+                }
+                let status = |posture| {
+                    run(&[
+                        "status",
+                        "--runtime-config",
+                        path(&config),
+                        "--posture",
+                        posture,
+                    ])
+                };
+                if let Some(regression) = regression {
+                    match regression {
+                        Regression::Status => {
+                            mutate_database(
+                                database_admin_url.clone(),
+                                "UPDATE registry_internal.registry_migrations SET posture = 'production'",
+                            );
+                            let output = status(declared);
+                            let report = json_stdout(&output);
+                            assert_eq!(report["diagnostics"][0]["code"], "platform.activation.posture-mismatch", "{report}");
+                            assert_eq!(output.status.code(), Some(1), "{report}");
+                            assert_eq!(report["status"], "domain-refusal", "{report}");
+                            assert!(report["registryRevision"].is_string(), "{report}");
+                        }
+                        Regression::Doctor => {
+                            mutate_database(
+                                database_admin_url.clone(),
+                                "UPDATE registry_internal.registry_state
+                                 SET maintenance_status = 'failed',
+                                     maintenance_target_package_digest = active_package_digest",
+                            );
+                            let output = run(&["doctor", "--runtime-config", path(&config), "--posture", declared]);
+                            let report = json_stdout(&output);
+                            assert_eq!(output.status.code(), Some(1), "{report}");
+                            let diagnostics = report["diagnostics"].as_array().unwrap();
+                            for code in ["startup.database.unready", "platform.activation.posture-mismatch"] {
+                                assert!(diagnostics.iter().any(|item| item["code"] == code), "{report}");
+                            }
+                        }
+                        Regression::ActivationFindings => unreachable!(),
+                    }
+                    return;
+                }
+                let before = json_stdout(&status(recorded));
+                let unopened_audit = config_root.path().join("audit/must-stay-absent.jsonl");
+                let apply_config = config_root.path().join("refused-apply.yaml");
+                let source = fs::read_to_string(&config).unwrap();
+                fs::write(&apply_config, source.replace("audit.jsonl", "must-stay-absent.jsonl")).unwrap();
+                for operation in ["plan", "apply"] {
+                    let mut args = vec![
+                        operation,
+                        "--runtime-config",
+                        path(if operation == "apply" { &apply_config } else { &config }),
+                        "--package",
+                        path(&package),
+                        "--posture",
+                        declared,
+                    ];
+                    if operation == "apply" {
+                        args.push("--initial");
+                    }
+                    let refused = run(&args);
+                    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+                    let report = json_stdout(&refused);
+                    assert_eq!(
+                        report["diagnostics"][0]["code"], "platform.activation.posture-mismatch",
+                        "{report}"
+                    );
+                }
+                assert!(!unopened_audit.exists(), "a posture refusal must precede opening audit");
+                let reconcile_target = config_root.path().join("reconcile-target");
+                prepare_packaging_candidate(&project, &format!("sha256:{}", "4".repeat(64)))
+                    .publish_to_directory(&reconcile_target)
+                    .unwrap();
+                for flags in [&[][..], &["--execute"][..]] {
+                    let mut arguments = vec![
+                        "migration", "reconcile", "--runtime-config", path(&config),
+                        "--package", path(&reconcile_target), "--posture", declared,
+                        "--operator-reference", "synthetic-reconcile-posture",
+                    ];
+                    arguments.extend(flags);
+                    let refused = run(&arguments);
+                    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+                    let report = json_stdout(&refused);
+                    assert_eq!(report["diagnostics"][0]["code"], "platform.activation.posture-mismatch", "{report}");
+                    assert_eq!(report["diagnostics"][0]["path"], "/database", "{report}");
+                }
+
+                let checked = status(declared);
+                assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+                let checked = json_stdout(&checked);
+                assert_eq!(
+                    checked["diagnostics"][0]["code"], "platform.activation.posture-mismatch",
+                    "{checked}"
+                );
+                assert_eq!(checked["ledger"], before["ledger"]);
+                if declared == "development" {
+                    let source = fs::read_to_string(&config).unwrap();
+                    fs::write(&config, source.replace(
+                        "  bind: 127.0.0.1:1\n",
+                        "  bind: 127.0.0.1:1\n  publicOrigin: http://127.0.0.1:1\n",
+                    )).unwrap();
+                }
+                let doctor = run(&[
+                    "doctor",
+                    "--runtime-config",
+                    path(&config),
+                    "--posture",
+                    declared,
+                ]);
+                assert!(doctor.status.success(), "{}", json_stdout(&doctor));
+                let doctor_report = json_stdout(&doctor);
+                assert!(doctor_report["checked"].is_array(), "{doctor_report}");
+                assert!(doctor_report["roleMode"].is_string(), "{doctor_report}");
+                assert!(doctor_report["advisories"].is_array(), "{doctor_report}");
+                let has_code = |member: &str, code: &str| {
+                    doctor_report[member].as_array().unwrap().iter().any(|item| item["code"] == code)
+                };
+                assert!(has_code("diagnostics", "platform.activation.posture-mismatch"), "{doctor_report}");
+                assert!(has_code("advisories", "platform.activation.posture-mismatch"), "{doctor_report}");
+                if declared == "development" {
+                    assert!(has_code("advisories", "breg.posture.http-public-origin"), "{doctor_report}");
+                }
+                if recorded == "development" {
+                    let development_config = config_root.path().join("development.yaml");
+                    let development = fs::read_to_string(&config).unwrap().replace(
+                        "audit:\n",
+                        "audit:\n  hashKeyCustody: development-generated\n",
+                    );
+                    fs::write(&development_config, development).unwrap();
+                    for command in ["hook", "proposal-retention"] {
+                        for format in ["json", "human"] {
+                            let output = run(&[
+                                "--format", format, command, "list", "--runtime-config",
+                                path(&development_config), "--posture", "development",
+                            ]);
+                            assert!(output.status.success(), "{output:?}");
+                            if format == "json" {
+                                let report = json_stdout(&output);
+                                assert!(report["diagnostics"].as_array().unwrap().iter().any(|item| {
+                                    item["code"] == "platform.posture.generated-audit-key"
+                                        && item["path"] == "/audit/hashKeyCustody"
+                                }), "{report}");
+                            } else {
+                                let report = String::from_utf8(output.stdout).unwrap();
+                                assert!(report.contains("platform.posture.generated-audit-key"), "{report}");
+                                assert!(report.contains("/audit/hashKeyCustody"), "{report}");
+                            }
+                        }
+                    }
+                }
+                let cursor_config = config_root.path().join("invalid-cursor.yaml");
+                let source = fs::read_to_string(&config).unwrap();
+                fs::write(&cursor_config, source.replace(
+                    &format!("  secretRef: secret:file/{PACKAGE_VALUE_CANARY}"),
+                    "  secretRef: secret:file/missing-cursor-key",
+                )).unwrap();
+                let refused = run(&["doctor", "--runtime-config", path(&cursor_config), "--posture", declared]);
+                assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+                let report = json_stdout(&refused);
+                assert!(report["diagnostics"].as_array().unwrap().iter().any(|item| item["code"] == "startup.cursor.refused"), "{report}");
+                assert!(report["diagnostics"].as_array().unwrap().iter().any(|item| item["code"] == "platform.activation.posture-mismatch"), "{report}");
+                let refresh_config = config_root.path().join("invalid-refresh.yaml");
+                let source = fs::read_to_string(&config).unwrap();
+                fs::write(&refresh_config, format!("{source}
+externalRefresh:
+  plans:
+    people:
+      target: {{view: unknown-view, link: register}}
+      worker:
+        accessProfile: person-refresh
+        requesterClient: wfp-scope
+        principal: refresh-service
+      intervalSeconds: 60
+")).unwrap();
+                let refresh_doctor = run(&[
+                    "doctor", "--runtime-config", path(&refresh_config), "--posture", declared,
+                ]);
+                assert_eq!(refresh_doctor.status.code(), Some(1));
+                let refresh_report = json_stdout(&refresh_doctor);
+                assert_eq!(
+                    refresh_report["diagnostics"][0]["code"],
+                    "breg.external-refresh.view-missing",
+                    "{refresh_report}"
+                );
+                assert!(
+                    refresh_report["diagnostics"].as_array().unwrap().iter().any(
+                        |item| item["code"] == "platform.activation.posture-mismatch"
+                            && item["path"] == "/database"
+                    ),
+                    "{refresh_report}"
+                );
+            });
+            admin
+                .batch_execute(&format!("DROP DATABASE {database} WITH (FORCE)"))
+                .await
+                .unwrap();
+            admin
+                .batch_execute(&format!("DROP ROLE {role}"))
+                .await
+                .unwrap();
+            if let Err(panic) = result {
+                std::panic::resume_unwind(panic);
+            }
+        }
+        drop(admin);
+        owner.await.unwrap().unwrap();
+    });
+}
+
+fn mutate_database(database_url: url::Url, statement: &'static str) {
+    // Keep the fixture's panic boundary synchronous so cleanup runs on failure.
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (client, connection) =
+                    tokio_postgres::connect(database_url.as_str(), tokio_postgres::NoTls)
+                        .await
+                        .unwrap();
+                let connection = tokio::spawn(connection);
+                client.batch_execute(statement).await.unwrap();
+                drop(client);
+                connection.await.unwrap().unwrap();
+            });
+    })
+    .join()
+    .unwrap();
+}

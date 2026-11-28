@@ -99,6 +99,9 @@ pub enum AuthPlanFault {
     /// A `none` endpoint reaches an origin that is neither numeric
     /// loopback nor `https` with an mTLS client identity.
     NoneNotAdmitted,
+    /// A credential would travel over plain HTTP to a host that is not
+    /// loopback. Adapter sources are https or loopback only.
+    CredentialRequiresProtectedTransport,
     /// `scheme` is not 1 to 32 HTTP token bytes.
     SchemeOutOfBounds,
     /// `headerName` is a header the engine owns.
@@ -143,6 +146,10 @@ impl fmt::Display for AuthPlanFault {
             Self::NoneNotAdmitted => formatter.write_str(
                 "a none endpoint reaches an origin that is neither numeric loopback nor https \
                  with an mTLS client identity",
+            ),
+            Self::CredentialRequiresProtectedTransport => formatter.write_str(
+                "the endpoint's credential would travel over plain http to a host that is not \
+                 loopback. Serve the source over https, or reach it on loopback",
             ),
             Self::SchemeOutOfBounds => {
                 formatter.write_str("the authorization scheme must be 1 to 32 HTTP token bytes")
@@ -293,6 +300,9 @@ impl AuthPlan {
             }
             EndpointAuthenticationPolicyFault::KindMismatch => kind_mismatch(),
             EndpointAuthenticationPolicyFault::NoneNotAdmitted => AuthPlanFault::NoneNotAdmitted,
+            EndpointAuthenticationPolicyFault::CredentialRequiresProtectedTransport => {
+                AuthPlanFault::CredentialRequiresProtectedTransport
+            }
         })?;
         match (endpoint, binding.credential.as_ref()) {
             (EndpointAuthentication::None {}, Some(RuntimeCredential::None {})) => Ok(Self {
@@ -851,6 +861,70 @@ mod tests {
             let plan = AuthPlan::compile(&endpoint, &binding)
                 .unwrap_or_else(|fault| panic!("{} must admit: {fault}", kind.tag()));
             assert_eq!(plan.kind(), kind, "{}", kind.tag());
+        }
+    }
+
+    /// No credential of any kind compiles for plain HTTP beyond loopback, so
+    /// the deployment refuses at load what the checks refuse, inside a
+    /// declared private range or not. Loopback still carries every kind.
+    #[test]
+    fn a_credential_over_plain_http_beyond_loopback_refuses_to_compile() {
+        let cases = [
+            (
+                EndpointAuthentication::Basic {},
+                RuntimeCredential::Basic {
+                    username_ref: secret("USER"),
+                    password_ref: secret("PASS"),
+                },
+            ),
+            (
+                EndpointAuthentication::StaticAuthorization { scheme: None },
+                RuntimeCredential::StaticAuthorization {
+                    token_ref: secret("TOKEN"),
+                },
+            ),
+            (
+                EndpointAuthentication::StaticApiKey {
+                    header_name: "X-Api-Key".to_owned(),
+                },
+                RuntimeCredential::StaticApiKey {
+                    value_ref: secret("KEY"),
+                },
+            ),
+            (
+                EndpointAuthentication::Oauth2ClientCredentials {},
+                oauth_credential(
+                    "https://token.example.invalid/token",
+                    "CLIENT_ID",
+                    "CLIENT_SECRET",
+                ),
+            ),
+            (
+                EndpointAuthentication::Oauth2PrivateKeyJwt {},
+                pkjwt_credential("https://token.example.invalid".to_owned()),
+            ),
+        ];
+        for (endpoint, credential) in cases {
+            for base_url in ["http://10.0.0.7:8080/", "http://civreg:8080/"] {
+                let fault =
+                    AuthPlan::compile(&endpoint, &binding(base_url, Some(credential.clone())))
+                        .expect_err("a credential over plain http beyond loopback refuses");
+                assert_eq!(
+                    fault,
+                    AuthPlanFault::CredentialRequiresProtectedTransport,
+                    "{} over {base_url}",
+                    endpoint.kind()
+                );
+                let rendered = fault.to_string();
+                assert!(
+                    rendered.contains("Serve the source over https, or reach it on loopback")
+                        && !rendered.contains("civreg")
+                        && !rendered.contains("10.0.0.7"),
+                    "{rendered}"
+                );
+            }
+            AuthPlan::compile(&endpoint, &binding("http://127.0.0.1:9/", Some(credential)))
+                .unwrap_or_else(|fault| panic!("{} on loopback: {fault}", endpoint.kind()));
         }
     }
 

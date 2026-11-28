@@ -1394,7 +1394,14 @@ fn current_runtime_ca_capture_rejects_symlink_malformed_and_mutable_files() {
         .expect("write runtime configuration");
         fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
             .expect("protect runtime configuration");
-        let error = RuntimeDocument::load(&runtime_path).expect_err("unsafe CA capture fails");
+        let error = RuntimeDocument::load(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect_err("unsafe CA capture fails");
         match case {
             CaCase::Symlink => assert_eq!(error, BundleError::InvalidPath),
             CaCase::Malformed => assert!(matches!(error, BundleError::InvalidArtifact(_))),

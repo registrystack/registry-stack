@@ -15,6 +15,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+const DEVELOPMENT_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
 use axum::Router;
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{
@@ -33,7 +39,7 @@ use registry_breg::package::{
     VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    initialize_compiled_registry_state_with_posture_for_test, install_compiled_schema,
     managed_schema_fingerprint, provision_postgis_prerequisites, spatial_bbox_role,
     ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
@@ -177,7 +183,8 @@ async fn fixture_import_uses_real_ingestion_and_leaves_no_open_authority() {
     let database = TestDatabase::create(8).await;
     let idp = MockIdp::start().await;
     let config_path = package.write_runtime_config(&database, &idp);
-    let config = load_runtime_config(&config_path).expect("runtime config loads");
+    let config =
+        load_runtime_config(&config_path, DEVELOPMENT_POSTURE).expect("runtime config loads");
     let prepared_database = prepare_schema_test_database_with_connection_configs_for_test(
         &config,
         &package.prepared,
@@ -253,7 +260,7 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
             .await
             .expect("closed managed schema fingerprint computes");
     let package = package_fixture(&project_source, &schema_fingerprint);
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &registry,
@@ -262,6 +269,7 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
             database_id: DATABASE_ID,
             label: &package.revision,
         },
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("administrator activates the exact verified package identity");
@@ -271,10 +279,13 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
 
     let idp = MockIdp::start().await;
     let config_path = package.write_runtime_config(&database, &idp);
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("verified startup constructs the authenticated fixture runtime");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        DEVELOPMENT_POSTURE,
+    )
+    .await
+    .expect("verified startup constructs the authenticated fixture runtime");
     let audit_path = package.directory.join("audit").join("audit.jsonl");
 
     let suite = validate_fixture_journeys(JOURNEY_SOURCE, &registry).expect("journeys preflight");
@@ -350,7 +361,7 @@ async fn fixture_test_accepts_the_real_runtime_row_local_constraint_refusal() {
         &schema_fingerprint,
         COMPARE_CONSTRAINT_JOURNEY_SOURCE,
     );
-    initialize_compiled_registry_state_for_test(
+    initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &registry,
@@ -359,6 +370,7 @@ async fn fixture_test_accepts_the_real_runtime_row_local_constraint_refusal() {
             database_id: DATABASE_ID,
             label: &package.revision,
         },
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("administrator activates the exact verified package identity");
@@ -367,10 +379,13 @@ async fn fixture_test_accepts_the_real_runtime_row_local_constraint_refusal() {
 
     let idp = MockIdp::start().await;
     let config_path = package.write_runtime_config(&database, &idp);
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("verified startup constructs the authenticated fixture runtime");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        DEVELOPMENT_POSTURE,
+    )
+    .await
+    .expect("verified startup constructs the authenticated fixture runtime");
     let suite = validate_fixture_journeys(COMPARE_CONSTRAINT_JOURNEY_SOURCE, &registry)
         .expect("constraint journeys preflight");
     let tokens = (0..3).map(|_| operator_token(&idp, true)).collect();
@@ -449,7 +464,8 @@ async fn production_schema_test_setup_failures_identify_configuration_without_se
             );
             fs::write(&config_path, source).expect("extra destination config writes");
         }
-        let config = load_runtime_config(&config_path).expect("runtime config shape is valid");
+        let config = load_runtime_config(&config_path, DEVELOPMENT_POSTURE)
+            .expect("runtime config shape is valid");
         let prepared_database = prepare_schema_test_database_with_connection_configs_for_test(
             &config,
             &package.prepared,
@@ -474,6 +490,146 @@ async fn production_schema_test_setup_failures_identify_configuration_without_se
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deployed_and_rehearsed_delivery_bindings_refuse_shared_or_invalid_keys() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    use registry_breg::startup::{check_with_connection_config_for_test, StartupError};
+
+    let baseline = String::from_utf8(compiled_fixture().1).unwrap();
+    let project_source = baseline.replacen(
+        "    fields:\n",
+        r#"    hooks:
+      - id: widget-created
+        phase: after
+        trigger: created
+        projection: [label]
+        handler: {type: url, destinationId: receiver}
+    fields:
+"#,
+        1,
+    );
+    let project = parse_project_yaml(project_source.as_bytes()).unwrap();
+    let module = parse_module_yaml(MODULE_SOURCE).unwrap();
+    let compiled = compile_project(&project, &[module], CompileProfile::Production).unwrap();
+    let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
+    let package = package_fixture(project_source.as_bytes(), &schema_fingerprint);
+    let suite = validate_fixture_journeys(JOURNEY_SOURCE, &compiled).unwrap();
+    let idp = MockIdp::start().await;
+    let current = "reviewAuthorities.casework.completion.hmacSha256KeyRef";
+    let previous = "reviewAuthorities.casework.completion.previousHmacSha256KeyRef";
+    let hook = "destinations.hooks.receiver.hmacSha256KeyRef";
+    let repeated = format!("{hook} and {current} resolve to the same key bytes. Give {current} its own key by writing 32 new random bytes to another secret and referencing it there.");
+    for (key, rotation, expected) in [
+        (&[0x22; 32][..], "", repeated.clone()),
+        (&[0x13; 31][..], "", format!("{current} has 31 bytes (trailing newline: false). Supply 32 to 64 exact key bytes.")),
+        (&[0x13; 32][..], "      previousHmacSha256KeyRef: secret:file/old-key\n", format!("{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}.")),
+    ] {
+        let database = TestDatabase::create(8).await;
+        let path = package.write_runtime_config(&database, &idp);
+        let secrets = package.directory.join("secrets");
+        write_private(&secrets.join("completion-key"), key);
+        write_private(&secrets.join("old-key"), key);
+        write_private(&secrets.join("hook-key"), &[0x22; 32]);
+        write_private(&secrets.join("review-token"), b"synthetic-review-token");
+        let bindings = r#"destinations:
+  hooks:
+    receiver:
+      origin: https://receiver.example.test
+      path: /events
+      networkProfile: production-https
+      dnsFamily: ipv4-only
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/hook-key
+      classificationCeiling: public
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 1000
+        maximumAttempts: 1
+reviewAuthorities:
+  casework:
+    endpoint: https://review.example.test/
+    profile: producer
+    producerId: registry-producer
+    recoveryDays: 7
+    tokenRef: secret:file/review-token
+    completion:
+      recipientBinding: registry
+      hmacSha256KeyRef: secret:file/completion-key
+"#;
+        let append_bindings = |path: &Path| {
+            let mut source = fs::read_to_string(path).unwrap();
+            source.push_str(bindings);
+            source.push_str(rotation);
+            fs::write(path, source).unwrap();
+        };
+        append_bindings(&path);
+        let config = load_runtime_config(&path, DEVELOPMENT_POSTURE).unwrap();
+        let database_for_test = prepare_schema_test_database_with_connection_configs_for_test(
+            &config,
+            &package.prepared,
+            &database.migration_config,
+            &database.runtime_config,
+        )
+        .await
+        .unwrap();
+        if expected == repeated {
+            let serving = TestDatabase::create(8).await;
+            let (migration, task) = serving.connect_migration().await;
+            install_compiled_schema(&migration, &compiled, &serving.runtime_role)
+                .await
+                .unwrap();
+            initialize_compiled_registry_state_with_posture_for_test(
+                &migration,
+                &serving.runtime_role,
+                &compiled,
+                RegistryStateTestIdentity {
+                    package_id: &package.package.manifest().package_id,
+                    database_id: DATABASE_ID,
+                    label: &package.revision,
+                },
+                registry_platform_config::Posture::Development,
+            )
+            .await
+            .unwrap();
+            drop(migration);
+            task.abort();
+            let serving_path = package.write_runtime_config(&serving, &idp);
+            append_bindings(&serving_path);
+            let serve = prepare_with_connection_config_for_test(
+                &serving_path,
+                serving.runtime_config.clone(),
+                DEVELOPMENT_POSTURE,
+            )
+            .await
+            .err()
+            .unwrap();
+            let doctor = check_with_connection_config_for_test(
+                &serving_path,
+                serving.runtime_config.clone(),
+                DEVELOPMENT_POSTURE,
+            )
+            .await
+            .unwrap_err();
+            for error in [serve, doctor] {
+                assert!(matches!(error, StartupError::EventDestinations(ref message) if message == &repeated), "{error:?}");
+            }
+            serving.cleanup().await;
+        }
+        let error = execute_schema_test(
+            database_for_test, &config, &package.prepared, &suite,
+            successful_credential_bindings(&suite, &idp),
+        )
+        .await
+        .unwrap_err();
+        let FixtureError::RuntimeSetup(cause) = error else {
+            panic!("expected the runtime setup refusal, got {error:?}");
+        };
+        let detail = cause.to_string();
+        assert_eq!(detail.strip_prefix("schema-test ").unwrap_or(&detail), expected);
+        database.cleanup().await;
+    }
+    idp.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn production_schema_test_executor_uses_only_prepared_database_and_private_credentials() {
     let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let (compiled, project_source) = compiled_fixture();
@@ -486,8 +642,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let first = TestDatabase::create(8).await;
     let first_config_path = package.write_runtime_config(&first, &idp);
-    let first_config =
-        load_runtime_config(&first_config_path).expect("strict runtime config loads");
+    let first_config = load_runtime_config(&first_config_path, DEVELOPMENT_POSTURE)
+        .expect("strict runtime config loads");
     let first_database = prepare_schema_test_database_with_connection_configs_for_test(
         &first_config,
         &package.prepared,
@@ -522,8 +678,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let second = TestDatabase::create(8).await;
     let second_config_path = package.write_runtime_config(&second, &idp);
-    let second_config =
-        load_runtime_config(&second_config_path).expect("second strict runtime config loads");
+    let second_config = load_runtime_config(&second_config_path, DEVELOPMENT_POSTURE)
+        .expect("second strict runtime config loads");
     let second_database = prepare_schema_test_database_with_connection_configs_for_test(
         &second_config,
         &package.prepared,
@@ -556,7 +712,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
         .await
         .expect("administrator can create a dirty managed object");
     let dirty_config_path = package.write_runtime_config(&dirty, &idp);
-    let dirty_config = load_runtime_config(&dirty_config_path).expect("dirty runtime config loads");
+    let dirty_config = load_runtime_config(&dirty_config_path, DEVELOPMENT_POSTURE)
+        .expect("dirty runtime config loads");
     assert!(
         prepare_schema_test_database_with_connection_configs_for_test(
             &dirty_config,
@@ -571,8 +728,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let wrong_role = TestDatabase::create(8).await;
     let wrong_role_config_path = package.write_runtime_config(&wrong_role, &idp);
-    let wrong_role_config =
-        load_runtime_config(&wrong_role_config_path).expect("wrong-role runtime config loads");
+    let wrong_role_config = load_runtime_config(&wrong_role_config_path, DEVELOPMENT_POSTURE)
+        .expect("wrong-role runtime config loads");
     assert!(
         prepare_schema_test_database_with_connection_configs_for_test(
             &wrong_role_config,
@@ -587,8 +744,9 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let claim_mismatch = TestDatabase::create(8).await;
     let claim_mismatch_config_path = package.write_runtime_config(&claim_mismatch, &idp);
-    let claim_mismatch_config = load_runtime_config(&claim_mismatch_config_path)
-        .expect("claim-mismatch runtime config loads");
+    let claim_mismatch_config =
+        load_runtime_config(&claim_mismatch_config_path, DEVELOPMENT_POSTURE)
+            .expect("claim-mismatch runtime config loads");
     let claim_mismatch_database = prepare_schema_test_database_with_connection_configs_for_test(
         &claim_mismatch_config,
         &package.prepared,
@@ -616,8 +774,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let substituted = TestDatabase::create(8).await;
     let substituted_config_path = package.write_runtime_config(&substituted, &idp);
-    let substituted_config =
-        load_runtime_config(&substituted_config_path).expect("substituted runtime config loads");
+    let substituted_config = load_runtime_config(&substituted_config_path, DEVELOPMENT_POSTURE)
+        .expect("substituted runtime config loads");
     let substituted_database = prepare_schema_test_database_with_connection_configs_for_test(
         &substituted_config,
         &package.prepared,
@@ -649,8 +807,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
     );
     let terminal = TestDatabase::create(8).await;
     let terminal_config_path = terminal_package.write_runtime_config(&terminal, &idp);
-    let terminal_config =
-        load_runtime_config(&terminal_config_path).expect("terminal runtime config loads");
+    let terminal_config = load_runtime_config(&terminal_config_path, DEVELOPMENT_POSTURE)
+        .expect("terminal runtime config loads");
     let terminal_database = prepare_schema_test_database_with_connection_configs_for_test(
         &terminal_config,
         &terminal_package.prepared,
@@ -710,7 +868,8 @@ async fn public_spatial_fixture_schema_test_runs_through_the_production_executor
     .await
     .expect("administrator provisions spatial schema-test prerequisites");
     let config_path = package.write_spatial_runtime_config(&database, &idp);
-    let config = load_runtime_config(&config_path).expect("spatial runtime config loads");
+    let config = load_runtime_config(&config_path, DEVELOPMENT_POSTURE)
+        .expect("spatial runtime config loads");
     let schema_test_database = prepare_schema_test_database_with_connection_configs_for_test(
         &config,
         &package.prepared,
@@ -979,7 +1138,7 @@ fn package_fixture_with_modules(
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            database_initialization_environment: "production",
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .expect("package closure rederives into VerifiedPackage");
@@ -1043,7 +1202,7 @@ fn spatial_package_fixture(project: &[u8], schema_fingerprint: &str) -> PackageF
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .expect("spatial package closure rederives into VerifiedPackage");
@@ -1091,7 +1250,6 @@ identity:
   environment: production
   instanceId: {INSTANCE_ID}
   databaseId: {DATABASE_ID}
-  databaseInitializationEnvironment: production
 secretProviders:
   file:
     root: {}
@@ -1110,25 +1268,28 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: {}
-    audience: {AUDIENCE}
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {}
+        audience: {AUDIENCE}
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        actorKind: service
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksSource:
+          type: static
+          documentRef: secret:file/oidc-jwks
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
     purpose: purpose
@@ -1188,7 +1349,6 @@ identity:
   environment: local
   instanceId: {QUICKSTART_INSTANCE_ID}
   databaseId: {QUICKSTART_DATABASE_ID}
-  databaseInitializationEnvironment: local
 secretProviders:
   file:
     root: {}
@@ -1207,25 +1367,28 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: {}
-    audience: {AUDIENCE}
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {}
+        audience: {AUDIENCE}
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        actorKind: service
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksSource:
+          type: static
+          documentRef: secret:file/oidc-jwks
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

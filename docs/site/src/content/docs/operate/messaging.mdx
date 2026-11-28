@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -32,36 +32,37 @@ Messaging needs no broker or cache, and connects to no database but its own.
 
 ## Install the binaries
 
-Choose a tag, normally the
-[latest release](https://github.com/registrystack/registry-stack/releases/latest), download
-`messaging-<tag>-linux-amd64` and `messagingctl-<tag>-linux-amd64`, and authenticate both with
+From v0.44.0, each release publishes `messaging` and `messagingctl` for Linux amd64, Linux arm64,
+and macOS arm64, with an installer. Choose a tag, normally the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest), and
+authenticate the assets with
 [Verify a release](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
-Install the pair from one tag:
+Linux assets are executables named `<binary>-<tag>-linux-<arch>`. macOS assets are `.tar.gz`
+bundles that carry the executable, its AWS-LC-FIPS libraries, and notices.
+Install the pair from one tag with the release-pinned installer:
 
-```sh
-tag="${TAG:?set TAG to the release you verified}"
-mkdir -p ~/.local/bin
-for binary in messaging messagingctl; do
-  install -m 0755 "${binary}-${tag}-linux-amd64" "$HOME/.local/bin/${binary}"
-done
-export PATH="$HOME/.local/bin:$PATH"
-messaging --version
-messagingctl --version
+```sh test-skip="installs release assets; the runner serves the binaries under test"
+tag="vX.Y.Z"
+bash "messaging-${tag:?set tag to the release tag}-install.sh"
+"${MESSAGING_INSTALL_DIR:-$HOME/.local/bin}/messaging" --version
+"${MESSAGING_INSTALL_DIR:-$HOME/.local/bin}/messagingctl" --version
 ```
 
-For another platform, build both from a checkout with
-`cargo build --release --locked -p registry-messaging -p registry-messagingctl`.
+The installer puts both binaries in `~/.local/bin`. Set `MESSAGING_INSTALL_DIR` to change that.
+The version checks run the binaries by that path, so they work before the directory is on your
+`PATH`. Neither path needs a Rust toolchain.
+
+{/* Evidence: release/scripts/release_roster.py ADDITIONAL_PLATFORM_BUILDS and ADDITIONAL_INSTALLERS;
+    crates/registry-messaging/install.sh MESSAGING_INSTALL_DIR. */}
 
 The image `ghcr.io/registrystack/messaging:<tag>` carries both binaries and runs
 `messaging --runtime-config /etc/registry-messaging/runtime.yaml serve`. Mount the package, runtime
 file, and secrets read-only, give the audit path writable storage, and deploy by digest.
 
-{/* Evidence: release/docker/Dockerfile.messaging; release v0.41.0 assets. */}
+{/* Evidence: release/docker/Dockerfile.messaging; release/scripts/build-release-image.sh. */}
 
-Each release publishes the `messaging` and `messagingctl` binaries for Linux amd64 only, checked
-against the release `SHA256SUMS`, and the container image for linux/amd64 only. There is no
-Messaging installer and no Linux arm64 or macOS build of either binary. The unified clients carry
-a `messaging` namespace: `@registrystack/client` on npm (Linux x64 and arm64 with glibc, macOS
+The container image is published for linux/amd64 only. The unified clients carry
+a `messaging` namespace: `@registrystack/client-node` on npm (Linux x64 and arm64 with glibc, macOS
 arm64) and `registry-stack-client` on PyPI (manylinux x86_64 and aarch64, macOS arm64).
 
 {/* Evidence: release/docker/Dockerfile.messaging; crates/registry-messaging-client-node;
@@ -93,36 +94,24 @@ Neither acceptance nor `submitted` is proof of delivery to the recipient or of l
 
 {/* TODO[evidence]: cite a test that shows a message moving from accepted to failed or unknown after the 202. */}
 
-## Provision PostgreSQL
+## Declare the deployment posture
 
-Create the roles and the database, then hand the schema to the migration role:
+The runtime and ctl read `REGISTRY_STACK_POSTURE` or `--posture`.
+The default is `production`.
+For a laptop deployment that uses development settings, run with `rstack dev` or declare `development` explicitly.
+Use the same posture for the entire deployment. Production peers refuse development responses.
 
-```sql
-CREATE ROLE messaging_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS;
-CREATE ROLE messaging_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS;
-CREATE DATABASE messaging;
-```
+`plan`, `apply`, and startup refuse a database activated under a different posture.
+`status` reports the mismatch alongside the ledger and schema information.
+To change posture, apply to a fresh database.
 
-Set each role's password with `\password messaging_migration` and `\password messaging_runtime` in
-`psql`, which prompts for it instead of taking it in a statement.
+A successful `/ready` returns `status`, `posture`, and `developmentSettings`.
+Each development setting lists its code and configuration pointer.
+In development, the public and metrics listeners add `Registry-Posture: development`.
 
-In the `messaging` database:
-
-```sql
-REVOKE ALL ON DATABASE messaging FROM PUBLIC;
-GRANT CONNECT ON DATABASE messaging TO messaging_migration, messaging_runtime;
-ALTER SCHEMA public OWNER TO messaging_migration;
-REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO messaging_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO messaging_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE messaging_migration IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO messaging_runtime;
-```
-
-{/* Evidence: crates/registry-messaging/migrations; crates/registry-messaging/src/store.rs. */}
+{/* Evidence: crates/registry-messaging/src/config.rs finish_load;
+    crates/registry-messaging/src/http.rs ready, http_edge;
+    crates/registry-messaging/src/activation.rs posture_mismatch. */}
 
 ## Write the runtime file
 
@@ -134,9 +123,12 @@ Set `package.root` to the absolute path of the package directory. Optionally set
 `package.expectedDigest` to the digest the author reported, which pins the runtime to that package.
 
 Set `listener.bind` to the private address your proxy reaches, and `tlsTermination` to
-`operator-controlled-upstream`: the example's `development-loopback` is refused on any non-loopback
-bind, and a public unicast address is refused under every setting. Set `authentication.oidc` to your
-issuer and audience; `allowedClients` must list every client an access profile names.
+`operator-controlled-upstream`: the example's `loopback-plaintext` is refused on any non-loopback
+bind, and a public unicast address is refused under every setting. Set an entry under `authentication.oidc.issuers` to
+your issuer and audience. Write `allowedClients: from-package` to admit exactly the clients the
+package's access profiles name, so the clients are written once, in `messaging.yaml`. A list is also
+accepted, and it must include every client an access profile names. Clients in the list that no
+profile names are admitted by the verifier but reach no profile.
 
 Each provider the package declares gets a connection with the same id and `type`:
 
@@ -207,11 +199,11 @@ unset value
 ```
 
 Write `smtp-username`, `smtp-password`, `sms-gateway-token`, and `sms-gateway-callback-key` the same
-way. Each must be a regular file owned by the runtime user, mode `0400` or `0600`, with one link.
+way. Each must meet the [secret file rule](../../security/hardening-checklist/#secret-files), for example a regular file owned by the runtime user, mode `0400` or `0600`, with one link.
 
-`serve` never reads the migration credential; only `apply` and `retention erase-expired` connect
-with it. Write `migration-database-url`, the URL for `messaging_migration`, only on the host that
-runs those two commands.
+`serve` never reads the migration credential; only `provision`, `apply`, and
+`retention erase-expired` read it. Write `migration-database-url`, the URL for
+`messaging_migration`, only on the host that runs those commands.
 
 :::caution[Keep the audit key]
 The audit key derives the pseudonyms the journal uses for callers and recipients. Rotating it
@@ -254,6 +246,75 @@ reaching a database.
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, check(); observed with messagingctl
     0.42.0-dev on 2026-10-19, paths replaced. */}
+
+## Provision PostgreSQL
+
+Your runtime file already names the roles, their passwords, and the database. They are the URLs in
+`database.migrationUrlRef` and `database.runtimeUrlRef`. `provision` reads the runtime file and the
+package it names, so write the file and build the package first. Put both database URLs in their
+secret files, then run `messagingctl provision` once as a PostgreSQL role that can create roles and
+databases:
+
+```sh
+messagingctl provision --runtime-config /etc/registry-messaging/runtime.yaml --admin-url-file admin-url
+```
+
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
+`CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable instead,
+use `--admin-url-env NAME`. The connection requires TLS and verifies the server certificate. Set
+`database.caBundleRef` in the runtime file to trust a private CA. The command never prints the
+administrator URL or a password.
+
+The administrator URL must name the same host and port as the two product URLs, or `provision`
+refuses it as `platform.provision.target-mismatch`. It must also name a database other than the
+product database, such as `postgres`, or `provision` refuses it as `platform.provision.target-invalid`.
+Where the administrator may connect only to the product database, `provision` cannot run: add
+`--print-sql` and give the script to the person who administers the server.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Gives the migration role `USAGE` and `CREATE` on the `public` schema and the runtime role `USAGE`
+  on it, and takes `CREATE` on it from `PUBLIC`.
+
+Run it again at any time. It creates only what is missing. It refuses a role that exists with a
+different password than its URL holds, and tells you which role.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
+`\password` line that prompts for the password in `psql`, so the script holds no password:
+
+```sql
+-- provision script, product messaging. Nothing was run.
+-- For a server where these objects do not exist yet. Review, then run with psql as an
+-- administrator that has CREATEROLE and CREATEDB. It stops at the first error.
+\set ON_ERROR_STOP on
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "messaging_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "messaging_migration"
+CREATE ROLE "messaging_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "messaging_runtime"
+CREATE DATABASE "messaging" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "messaging" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "messaging" TO "messaging_migration", "messaging_runtime";
+ALTER DATABASE "messaging" ALLOW_CONNECTIONS true;
+\connect "messaging"
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "messaging_migration"; GRANT USAGE ON SCHEMA public TO "messaging_runtime";
+```
+
+The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
+
+`provision` grants the runtime role `CONNECT` on the database and `USAGE` on the `public` schema,
+and running `provision` again restores that grant. `apply`, in the next section, grants it its
+access to the Messaging tables and sequences. It does not restore `USAGE` on `public`. The runtime requires TLS on
+its database connection and refuses one it cannot verify; `database.caBundleRef` names the CA
+bundle when a private CA fronts PostgreSQL.
+
+{/* Evidence: crates/registry-messagingctl/src/provision.rs;
+    crates/registry-messaging/migrations; crates/registry-messaging/src/store.rs. */}
 
 ## Record and serve the package
 
@@ -464,6 +525,7 @@ The series are:
 | `messaging_provider_attempts_total` | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent` | Provider attempts, by class |
 | `messaging_provider_callbacks_total` | `outcome`: `unverified`, `unreadable`, `ignored`, `applied`, `unchanged`, `unmatched`, `ambiguous`, `unavailable` | Provider callbacks, by what became of them |
 | `messaging_limit_refusals_total` | `limit`: `rate`, `daily`, `pacing`, `callback` | Submissions, attempts, and callbacks a limit refused |
+| `messaging_request_refusals_total` | `check`: the closed set of 45 failed checks, every value published at zero | Requests refused, by the check that failed. Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute, with `suppressed` counting what a window held back. Neither carries a token, claim, client, subject or identifier |
 | `messaging_retention_runs_total` | `outcome`: `erased`, `idle`, `failed` | Retention sweeps this process ran |
 | `messaging_metrics_sample_failures_total` | `sample`: `dispatch-queue` | Scrapes in which the database read failed, since the process started |
 | `messaging_dispatch_jobs` | `state`: `pending`, `leased`, `unknown` | Gauge read from the database at each scrape |
@@ -498,7 +560,7 @@ first exits 2 and the others exit 1:
 | ``messaging: the Messaging package at package.root does not satisfy the shared package envelope: the package at <package.root> does not match its SHA256SUMS; changed: messaging.yaml; rebuild the package with `messagingctl package` and deploy the whole directory`` | A package file was changed in place. Deploy the directory `messagingctl package` wrote, unchanged. A missing directory is reported the same way, as `does not exist or cannot be read` |
 | `messaging: package.expectedDigest does not pin the package at package.root, whose digest is sha256:<digest>; deploy the pinned package or update package.expectedDigest` | The package on disk is not the one `package.expectedDigest` names |
 | `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: no readable secret of that name exists under the configured provider` | No file of that name exists under `secretProviders.file.root`, or the runtime user cannot read it |
-| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: the secret file must be a regular file owned by the runtime user, with mode 0400 or 0600, and exactly one hard link` | The file exists but is a symbolic link, belongs to another user, has another mode, or has a second hard link |
+| `messaging: the Messaging runtime database configuration failed: the Messaging database secret could not be resolved: the secret reference configured at database.runtimeUrlRef could not be resolved: the secret file has more than one hard link (platform.secret-file.hard-linked). Replace it with a copy that has one link.` | The file exists but fails a [secret file check](../../reference/errors/#secret-file-codes). The refusal names the check: here a second hard link, and other files report a link that leaves the root, another owner, or a loose mode |
 | `messaging: the Messaging database connection could not be established: Error occurred while creating a new object: error connecting to server` | Nothing answers at the URL's host and port. `error performing TLS handshake` in its place means the server certificate is not trusted; name the CA bundle in `database.caBundleRef` |
 | `messaging: the Messaging query failed: db error` | The database has no schema yet. Run `messagingctl plan`, then `apply`, with the migration credential |
 | `messaging: identity.databaseId does not match the database activation ledger` | The runtime file names another deployment's `identity.databaseId`, or its URL reaches another deployment's database |

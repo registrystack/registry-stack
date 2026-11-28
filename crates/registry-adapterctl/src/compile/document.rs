@@ -254,6 +254,17 @@ pub(crate) fn assemble(
             }
         }));
     }
+    for (reserved, route) in [
+        (registry_platform_httputil::probe::HEALTH_PATH, "health"),
+        (registry_platform_httputil::probe::READY_PATH, "ready"),
+    ] {
+        if paths.contains_key(reserved) {
+            findings.push(assembly_refusal(
+                "adapterctl.compile.reserved-path",
+                &format!("an authored operation collides with the Adapter {route} route"),
+            ));
+        }
+    }
     if paths.contains_key(well_known_path) {
         findings.push(assembly_refusal(
             "adapterctl.compile.reserved-path",
@@ -493,23 +504,15 @@ fn openapi_method(method: HttpMethod) -> String {
 }
 
 /// The concrete path of one bound operation: the record type substituted
-/// into the record-type parameter's whole segment, every other segment
-/// kept as declared.
+/// into the record-type parameter's placeholder by the rule the listener and
+/// the checks share, every other part kept as declared.
 fn concrete_path(path: &str, parameter: Option<&str>, record_type: &str) -> String {
-    let Some(parameter) = parameter else {
-        return path.to_owned();
-    };
-    let template = format!("{{{parameter}}}");
-    path.split('/')
-        .map(|segment| {
-            if segment == template {
-                record_type.to_owned()
-            } else {
-                segment.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/")
+    match parameter {
+        Some(parameter) => {
+            registry_adapter_core::concrete_facade_path(path, parameter, record_type)
+        }
+        None => path.to_owned(),
+    }
 }
 
 /// The operation's OpenAPI parameters: the remaining declared path
@@ -768,13 +771,18 @@ mod tests {
 
     /// One project over that profile, with the given bindings.
     fn project(bindings: Value) -> AdapterProject {
+        project_of_record_type("case", bindings)
+    }
+
+    /// [`project`] with its one record type named `record_type`.
+    fn project_of_record_type(record_type: &str, bindings: Value) -> AdapterProject {
         serde_json::from_value(json!({
             "project": {"id": "case-deployment", "version": "1"},
             "profile": {"id": "case-api", "version": "1", "digest": PINNED_DIGEST},
             "pack": {"id": "case-api-pack", "version": "1", "digest": PINNED_DIGEST},
             "recordTypes": [
                 {
-                    "name": "case",
+                    "name": record_type,
                     "fields": [
                         {"name": "case_type", "type": "string", "required": true},
                         {"name": "severity", "type": "integer"},
@@ -1305,6 +1313,21 @@ mod tests {
         );
     }
 
+    /// The compiled path is the one the listener serves, whether the
+    /// record-type placeholder fills a segment or sits inside one.
+    #[test]
+    fn the_concrete_path_follows_the_shared_substitution_rule() {
+        assert_eq!(
+            concrete_path("/v1/{type}/{id}", Some("type"), "case"),
+            "/v1/case/{id}"
+        );
+        assert_eq!(
+            concrete_path("/v1/{type}.json", Some("type"), "case"),
+            "/v1/case.json"
+        );
+        assert_eq!(concrete_path("/v1/{type}", None, "case"), "/v1/{type}");
+    }
+
     /// Two bindings whose concrete paths collide refuse the assembly with
     /// the collision finding.
     #[test]
@@ -1331,6 +1354,49 @@ mod tests {
         .expect_err("the collision refuses");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, "adapterctl.compile.path-collision");
+    }
+
+    /// A binding whose concrete path is the health or ready route refuses the
+    /// assembly, because the listener answers those routes itself.
+    #[test]
+    fn a_concrete_path_equal_to_the_health_or_ready_route_refuses() {
+        let mut declared = profile_value();
+        declared["operations"][1]["path"] = json!("/{type}");
+        let profile: AdapterProfile =
+            serde_json::from_value(declared).expect("the profile decodes");
+        for (record_type, route) in [("health", "health"), ("ready", "ready")] {
+            let findings = assemble(
+                &profile,
+                &project_of_record_type(
+                    record_type,
+                    json!([{
+                        "id": "case-find",
+                        "operation": "cases-find",
+                        "recordType": record_type,
+                        "route": "case-find",
+                        "maximumUpstreamCalls": 11,
+                    }]),
+                ),
+            )
+            .expect_err("the reserved path refuses");
+            assert_eq!(findings.len(), 1, "{findings:?}");
+            assert_eq!(findings[0].code, "adapterctl.compile.reserved-path");
+            assert!(findings[0].message.contains(route), "{findings:?}");
+        }
+        assemble(
+            &profile,
+            &project_of_record_type(
+                "cases",
+                json!([{
+                    "id": "case-find",
+                    "operation": "cases-find",
+                    "recordType": "cases",
+                    "route": "case-find",
+                    "maximumUpstreamCalls": 11,
+                }]),
+            ),
+        )
+        .expect("an ordinary record type compiles");
     }
 
     /// The same authored bytes compile to the same rendered bytes.

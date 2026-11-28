@@ -2,6 +2,136 @@
 
 ## Unreleased
 
+- Verify BReg runtime issuer and audience against fixture tokens in the shared-issuer journeys.
+
+- Clean up managed project data through `rstack dev` after fixture runs.
+
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
+
+- `coordinatorctl serve` passes the resolved posture explicitly to the runtime.
+
+- BREAKING: Rust client configurations take a peer policy in `CoordinatorClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
+- Coordinator accepts responses from development downstream product peers when the runtime declares development.
+
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, the database connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, a keyword connection string host written as an IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`, is skipped when the transport otherwise permits it and the driver would dial it, as the driver itself fails that entry and tries the next. When no other host is left, the connection is refused when it is configured, with `platform.database.bracketed-host` naming the address. Write `host=::1`. When a keyword host has an authored `hostaddr`, the connection still uses that `hostaddr`. A bracketed IPv6 address in a URL, such as `postgresql://app@[::1]/registry`, still works.
+- The library's public `Store::open` runs the same `loopback-plaintext` check on a plaintext connection, after its local-host check, and dials only the loopback addresses it accepted. A `hostaddr` that is not loopback, `localhost` answering a non-loopback address, or a list whose dialled hosts are all bracketed keyword addresses is refused with the shared code.
+
+- Signed deliveries have the same form in both postures.
+
+- Typed remote `coordinatorctl` mutations probe the Coordinator API through an unauthenticated `GET /v1/doctor` before sending the mutation. The probe requires HTTP 401 or 200 and a valid `Registry-Posture` header if present. Production commands refuse a development Coordinator, and probe refusals point to `--url`, with `coordinator.command.probe-posture-invalid` for malformed or repeated posture headers.
+
+- Start a local development run from the starter with `rstack dev start`.
+- BREAKING: Configure OIDC issuer entries under `deployment.authentication.issuers` and keep the client policies under `deployment.authentication.policies`.
+  Migration: Move `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`, `assertionIssuers`, and `scopeClaim` to a named entry and set its `allowedClients` to `from-policies` or list the clients explicitly.
+- BREAKING: An issuer entry reads scopes from `scope` by default.
+  Migration: Write `scopeClaim: registry_scopes` in an entry if its issuer uses that claim.
+- BREAKING: An entry that states `accessTokenType: JWT` refuses tokens carrying ID-token markers.
+  Migration: Present an access token addressed to the Coordinator.
+- BREAKING: Tokens without a caller kind and without a scope beyond OpenID Connect identity scopes are refused.
+  Migration: Have the issuer grant the scope the Coordinator policy requires or declare the caller kind for the appropriate issuer or client.
+- `coordinatorctl generate identity-facts` writes the clients and access profiles of one configured issuer.
+- Development refusal bodies include `failedCheck`, the check that refused the request.
+
+- BREAKING: An undeclared posture is production.
+  Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+
+- BREAKING: `check` reports development settings as errors under the production default.
+  Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+
+- BREAKING: Use `loopback-plaintext` for loopback listener placement.
+  Migration: Set `tlsTermination` to `loopback-plaintext` for a listener behind a TLS proxy on the same host.
+
+- BREAKING: Issuer `allowInsecureHttp: true` requires development.
+  Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
+
+- Development deployments can now set `database.transport` to `private-network-plaintext` for PostgreSQL on the private network.
+
+- Loopback HTTP issuer URLs are accepted in either posture. A non-loopback HTTP issuer requires an explicit development opt-in.
+
+- Production responses keep HSTS behind a TLS proxy on the same host. Development responses omit HSTS when the listener uses a loopback mode.
+
+- BREAKING: Activation records the declared posture. Startup, plan and apply refuse a different posture. Status reports a finding. Existing rows read production.
+  Migration: Recreate development databases: a fresh apply is the way.
+
+- BREAKING: `/ready` returns a JSON object with `posture` and `developmentSettings`.
+  Migration: No change for probes that read the status code.
+
+- BREAKING: Audit lines carry `posture`.
+  Migration: Audit readers with a closed line parser accept the posture member.
+
+- Development responses carry `Registry-Posture: development`. The Coordinator Rust client enforces its configured `PeerPolicy`, and every typed `coordinatorctl` command refuses a development peer when it runs as production. The refusal code is `coordinator.command.development-peer`. `coordinatorctl api` passes the response through unchecked.
+
+- `/v1/doctor` carries a required `findings` member. It holds the `platform.activation.posture-mismatch` entry when the activation ledger records the other posture.
+
+- BREAKING: Local plaintext PostgreSQL needs `database.transport`. This replaces the local plaintext database behavior selected by the former listener mode.
+  Migration: Set `database.transport: loopback-plaintext` for PostgreSQL on the same host, in either posture.
+
+- BREAKING: The shared `platform.database.*` codes report transport configuration refusals.
+  Migration: Update scripts that match the old codes.
+
+- BREAKING: protected state schema version 7 records a posture with each
+  activation. Version 6 namespaces are refused. Settle their Runs with the
+  matching binary, then apply this version to a fresh namespace and database
+  identity.
+
+- Coordinator counts every refused caller by the check that refused it, in
+  `coordinator_request_refusals_total{check}` on the metrics listener, and
+  writes one `request refused` line with `failed_check` and the request's
+  trace id, at most five lines per check per minute. A policy denial after
+  authentication and a refused signed event delivery are now counted and
+  logged too. A scope refusal's line also names the scope claim the
+  deployment configured and the scope the caller's policy requires, as
+  `scope_claim` and `required_scope`, and nothing from the token. Refusal
+  statuses and production bodies are unchanged, and
+  `coordinator_authentication_refusals_total{reason}` stays.
+- Wherever Coordinator and `coordinatorctl` allow plaintext to a loopback
+  host, an IPv4-mapped loopback literal such as `[::ffff:127.0.0.1]` counts as
+  loopback, the same as `127.0.0.1`. A database host of `localhost` is matched
+  in any letter case. Host names other than `localhost` stay refused.
+- **BREAKING**. Coordinator verifies event and review completion deliveries
+  with Standard Webhooks. The signature is `v1,<base64>` over `webhook-id`,
+  `webhook-timestamp` and the exact body bytes. A delivery must be within 300
+  seconds of the Coordinator clock in either direction. A refused delivery
+  answers 401 with
+  `WWW-Authenticate: Registry-Signature scheme="standard-webhooks", version="v1"`.
+  A completion also carries `Registry-Recipient-Binding`, which selects the
+  connection's key. A completion no longer reads `Idempotency-Key` or
+  `Authorization`, and its `eventId` must equal `webhook-id`. An event route
+  no longer answers `503 event.source-unavailable`.
+- **BREAKING**. Configure one key per event trigger under
+  `eventSources.<alias>.triggers.<workflow>.<trigger>.hmacSha256KeyRef`, in
+  place of `eventSources.<alias>.signingKeyRef`. Configure
+  `connections.<id>.completion.hmacSha256KeyRef` in place of
+  `completion.bearerTokenRef`, with the same file in the Casework destination.
+  Startup refuses the removed keys with the replacement. It also refuses a
+  deployed trigger without a key entry, a key entry without a deployed
+  trigger, and a key that is unavailable, shorter than 32 bytes, longer than
+  64 bytes or starts with `whsec_`. It refuses the same key bytes in two
+  triggers or completion connections, including previous keys, and names both
+  paths. A refusal never names a key byte.
+- To rotate, keep `hmacSha256KeyRef` fixed, put the new bytes behind it, and
+  set `previousHmacSha256KeyRef` to the old bytes on the trigger or the
+  completion. Coordinator accepts either key. Restart to load the new files.
+- A static key set that startup refuses now names the rule it broke, and the
+  key's position for a rule about one key, in the `access.configuration`
+  message instead of pointing at the issuer and policy configuration.
+- `coordinatorctl provision` creates the database, the migration and runtime
+  roles and the grants `apply` expects, from the two database URLs in the
+  runtime file, as a PostgreSQL administrator. `--print-sql` prints the plan
+  and connects to nothing. When the runtime file has a `deployment` block, a
+  runtime URL whose user is not `deployment.runtimeRole` is refused before any
+  connection with `coordinator.runtime-config.runtime-role-mismatch`, and a
+  runtime URL that names no user gets its own message under the same code.
+  `coordinatorctl --runtime-config FILE provision` is accepted, as for every
+  other `coordinatorctl` command.
+
+- `GET /health` and `GET /ready` carry the `status` member the other
+  services answer (`"ok"` on `/health`, `"ready"` alongside `posture` and
+  `developmentSettings` on `/ready`). The `live` and `ready` members stay, and
+  the 503 body is unchanged.
+
 - Add native Adapter payment collection operations: request a collection from
   an authoritative bill id and version, read its typed state, and record a
   verified receipt under a separate idempotent command. Collection requests

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The gateway over its real HTTP surface: an rmcp client talks to the
-//! complete application `runtime::build` returns, the test authorization
-//! server issues and exchanges the tokens, and a stand-in registry records
-//! everything the gateway sends.
+//! complete application `runtime::build_with_posture` returns, the test
+//! authorization server issues and exchanges the tokens, and a stand-in
+//! registry records everything the gateway sends.
 
 #[path = "support/gateway.rs"]
 mod gateway;
@@ -323,6 +323,10 @@ async fn no_token_or_key_material_leaves_the_gateway() {
     let results = serde_json::to_string(&results).expect("results");
     let logs = logs();
     let audit = harness.audit_text();
+    assert!(audit
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|line| line["posture"] == "development"));
     assert!(!audit.is_empty());
     assert!(
         logs.contains("tool call"),
@@ -436,10 +440,15 @@ async fn health_readiness_and_unknown_routes() {
         .await
         .expect("ready answers");
     assert_eq!(ready.status(), StatusCode::OK);
-    assert_eq!(
-        ready.json::<Value>().await.expect("ready body"),
-        json!({"status": "ready"})
-    );
+    assert_eq!(ready.headers()["registry-posture"], "development");
+    let body = ready.json::<Value>().await.expect("ready body");
+    assert_eq!(body["status"], "ready");
+    assert_eq!(body["posture"], "development");
+    assert!(body["developmentSettings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|setting| setting["pointer"] == "/resourceServer/resource"));
 
     let missing = reqwest::get(format!("{}/admin", harness.origin))
         .await
@@ -863,4 +872,190 @@ async fn missing_and_invalid_credentials_challenge_before_any_recovery_exchange(
     assert_eq!(harness.exchanges(), 0);
     assert!(harness.registry.seen().is_empty());
     assert_private_recovery(&harness, INVALID_CREDENTIAL_CANARY, &[]);
+}
+
+#[tokio::test]
+async fn built_gateway_reports_and_audits_its_posture_behind_a_loopback_proxy() {
+    use registry_breg_mcp::{config::RuntimeConfig, runtime};
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+    use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
+    use registry_platform_testing::{jwks_from_private_jwk, sign_compact_jwt_with_key};
+
+    const ISSUER: &str = "https://issuer.example.test";
+    let key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
+    let kid = key.kid.as_deref().unwrap();
+    for (posture, source) in [
+        (Posture::Production, "static"),
+        (Posture::Development, "test-issuer"),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let resource = format!("https://{address}/mcp");
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let secrets = gateway::write_secrets(&root, &key);
+        gateway::write_secret(&secrets, "jwks", &jwks_from_private_jwk(&key).to_string());
+        let path = root.join("runtime.yaml");
+        let audit = root.join("audit.jsonl");
+        let source_text = gateway::document(&gateway::Document {
+            listen: &address.to_string(),
+            resource: &resource,
+            issuer: ISSUER,
+            jwks: "https://issuer.example.test/jwks",
+            registry: "http://127.0.0.1:1/",
+            token_endpoint: "http://127.0.0.1:1/token",
+            review: "https://review.example.test",
+            secrets: &secrets,
+            audit: &audit,
+            limits: Limits::default(),
+        })
+        .replace(
+            "type: uri\n    uri: https://issuer.example.test/jwks",
+            &format!("type: {source}\n    documentRef: secret:file/jwks"),
+        )
+        .replace("algorithms: [EdDSA]", "algorithms: [ES256]");
+        std::fs::write(&path, source_text).unwrap();
+        let loaded = RuntimeConfig::load_with_posture(
+            &path,
+            DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            },
+        )
+        .unwrap();
+        let app = runtime::build_with_posture(
+            &loaded.config,
+            &loaded.posture,
+            loaded.development.as_ref(),
+        )
+        .await
+        .unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let ready = reqwest::get(format!("http://{address}/ready"))
+            .await
+            .unwrap();
+        assert_eq!(ready.status(), StatusCode::OK);
+        assert_eq!(
+            ready.headers().contains_key("registry-posture"),
+            posture == Posture::Development
+        );
+        assert_eq!(
+            ready
+                .headers()
+                .contains_key(header::STRICT_TRANSPORT_SECURITY),
+            posture == Posture::Production
+        );
+        let body: Value = ready.json().await.unwrap();
+        assert_eq!(body["posture"], posture.as_str());
+        let token = sign_compact_jwt_with_key(
+            &key,
+            "at+jwt",
+            kid,
+            json!({
+                "iss": ISSUER, "sub": "fixture-subject", "aud": resource, "client_id": CHAT_HOST,
+                "scope": gateway::SCOPE, "iat": now(), "exp": now() + 300,
+            }),
+        );
+        let client = connect(&format!("http://{address}/mcp"), &token).await;
+        let answer = call(&client, "describe_service", json!({})).await;
+        assert_ne!(answer.is_error, Some(true), "{answer:?}");
+        let text = std::fs::read_to_string(&audit).unwrap();
+        let mark: Value = serde_json::from_str(text.lines().next().expect("tool audit")).unwrap();
+        assert_eq!(mark["posture"], posture.as_str());
+        task.abort();
+    }
+}
+
+/// A gateway document with a static key set that production accepts, with
+/// `jwks_source` as its key source and `audit_member` added to its audit block,
+/// loaded under development.
+fn development_loaded(
+    root: &std::path::Path,
+    jwks_source: &str,
+    audit_member: &str,
+) -> registry_platform_config::LoadedRuntimeConfig<registry_breg_mcp::config::RuntimeConfig> {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+    use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
+    use registry_platform_testing::jwks_from_private_jwk;
+
+    let key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
+    let secrets = gateway::write_secrets(root, &key);
+    gateway::write_secret(&secrets, "jwks", &jwks_from_private_jwk(&key).to_string());
+    let path = root.join("runtime.yaml");
+    let audit = root.join("audit.jsonl");
+    let source_text = gateway::document(&gateway::Document {
+        listen: "127.0.0.1:8110",
+        resource: "https://citizen-assistant.example.invalid/mcp",
+        issuer: "https://login.example.invalid",
+        jwks: "https://login.example.invalid/jwks",
+        registry: "http://127.0.0.1:1/",
+        token_endpoint: "http://127.0.0.1:1/token",
+        review: "https://review.example.invalid",
+        secrets: &secrets,
+        audit: &audit,
+        limits: Limits::default(),
+    })
+    .replace(
+        "type: uri\n    uri: https://login.example.invalid/jwks",
+        &format!("type: {jwks_source}\n    documentRef: secret:file/jwks"),
+    )
+    .replace("algorithms: [EdDSA]", "algorithms: [ES256]")
+    .replace("audit:\n", &format!("audit:\n{audit_member}"));
+    std::fs::write(&path, source_text).unwrap();
+    registry_breg_mcp::config::RuntimeConfig::load_with_posture(
+        &path,
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        },
+    )
+    .expect("development loads the document")
+}
+
+fn production_report() -> registry_platform_config::PostureReport {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureReport, PostureSource};
+    PostureReport::new(DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Flag,
+    })
+}
+
+#[tokio::test]
+async fn production_refuses_a_development_loaded_audit_key_custody() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let loaded = development_loaded(&root, "static", "  hashKeyCustody: development-generated\n");
+    let error =
+        registry_breg_mcp::runtime::build_with_posture(&loaded.config, &production_report(), None)
+            .await
+            .expect_err("production refuses a development-generated audit key");
+    let text = error.to_string();
+    assert!(
+        text.contains("production refuses development settings")
+            && text.contains("platform.posture.generated-audit-key at /audit/hashKeyCustody")
+            && text.contains("rstack dev"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_witness_that_does_not_match_the_report_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let loaded = development_loaded(&root, "test-issuer", "");
+    for (posture, development) in [
+        (&production_report(), loaded.development.as_ref()),
+        (&loaded.posture, None),
+    ] {
+        let error =
+            registry_breg_mcp::runtime::build_with_posture(&loaded.config, posture, development)
+                .await
+                .expect_err("a mismatched witness is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("the development witness does not match the declared posture"),
+            "{error}"
+        );
+    }
 }

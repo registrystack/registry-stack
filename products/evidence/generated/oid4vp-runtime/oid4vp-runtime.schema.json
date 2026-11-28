@@ -29,8 +29,11 @@
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
         },
         "audience": {
           "description": "The audience every accepted access token must carry in `aud`.",
@@ -47,7 +50,10 @@
           "default": {
             "type": "discovery"
           },
-          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
         },
         "maximumTokenLifetimeSeconds": {
           "default": 900,
@@ -92,6 +98,13 @@
           "$ref": "#/$defs/AuditDestinationKind",
           "default": "file"
         },
+        "hashKeyCustody": {
+          "$ref": "#/$defs/AuditKeyCustody",
+          "description": "Who provisioned the key. Absent means `operator-provisioned`.\n`development-generated` marks a key a development tool made.",
+          "x-registry-development-only": [
+            "platform.posture.generated-audit-key"
+          ]
+        },
         "hashKeyRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "Secret reference to the audit hash key."
@@ -117,6 +130,21 @@
         "hashKeyRef"
       ],
       "type": "object"
+    },
+    "AuditKeyCustody": {
+      "description": "Who provisioned the audit hash key.",
+      "oneOf": [
+        {
+          "const": "operator-provisioned",
+          "description": "The operator provisioned the key.",
+          "type": "string"
+        },
+        {
+          "const": "development-generated",
+          "description": "A development tool generated the key.",
+          "type": "string"
+        }
+      ]
     },
     "ClaimQueryDocument": {
       "additionalProperties": false,
@@ -330,8 +358,11 @@
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
         },
         "allowedClient": {
           "$ref": "#/$defs/ExternalId",
@@ -352,7 +383,10 @@
           "default": {
             "type": "discovery"
           },
-          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
         },
         "maximumTokenLifetimeSeconds": {
           "default": 900,
@@ -387,7 +421,7 @@
       "description": "The file secret provider.",
       "properties": {
         "root": {
-          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "description": "Absolute directory holding one file per secret. A name may be a\nrelative link that stays below this directory, through at most 8 links.\nThe file it reaches must be a regular file with one hard link, owned by\nthe runtime user with mode 0400 or 0600, or owned by root with no\naccess beyond group read (0440 or 0640) when the runtime is not root.\nA process that declared development loads a file with looser read or\nmode bits and logs a warning.",
           "pattern": "^/",
           "type": "string"
         }
@@ -441,6 +475,24 @@
             },
             "type": {
               "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, as `static` does, for a test issuer a\ndevelopment run supervises. Development only: production refuses it.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "test-issuer",
               "type": "string"
             }
           },

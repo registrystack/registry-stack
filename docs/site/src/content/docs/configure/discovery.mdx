@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -30,44 +30,49 @@ checkout root for the commands that run beside it.
 
 ## Install the binaries
 
-Releases from v0.38.0 publish Linux amd64 assets `discovery-<tag>-linux-amd64` and
-`discoveryctl-<tag>-linux-amd64`, with `<tag>` from the
-[latest release](https://github.com/registrystack/registry-stack/releases/latest). Authenticate
-them through the release's `SHA256SUMS` as the
-[verification guide](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
-describes, then install them under their plain names:
+From v0.44.0, each release publishes `discovery` and `discoveryctl` for Linux amd64, Linux arm64,
+and macOS arm64, with an installer. Choose a tag, normally the
+[latest release](https://github.com/registrystack/registry-stack/releases/latest), and
+authenticate the assets with the
+[verification guide](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
+Linux assets are executables named `<binary>-<tag>-linux-<arch>`. macOS assets are `.tar.gz`
+bundles that carry the executable, its AWS-LC-FIPS libraries, and notices.
+Install the pair from one tag with the release-pinned installer:
 
 ```sh test-skip="installs release assets; the runner serves the binaries under test"
-tag="${TAG:?set TAG to the published release tag}"
-mkdir -p ~/.local/bin
-for binary in discovery discoveryctl; do
-  install -m 0755 "${binary}-${tag}-linux-amd64" "$HOME/.local/bin/${binary}"
-done
+tag="vX.Y.Z"
+bash "discovery-${tag:?set tag to the release tag}-install.sh"
+"${DISCOVERY_INSTALL_DIR:-$HOME/.local/bin}/discovery" --version
+"${DISCOVERY_INSTALL_DIR:-$HOME/.local/bin}/discoveryctl" --version
 ```
 
-On another platform, build them from a checkout as the tutorial does. The release also publishes
-the image `ghcr.io/registrystack/discovery:<tag>`; deploy it by the digest the release manifest
-records, not by the tag. It runs `discovery` as a nonroot user and reads
-`/etc/registry-discovery/runtime.yaml`. Mount that file and the package directory read-only;
-Discovery writes nothing.
+The installer puts both binaries in `~/.local/bin`. Set `DISCOVERY_INSTALL_DIR` to change that.
+The version checks run the binaries by that path, so they work before the directory is on your
+`PATH`. Neither path needs a Rust toolchain.
 
-{/* Evidence: release/scripts/release_roster.py, DISCOVERYCTL_FIRST_RELEASE;
+The release also publishes the image `ghcr.io/registrystack/discovery:<tag>` for linux/amd64.
+Deploy it by the digest the release manifest records, not by the tag. It runs `discovery` as a
+nonroot user and reads `/etc/registry-discovery/runtime.yaml`. Mount that file and the package
+directory read-only. Discovery writes nothing.
+
+{/* Evidence: release/scripts/release_roster.py, ADDITIONAL_PLATFORM_BUILDS and ADDITIONAL_INSTALLERS;
+    crates/registry-discovery/install.sh, DISCOVERY_INSTALL_DIR;
     release/docker/Dockerfile.discovery, ENTRYPOINT, CMD, and "writes nothing"; release/VERIFY.md. */}
 
 ## Approve HTTPS origins
 
 A provider gives you the HTTPS URL of its public description out of band. Check the project the way
-production does, without `--allow-loopback`:
+production does, with `--production`:
 
 ```sh test-exit="1"
-discoveryctl check --project discovery-project
+discoveryctl check --project discovery-project --production
 ```
 
 ```text test-expect
 discoveryctl check refused the input.
-error[discovery.origins.catalog-url-not-allowed] discovery-project/origins.yaml:5:17 /origins/tutorial-evidence/catalogUrl
-  a catalogUrl is an https URL with no query, fragment, empty path segment, whitespace, or control character
-  next: Write an https catalog URL with no query or fragment, or pass --allow-loopback for an http loopback origin during development.
+error[discovery.posture.loopback-catalog-url] discovery-project/origins.yaml:5:17 /origins/tutorial-evidence/catalogUrl
+  the index advertises an address on the reader's own machine; it is accepted only when the process declares development
+  next: Publish HTTPS URLs on non-loopback hosts. For a laptop or test run, start it with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.
 1 error, 0 warnings in 3 files
 ```
 
@@ -101,7 +106,7 @@ existing directory is refused:
 discoveryctl package \
   --project discovery-project \
   --output discovery-project/package \
-  --allow-loopback
+  --posture development
 ```
 
 ```text test-expect
@@ -114,12 +119,18 @@ Package into a new directory, and record your own revision label with it:
 discoveryctl package \
   --project discovery-project \
   --output discovery-project/package-2 \
-  --allow-loopback \
+  --posture development \
   --revision 2
 ```
 
 ```text test-expect
 packaged packageDigest=sha256:<package-digest> catalogRevision=sha256:7e0799f2c5fd24957e4d1372f757c40abef694110eb70fc260a0abdc312ca963 mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
+warning[discovery.posture.loopback-catalog-url] discovery-project/package-2/discovery-index.json /origins/0/catalogUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
+warning[discovery.posture.loopback-catalog-url] discovery-project/package-2/discovery-index.json /services/0/originUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
 ```
 
 The two revisions are unchanged, because the descriptions and mappings mean the same. The package
@@ -130,12 +141,18 @@ server with `Ctrl+C`.
 Check the index on its own, as Discovery will read it:
 
 ```sh
-discoveryctl check --index discovery-project/package-2/discovery-index.json
+discoveryctl check --posture development --index discovery-project/package-2/discovery-index.json
 ```
 
 ```text test-expect
 valid index origins=1 services=1 mappings=1 catalogRevision=sha256:7e0799f2c5fd24957e4d1372f757c40abef694110eb70fc260a0abdc312ca963 mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
-0 errors, 0 warnings in 1 file
+warning[discovery.posture.loopback-catalog-url] discovery-project/package-2/discovery-index.json /origins/0/catalogUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
+warning[discovery.posture.loopback-catalog-url] discovery-project/package-2/discovery-index.json /services/0/originUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
+0 errors, 2 warnings in 1 file
 ```
 
 {/* Evidence: crates/registry-discoveryctl/src/build.rs, write_index_package() and
@@ -163,17 +180,27 @@ export DISCOVERY_PACKAGE_ROOT="$PWD/discovery-project/package-2"
 export DISCOVERY_PACKAGE_DIGEST="sha256:$(shasum -a 256 "$DISCOVERY_PACKAGE_ROOT/SHA256SUMS" | cut -d ' ' -f 1)"
 ```
 
-Check the runtime file with the values filled in:
+Check the runtime file and its package under development:
 
 ```sh
-discoveryctl check --runtime-config "$PWD/discovery-project/runtime.yaml" --environment
+discoveryctl check --runtime-config "$PWD/discovery-project/runtime.yaml" --environment --posture development
 ```
 
 ```text test-expect
-0 errors, 0 warnings in 1 file
+warning[discovery.posture.loopback-catalog-url] <package-index> /origins/0/catalogUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
+warning[discovery.posture.loopback-catalog-url] <package-index> /services/0/originUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
+0 errors, 2 warnings in 1 file
 ```
 
+The check verifies the package and reports the loopback catalog and origin URL warnings. A package that fails verification is reported as `discovery.runtime.package-refused` at `/package/root` and exits 1. A package file the check cannot read exits 3. If the package root lookup fails, both check and startup report `discovery.runtime.package-refused` at `/package/root`. Offline check skips a missing package directory so you can check the runtime before building the package. Startup requires the package.
 Without `--environment`, the check reads the file without filling its `${NAME}` expressions.
+
+{/* Evidence: crates/registry-discovery/src/runtime_config.rs, check_runtime_with_package;
+    crates/registry-discoveryctl/src/lib.rs, runtime_config_check_reports_package_posture. */}
 
 ## Restart on the new package
 
@@ -181,7 +208,7 @@ Discovery checks the pin before it listens. Started on the old package, it refus
 
 ```sh test-exit="1"
 DISCOVERY_PACKAGE_ROOT="$PWD/discovery-project/package" \
-  discovery --runtime-config "$PWD/discovery-project/runtime.yaml"
+  discovery --runtime-config "$PWD/discovery-project/runtime.yaml" --posture development
 ```
 
 ```text test-excerpt
@@ -191,7 +218,7 @@ discovery: package.expectedDigest is sha256:<pinned-digest> but the package at p
 Start it on the pinned package:
 
 ```sh test-background="http://127.0.0.1:38080/ready"
-discovery --runtime-config "$PWD/discovery-project/runtime.yaml"
+discovery --runtime-config "$PWD/discovery-project/runtime.yaml" --posture development
 ```
 
 In the second shell:
@@ -201,12 +228,16 @@ curl -s http://127.0.0.1:38080/ready
 ```
 
 ```json test-expect
-{"status":"ready"}
+{"developmentSettings":[{"code":"discovery.posture.loopback-catalog-url","pointer":"/origins/0/catalogUrl"},{"code":"discovery.posture.loopback-catalog-url","pointer":"/services/0/originUrl"}],"posture":"development","status":"ready"}
 ```
 
 Before it listens, Discovery recomputes every `SHA256SUMS` entry and refuses a changed, missing, or
 extra file by name. It serves that index until it stops; a new revision always means a new package
 and a restart.
+
+Discovery defaults to production and refuses loopback catalog, endpoint and origin URLs in a production package.
+Choose one posture across your stack. Production peers refuse responses marked as development.
+Discovery has no audit journal. Its declared posture appears in startup logs and `/ready`, and development responses carry `Registry-Posture: development`.
 
 The runtime file is the whole runtime configuration: the listener, the package root and pin, the
 limits, and the log level. It holds no origin, mapping, credential, or trust setting. Discovery
@@ -256,7 +287,7 @@ overview](../../start/discovery/#what-a-selection-holds-and-what-it-does-not-do)
 {/* Evidence: crates/registry-discoveryctl/src/build.rs, BuildError;
     crates/registry-discovery/src/startup.rs,
     startup_refuses_an_index_with_the_retired_header_with_rebuild_guidance;
-    crates/registry-discovery/src/startup.rs, PackageIndexRetiredService,
+    crates/registry-discovery/src/package.rs, PackageIndexRetiredService,
     startup_refuses_a_pre_retirement_mixed_package_with_rebuild_guidance; products/discovery/README.md;
     crates/registry-discovery/src/query.rs, service_matches_filters. */}
 

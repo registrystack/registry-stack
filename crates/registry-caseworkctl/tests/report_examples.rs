@@ -7,14 +7,18 @@
 //! `CASEWORKCTL_WRITE_REPORT_EXAMPLE=1 cargo test -p registry-caseworkctl --test report_examples`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use jsonschema::{Draft, JSONSchema};
 use serde_json::Value;
 
+#[path = "support/cli.rs"]
+#[allow(dead_code)]
+mod cli;
+
 const STANDALONE: &str = "products/casework/examples/standalone-decision";
 const ADVANCED: &str = "products/casework/examples/multi-stage-routing-clocks";
 const STAGE_OUTCOMES: &str = "products/casework/examples/stage-outcomes";
+const CANONICAL: &str = "products/casework/examples/canonical-review";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -47,10 +51,9 @@ fn output(root: &Path, arguments: &[&str], expected_exit: i32) -> (Value, Vec<u8
     for project in [STANDALONE, ADVANCED, STAGE_OUTCOMES] {
         stage_project(root, scratch.path(), project);
     }
-    let output = Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
-        .arg("--format")
-        .arg("json")
-        .args(arguments)
+    let mut args = vec!["--format", "json"];
+    args.extend_from_slice(arguments);
+    let output = cli::caseworkctl_command(&args)
         .current_dir(scratch.path())
         .output()
         .expect("caseworkctl starts");
@@ -123,6 +126,91 @@ fn current_offline_reports_match_the_typed_contract_and_committed_check_example(
             }
         }
     }
+}
+
+#[test]
+fn check_with_a_runtime_file_lists_each_explicit_production_setting_it_states() {
+    let root = repo_root();
+    let scratch = tempfile::tempdir().expect("temporary directory");
+    stage_project(&root, scratch.path(), CANONICAL);
+    let project = scratch.path().join(CANONICAL);
+    let runtime = project.join("runtime.example.yaml");
+    let source = std::fs::read_to_string(&runtime).expect("runtime example reads");
+    let anchor = "        allowedClients: [casework-client]\n";
+    assert!(source.contains(anchor), "{source}");
+    std::fs::write(
+        &runtime,
+        source.replace(
+            anchor,
+            // A production file lists its clients; the stated settings follow.
+            "        allowedClients: [casework-console]\n        accessTokenType: JWT\n        scopeClaim: scp\n",
+        ),
+    )
+    .expect("runtime file is written");
+    let output = cli::caseworkctl_command(&["--format", "json", "check"])
+        .arg(&project)
+        .arg("--runtime-config")
+        .arg(&runtime)
+        .current_dir(scratch.path())
+        .output()
+        .expect("caseworkctl starts");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("report is JSON");
+    let schema: Value = serde_json::from_slice(
+        &std::fs::read(root.join("products/casework/contracts/cli/report.schema.json"))
+            .expect("generated report schema reads"),
+    )
+    .expect("generated report schema parses");
+    let validator = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&schema)
+        .expect("generated report schema compiles");
+    if let Err(errors) = validator.validate(&report) {
+        panic!(
+            "check report violates schema: {}\n{report}",
+            errors
+                .map(|error| format!("{} at {}", error, error.instance_path))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    // A stated setting is a fact for a reviewer, not a diagnostic.
+    assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(0));
+    let lines = report["explicitProductionSettings"]
+        .as_array()
+        .expect("the check lists the explicit settings");
+    let mut listed = lines
+        .iter()
+        .map(|line| {
+            assert!(line["summary"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()));
+            assert!(line["line"].as_u64().is_some(), "{line}");
+            (
+                line["code"].as_str().expect("a code"),
+                line["pointer"].as_str().expect("a pointer"),
+            )
+        })
+        .collect::<Vec<_>>();
+    listed.sort_unstable();
+    assert_eq!(
+        listed,
+        [
+            (
+                "platform.posture.jwt-access-token",
+                "/authentication/oidc/issuers/main/accessTokenType"
+            ),
+            (
+                "platform.posture.scope-claim",
+                "/authentication/oidc/issuers/main/scopeClaim"
+            ),
+        ]
+    );
 }
 
 #[test]

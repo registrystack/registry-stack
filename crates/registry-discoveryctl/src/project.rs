@@ -16,7 +16,11 @@ use std::fs;
 use std::io::{self, Read as _};
 use std::path::{Component, Path, PathBuf};
 
-use registry_discovery::{check_runtime, RUNTIME_KIND};
+use registry_discovery::{check_runtime, LOOPBACK_CATALOG_URL, RUNTIME_KIND};
+use registry_platform_config::{
+    DeclaredPosture, FoundSetting, Posture, PostureReport, PostureSource, SettingOrigin,
+};
+use registry_platform_httputil::client::is_loopback_host;
 use registry_platform_yaml::{
     ApiVersion, Diagnostic, Document, EnvelopeRule, Expect, FormatSpec, Identified, LocalId,
     NodeValue, Position, Reader, Related, RemovedKey, Report, Severity, Source, UniqueList, Url,
@@ -121,7 +125,7 @@ pub struct ApprovedOrigin {
     pub id: LocalId,
     /// Exact production HTTPS URL without credentials, query, or fragment.
     /// Loopback HTTP is a development exception `discoveryctl` accepts only
-    /// with `--allow-loopback`, not part of this production authoring schema.
+    /// in the development posture. The schema describes production.
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = CATALOG_URL_PATTERN)))]
     pub catalog_url: Url,
     pub profile: OriginProfile,
@@ -211,14 +215,25 @@ pub struct CheckedProject {
 }
 
 /// How a project is checked.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct ProjectOptions {
-    /// Accept an `http` loopback catalog URL, for development.
-    pub allow_loopback: bool,
+    pub declared: DeclaredPosture,
     /// Fill the runtime file's `${NAME}` expressions from the process
     /// environment and check every value. Without it, a member that holds an
     /// expression is checked by syntax and position only.
     pub environment: bool,
+}
+
+impl Default for ProjectOptions {
+    fn default() -> Self {
+        Self {
+            declared: DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            environment: false,
+        }
+    }
 }
 
 /// Everything one project check found.
@@ -255,9 +270,9 @@ impl std::error::Error for ProjectError {}
 #[must_use]
 pub fn inspect_project(root: &Path, options: ProjectOptions) -> ProjectReport {
     let mut findings = Findings::default();
-    let project = read_authored(root, options.allow_loopback, &mut findings);
+    let project = read_authored(root, options.declared, &mut findings);
     if !findings.unavailable {
-        check_root_files(root, options.environment, &mut findings);
+        check_root_files(root, options.environment, options.declared, &mut findings);
     }
     let unavailable = findings.unavailable;
     let report = findings.into_report();
@@ -271,9 +286,12 @@ pub fn inspect_project(root: &Path, options: ProjectOptions) -> ProjectReport {
 
 /// Read and check the authored files of the project at `root`, the
 /// origins and the mappings, without network access.
-pub fn check_project(root: &Path, allow_loopback: bool) -> Result<CheckedProject, ProjectError> {
+pub fn check_project(
+    root: &Path,
+    declared: DeclaredPosture,
+) -> Result<CheckedProject, ProjectError> {
     let mut findings = Findings::default();
-    let project = read_authored(root, allow_loopback, &mut findings);
+    let project = read_authored(root, declared, &mut findings);
     let unavailable = findings.unavailable;
     let report = findings.into_report();
     match project {
@@ -341,7 +359,7 @@ impl Findings {
 
 fn read_authored(
     root: &Path,
-    allow_loopback: bool,
+    declared: DeclaredPosture,
     findings: &mut Findings,
 ) -> Option<CheckedProject> {
     match fs::metadata(root) {
@@ -367,8 +385,11 @@ fn read_authored(
     let origins = read_document::<OriginsFile>(&origins_path, &ORIGINS_FORMAT, findings).and_then(
         |(document, origins)| {
             let before = findings.diagnostics.len();
-            check_origins(&document, &origins, allow_loopback, findings);
-            (findings.diagnostics.len() == before).then_some(origins.origins)
+            check_origins(&document, &origins, &origins_path, declared, findings);
+            (!findings.diagnostics[before..]
+                .iter()
+                .any(|d| d.severity == Severity::Error))
+            .then_some(origins.origins)
         },
     );
 
@@ -488,7 +509,8 @@ fn related_at(file: &str, position: Option<Position>, pointer: &str, message: &s
 fn check_origins(
     document: &Document,
     file: &OriginsFile,
-    allow_loopback: bool,
+    path: &Path,
+    declared: DeclaredPosture,
     findings: &mut Findings,
 ) {
     if file.origins.is_empty() || file.origins.len() > MAX_ORIGINS {
@@ -500,18 +522,32 @@ fn check_origins(
             "List at least one origin, and at most 128.",
         ));
     }
+    let mut posture = PostureReport::new(declared);
     let mut urls: BTreeMap<&str, String> = BTreeMap::new();
     for origin in &file.origins {
         let url_pointer = format!("/origins/{}/catalogUrl", origin.id.as_str());
-        if !valid_catalog_url(origin.catalog_url.as_str(), allow_loopback) {
+        if origin
+            .catalog_url
+            .to_url()
+            .host()
+            .is_some_and(|host| is_loopback_host(&host))
+            && valid_catalog_url(origin.catalog_url.as_str())
+        {
+            posture.record(FoundSetting {
+                setting: &LOOPBACK_CATALOG_URL,
+                position: document.span_of(&url_pointer).map(|span| span.start),
+                pointer: Some(url_pointer.clone()),
+                origin: SettingOrigin::Package,
+            });
+        }
+        if !valid_catalog_url(origin.catalog_url.as_str()) {
             findings.push(error_at(
                 document,
                 "discovery.origins.catalog-url-not-allowed",
                 &url_pointer,
                 "a catalogUrl is an https URL with no query, fragment, empty path segment, \
                  whitespace, or control character",
-                "Write an https catalog URL with no query or fragment, or pass --allow-loopback \
-                 for an http loopback origin during development.",
+                "Write an https catalog URL with no query or fragment, or, for an HTTP loopback origin, declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
             ));
         } else if let Some(first) = urls.get(origin.catalog_url.as_str()) {
             let mut diagnostic = error_at(
@@ -531,6 +567,7 @@ fn check_origins(
             urls.insert(origin.catalog_url.as_str(), url_pointer);
         }
     }
+    findings.extend(posture.diagnostics(path));
 }
 
 /// Where a mapping's identity was first written, for duplicate notes.
@@ -780,7 +817,12 @@ fn check_mapping(
 
 /// Check the `.yaml` and `.yml` files beside `origins.yaml`: each runtime
 /// file as `discovery --runtime-config` reads it, and a refusal for every other kind.
-fn check_root_files(root: &Path, environment: bool, findings: &mut Findings) {
+fn check_root_files(
+    root: &Path,
+    environment: bool,
+    declared: DeclaredPosture,
+    findings: &mut Findings,
+) {
     let Ok(entries) = fs::read_dir(root) else {
         findings.unreadable(root);
         return;
@@ -821,6 +863,16 @@ fn check_root_files(root: &Path, environment: bool, findings: &mut Findings) {
         };
         let named_runtime = path.file_name() == Some("runtime.yaml".as_ref());
         let tree = Reader::new(path.display().to_string()).scan(&bytes);
+        if !named_runtime
+            && tree
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .is_some_and(registry_rstack_dev::is_development_companion)
+        {
+            continue;
+        }
+
         let kind = match &tree {
             Ok(Some(root)) => root.get("kind").and_then(|entry| match &entry.value.value {
                 NodeValue::String(text) => Some((text.text.clone(), entry.value.span.start)),
@@ -832,7 +884,7 @@ fn check_root_files(root: &Path, environment: bool, findings: &mut Findings) {
         match (kind.as_deref(), named_runtime, tree) {
             (Some(RUNTIME_KIND), _, _) | (_, true, _) => {
                 findings.files += 1;
-                check_runtime_file(&path, environment, findings);
+                check_runtime_file(&path, environment, declared, false, findings);
             }
             (Some(_), false, _) => {
                 findings.files += 1;
@@ -876,13 +928,23 @@ fn foreign_kind(path: &Path, at: Option<Position>) -> Diagnostic {
 
 /// Check the runtime file at `path` as `discovery --runtime-config` reads it, naming
 /// the file as it was given.
-fn check_runtime_file(path: &Path, environment: bool, findings: &mut Findings) {
+fn check_runtime_file(
+    path: &Path,
+    environment: bool,
+    declared: DeclaredPosture,
+    inspect_package: bool,
+    findings: &mut Findings,
+) {
     let given = path.display().to_string();
     let Some(absolute) = absolute_lexical(path) else {
         findings.unreadable(path);
         return;
     };
-    let checked = check_runtime(&absolute, environment);
+    let checked = if inspect_package {
+        registry_discovery::check_runtime_with_package(&absolute, environment, declared)
+    } else {
+        check_runtime(&absolute, environment, declared)
+    };
     let absolute = absolute.display().to_string();
     findings.unavailable |= checked.unavailable;
     findings.extend(checked.diagnostics.into_iter().map(|mut diagnostic| {
@@ -902,12 +964,16 @@ fn check_runtime_file(path: &Path, environment: bool, findings: &mut Findings) {
 
 /// Check one runtime file given on the command line.
 #[must_use]
-pub fn inspect_runtime_file(path: &Path, environment: bool) -> (Report, bool) {
+pub fn inspect_runtime_file(
+    path: &Path,
+    environment: bool,
+    declared: DeclaredPosture,
+) -> (Report, bool) {
     let mut findings = Findings {
         files: 1,
         ..Findings::default()
     };
-    check_runtime_file(path, environment, &mut findings);
+    check_runtime_file(path, environment, declared, true, &mut findings);
     let unavailable = findings.unavailable;
     (findings.into_report(), unavailable)
 }
@@ -936,9 +1002,9 @@ fn is_yaml(path: &Path) -> bool {
     )
 }
 
-fn valid_catalog_url(value: &str, allow_loopback: bool) -> bool {
+fn valid_catalog_url(value: &str) -> bool {
     value.chars().count() <= MAX_IDENTIFIER_CHARACTERS
-        && registry_discovery_profile::is_valid_endpoint_url(value, allow_loopback)
+        && registry_discovery_profile::is_valid_endpoint_url(value, true)
 }
 
 fn valid_identifier(value: &str) -> bool {
@@ -948,6 +1014,14 @@ fn valid_identifier(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    const PRODUCTION: DeclaredPosture = DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Default,
+    };
+    const DEVELOPMENT: DeclaredPosture = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
     use std::fs;
 
     use tempfile::TempDir;
@@ -963,7 +1037,18 @@ mod tests {
         let base = std::env::temp_dir()
             .canonicalize()
             .expect("the temporary directory resolves");
-        TempDir::new_in(base).expect("temporary directory")
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            tempfile::Builder::new()
+                .permissions(fs::Permissions::from_mode(0o700))
+                .tempdir_in(base)
+                .expect("temporary directory")
+        }
+        #[cfg(not(unix))]
+        {
+            TempDir::new_in(base).expect("temporary directory")
+        }
     }
 
     fn project(origins: &str, mappings: &[(&str, &str)]) -> TempDir {
@@ -977,7 +1062,7 @@ mod tests {
     }
 
     fn refusal(root: &Path) -> Vec<Diagnostic> {
-        check_project(root, false)
+        check_project(root, PRODUCTION)
             .expect_err("the project is refused")
             .report
             .into_diagnostics()
@@ -1016,14 +1101,14 @@ alternatives:
     #[test]
     fn check_is_offline_and_accepts_an_unreachable_https_origin() {
         let root = project(ORIGINS, &[]);
-        let checked = check_project(root.path(), false).expect("offline check");
+        let checked = check_project(root.path(), PRODUCTION).expect("offline check");
         assert_eq!(checked.origins.len(), 1);
     }
 
     #[test]
     fn an_origin_is_enabled_unless_it_says_enabled_false() {
         let root = project(ORIGINS, &[]);
-        let checked = check_project(root.path(), false).expect("enabled by default");
+        let checked = check_project(root.path(), PRODUCTION).expect("enabled by default");
         assert_eq!(checked.origins[0].id.as_str(), "evidence-one");
         assert!(checked.origins[0].enabled);
 
@@ -1032,7 +1117,7 @@ alternatives:
             "    profile: registry-discovery-v1alpha1\n    enabled: false\n",
         );
         let root = project(&disabled, &[]);
-        let checked = check_project(root.path(), false).expect("explicitly disabled");
+        let checked = check_project(root.path(), PRODUCTION).expect("explicitly disabled");
         assert!(!checked.origins[0].enabled);
     }
 
@@ -1089,20 +1174,32 @@ alternatives:
             "{ORIGINS}  alpha:\n    catalogUrl: https://other.example.invalid/catalog.jsonld\n    profile: registry-discovery-v1alpha1\n"
         );
         let root = project(&origins, &[]);
-        let checked = check_project(root.path(), false).expect("two origins");
+        let checked = check_project(root.path(), PRODUCTION).expect("two origins");
         let ids: Vec<_> = checked.origins.iter().map(|o| o.id.as_str()).collect();
         assert_eq!(ids, ["alpha", "evidence-one"]);
     }
 
+    fn shipped_project(source: &str) -> TempDir {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/discovery")
+            .join(source);
+        let root = temporary();
+        fs::create_dir(root.path().join("mappings")).unwrap();
+        for file in ["origins.yaml", "mappings/adult-status.yaml", "runtime.yaml"] {
+            fs::copy(source.join(file), root.path().join(file)).unwrap();
+        }
+        root
+    }
+
     #[test]
     fn shipped_authoring_fixture_passes_the_offline_check() {
-        let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/discovery/fixtures/project");
-        let checked = check_project(&root, false).expect("shipped project checks offline");
+        let root = shipped_project("fixtures/project");
+        let checked =
+            check_project(root.path(), PRODUCTION).expect("shipped project checks offline");
         assert_eq!(checked.origins.len(), 1);
         assert_eq!(checked.mappings.len(), 1);
 
-        let inspected = inspect_project(&root, ProjectOptions::default());
+        let inspected = inspect_project(root.path(), ProjectOptions::default());
         assert!(
             inspected.report.is_empty(),
             "{}",
@@ -1114,18 +1211,25 @@ alternatives:
 
     #[test]
     fn the_tutorial_project_checks_without_its_package_root_variable() {
-        let root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/discovery/tutorial/project");
+        let root = shipped_project("tutorial/project");
         let options = ProjectOptions {
-            allow_loopback: true,
+            declared: DEVELOPMENT,
             environment: false,
         };
-        let inspected = inspect_project(&root, options);
+        let inspected = inspect_project(root.path(), options);
         assert!(
-            inspected.report.is_empty(),
+            !inspected.report.has_errors(),
             "{}",
             inspected.report.render_human()
         );
+        let diagnostics = inspected.report.into_diagnostics();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].severity, Severity::Warning);
+        assert_eq!(
+            diagnostics[0].code,
+            "discovery.posture.loopback-catalog-url"
+        );
+        assert_eq!(diagnostics[0].path, "/origins/tutorial-evidence/catalogUrl");
     }
 
     #[test]
@@ -1206,12 +1310,37 @@ alternatives:
             let diagnostics = refusal(root.path());
             assert_eq!(
                 codes(&diagnostics),
-                ["discovery.origins.catalog-url-not-allowed"],
+                ["discovery.posture.loopback-catalog-url"],
                 "{endpoint}"
             );
-            assert!(diagnostics[0].suggested_action.contains("--allow-loopback"));
-            assert!(check_project(root.path(), true).is_ok(), "{endpoint}");
+            assert!(diagnostics[0]
+                .suggested_action
+                .contains("--posture development"));
+            assert!(
+                check_project(root.path(), DEVELOPMENT).is_ok(),
+                "{endpoint}"
+            );
         }
+    }
+
+    #[test]
+    fn a_refused_catalog_url_action_does_not_send_the_operator_to_rstack_dev() {
+        let origins = ORIGINS.replace(
+            "https://unreachable.example.invalid/catalog.jsonld",
+            "http://127.0.0.2:8080/catalog.jsonld",
+        );
+        let root = project(&origins, &[]);
+        let diagnostics = refusal(root.path());
+        let refused = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "discovery.origins.catalog-url-not-allowed")
+            .expect("the catalog URL is refused");
+        assert!(
+            !refused.suggested_action.contains("rstack dev"),
+            "{}",
+            refused.suggested_action
+        );
+        assert!(refused.suggested_action.contains("--posture development"));
     }
 
     #[test]
@@ -1226,7 +1355,7 @@ alternatives:
             "https://catalog.example.invalid/catalog .jsonld",
             "https://catalog.example.invalid/catalog\u{0007}.jsonld",
         ] {
-            assert!(!valid_catalog_url(endpoint, true), "accepted {endpoint:?}");
+            assert!(!valid_catalog_url(endpoint), "accepted {endpoint:?}");
         }
     }
 
@@ -1234,7 +1363,7 @@ alternatives:
     fn mapping_semantic_identifiers_accept_rdf_fragment_iris() {
         let mapping = MAPPING.replace("mapping:one", "mapping#fragment");
         let root = project(ORIGINS, &[("fragment.yaml", &mapping)]);
-        let checked = check_project(root.path(), false).expect("fragment IRI mapping");
+        let checked = check_project(root.path(), PRODUCTION).expect("fragment IRI mapping");
         assert_eq!(
             checked.mappings[0].mapping_id,
             "urn:example:mapping#fragment"
@@ -1371,7 +1500,7 @@ alternatives:
             .ends_with("notes.txt"));
 
         let absent = root.path().join("absent");
-        let checked = check_project(&absent, false).expect_err("no project");
+        let checked = check_project(&absent, PRODUCTION).expect_err("no project");
         assert!(checked.unavailable);
     }
 
@@ -1424,7 +1553,7 @@ alternatives:
         )
         .unwrap();
         fs::create_dir(root.path().join("nested")).unwrap();
-        let (report, unavailable) = inspect_runtime_file(&path, false);
+        let (report, unavailable) = inspect_runtime_file(&path, false, PRODUCTION);
         assert!(!unavailable);
         let unknown = report
             .diagnostics()
@@ -1449,7 +1578,7 @@ alternatives:
             "id.registrystack.org/formats/discovery/evidence-mapping/v1alpha1"
         );
         let root = project(ORIGINS, &[("one.yaml", MAPPING)]);
-        let checked = check_project(root.path(), false).expect("both files are read");
+        let checked = check_project(root.path(), PRODUCTION).expect("both files are read");
         assert_eq!(checked.origins.len(), 1);
         assert_eq!(checked.mappings.len(), 1);
 
@@ -1511,5 +1640,63 @@ alternatives:
             serde_json::to_value(OriginProfile::RegistryDiscoveryV1Alpha1).unwrap(),
             registry_discovery_profile::PROFILE_ID
         );
+    }
+    #[test]
+    fn a_development_plan_cannot_occupy_the_reserved_runtime_path() {
+        let root = project(ORIGINS, &[("one.yaml", MAPPING)]);
+        fs::write(
+            root.path().join("runtime.yaml"),
+            "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\nkind: RStackDev\n",
+        )
+        .unwrap();
+        let checked = inspect_project(
+            root.path(),
+            ProjectOptions {
+                declared: DEVELOPMENT,
+                environment: false,
+            },
+        );
+        assert!(checked.report.has_errors());
+    }
+
+    #[test]
+    fn checks_distinguish_development_companions() {
+        let root = project(ORIGINS, &[("one.yaml", MAPPING)]);
+        for (version, kind, accepted) in [
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "RStackDev",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+                "RStackScenarios",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v2",
+                "RStackDev",
+                false,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "Unknown",
+                false,
+            ),
+        ] {
+            fs::write(
+                root.path().join("dev.yaml"),
+                format!("apiVersion: {version}\nkind: {kind}\n"),
+            )
+            .unwrap();
+            let inspected = inspect_project(
+                root.path(),
+                ProjectOptions {
+                    declared: DEVELOPMENT,
+                    environment: false,
+                },
+            );
+            assert_eq!(!inspected.report.has_errors(), accepted, "{kind} {version}");
+        }
     }
 }

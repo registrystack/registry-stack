@@ -7,17 +7,20 @@ use crate::{
 };
 use axum::Router;
 use registry_mcp_edge::{
-    AuditOptions, AuthorizationFactory, Delegation, DelegationOptions, FixedAuthorizationFactory,
-    GatewayCore, GatewayInfo, ProviderBinding, RateLimitOptions, ResourceServer, ServerOptions,
-    TokenBucketOptions, ToolAuditLog,
+    config::describe_development_settings, AuditOptions, AuthorizationFactory, Delegation,
+    DelegationOptions, FixedAuthorizationFactory, GatewayCore, GatewayInfo, ProviderBinding,
+    RateLimitOptions, ResourceServer, ServerOptions, TokenBucketOptions, ToolAuditLog,
 };
 use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
-use registry_platform_config::{describe_secret_failure, JwksSource, SecretError, SecretResolver};
+use registry_platform_config::{
+    describe_secret_failure, DeclaredPosture, DevelopmentWitness, JwksSource, Posture,
+    PostureReport, SecretError, SecretResolver,
+};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::client::StaticToken;
 use registry_platform_oidc::{
     fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy, JwksFetcher,
-    JwksFetcherConfig, OidcDiscoveryConfig,
+    JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
 };
 use std::{fmt, future::Future, io, sync::Arc, time::Duration};
 use zeroize::Zeroizing;
@@ -85,8 +88,31 @@ fn secret_failure(field: String, reference: &str, error: &SecretError) -> Startu
     )
 }
 
-fn invalid_secret_value(field: String, cause: &'static str, remedy: &'static str) -> StartupError {
+fn invalid_secret_value(
+    field: String,
+    cause: impl Into<String>,
+    remedy: &'static str,
+) -> StartupError {
     startup_failure(field, cause, remedy)
+}
+
+/// Reads the static key document. A refusal of the document's own contents
+/// names what it refused, in words that carry no key material.
+fn static_key_fetcher(bytes: &[u8], field: String) -> Result<JwksFetcher, StartupError> {
+    let keys = parse_static_jwks(bytes).map_err(|error| {
+        let cause = match &error {
+            OidcError::StaticKeySet(refused) => {
+                format!("the resolved secret is not a usable JWKS document: {refused}")
+            }
+            _ => "the resolved secret is not a usable JWKS document".to_owned(),
+        };
+        invalid_secret_value(
+            field,
+            cause,
+            "Replace it with a bounded JSON Web Key Set containing the issuer's active verification keys.",
+        )
+    })?;
+    Ok(JwksFetcher::new_static(keys, JwksFetcherConfig::defaults()))
 }
 
 fn audit_failure(error: AuditError) -> StartupError {
@@ -133,8 +159,49 @@ fn private_key(
     })
 }
 
-pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
-    config.validate().map_err(|_| {
+/// How an operator gets past a posture refusal at startup.
+const POSTURE_REMEDY: &str = "Run registry-mcp check for each member. For a laptop or test run, start with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.";
+
+/// Build the gateway's HTTP application from what the runtime loader
+/// returned: the configuration, the posture report and the witness.
+pub async fn build_with_posture(
+    loaded: &registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
+) -> Result<Router, StartupError> {
+    assemble_router(&loaded.config, &loaded.posture, loaded.development.as_ref()).await
+}
+
+async fn assemble_router(
+    config: &RuntimeConfig,
+    posture: &PostureReport,
+    development: Option<&DevelopmentWitness>,
+) -> Result<Router, StartupError> {
+    if development.is_some() != (posture.posture() == Posture::Development) {
+        return Err(startup_failure(
+            "runtime configuration",
+            "the development witness does not match the declared posture",
+            "Use the configuration, posture and witness the runtime loader returned. For a laptop or test run, start with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+        ));
+    }
+    let declared = DeclaredPosture {
+        posture: posture.posture(),
+        source: crate::config::default_posture().source,
+    };
+    let peer_policy = match posture.posture() {
+        Posture::Production => registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
+    };
+    let settings = config.development_settings();
+    if posture.posture() == Posture::Production && !settings.is_empty() {
+        return Err(startup_failure(
+            "runtime configuration",
+            format!(
+                "production refuses development settings: {}",
+                describe_development_settings(&settings)
+            ),
+            POSTURE_REMEDY,
+        ));
+    }
+    config.validate(declared, development).map_err(|_| {
         startup_failure(
             "runtime configuration",
             "semantic validation refused the document",
@@ -158,39 +225,45 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         )
     })?;
     let resource = &config.resource_server;
-    let policy = IssuerNetworkPolicy::new(resource.issuer.as_str(), resource.allow_insecure_http)
-        .map_err(|_| {
+    let resource_url = resource.resource_url(development).map_err(|error| {
+        startup_failure("resourceServer.resource", error.to_string(), POSTURE_REMEDY)
+    })?;
+    let issuer = resource.issuer_url(development).map_err(|error| {
+        startup_failure("resourceServer.issuer", error.to_string(), POSTURE_REMEDY)
+    })?;
+    let policy =
+        IssuerNetworkPolicy::new(issuer.as_str(), resource.allow_insecure_http).map_err(|_| {
+            startup_failure(
+                "resourceServer.issuer",
+                "the issuer network policy could not be configured",
+                "Use the checked issuer URL and its explicit insecure-HTTP policy.",
+            )
+        })?;
+    let jwks_source = resource.jwks_source.get(development).map_err(|error| {
         startup_failure(
-            "resourceServer.issuer",
-            "the issuer network policy could not be configured",
-            "Use the checked issuer URL and its explicit insecure-HTTP policy.",
+            "resourceServer.jwksSource",
+            error.to_string(),
+            POSTURE_REMEDY,
         )
     })?;
-    let fetcher = match &resource.jwks_source {
+    let fetcher = match jwks_source {
         JwksSource::Uri { uri } => JwksFetcher::new_with_fetch_url_policy(
             uri.to_string(),
             JwksFetcherConfig::defaults(),
             policy.declared_jwks_fetch_policy(),
         ),
-        JwksSource::Static { document_ref } => {
+        JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
             let bytes = secret(
                 &secrets,
                 document_ref,
                 "resourceServer.jwksSource.documentRef".to_owned(),
             )?;
-            let keys = parse_static_jwks(&bytes).map_err(|_| {
-                invalid_secret_value(
-                    "resourceServer.jwksSource.documentRef".to_owned(),
-                    "the resolved secret is not a usable JWKS document",
-                    "Replace it with a bounded JSON Web Key Set containing the issuer's active verification keys.",
-                )
-            })?;
-            JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())
+            static_key_fetcher(&bytes, "resourceServer.jwksSource.documentRef".to_owned())?
         }
         JwksSource::Discovery {} => {
             let (discovery, network) = fetch_discovery_for_issuer(
                 &OidcDiscoveryConfig {
-                    issuer: resource.issuer.to_string(),
+                    issuer: issuer.to_string(),
                     jwks_uri_override: None,
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
@@ -212,13 +285,15 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
             )
         }
     };
-    let options = config.resource_options();
+    let options = config
+        .resource_options(development)
+        .map_err(|error| startup_failure("resourceServer", error.to_string(), POSTURE_REMEDY))?;
     let limits = &config.rate_limits;
     let bucket = |limit: &registry_mcp_edge::config::RateLimitConfig| TokenBucketOptions {
         requests_per_minute: limit.requests_per_minute.get(),
         burst: limit.burst.get(),
     };
-    let resource_server = ResourceServer::new(
+    let resource_server = ResourceServer::new_with_posture(
         &options,
         registry_mcp_edge::token_verifier(&options, Arc::new(fetcher)),
         profile.key_hasher(),
@@ -226,6 +301,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
             per_principal: bucket(&limits.per_principal),
             per_client: bucket(&limits.per_client),
         },
+        posture.posture(),
     )
     .map_err(|error| {
         startup_failure(
@@ -265,7 +341,8 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                 registry,
                 exchange,
                 service,
-                resource.resource.as_str(),
+                development,
+                resource_url.as_str(),
                 private_key(
                     &secrets,
                     exchange.private_key_ref.as_str(),
@@ -290,6 +367,11 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                     error.to_string(),
                     "Correct this binding's public BReg tool ceiling and retry startup.",
                 ),
+                registry_breg_mcp::BRegBindingError::ReviewOrigin => startup_failure(
+                    provider_field("service/reviewBaseUrl"),
+                    error.to_string(),
+                    POSTURE_REMEDY,
+                ),
             })?,
             ProviderConfig::Casework {
                 authority: crate::config::CaseworkAuthority::DelegatedStaffRead,
@@ -300,11 +382,12 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                 authorization,
             } => {
                 let provider = CaseworkProvider::new(
-                    CaseworkOptions::new(
+                    CaseworkOptions::new_with_peer_policy(
                         base_url.to_url(),
                         reader_policy.to_string(),
                         source_profile.as_ref().map(|profile| profile.to_string()),
                         *page_size,
+                        peer_policy,
                     )
                     .map_err(|_| {
                         startup_failure(
@@ -331,7 +414,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                         provider_field("authorization/exchange/privateKeyRef"),
                     )?,
                     assertion_audience: exchange.assertion_audience.as_str().to_owned(),
-                    gateway_resource: resource.resource.to_string(),
+                    gateway_resource: resource_url.to_string(),
                     downstream_resource: authorization.audience.to_string(),
                     downstream_scopes: authorization
                         .scopes
@@ -361,6 +444,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
             } => {
                 let contract = AdapterContract::load_bound(
                     contract_file, contract_digest,
+                    declared,
                     &operations.values().map(|binding| binding.operation.clone()).collect(),
                 )
                 .map_err(|_| {
@@ -370,12 +454,13 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                         "Restore the reviewed contract file at its configured digest, then retry startup.",
                     )
                 })?;
-                let provider = AdapterProvider::new(
+                let provider = AdapterProvider::new_with_peer_policy(
                     base_url.to_url(),
                     contract,
                     operations.clone(),
                     audience.as_str(),
                     1024 * 1024,
+                    peer_policy,
                 )
                 .map_err(|_| {
                     startup_failure(
@@ -419,7 +504,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         )
     })?;
     let audit = ToolAuditLog::new(
-        AuditWriter::open(destination)
+        AuditWriter::open(destination, posture.posture())
             .await
             .map_err(audit_failure)?,
     );
@@ -454,18 +539,21 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         Arc::new(core),
         Arc::new(resource_server),
         &ServerOptions {
-            resource: resource.resource.to_url(),
+            resource: resource_url.to_url(),
             maximum_request_bytes: config.limits.request_bytes(),
-            hsts: !config.development_loopback(),
+            hsts: posture.posture() != registry_platform_config::Posture::Development
+                || !config.loopback_listener(),
+            posture: posture.clone(),
         },
     ))
 }
 
 pub async fn serve<F: Future<Output = ()> + Send + 'static>(
-    config: &RuntimeConfig,
+    loaded: &registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
     shutdown: F,
 ) -> Result<(), StartupError> {
-    let router = build(config).await?;
+    let config = &loaded.config;
+    let router = build_with_posture(loaded).await?;
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(|error| {
@@ -498,6 +586,44 @@ mod tests {
     use registry_platform_config::SecretError;
 
     use super::*;
+
+    /// A public EC key as a provider publishes it, with members the verifier
+    /// does not read.
+    fn provider_key_set(extra: &str) -> Vec<u8> {
+        format!(
+            r#"{{"keys":[{{"kty":"EC","crv":"P-256","kid":"key-1","use":"sig","alg":"ES256","ext":true,"x5c":["MIIB"],"x5t":"abc","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"{extra}}}]}}"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn a_static_key_set_with_unknown_public_members_loads() {
+        static_key_fetcher(&provider_key_set(""), "field".to_owned())
+            .expect("a provider key set with ext and x5c members loads");
+    }
+
+    #[test]
+    fn a_static_key_set_with_a_private_member_is_refused_with_the_validator_text() {
+        let Err(error) = static_key_fetcher(
+            &provider_key_set(r#","d":"CANARY-PRIVATE""#),
+            "field".to_owned(),
+        ) else {
+            panic!("a private member is refused");
+        };
+        let error = error.to_string();
+        assert!(
+            error.contains("not a usable JWKS document"),
+            "the refusal says the key set is unusable"
+        );
+        assert!(
+            error.contains("private-key member \"d\""),
+            "the refusal names the private-key member rule"
+        );
+        assert!(
+            !error.contains("CANARY-PRIVATE"),
+            "the refusal holds the private member's value"
+        );
+    }
 
     #[test]
     fn missing_secret_and_malformed_key_have_distinct_value_free_guidance() {

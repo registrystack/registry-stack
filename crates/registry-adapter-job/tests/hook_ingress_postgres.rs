@@ -123,8 +123,18 @@ struct ManagedChild {
 
 impl ManagedChild {
     fn spawn(database_url: &str, fixture: &JobFixture, fixture_url: &str) -> Self {
+        Self::spawn_in_posture(database_url, fixture, fixture_url, "production")
+    }
+
+    fn spawn_in_posture(
+        database_url: &str,
+        fixture: &JobFixture,
+        fixture_url: &str,
+        posture: &str,
+    ) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_adapter-job"))
             .env("JOB_TEST_DB", database_url)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args([
                 "pass",
                 fixture.job.to_str().expect("a UTF-8 job path"),
@@ -136,6 +146,8 @@ impl ManagedChild {
                 "--fixture-url",
                 fixture_url,
                 "--loop",
+                "--posture",
+                posture,
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -305,8 +317,7 @@ impl Drop for IsolatedDatabase {
 }
 
 async fn isolated_database_url() -> IsolatedDatabase {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let base = crate::job_fixture::test_database_url();
     let serial = NEXT_SCHEMA.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -372,7 +383,7 @@ fn configure_hook(fixture: &JobFixture, initial_delay_milliseconds: u64, burst: 
     runtime["hookIngress"] = json!({
         "listener": {
             "bind": "127.0.0.1:0",
-            "tlsTermination": "development-loopback"
+            "tlsTermination": "loopback-plaintext"
         },
         "sources": {
             "kobo": {
@@ -473,6 +484,7 @@ async fn actual_cli_hook_starts_one_postgres_backed_pass_without_using_its_body(
         .await
         .expect("send the forged hook");
     assert_eq!(forged.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert!(!forged.headers().contains_key("registry-posture"));
     assert!(fixture.double.requests().is_empty());
 
     let authorization = format!("Basic {}", STANDARD.encode("kobo:synthetic-hook-password"));
@@ -723,7 +735,8 @@ async fn the_loop_serves_item_state_pass_age_and_hook_refusal_metrics() {
         run_id: Some("metrics-run".to_string()),
     }])
     .await;
-    let mut child = ManagedChild::spawn(&database_url, &fixture, &receiver.url);
+    let mut child =
+        ManagedChild::spawn_in_posture(&database_url, &fixture, &receiver.url, "development");
     let address = wait_for_listener(&mut child).await;
     wait_for_pass(&database_url, &receiver).await;
 
@@ -734,6 +747,11 @@ async fn the_loop_serves_item_state_pass_age_and_hook_refusal_metrics() {
         .await
         .expect("send the unknown hook");
     assert_eq!(refused.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(refused.headers()["registry-posture"], "development");
+    let metrics = reqwest::get(format!("http://127.0.0.1:{port}/metrics"))
+        .await
+        .unwrap();
+    assert_eq!(metrics.headers()["registry-posture"], "development");
 
     let body = tokio::time::timeout(Duration::from_secs(20), async {
         loop {

@@ -96,10 +96,12 @@ the copy private and delete it with the run.
 ## Plan the change
 
 `plan` compares the candidate with the database's activation ledger and its open reviews, and
-writes nothing:
+writes nothing. Because `successor.yaml` comes from `rstack dev` and carries development settings,
+pass `--posture development` to the operator commands below (or set
+`REGISTRY_STACK_POSTURE=development`):
 
 ```sh
-caseworkctl plan --runtime-config "$next"
+caseworkctl plan --runtime-config "$next" --posture development
 ```
 
 ```json test-excerpt
@@ -118,18 +120,18 @@ queue while a request still waited in it would be refused here with
 Apply under a reference your change record keeps:
 
 ```sh
-caseworkctl apply --runtime-config "$next" --operator-reference tutorial-change-1
+caseworkctl apply --runtime-config "$next" --posture development --operator-reference tutorial-change-1
 ```
 
 ```json test-excerpt
-{"applyOrder": 2, "planKind": "successor", "predecessorPackageDigest": "sha256:<digest>"}
+{"planKind": "successor", "predecessorPackageDigest": "sha256:<digest>"}
 ```
 
 The ledger now names `package-2` as active, with the run's package as its predecessor.
 Applying it again is refused, because there is nothing left to apply:
 
 ```sh test-exit="1"
-caseworkctl apply --runtime-config "$next"
+caseworkctl apply --runtime-config "$next" --posture development
 ```
 
 ```text test-expect
@@ -145,14 +147,14 @@ error[casework.activation.already-active] runtime.yaml:/package
 ## Read the activation history
 
 ```sh
-caseworkctl status --runtime-config "$next"
+caseworkctl status --runtime-config "$next" --posture development
 ```
 
 ```json test-excerpt
 {"roleMode": "split"}
 ```
 
-`history` lists both activations. Split role mode means the runtime's database login cannot write
+`history` lists every activation in order, with `package-2` active. Split role mode means the runtime's database login cannot write
 the ledger, as in a deployment. The run's migration login does.
 
 The run's runtime is still serving the package it started with: a running process never

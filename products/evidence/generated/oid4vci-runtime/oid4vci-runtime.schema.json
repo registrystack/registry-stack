@@ -32,6 +32,13 @@
           "$ref": "#/$defs/AuditDestinationKind",
           "default": "file"
         },
+        "hashKeyCustody": {
+          "$ref": "#/$defs/AuditKeyCustody",
+          "description": "Who provisioned the key. Absent means `operator-provisioned`.\n`development-generated` marks a key a development tool made.",
+          "x-registry-development-only": [
+            "platform.posture.generated-audit-key"
+          ]
+        },
         "hashKeyRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "Secret reference to the audit hash key."
@@ -57,6 +64,21 @@
         "hashKeyRef"
       ],
       "type": "object"
+    },
+    "AuditKeyCustody": {
+      "description": "Who provisioned the audit hash key.",
+      "oneOf": [
+        {
+          "const": "operator-provisioned",
+          "description": "The operator provisioned the key.",
+          "type": "string"
+        },
+        {
+          "const": "development-generated",
+          "description": "A development tool generated the key.",
+          "type": "string"
+        }
+      ]
     },
     "ClaimNamesDocument": {
       "additionalProperties": false,
@@ -117,7 +139,7 @@
       "properties": {
         "baseUrl": {
           "$ref": "#/$defs/Url",
-          "description": "The Evidence base URL, with no query or fragment. https in strict mode."
+          "description": "The Evidence base URL, using HTTPS or loopback HTTP, with no query or fragment."
         }
       },
       "required": [
@@ -137,7 +159,7 @@
       "description": "The file secret provider.",
       "properties": {
         "root": {
-          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "description": "Absolute directory holding one file per secret. A name may be a\nrelative link that stays below this directory, through at most 8 links.\nThe file it reaches must be a regular file with one hard link, owned by\nthe runtime user with mode 0400 or 0600, or owned by root with no\naccess beyond group read (0440 or 0640) when the runtime is not root.\nA process that declared development loads a file with looser read or\nmode bits and logs a warning.",
           "pattern": "^/",
           "type": "string"
         }
@@ -245,12 +267,18 @@
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the offer-token issuer and to\n`jwksUri`.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the offer-token issuer and to\n`jwksUri` in the development posture.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "evidence.posture.insecure-offer-issuer-http"
+          ]
         },
         "allowedClients": {
           "$ref": "#/$defs/IdentifierRestriction",
-          "description": "Client identifiers permitted to create offers, each at most 128 bytes,\nor `unrestricted` for any client the issuer vouched for, which loads\nonly with `validationMode: supervised-local-development`."
+          "description": "Client identifiers permitted to create offers, each at most 128 bytes,\nor `unrestricted` for any client the issuer vouched for, which loads\nonly in the development posture.",
+          "x-registry-development-only": [
+            "evidence.posture.unrestricted-offer-gate"
+          ]
         },
         "audiences": {
           "description": "The audiences this service answers to, each at most 256 bytes. A token\nissued for anything else is refused.",
@@ -278,11 +306,11 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "The authorization server that issues offer tokens, compared exactly\nagainst a token's `iss`. https in strict mode."
+          "description": "The authorization server that issues offer tokens, compared exactly\nagainst a token's `iss`. Use HTTPS or loopback HTTP in production."
         },
         "jwksUri": {
           "$ref": "#/$defs/Url",
-          "description": "The offer-token issuer's key set. https in strict mode."
+          "description": "The offer-token issuer's key set. Use HTTPS or loopback HTTP in production."
         },
         "maximumTokenLifetimeSeconds": {
           "default": 900,
@@ -294,7 +322,10 @@
         },
         "requiredScopes": {
           "$ref": "#/$defs/IdentifierRestriction",
-          "description": "Scopes every offer token must carry, each an RFC 6749 scope token of at\nmost 256 bytes, or `unrestricted` for no scope gate, which loads only\nwith `validationMode: supervised-local-development`. Generated\nconfigurations state `oid4vci:offer`."
+          "description": "Scopes every offer token must carry, each an RFC 6749 scope token of at\nmost 256 bytes, or `unrestricted` for no scope gate, which loads only\nin the development posture. Generated\nconfigurations state `oid4vci:offer`.",
+          "x-registry-development-only": [
+            "evidence.posture.unrestricted-offer-gate"
+          ]
         }
       },
       "required": [
@@ -440,7 +471,7 @@
       "properties": {
         "clientAssertionAudience": {
           "$ref": "#/$defs/Url",
-          "description": "The authorization server's issuer identifier, exactly as its metadata\npublishes it: the client assertion's sole audience. It has no default."
+          "description": "The authorization server's issuer identifier, exactly as its metadata\npublishes it: the client assertion's sole audience. It has no default.\nStrict validation requires HTTPS. Supervised local development also\naccepts HTTP on 127.0.0.1 with an explicit port."
         },
         "clientId": {
           "$ref": "#/$defs/ExternalId",
@@ -466,7 +497,7 @@
         },
         "tokenEndpoint": {
           "$ref": "#/$defs/Url",
-          "description": "The token endpoint, with no query or fragment. https in strict mode."
+          "description": "The token endpoint, using HTTPS or loopback HTTP, with no query or fragment."
         }
       },
       "required": [
@@ -489,12 +520,12 @@
       "oneOf": [
         {
           "const": "strict",
-          "description": "Every published and called origin uses https.",
+          "description": "The published credential issuer uses HTTPS.",
           "type": "string"
         },
         {
           "const": "supervised-local-development",
-          "description": "One supervised process group on loopback: the credential issuer is a\ncanonical `http://127.0.0.1:<port>` origin the listener binds exactly,\nand every called origin is https or a 127.0.0.1 HTTP origin.",
+          "description": "One supervised process group on loopback. An HTTP credential issuer\nuses a loopback origin with an explicit port matching the listener.\nRequires the development posture.",
           "type": "string"
         }
       ]
@@ -569,7 +600,10 @@
     "validationMode": {
       "$ref": "#/$defs/ValidationMode",
       "default": "strict",
-      "description": "The transport validation boundary. Absent means strict."
+      "description": "The transport validation boundary. Absent means strict.",
+      "x-registry-development-only": [
+        "evidence.posture.supervised-validation"
+      ]
     }
   },
   "required": [

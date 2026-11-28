@@ -1,0 +1,58 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "supabase-user-access",
+  "class": "positive",
+  "provider": "supabase-auth",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "self-hosted Supabase stack",
+    "note": "Observed from a self-hosted Supabase Auth issuer on 27 November 2026, password grant. Claim values are synthetic. Signed by the corpus test key. This fixture holds the stock shape."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "aal": "aal1",
+    "amr": [
+      {
+        "method": "password",
+        "timestamp": 1700000000
+      }
+    ],
+    "app_metadata": {},
+    "aud": "authenticated",
+    "email": "journey-user@example.test",
+    "exp": {
+      "offsetSeconds": 3600
+    },
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "is_anonymous": false,
+    "iss": {
+      "bind": "issuer"
+    },
+    "phone": "",
+    "role": "authenticated",
+    "session_id": "synthetic-session",
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "user_metadata": {}
+  },
+  "omits": [
+    "scope",
+    "scp",
+    "client_id",
+    "azp",
+    "registry_actor_kind"
+  ],
+  "notes": "The token carries no scope claim and no client claim. The lifetime, 3600 seconds, is the observed one."
+}

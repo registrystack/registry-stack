@@ -23,6 +23,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
+use registry_platform_config::DeclaredPosture;
 use registry_platform_yaml::{Diagnostic, NodeValue, Reader, Report, Severity, Source};
 use serde::Serialize;
 
@@ -30,7 +31,7 @@ use crate::bundle::{bundle_file_name, read_root_manifest, Bundle};
 use crate::labels::{labels_path, read_labels_with_warning, LABELS_KIND};
 use crate::manifest::{error_at, read_manifest, Manifest, MANIFEST_FILE, MANIFEST_KIND};
 use crate::problem::{ProblemKind, RenderProblem};
-use crate::runtime::RUNTIME_KIND;
+use crate::runtime::{RuntimeCheck, RUNTIME_KIND};
 
 /// The `apiVersion` of the report `check --format json` writes.
 pub const CTL_REPORT_API_VERSION: &str = "id.registrystack.org/formats/render/ctl-report/v1alpha1";
@@ -55,6 +56,7 @@ pub enum OutputFormat {
 /// What one `registry-render check` run reads and how it reports.
 #[derive(Debug)]
 pub struct CheckRequest<'a> {
+    pub declared: DeclaredPosture,
     /// The authored bundle or package directory.
     pub bundle: Option<&'a Path>,
     /// The runtime file, as given on the command line.
@@ -131,7 +133,73 @@ struct CtlReport<'a> {
     /// `--environment`, so no chain file was read; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     seal_chains: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    posture: Option<PostureMember>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    explicit_production_settings: Vec<ExplicitProductionSetting>,
     diagnostics: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct ExplicitProductionSetting {
+    code: &'static str,
+    pointer: Option<String>,
+    summary: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct PostureMember {
+    value: &'static str,
+    source: &'static str,
+}
+
+impl From<DeclaredPosture> for PostureMember {
+    fn from(declared: DeclaredPosture) -> Self {
+        Self {
+            value: declared.posture.as_str(),
+            source: declared.source.as_str(),
+        }
+    }
+}
+
+pub(crate) fn usage_error(
+    diagnostic: Diagnostic,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> i32 {
+    match format {
+        OutputFormat::Json => {
+            let report = CtlReport {
+                ok: false,
+                command: "check",
+                status: "usage-error",
+                api_version: CTL_REPORT_API_VERSION,
+                kind: CTL_REPORT_KIND,
+                files_checked: 0,
+                errors: 1,
+                warnings: 0,
+                bundle: None,
+                audit: None,
+                seal_chains: None,
+                posture: None,
+                explicit_production_settings: Vec::new(),
+                diagnostics: Report::new(vec![diagnostic]).to_json_value(),
+            };
+            if write_report(&report, stdout).is_err() {
+                return OPERATIONAL_FAILURE_EXIT;
+            }
+        }
+        OutputFormat::Human => {
+            let _ = write!(stderr, "{}", diagnostic.render_human());
+        }
+    }
+    2
+}
+
+fn write_report(report: &CtlReport<'_>, stdout: &mut dyn Write) -> std::io::Result<()> {
+    serde_json::to_writer_pretty(&mut *stdout, report).map_err(std::io::Error::other)?;
+    writeln!(stdout)
 }
 
 /// Run `registry-render check` and report every finding (CFG-DIAG-4): exit 0
@@ -158,12 +226,24 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
     }
     let mut audit = None;
     let mut seal_chains_not_read = false;
+    let mut explicit_production_settings = Vec::new();
     if let Some(path) = request.runtime {
-        let (mut checked, missing, seal_capacities, chains_not_read) = check_runtime_file(
+        let RuntimeCheck {
+            diagnostics: mut checked,
+            unavailable: missing,
+            seal_capacities,
+            seal_chains_not_read: chains_not_read,
+            explicit_production_settings: settings,
+        } = check_runtime_file(
             path,
             request.environment,
             request.require_audit_under,
-            manifest.as_ref(),
+            if bundle_dir.is_some() {
+                crate::runtime::CheckPackage::Explicit(manifest.as_ref())
+            } else {
+                crate::runtime::CheckPackage::Configured
+            },
+            request.declared,
         );
         if let (Some(dir), Some(manifest)) = (bundle_dir, manifest.as_ref()) {
             checked.extend(unsealable_members(dir, manifest, &seal_capacities));
@@ -171,6 +251,13 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
         files += 1;
         unavailable |= missing;
         seal_chains_not_read = chains_not_read;
+        explicit_production_settings.extend(settings.into_iter().map(|found| {
+            ExplicitProductionSetting {
+                code: found.setting.code,
+                pointer: found.pointer,
+                summary: found.setting.summary,
+            }
+        }));
         let proven = !missing
             && !checked
                 .iter()
@@ -190,7 +277,10 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
     }
     let exit = if unavailable {
         OPERATIONAL_FAILURE_EXIT
-    } else if report.has_errors() || (request.deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (request.deny_warnings
+            && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         DOMAIN_REFUSAL_EXIT
     } else {
         0
@@ -199,6 +289,19 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
         "seal chains not read: pass --environment to check them\n"
     } else {
         ""
+    };
+    let explicit_notes = || {
+        explicit_production_settings
+            .iter()
+            .map(|setting| {
+                format!(
+                    "Explicit production setting {} at {}. {}.\n",
+                    setting.code,
+                    setting.pointer.as_deref().unwrap_or(""),
+                    setting.summary
+                )
+            })
+            .collect::<String>()
     };
     match request.format {
         OutputFormat::Json => {
@@ -218,11 +321,11 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
                 bundle: summary.as_ref().map(|(_, summary)| summary),
                 audit,
                 seal_chains: seal_chains_not_read.then_some("not-read"),
+                posture: Some(request.declared.into()),
+                explicit_production_settings,
                 diagnostics: report.to_json_value(),
             };
-            let written = serde_json::to_writer_pretty(&mut *stdout, &document)
-                .map_err(std::io::Error::other)
-                .and_then(|()| writeln!(stdout));
+            let written = write_report(&document, stdout);
             if written.is_err() {
                 return OPERATIONAL_FAILURE_EXIT;
             }
@@ -238,6 +341,7 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
                     audit.proven_under
                 ));
             }
+            text.push_str(&explicit_notes());
             text.push_str(&report.render_human());
             text.push_str(chains_note);
             if stdout.write_all(text.as_bytes()).is_err() {
@@ -250,7 +354,12 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
             } else {
                 "registry-render check refused the input."
             };
-            let _ = write!(stderr, "{sentence}\n{}{chains_note}", report.render_human());
+            let _ = write!(
+                stderr,
+                "{sentence}\n{}{}{chains_note}",
+                explicit_notes(),
+                report.render_human()
+            );
         }
     }
     exit
@@ -494,14 +603,16 @@ fn scan_unread_yaml(dir: &Path, bundle: &Bundle) -> (Vec<Diagnostic>, usize) {
         if !yaml || read.contains(relative) {
             continue;
         }
-        files += 1;
-        diagnostics.extend(identify(&bundle_file_name(dir, relative), bytes.as_slice()));
+        if let Some(findings) = identify(&bundle_file_name(dir, relative), bytes.as_slice()) {
+            files += 1;
+            diagnostics.extend(findings);
+        }
     }
     (diagnostics, files)
 }
 
 /// What a YAML file no document reads holds, by its envelope.
-fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
+fn identify(file: &str, bytes: &[u8]) -> Option<Vec<Diagnostic>> {
     let unread = |message: &str| {
         let mut diagnostic = Diagnostic::warning(
             "render.bundle.unread-file",
@@ -518,11 +629,17 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
         vec![diagnostic]
     };
     let Ok(root) = Reader::new(file).scan(bytes) else {
-        return unread(
+        return Some(unread(
             "the file is outside the YAML subset configuration files use, so the check cannot \
              identify it by its envelope; no Render runtime reads it as configuration",
-        );
+        ));
     };
+    if root
+        .as_ref()
+        .is_some_and(registry_rstack_dev::is_development_companion)
+    {
+        return None;
+    }
     let text = |key: &str| {
         let entry = root.as_ref()?.get(key)?;
         match &entry.value.value {
@@ -531,9 +648,9 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
         }
     };
     let (Some((kind, at)), Some(_)) = (text("kind"), text("apiVersion")) else {
-        return unread(
+        return Some(unread(
             "the file has no apiVersion and kind, so no Render runtime reads it as configuration",
-        );
+        ));
     };
     let at_kind = |severity: Severity, code: &str, message: &str, action: &str| {
         let mut diagnostic = Diagnostic::error(code, "/kind", message, action);
@@ -545,7 +662,7 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
         });
         diagnostic
     };
-    match kind.as_str() {
+    Some(match kind.as_str() {
         LABELS_KIND => {
             let mut unused = at_kind(
                 Severity::Warning,
@@ -579,7 +696,7 @@ fn identify(file: &str, bytes: &[u8]) -> Vec<Diagnostic> {
             "the file is of a kind a Render bundle does not hold",
             "Move the file out of the bundle.",
         )],
-    }
+    })
 }
 
 /// The checks `registry-render package` applies to source before it writes
@@ -713,8 +830,9 @@ fn check_runtime_file(
     path: &Path,
     environment: bool,
     audit_root: Option<&Path>,
-    manifest: Option<&Manifest>,
-) -> (Vec<Diagnostic>, bool, BTreeMap<String, usize>, bool) {
+    package: crate::runtime::CheckPackage<'_>,
+    declared: DeclaredPosture,
+) -> RuntimeCheck {
     let given = path.display().to_string();
     let Some(absolute) = absolute_lexical(path) else {
         let mut diagnostic = Diagnostic::error(
@@ -728,34 +846,35 @@ fn check_runtime_file(
             line: None,
             column: None,
         });
-        return (vec![diagnostic], true, BTreeMap::new(), false);
+        return RuntimeCheck {
+            diagnostics: vec![diagnostic],
+            unavailable: true,
+            seal_capacities: BTreeMap::new(),
+            seal_chains_not_read: false,
+            explicit_production_settings: Vec::new(),
+        };
     };
-    let checked =
-        crate::runtime::check_runtime_with_bundle(&absolute, environment, audit_root, manifest);
+    let mut checked = crate::runtime::check_runtime_package(
+        &absolute,
+        environment,
+        audit_root,
+        package,
+        declared,
+    );
     let absolute = absolute.display().to_string();
-    let diagnostics = checked
-        .diagnostics
-        .into_iter()
-        .map(|mut diagnostic| {
-            if let Some(source) = &mut diagnostic.source {
-                if source.file == absolute {
-                    source.file.clone_from(&given);
-                }
+    for diagnostic in &mut checked.diagnostics {
+        if let Some(source) = &mut diagnostic.source {
+            if source.file == absolute {
+                source.file.clone_from(&given);
             }
-            for related in &mut diagnostic.related {
-                if related.file == absolute {
-                    related.file.clone_from(&given);
-                }
+        }
+        for related in &mut diagnostic.related {
+            if related.file == absolute {
+                related.file.clone_from(&given);
             }
-            diagnostic
-        })
-        .collect();
-    (
-        diagnostics,
-        checked.unavailable,
-        checked.seal_capacities,
-        checked.seal_chains_not_read,
-    )
+        }
+    }
+    checked
 }
 
 /// `path` made absolute against the working directory, with `.` and `..`
@@ -922,5 +1041,43 @@ fn label_finding(
 fn push_once(findings: &mut Vec<Diagnostic>, diagnostic: Diagnostic) {
     if !findings.contains(&diagnostic) {
         findings.push(diagnostic);
+    }
+}
+
+#[cfg(test)]
+mod development_companion_tests {
+    use super::*;
+
+    #[test]
+    fn checks_distinguish_development_companions() {
+        for (version, kind, accepted) in [
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "RStackDev",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+                "RStackScenarios",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v2",
+                "RStackDev",
+                false,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "Unknown",
+                false,
+            ),
+        ] {
+            let bytes = format!("apiVersion: {version}\nkind: {kind}\n");
+            assert_eq!(
+                identify("dev.yaml", bytes.as_bytes()).is_none(),
+                accepted,
+                "{kind} {version}"
+            );
+        }
     }
 }

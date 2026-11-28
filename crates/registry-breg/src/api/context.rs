@@ -85,6 +85,16 @@ pub struct VerifiedRequestClaims {
     grant_subjects: BTreeMap<String, Value>,
     human_identity: Option<registry_review_client::HumanIdentity>,
     recipients: BTreeSet<String>,
+    scope_declaration: Option<ScopeDeclaration>,
+}
+
+/// Where a scope refusal records the values the operator declared: the name of
+/// the claim that carries scopes, and the request's slot for the recording
+/// layer. Both come from configuration and the request, never from the token.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ScopeDeclaration {
+    scope_claim: std::sync::Arc<str>,
+    slot: crate::correlation::DeclaredScopeSlot,
 }
 
 /// The verified claims of an authenticated caller, as a handler extractor.
@@ -106,11 +116,56 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Authenticated {
             .get::<VerifiedRequestClaims>()
             .cloned()
             .map(Self)
-            .ok_or_else(crate::auth::authentication_refused)
+            .ok_or_else(|| {
+                crate::auth::authentication_refused(registry_platform_authcommon::RefusalNote::new(
+                    registry_platform_authcommon::FailedCheck::CredentialMissing,
+                ))
+            })
     }
 }
 
 impl VerifiedRequestClaims {
+    /// Bind the claims to the request's recording slot, so a scope refusal can
+    /// name the configured scope claim.
+    #[must_use]
+    pub(crate) fn with_scope_declaration(
+        mut self,
+        scope_claim: &str,
+        slot: crate::correlation::DeclaredScopeSlot,
+    ) -> Self {
+        self.scope_declaration = Some(ScopeDeclaration {
+            scope_claim: scope_claim.into(),
+            slot,
+        });
+        self
+    }
+
+    /// Record, for the operator's refusal line, the scope the operation needs
+    /// and the access profile that was applied. Both are declared by the
+    /// package, never read from the token. The first required scope the token
+    /// lacks is the one named.
+    pub(crate) fn declare_scope_refusal<'a>(
+        &self,
+        required_scopes: impl IntoIterator<Item = &'a String>,
+        access_profile: Option<&str>,
+    ) {
+        let Some(declaration) = &self.scope_declaration else {
+            return;
+        };
+        let mut declared =
+            registry_platform_authcommon::DeclaredScope::new(&*declaration.scope_claim);
+        if let Some(scope) = required_scopes
+            .into_iter()
+            .find(|scope| !self.has_scope(scope))
+        {
+            declared = declared.with_required_scope(scope);
+        }
+        if let Some(profile) = access_profile {
+            declared = declared.with_access_profile(profile);
+        }
+        declaration.slot.set(declared);
+    }
+
     pub fn authenticated(
         principal_claim: impl Into<String>,
         principal: impl Into<String>,
@@ -137,6 +192,7 @@ impl VerifiedRequestClaims {
             grant_subjects: BTreeMap::new(),
             human_identity: None,
             recipients: BTreeSet::new(),
+            scope_declaration: None,
         })
     }
 

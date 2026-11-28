@@ -5,7 +5,10 @@ use registry_casework_core::{
     ActorContext, BootstrapDirectoryRequest, CaseworkActsAs, DirectoryMember, DirectoryResponse,
     IssuerPrincipal, TeamRecord,
 };
-use registry_platform_config::SecretResolver;
+use registry_platform_authcommon::FailedCheck;
+use registry_platform_config::{
+    DatabaseTransport, DatabaseTransportError, DevelopmentWitness, SecretResolver,
+};
 use serde_json::{json, Value};
 use std::str::FromStr;
 use std::time::Duration;
@@ -15,8 +18,13 @@ use uuid::Uuid;
 /// Every schema version, in the order it is applied. The baseline is
 /// version [`BASELINE_SCHEMA_VERSION`], above every version an earlier
 /// release applied; each later migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 1] =
-    [(200, include_str!("../migrations/0200_reviews.sql"))];
+pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+    (200, include_str!("../migrations/0200_reviews.sql")),
+    (
+        201,
+        include_str!("../migrations/0201_activation_posture.sql"),
+    ),
+];
 /// The baseline schema version. A ledger holding any version below it was
 /// left by an earlier pre-1.0 release, which this release refuses by name:
 /// version 100 is the v0.42.0 and v0.43.0 baseline, whose completion outbox
@@ -188,10 +196,12 @@ impl PostgresStore {
     pub fn connect_runtime(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.runtimeUrlRef",
             &config.runtime_url_ref,
         )
@@ -199,10 +209,12 @@ impl PostgresStore {
     pub fn connect_migration(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.migrationUrlRef",
             &config.migration_url_ref,
         )
@@ -210,6 +222,7 @@ impl PostgresStore {
     fn connect_reference(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
         field: &'static str,
         reference: &str,
     ) -> Result<Self, StoreError> {
@@ -218,31 +231,23 @@ impl PostgresStore {
         })?;
         let url = std::str::from_utf8(protected.expose_secret())
             .map_err(|_| StoreError::Configuration)?;
-        let mut postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
-        if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
-            return Err(StoreError::Configuration);
-        }
-        bound_database_connection(&mut postgres);
+        let (postgres, transport) = driver_config(
+            config,
+            url,
+            witness,
+            &registry_platform_config::resolve_database_host,
+        )?;
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
-        #[cfg(feature = "postgres-test")]
-        let manager = if config.test_only_plaintext {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
-        } else {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
-        };
-        #[cfg(not(feature = "postgres-test"))]
-        let manager = {
-            if config.test_only_plaintext {
-                return Err(StoreError::Configuration);
+        let manager = match transport {
+            DatabaseTransport::VerifiedTls => {
+                let connector = tls_connector(config, secrets)?;
+                Manager::from_config(postgres, connector, manager_config)
             }
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
+            DatabaseTransport::LoopbackPlaintext | DatabaseTransport::PrivateNetworkPlaintext => {
+                Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
+            }
         };
         let pool = Pool::builder(manager)
             .max_size(32)
@@ -425,7 +430,7 @@ impl PostgresStore {
         idempotency_key: &str,
     ) -> Result<i64, StoreError> {
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         let request_hash = request_hash(request)?;
         let mut audit = self
@@ -528,7 +533,7 @@ impl PostgresStore {
         actor: &ActorContext,
     ) -> Result<(i64, Vec<TeamRecord>), StoreError> {
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
@@ -548,7 +553,7 @@ impl PostgresStore {
             CaseworkActsAs::Staff => "staff",
             CaseworkActsAs::Supervisor => "supervisor",
             CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
-                return Err(StoreError::Forbidden);
+                return Err(StoreError::Forbidden(FailedCheck::Operation));
             }
         };
         let client = self.client().await?;
@@ -741,6 +746,8 @@ fn violated_constraint(error: &tokio_postgres::Error) -> String {
 }
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error("[{}] {}. {}", .0.code(), .0, .0.suggested_action())]
+    DatabaseTransport(#[from] DatabaseTransportError),
     #[error("this release requires a fresh review-only database; the configured database contains a retired Casework schema. Preserve it with the release that wrote it and configure a fresh database before applying this package")]
     RetiredSchema,
     #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]
@@ -755,8 +762,12 @@ pub enum StoreError {
     AuditUnavailable,
     #[error("the requested resource was not found")]
     NotFound,
+    /// A record the caller named is absent and the answer conceals nothing,
+    /// so it is not a refusal the operator counts.
+    #[error("the requested resource was not found")]
+    Absent,
     #[error("the caller is not authorized for this operation")]
-    Forbidden,
+    Forbidden(FailedCheck),
     #[error("the expected revision is no longer current")]
     Conflict,
     #[error("the review task is already claimed")]
@@ -937,13 +948,87 @@ mod schema_version_tests {
             }
         }
         assert!(refuse_unsupported_schema(&[]).is_ok());
-        assert!(refuse_unsupported_schema(&[200]).is_ok());
+        assert!(refuse_unsupported_schema(&[200, 201]).is_ok());
         assert!(matches!(
-            refuse_unsupported_schema(&[200, 201]),
+            refuse_unsupported_schema(&[200, 201, 202]),
             Err(StoreError::SchemaNewer {
-                found: 201,
-                supported: 200
+                found: 202,
+                supported: 201
             })
         ));
+    }
+}
+
+/// The driver configuration the pool is built from, and its transport. Under
+/// a plaintext transport every TCP host is replaced by the numeric addresses
+/// its check accepted, so the driver never resolves a name again.
+fn driver_config(
+    config: &DatabaseConfig,
+    url: &str,
+    witness: Option<&DevelopmentWitness>,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<(PgConfig, DatabaseTransport), StoreError> {
+    let mut postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
+    if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
+        return Err(StoreError::Configuration);
+    }
+    bound_database_connection(&mut postgres);
+    config.check(cfg!(feature = "postgres-test"))?;
+    let (transport, mut postgres) = if config.test_only_plaintext {
+        // The postgres-test transport uses NoTls without restricting the host.
+        (DatabaseTransport::LoopbackPlaintext, postgres)
+    } else {
+        registry_platform_postgres::postgres_connection(config, postgres, witness, resolve)?
+    };
+    postgres.ssl_mode(match transport {
+        DatabaseTransport::VerifiedTls => tokio_postgres::config::SslMode::Require,
+        DatabaseTransport::LoopbackPlaintext | DatabaseTransport::PrivateNetworkPlaintext => {
+            tokio_postgres::config::SslMode::Disable
+        }
+    });
+    Ok((postgres, transport))
+}
+
+#[cfg(test)]
+mod driver_config_tests {
+    use registry_platform_config::Gated;
+
+    use super::*;
+
+    #[test]
+    fn a_loopback_name_reaches_the_pool_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        let config = DatabaseConfig {
+            runtime_url_ref: "secret:env/DB_RUNTIME".to_owned(),
+            migration_url_ref: "secret:env/DB_MIGRATION".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap()),
+        };
+        let (postgres, transport) = driver_config(
+            &config,
+            "postgresql://app@localhost:5433/casework",
+            None,
+            &fixed,
+        )
+        .unwrap();
+        assert_eq!(transport, DatabaseTransport::LoopbackPlaintext);
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
     }
 }

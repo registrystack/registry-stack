@@ -214,7 +214,7 @@ fn install_runtime_constraints(schema: &mut Value) {
 /// timestamp policy, its clients are named (no wildcard, no `unrestricted`),
 /// and a timestamp authority is `https`, or `http` on a loopback host.
 /// Rules that need another member (every client is admitted by
-/// `authentication.oidc.allowedClients`, the secret provider is declared, OIDC is
+/// `allowedClients` of an issuer under `authentication.oidc.issuers`, the secret provider is declared, OIDC is
 /// configured) are left to the reader and stated in the member descriptions.
 fn set_signing_constraints(schema: &mut Value) {
     if let Some(member) = schema
@@ -235,7 +235,15 @@ fn set_signing_constraints(schema: &mut Value) {
         .pointer_mut("/properties/assuranceProfile")
         .and_then(Value::as_object_mut)
     {
-        member.remove("anyOf");
+        if let Some(Value::Array(branches)) = member.remove("anyOf") {
+            if let Some(annotation) = branches.into_iter().find_map(|mut branch| {
+                branch
+                    .as_object_mut()?
+                    .remove("x-registry-development-only")
+            }) {
+                member.insert("x-registry-development-only".to_owned(), annotation);
+            }
+        }
         member.insert("$ref".to_owned(), json!("#/$defs/AssuranceProfile"));
     }
     if let Some(seals) = schema
@@ -446,7 +454,24 @@ mod tests {
     use super::*;
     use crate::labels::read_labels;
     use crate::manifest::read_manifest;
-    use crate::runtime::check_runtime;
+    use crate::runtime::{check_runtime, check_runtime_with_bundle, DEFAULT_POSTURE};
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+    use registry_platform_yaml::Severity;
+
+    const DEVELOPMENT: DeclaredPosture = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+
+    fn assert_local_assurance_warning(diagnostics: &[registry_platform_yaml::Diagnostic]) {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|finding| finding.code == "render.posture.local-assurance"
+                    && finding.severity == Severity::Warning),
+            "{diagnostics:?}"
+        );
+    }
 
     const PRODUCT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../products/render");
 
@@ -559,9 +584,12 @@ mod tests {
         assert!(checked > 0, "the bundles carry label tables");
 
         let example = Path::new(PRODUCT).join("examples/runtime.yaml");
-        let check = check_runtime(&example.canonicalize().unwrap(), false, None);
-        assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
         let bytes = std::fs::read(&example).unwrap();
+        let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let path = temporary.path().join("runtime.yaml");
+        std::fs::write(&path, &bytes).unwrap();
+        let check = check_runtime(&path, false, None);
+        assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
         assert!(validator(RUNTIME_SCHEMA_FILE).is_valid(&as_json("runtime.yaml", &bytes)));
     }
 
@@ -764,6 +792,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn assurance_profile_schema_marks_local_assurance_as_development_only() {
+        let documents = schema_documents().unwrap();
+        let runtime: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        assert_eq!(
+            runtime["properties"]["assuranceProfile"]["x-registry-development-only"],
+            json!(["render.posture.local-assurance"])
+        );
+    }
+
     fn signing_runtime_document() -> Value {
         json!({
             "apiVersion": RUNTIME_API_VERSION,
@@ -771,11 +809,11 @@ mod tests {
             "listener": {"bind": "127.0.0.1:8080"},
             "package": {"root": "/srv/render/package"},
             "secretProviders": {"file": {"root": "/run/secrets"}},
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": "https://issuer.example.test",
                 "audience": "https://render.example.test",
                 "allowedClients": ["portal", "records-service"]
-            }},
+            }}}},
             "audit": {"path": "/var/lib/render/audit/render.jsonl"},
             "assuranceProfile": "local",
             "signing": {"seals": {"ministry": {
@@ -1108,9 +1146,32 @@ mod tests {
             ]);
         for (document, accepted) in documents {
             std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
-            let check = check_runtime(&path, false, None);
+            let local = document["assuranceProfile"] == "local";
+            let transit_signer = document
+                .pointer("/signing/seals/ministry/signer/type")
+                .is_some_and(|kind| kind == "transit")
+                || document["signing"]["seals"]["Ministry"]["signer"]["type"] == "transit";
+            let declared = if local { DEVELOPMENT } else { DEFAULT_POSTURE };
+            let check = check_runtime_with_bundle(&path, false, None, None, declared);
+            if local && accepted {
+                assert_local_assurance_warning(&check.diagnostics);
+            }
+            if local && transit_signer {
+                // Under development the posture refusal is gone, so the
+                // signer rule alone rejects this combination.
+                let codes = check
+                    .diagnostics
+                    .iter()
+                    .filter(|finding| finding.severity == Severity::Error)
+                    .map(|finding| finding.code.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(codes, ["render.runtime.signer-assurance-mismatch"]);
+            }
             assert_eq!(
-                check.diagnostics.is_empty(),
+                !check
+                    .diagnostics
+                    .iter()
+                    .any(|finding| finding.severity == Severity::Error),
                 accepted,
                 "reader: {document}\n{:?}",
                 check.diagnostics
@@ -1160,9 +1221,12 @@ mod tests {
         ] {
             assert!(validator.is_valid(&document), "schema: {document}");
             std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
-            let codes = check_runtime(&path, false, None)
+            let check = check_runtime_with_bundle(&path, false, None, None, DEVELOPMENT);
+            assert_local_assurance_warning(&check.diagnostics);
+            let codes = check
                 .diagnostics
                 .into_iter()
+                .filter(|finding| finding.severity == Severity::Error)
                 .map(|diagnostic| diagnostic.code)
                 .collect::<Vec<_>>();
             assert_eq!(codes, [code], "{document}");
@@ -1174,7 +1238,7 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(
-            clients.contains("authentication.oidc.allowedClients"),
+            clients.contains("authentication.oidc.issuers"),
             "the cross-member rule is stated: {clients}"
         );
     }

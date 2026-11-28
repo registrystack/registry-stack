@@ -51,7 +51,7 @@ enum InspectionBinding<'a> {
 /// The protected state schema version. It is written once, when apply creates
 /// the namespace, to `control.schema_version` and to the activation migration
 /// ledger, and every state transaction fences on it.
-pub(crate) const SCHEMA_VERSION: i32 = 6;
+pub(crate) const SCHEMA_VERSION: i32 = 7;
 
 /// Identifies a namespace whose tables this runtime created and owns.
 const NAMESPACE_MARKER: &str = "registry-coordinator protected-state";
@@ -719,7 +719,10 @@ impl Store {
             StoreSecurity {
                 database_id: namespace.to_owned(),
                 keys: StateKeys::new(1, BTreeMap::from([(1, [0x11; 32])]), [0x22; 32])?,
-                audit: AuditWriter::from_line_sink(Box::new(std::io::sink())),
+                audit: AuditWriter::from_line_sink(
+                    Box::new(std::io::sink()),
+                    registry_platform_config::Posture::Production,
+                ),
                 audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                     vec![0x33; 32],
                 ))
@@ -736,6 +739,20 @@ impl Store {
         security: StoreSecurity,
         tls: Option<tokio_postgres_rustls::MakeRustlsConnect>,
     ) -> Result<Self> {
+        let config = open_driver_config(
+            database_url,
+            tls.is_some(),
+            &registry_platform_config::resolve_database_host,
+        )?;
+        Self::open_config(config, namespace, security, tls).await
+    }
+
+    pub(crate) async fn open_config(
+        config: tokio_postgres::Config,
+        namespace: &str,
+        security: StoreSecurity,
+        tls: Option<tokio_postgres_rustls::MakeRustlsConnect>,
+    ) -> Result<Self> {
         if !namespace.starts_with("coordinator_") || namespace.len() > 60 {
             return Err(refused(
                 "namespace-invalid",
@@ -743,23 +760,6 @@ impl Store {
             ));
         }
         let table = job_table(namespace)?;
-        let config: tokio_postgres::Config = database_url.parse().map_err(unavailable)?;
-        let local = !config.get_hosts().is_empty()
-            && config.get_hosts().iter().all(|host| match host {
-                tokio_postgres::config::Host::Tcp(name) => {
-                    name == "localhost"
-                        || name
-                            .parse::<std::net::IpAddr>()
-                            .is_ok_and(|ip| ip.is_loopback())
-                }
-                #[cfg(unix)]
-                tokio_postgres::config::Host::Unix(_) => true,
-            });
-        if tls.is_none() && !local
-            || tls.is_some() && config.get_ssl_mode() != tokio_postgres::config::SslMode::Require
-        {
-            return Err(refused("database-tls-required", "use verified TLS with sslmode=require for PostgreSQL; plaintext is restricted to an explicit local connection"));
-        }
         if security.database_id.is_empty() || security.database_id.len() > 128 {
             return Err(refused(
                 "database-identity-invalid",
@@ -3525,11 +3525,95 @@ impl Store {
     }
 }
 
+/// The driver configuration [`Store::open`] hands to the pool. Plaintext is
+/// restricted to an explicit local connection, which then passes the shared
+/// `loopback-plaintext` check and dials only the loopback addresses it
+/// accepted, so the driver never resolves `localhost` again.
+fn open_driver_config(
+    database_url: &str,
+    tls: bool,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<tokio_postgres::Config> {
+    let config: tokio_postgres::Config = database_url.parse().map_err(unavailable)?;
+    let local = !config.get_hosts().is_empty()
+        && config.get_hosts().iter().all(|host| match host {
+            // The spelling is checked here; the shared check below
+            // resolves `localhost` once and pins its loopback answers.
+            tokio_postgres::config::Host::Tcp(name) => {
+                registry_platform_httputil::loopback::loopback_host(name).is_some()
+            }
+            #[cfg(unix)]
+            tokio_postgres::config::Host::Unix(_) => true,
+        });
+    if !tls && !local || tls && config.get_ssl_mode() != tokio_postgres::config::SslMode::Require {
+        return Err(refused("database-tls-required", "use verified TLS with sslmode=require for PostgreSQL; plaintext is restricted to an explicit local connection"));
+    }
+    if tls {
+        return Ok(config);
+    }
+    registry_platform_postgres::loopback_postgres_connection(config, resolve).map_err(|error| {
+        CoordinatorError::new(error.code(), error.to_string()).suggest(error.suggested_action())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use registry_platform_testing::MIGRATION_PIN_RULE;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn the_public_constructor_pins_localhost_and_refuses_what_the_deployment_path_refuses() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        let fixed = |name: &str| -> std::io::Result<Vec<IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 9)),
+                IpAddr::V6(Ipv6Addr::LOCALHOST),
+            ])
+        };
+        let pinned =
+            open_driver_config("postgresql://app@localhost:5433/coordinator", false, &fixed)
+                .unwrap();
+        assert!(pinned.get_hosts().is_empty());
+        assert_eq!(
+            pinned.get_hostaddrs(),
+            &[
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 9)),
+                IpAddr::V6(Ipv6Addr::LOCALHOST)
+            ]
+        );
+        assert_eq!(pinned.get_ports(), &[5433, 5433]);
+
+        let elsewhere = |_: &str| -> std::io::Result<Vec<IpAddr>> {
+            Ok(vec![IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))])
+        };
+        for (url, resolve, code) in [
+            (
+                "postgresql://app@localhost:5433/coordinator",
+                &elsewhere as &registry_platform_config::HostResolver,
+                "platform.database.transport-host-mismatch",
+            ),
+            (
+                "host=localhost hostaddr=10.0.0.5 user=app dbname=coordinator",
+                &fixed,
+                "platform.database.transport-host-mismatch",
+            ),
+            (
+                "host=[::1] user=app dbname=coordinator",
+                &fixed,
+                "platform.database.bracketed-host",
+            ),
+            (
+                "postgresql://app@db.example.com/coordinator",
+                &fixed,
+                "database-tls-required",
+            ),
+        ] {
+            let error = open_driver_config(url, false, resolve).unwrap_err();
+            assert_eq!(error.code, code, "{url}");
+        }
+    }
 
     #[test]
     fn an_uncertain_mutation_with_a_read_receipt_is_sent_to_reconcile() {
@@ -3557,15 +3641,15 @@ mod tests {
     /// every statement that creates the schema, including the shared dispatch
     /// job table, its product widening, and the activation ledger.
     #[test]
-    fn schema_version_6_is_pinned() {
+    fn schema_version_7_is_pinned() {
         let mut ddl = schema_statements("coordinator_pin").expect("a valid namespace");
         ddl.push(crate::deployment::activation_ledger_statements());
         let digest = hex::encode(Sha256::digest(ddl.join("\n")));
         assert_eq!(
             (SCHEMA_VERSION, digest.as_str()),
             (
-                6,
-                "c9e4c5df5c2d5f5dfe4a1db6ee69e05f637bc74e98a7a2f2db0bdc42b931ec91"
+                7,
+                "ccc850397a0304baf054aa3315a789ac7889afa953abb3f93a32ccef8d181b48"
             ),
             "the protected state schema DDL changed at this SCHEMA_VERSION; {MIGRATION_PIN_RULE}"
         );

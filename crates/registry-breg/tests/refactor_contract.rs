@@ -898,7 +898,9 @@ fn immediate_mode_cannot_bypass_target_proposal_policy() {
         .iter_mut()
         .find(|action| action.id == "deactivate-facility")
         .unwrap()
-        .execution = registry_breg::contract::ActionExecutionSource::Immediate {};
+        .execution = registry_breg::contract::ActionExecutionSource::Immediate {
+        concurrency: Default::default(),
+    };
     for profile in &mut project.access_profiles {
         profile
             .permissions

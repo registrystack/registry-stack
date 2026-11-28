@@ -2,6 +2,78 @@
 
 ## Unreleased
 
+- Verify external-issuer delivery and operator submit refusal in the shared-issuer journey.
+
+- Clean up managed project data through `rstack dev` after fixture runs.
+- `messaging` refuses repeated `--posture` flags, including flags on both sides of `serve`.
+
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
+
+- BREAKING: Use `rstack dev` for local Messaging runs. The `messagingctl dev` command and legacy session-state format are retired.
+
+- BREAKING: Rust client configurations take a peer policy in `MessagingClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, the database connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, a keyword connection string host written as an IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`, is skipped when the transport otherwise permits it and the driver would dial it, as the driver itself fails that entry and tries the next. When no other host is left, the connection is refused when it is configured, with `platform.database.bracketed-host` naming the address. Write `host=::1`. When a keyword host has an authored `hostaddr`, the connection still uses that `hostaddr`. A bracketed IPv6 address in a URL, such as `postgresql://app@[::1]/registry`, still works.
+
+- `messagingctl provision` reports all diagnostics returned by its runtime configuration loader.
+
+- BREAKING: An undeclared posture is production. Runtime files with development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `check` reports development settings as errors when no posture is declared. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: Use `loopback-plaintext` to bind a plaintext listener to loopback in either posture. Migration: Write tlsTermination: loopback-plaintext; settings it used to relax now follow the posture.
+- BREAKING: Issuer `allowInsecureHttp: true` requires development. Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
+- BREAKING: SMTP plaintext to a loopback relay uses `loopback-plaintext` in either posture. Migration: Write tls: loopback-plaintext.
+- BREAKING: Plaintext PostgreSQL on a private address requires development. The test-only plaintext diagnostic becomes `platform.database.test-only-plaintext`. Migration: Use database.transport: private-network-plaintext for a database container beside the product. Update scripts that match the old codes.
+- BREAKING: Activation records the deployment posture. Existing rows read as production. Migration: Recreate development databases: a fresh apply is the way.
+- BREAKING: Successful `/ready` replies include `posture` and `developmentSettings` in JSON. Migration: No change for probes that read the status code.
+- BREAKING: Audit lines include the process posture. Migration: Audit readers with a closed line parser accept the posture member.
+- BREAKING: Development responses carry `Registry-Posture: development`, and production peers refuse development responses. Migration: Point production runtimes at production peers.
+- BREAKING: The runtime accepts tokens from an issuer set. `authentication.oidc` holds `issuers`, keyed by issuer id, and each entry carries `issuer`, `audience`, `allowedClients`, `jwksSource`, `allowInsecureHttp`, `scopeClaim`, `accessTokenType`, `actorKind`, `clientActorKinds` and `assertionIssuers`. A client belongs to one issuer, and the lists of all entries together cover every client an access profile names. Messaging refuses `allowedClients: unrestricted` in every entry. Migration: Move the members of `authentication.oidc` under `authentication.oidc.issuers.<id>`.
+- BREAKING: An access token typed `JWT` is accepted only when the entry states `accessTokenType: JWT`, and an ID token stays refused in either setting. Migration: State `accessTokenType: JWT` for an issuer that does not type its access tokens `at+jwt`.
+- BREAKING: A token that grants only OpenID Connect scopes, or none, is refused unless the issuer or client declares an actor kind. Migration: Declare `actorKind` or `clientActorKinds` for the entry, or issue tokens that carry the profile's scopes.
+- A runtime declares the kind of a caller with `actorKind` for an issuer or `clientActorKinds` for named clients. A token without a kind claim is an unspecified caller and reaches an access profile unless the profile pins a kind, which refuses it with 403 `profile.not-authorized`.
+- A development refusal body names the `failedCheck`. A production body is unchanged.
+- `messagingctl generate identity-facts` takes `--issuer ISSUER_ID`, required when the runtime has more than one entry. A missing or unknown id is refused with `identity.facts.issuer-required` or `identity.facts.unknown-issuer`. The facts describe the entry that was named.
+- `messagingctl check` lists the production settings the runtime states explicitly as `explicitProductionSettings`.
+
+- Messaging counts every refused request by the check that refused it, in
+  `messaging_request_refusals_total{check}` on the metrics listener, published
+  at zero for every check. Each refusal writes one `request refused` line with
+  `failed_check` and the request's trace id, at most five lines per check per
+  minute. That line replaces the authentication refusal line that carried a
+  `stage` field, and the three callback refusal lines. The count covers
+  authentication, message, rate limit and callback refusals, each under the
+  check its producer names, and a key endpoint outage under
+  `key-source-unavailable`. `messaging_authentication_refusals_total{reason}`
+  is unchanged. Refusal statuses, headers and production bodies are unchanged.
+- A scope refusal line also names the scope claim the deployment reads, the
+  scope the access profile requires and the profile's id. The values come from
+  the configuration and the reviewed package, never from the token. No other
+  refusal line carries them, and the answer is unchanged.
+- A static key set with a private key member or a repeated member name is
+  refused at startup under `messaging.runtime.unreadable-jwks-secret`, with
+  the rule it broke, and `messagingctl` names the rule when it refuses a
+  borrowed owner's key set. A public member the service does not know loads.
+- `messagingctl provision --runtime-config FILE` creates the migration and
+  runtime roles and the database from the runtime file's two database URLs, as
+  a non-superuser administrator over verified TLS, or prints the script with
+  `--print-sql`. It also grants the runtime role USAGE on the `public` schema,
+  and running it again restores that grant.
+- A plain `http` provider base URL and an SMTP relay in development use the
+  same loopback rule: `127.0.0.0/8`, `::1`, or an IPv4-mapped form of
+  `127.0.0.0/8`. The name `localhost` is accepted for a provider base URL as
+  before, and a name such as `relay.localhost` stays refused for SMTP.
+
+- Each issuer entry's `allowedClients` accepts the keyword `from-package`,
+  which admits the requester clients of the package's access profiles, so the
+  clients are written once, in the package. The member stays required, and an
+  omitted member, an empty list and `unrestricted` are still refused. A list
+  must still include every client a profile names.
+
+- `registry-messaging-client` accepts an empty body or a JSON object of at
+  most 4096 bytes from `/health` and `/ready`, and refuses a larger one. The
+  runtime still answers an empty `200` on `/health`, and returns JSON on
+  `/ready`.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: `providers`, `senderProfiles`, and `accessProfiles` in

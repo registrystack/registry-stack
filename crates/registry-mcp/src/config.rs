@@ -2,21 +2,22 @@
 //! Offline-checked bindings for one independently operated MCP resource server.
 use registry_breg_mcp::config::{RegistryConfig, ServiceConfig};
 use registry_mcp_edge::config::{
-    AuditConfig, ExchangeConfig, LimitsConfig, LogLevel, RateLimitConfig, ResourceServerConfig,
-    ResourceServerConfigError, ResourceUri, ScopeToken,
+    record_development_settings, AuditConfig, ExchangeConfig, LimitsConfig, LogLevel,
+    RateLimitConfig, ResourceServerConfig, ResourceServerConfigError, ResourceUri, ScopeToken,
 };
 use registry_mcp_edge::ResourceServerOptions;
 use registry_platform_config::{
+    DeclaredPosture, DevelopmentWitness, FoundSetting, LoadedRuntimeConfig, Posture, PostureSource,
     PrivateListenerConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
     SecretReference, TlsTermination, MAX_OIDC_AUDIENCE_CHARACTERS,
 };
+use registry_platform_httputil::loopback::loopback_host;
 use registry_platform_yaml::{Diagnostic, Digest, LocalId, Report, UniqueList, Url};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
-use url::Host;
 
 pub const API_VERSION: &str = "id.registrystack.org/formats/platform/mcp-runtime/v1alpha1";
 pub const KIND: &str = "PlatformMcpRuntimeConfig";
@@ -148,50 +149,94 @@ pub struct DelegationConfig {
 }
 
 impl RuntimeConfig {
-    pub const fn loader() -> RuntimeConfigLoader {
+    pub const fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
         RuntimeConfigLoader::new(RuntimeEnvelope {
             api_version: API_VERSION,
             kind: KIND,
-        }).removed_keys(&[RemovedKey {
+        }, declared).removed_keys(&[RemovedKey {
             path: "rateLimits.perCitizen",
             replacement: "Rename rateLimits.perCitizen to rateLimits.perPrincipal in PlatformMcpRuntimeConfig; breg-mcp retains perCitizen.",
         }])
     }
     pub fn load(path: &Path) -> Result<Self, String> {
-        let checked = Self::loader().check_offline::<Self>(path, true, stand_in);
-        let report = semantic_report(&checked);
+        Self::load_with_posture(path, default_posture()).map(|loaded| loaded.config)
+    }
+    pub fn load_with_posture(
+        path: &Path,
+        declared: DeclaredPosture,
+    ) -> Result<LoadedRuntimeConfig<Self>, String> {
+        let (checked, report) = read_runtime(path, true, declared);
         if report.has_errors() {
             return Err(report.render_human());
         }
-        checked
-            .loaded
-            .map(|loaded| loaded.config)
-            .ok_or_else(|| report.render_human())
+        let loaded = checked.loaded.ok_or_else(|| report.render_human())?;
+        loaded
+            .posture
+            .decide(path)
+            .map_err(|error| error.to_string())?;
+        Ok(loaded)
     }
     pub fn check(path: &Path, environment: bool) -> Report {
         Self::check_status(path, environment).0
     }
     pub fn check_status(path: &Path, environment: bool) -> (Report, bool) {
-        let checked = Self::loader().check_offline::<Self>(path, environment, stand_in);
-        let unavailable = checked.unavailable;
-        (semantic_report(&checked), unavailable)
+        Self::check_status_with_posture(path, environment, default_posture())
     }
-    pub fn validate(&self) -> Result<(), Report> {
-        let findings = self.findings();
+    pub fn check_status_with_posture(
+        path: &Path,
+        environment: bool,
+        declared: DeclaredPosture,
+    ) -> (Report, bool) {
+        let (checked, report) = read_runtime(path, environment, declared);
+        (report, checked.unavailable)
+    }
+    pub fn validate(
+        &self,
+        declared: DeclaredPosture,
+        development: Option<&DevelopmentWitness>,
+    ) -> Result<(), Report> {
+        let findings = self.findings(declared, development);
         if findings.is_empty() {
             Ok(())
         } else {
             Err(Report::new(findings))
         }
     }
-    pub fn development_loopback(&self) -> bool {
-        self.listener.tls_termination == TlsTermination::DevelopmentLoopback
+    pub fn loopback_listener(&self) -> bool {
+        matches!(
+            self.listener.tls_termination,
+            TlsTermination::DevelopmentLoopback | TlsTermination::LoopbackPlaintext
+        )
     }
-    pub fn resource_options(&self) -> ResourceServerOptions {
+    pub fn resource_options(
+        &self,
+        development: Option<&DevelopmentWitness>,
+    ) -> Result<ResourceServerOptions, registry_platform_config::DevelopmentOnlyRefused> {
         self.resource_server
-            .options(&self.name, "mcp.principal", "mcp.client")
+            .options(development, &self.name, "mcp.principal", "mcp.client")
     }
-    fn findings(&self) -> Vec<Diagnostic> {
+    /// Every development-only setting in the file, each with its pointer.
+    /// The reader records them, and a production gateway refuses to build
+    /// while the list is not empty.
+    #[must_use]
+    pub fn development_settings(&self) -> Vec<FoundSetting> {
+        let mut settings = self.resource_server.development_settings();
+        settings.extend(self.audit.development_settings());
+        for (index, binding) in self.bindings.iter().enumerate() {
+            if let ProviderConfig::Breg { service, .. } = &binding.provider {
+                settings.extend(
+                    service.development_settings(&format!("/bindings/{index}/provider/service")),
+                );
+            }
+        }
+        settings
+    }
+
+    fn findings(
+        &self,
+        declared: DeclaredPosture,
+        development: Option<&DevelopmentWitness>,
+    ) -> Vec<Diagnostic> {
         let mut result = Vec::new();
         let mut reject = |code: &str, location: &str, message: &str, action: &str| {
             result.push(Diagnostic::error(
@@ -231,7 +276,11 @@ impl RuntimeConfig {
                 "Check the audit destination and declare the hash key's secret provider.",
             );
         }
-        if self.resource_options().validate().is_err() {
+        let resource = self.resource_server.resource_url(development).ok();
+        if self
+            .resource_options(development)
+            .is_ok_and(|options| options.validate_with_posture(Posture::Development).is_err())
+        {
             reject(
                 "resource-server-invalid",
                 "/resourceServer",
@@ -239,21 +288,29 @@ impl RuntimeConfig {
                 "Use a valid MCP resource, issuer, asymmetric algorithms, clients and scopes.",
             );
         }
-        let resource_errors = self
-            .resource_server
-            .validate(self.development_loopback(), &self.secret_providers);
-        if resource_errors.iter().any(|error| {
-            matches!(
-                error,
-                ResourceServerConfigError::InsecureResource
-                    | ResourceServerConfigError::InsecureIssuer
-            )
-        }) {
+        let resource_errors =
+            self.resource_server
+                .validate(true, &self.secret_providers, development);
+        if resource_errors
+            .iter()
+            .any(|error| matches!(error, ResourceServerConfigError::InsecureResource))
+        {
             reject(
                 "insecure-resource-server",
                 "/resourceServer",
                 "Production resource-server URLs must protect credentials.",
-                "Use HTTPS, or declare development-loopback for a local fixture.",
+                "Write an https URL without credentials or a plain http loopback URL. For plain http beyond loopback, set resourceServer.allowInsecureHttp: true and start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+            );
+        }
+        if resource_errors
+            .iter()
+            .any(|error| matches!(error, ResourceServerConfigError::InsecureIssuer))
+        {
+            reject(
+                "insecure-resource-server",
+                "/resourceServer/issuer",
+                "The issuer uses plain http beyond loopback without allowInsecureHttp.",
+                registry_breg_mcp::config::ISSUER_REMEDY,
             );
         }
         if resource_errors.iter().any(|error| {
@@ -272,10 +329,7 @@ impl RuntimeConfig {
         }
         let protected_endpoint = |url: url::Url| {
             registry_platform_httputil::client::ServiceBaseUrl::new(url.clone()).is_ok()
-                && (url.scheme() == "https"
-                    || (url.scheme() == "http"
-                        && self.development_loopback()
-                        && loopback_host(&url)))
+                && (url.scheme() == "https" || (url.scheme() == "http" && is_loopback(&url)))
         };
         if self
             .bindings
@@ -325,8 +379,9 @@ impl RuntimeConfig {
                     service,
                 } => {
                     let provider = format!("{pointer}/provider");
-                    let review = service.review_base_url.to_url();
-                    if registry.audience.as_str() == self.resource_server.resource.as_str() {
+                    if resource
+                        .is_some_and(|resource| registry.audience.as_str() == resource.as_str())
+                    {
                         reject(
                             "downstream-audience-reused",
                             &format!("{provider}/registry/audience"),
@@ -334,16 +389,12 @@ impl RuntimeConfig {
                             "Configure the distinct downstream audience admitted by BReg.",
                         );
                     }
-                    if review.path() != "/"
-                        || review.query().is_some()
-                        || review.fragment().is_some()
-                        || !protected_endpoint(review)
-                    {
+                    if !service.review_base_url_is_origin() {
                         reject(
                             "breg-review-origin-invalid",
                             &format!("{provider}/service/reviewBaseUrl"),
                             "The BReg review origin is invalid.",
-                            "Use an HTTPS review origin with no path, query or fragment, or an explicitly isolated loopback fixture.",
+                            "Use an HTTPS review origin with no path, query or fragment.",
                         );
                     }
                     if self
@@ -364,7 +415,7 @@ impl RuntimeConfig {
                             "exchange-url-invalid",
                             &format!("{provider}/exchange/tokenEndpoint"),
                             "The BReg exchange endpoint is outside the configured network boundary.",
-                            "Use HTTPS, or loopback HTTP only with a development-loopback listener.",
+                            "Use HTTPS or a plain HTTP loopback URL.",
                         );
                     }
                     if self
@@ -384,7 +435,7 @@ impl RuntimeConfig {
                             "provider-url-invalid",
                             &format!("{provider}/registry/baseUrl"),
                             "The BReg service URL is outside the configured network boundary.",
-                            "Use HTTPS, or loopback HTTP only with a development-loopback listener.",
+                            "Use HTTPS or a plain HTTP loopback URL.",
                         );
                     }
                     for (tool_index, name) in binding.tools.iter().enumerate() {
@@ -426,7 +477,7 @@ impl RuntimeConfig {
                             "exchange-url-invalid",
                             &format!("{provider}/authorization/exchange/tokenEndpoint"),
                             "The Casework exchange endpoint is outside the configured network boundary.",
-                            "Use HTTPS, or loopback HTTP only with a development-loopback listener.",
+                            "Use HTTPS or a plain HTTP loopback URL.",
                         );
                     }
                     if self
@@ -441,7 +492,9 @@ impl RuntimeConfig {
                             "Declare the environment or file provider used by privateKeyRef.",
                         );
                     }
-                    if authorization.audience.as_str() == self.resource_server.resource.as_str() {
+                    if resource.is_some_and(|resource| {
+                        authorization.audience.as_str() == resource.as_str()
+                    }) {
                         reject(
                             "downstream-audience-reused",
                             &format!("{provider}/authorization/audience"),
@@ -462,7 +515,7 @@ impl RuntimeConfig {
                             "provider-url-invalid",
                             &format!("{provider}/baseUrl"),
                             "The Casework service URL is outside the configured network boundary.",
-                            "Use HTTPS, or loopback HTTP only with a development-loopback listener.",
+                            "Use HTTPS or a plain HTTP loopback URL.",
                         );
                     }
                     if !(1..=100).contains(page_size) {
@@ -496,9 +549,10 @@ impl RuntimeConfig {
                     let provider = format!("{pointer}/provider");
                     if !protected_endpoint(base_url.to_url()) {
                         reject(
-                            "adapter-url-invalid", &format!("{provider}/baseUrl"),
+                            "adapter-url-invalid",
+                            &format!("{provider}/baseUrl"),
                             "The Adapter base URL is outside the configured network boundary.",
-                            "Use HTTPS, or numeric loopback HTTP only with a development-loopback listener.",
+                            "Use HTTPS or a plain HTTP loopback URL.",
                         );
                     }
                     if !contract_file.is_absolute() {
@@ -535,7 +589,7 @@ impl RuntimeConfig {
                             "Use the exact non-empty Adapter OIDC audience of at most 512 characters, without control characters.",
                         );
                     }
-                    if audience.as_str() == self.resource_server.resource.as_str() {
+                    if resource.is_some_and(|resource| audience.as_str() == resource.as_str()) {
                         reject(
                             "adapter-audience-reused", &format!("{provider}/audience"),
                             "The Adapter audience reuses the inbound MCP resource identifier.",
@@ -557,6 +611,7 @@ impl RuntimeConfig {
                     if contract_file.is_absolute() && valid_digest(contract_digest) {
                         match crate::adapter::AdapterContract::load_bound_checked(
                             contract_file, contract_digest,
+                            declared,
                             &operations.values().map(|binding| binding.operation.clone()).collect(),
                         ) {
                             Ok(contract)
@@ -602,13 +657,9 @@ impl RuntimeConfig {
     }
 }
 
-fn loopback_host(url: &url::Url) -> bool {
-    match url.host() {
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        Some(Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
-        None => false,
-    }
+fn is_loopback(url: &url::Url) -> bool {
+    url.host_str()
+        .is_some_and(|host| loopback_host(host).is_some())
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -661,14 +712,42 @@ fn stand_in(pointer: &str) -> &'static str {
     }
 }
 
-fn semantic_report(check: &registry_platform_config::RuntimeFileCheck<RuntimeConfig>) -> Report {
+pub(crate) const fn default_posture() -> DeclaredPosture {
+    DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Default,
+    }
+}
+
+fn read_runtime(
+    path: &Path,
+    environment: bool,
+    declared: DeclaredPosture,
+) -> (
+    registry_platform_config::RuntimeFileCheck<RuntimeConfig>,
+    Report,
+) {
+    let mut check =
+        RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(path, environment, stand_in);
+    if let Some(loaded) = check.loaded.as_mut() {
+        record_development_settings(&mut loaded.posture, loaded.config.development_settings());
+        check.diagnostics = loaded.posture.diagnostics(path);
+    }
+    let report = semantic_report(&check, declared);
+    (check, report)
+}
+
+fn semantic_report(
+    check: &registry_platform_config::RuntimeFileCheck<RuntimeConfig>,
+    declared: DeclaredPosture,
+) -> Report {
     let diagnostics = check
         .loaded
         .as_ref()
         .map(|loaded| {
             loaded
                 .config
-                .findings()
+                .findings(declared, loaded.development.as_ref())
                 .into_iter()
                 .filter(|finding| !check.defers_within(&finding.path))
                 .map(|finding| {

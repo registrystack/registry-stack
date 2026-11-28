@@ -45,9 +45,10 @@ impl SessionAudit {
     pub async fn initialize(
         destination: AuditDestination,
         master_secret: Zeroizing<Vec<u8>>,
+        posture: registry_platform_config::Posture,
     ) -> Result<Self, AuditFailure> {
         let profile = AuditProfile::production_from_secret_bytes(master_secret)?;
-        let writer = AuditWriter::open(destination).await?;
+        let writer = AuditWriter::open(destination, posture).await?;
         Ok(Self {
             writer,
             key_hasher: profile.key_hasher(),

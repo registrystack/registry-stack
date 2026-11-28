@@ -11,6 +11,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use registry_platform_authcommon::{record_refusal, FailedCheck, RefusalNote, RefusalRecorder};
 use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder, Problem};
 use rmcp::transport::streamable_http_server::{
     session::never::NeverSessionManager, StreamableHttpServerConfig, StreamableHttpService,
@@ -28,6 +29,7 @@ pub struct ServerOptions {
     pub resource: Url,
     pub maximum_request_bytes: usize,
     pub hsts: bool,
+    pub posture: registry_platform_config::PostureReport,
 }
 
 fn allowed_hosts(resource: &Url) -> Vec<String> {
@@ -79,16 +81,23 @@ impl ResourceAuthority {
     }
 }
 
+/// The host and origin check, with the recorder that counts its refusals.
+struct HostGate {
+    authority: Option<ResourceAuthority>,
+    refusals: Arc<RefusalRecorder>,
+}
+
 async fn require_resource_host(
-    State(authority): State<Arc<Option<ResourceAuthority>>>,
+    State(gate): State<Arc<HostGate>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let admitted = authority
-        .as_ref()
+    let admitted = gate
+        .authority
         .as_ref()
         .is_some_and(|authority| authority.admits(request.uri(), request.headers()));
     if !admitted || request.headers().contains_key(header::ORIGIN) {
+        record_refusal!(gate.refusals, RefusalNote::new(FailedCheck::HostOrigin));
         return forbidden();
     }
     next.run(request).await
@@ -118,17 +127,23 @@ pub fn router(
             require_caller,
         ))
         .layer(from_fn_with_state(
-            Arc::new(ResourceAuthority::of(&options.resource)),
+            Arc::new(HostGate {
+                authority: ResourceAuthority::of(&options.resource),
+                refusals: Arc::clone(resource_server.refusal_recorder()),
+            }),
             require_resource_host,
         ));
     let metadata_path = format!("{METADATA_PREFIX}{MCP_PATH}");
     let public = Router::new()
         .route("/health", get(health))
-        .route("/ready", get(ready).with_state(gateway))
+        .route(
+            "/ready",
+            get(ready).with_state((gateway, options.posture.clone())),
+        )
         .route(METADATA_PREFIX, get(metadata))
         .route(&metadata_path, get(metadata))
         .with_state(resource_server);
-    let headers = security_headers(CspBuilder::restrictive());
+    let headers = security_headers(CspBuilder::restrictive(), options.posture.posture());
     let headers = if options.hsts {
         headers
     } else {
@@ -145,9 +160,13 @@ async fn health() -> Response {
     no_store((StatusCode::OK, Json(json!({"status": "alive"}))).into_response())
 }
 
-async fn ready(State(gateway): State<Arc<GatewayCore>>) -> Response {
+async fn ready(
+    State((gateway, posture)): State<(Arc<GatewayCore>, registry_platform_config::PostureReport)>,
+) -> Response {
     let (status, body) = if gateway.ready().await {
-        (StatusCode::OK, json!({"status": "ready"}))
+        let mut body = posture.ready_member();
+        body.insert("status".to_owned(), json!("ready"));
+        (StatusCode::OK, serde_json::Value::Object(body))
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,

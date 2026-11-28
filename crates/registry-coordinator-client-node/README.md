@@ -1,7 +1,7 @@
 # Registry Coordinator Node binding
 
-This internal napi-rs binding is not published separately. Registry Coordinator
-is part of the released `@registrystack/client` facade from v0.44.0.
+This internal napi-rs binding joined the unified Node package in the v0.44.0
+client roster. Install `@registrystack/client-node` for v0.49.0 and later.
 
 Each operation accepts the bearer token for that call. `workflow(token, workflow)` discovers
 the active permitted contract and computed `workflowRevision` under current start authority.
@@ -54,3 +54,5 @@ exact RFC 9457 `application/problem+json` document whose status, type and
 trace agree with the answer; its `family.reason` code stays a string because
 the Coordinator contract authors the vocabulary. Problem titles and details,
 credentials, request bodies, and transport chains are not copied into errors.
+
+The client accepts development-marked responses by default. Set `refuseDevelopmentPeer: true` when constructing the client to reject them.

@@ -522,6 +522,11 @@ def verify_client_registries(directory: Path, version: str) -> int:
                     f"PyPI {client} release does not contain the complete wheel set"
                 )
             package_count += len(npm_packages) + len(wheels)
+        if client_registry.web_npm_tarball(version) is not None:
+            web = client_registry.validate_web_npm(directory, version)
+            if client_registry.npm_registry_state(web, client_registry.npm_metadata(web)) != "present":
+                raise client_registry.ClientRegistryError(f"npm package is not public: {web.name}")
+            package_count += 1
     except client_registry.ClientRegistryError as exc:
         raise PublicReleaseError(
             f"client registry verification failed: {exc}"

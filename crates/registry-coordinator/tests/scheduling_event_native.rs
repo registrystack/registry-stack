@@ -13,7 +13,7 @@ use registry_coordinator::{
     deployment, problem::ProblemCode as CoordinatorProblemCode, runtime::RuntimeConfig,
 };
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
+use registry_platform_crypto::delivery_signature::{sign, DeliveryKey, DeliveryKeys};
 use registry_scheduling_client::{
     AdmissionRequest, CancelAppointmentRequest, CreateAppointmentRequest, ProblemCode,
     RescheduleAppointmentRequest, SchedulingClientError,
@@ -363,7 +363,17 @@ async fn coordinator(
     for (name, byte) in [("state-key", 81), ("admission-key", 82), ("audit-key", 83)] {
         support::private_file(&root.join(name), &[byte; 32]);
     }
-    support::private_file(&root.join("event-key"), support::scheduling::HOOK_KEY);
+    let trigger_keys: serde_json::Map<_, _> = support::scheduling::EVENT_KEYS
+        .iter()
+        .map(|(trigger, key)| {
+            let file = format!("{trigger}-key");
+            support::private_file(&root.join(&file), key);
+            (
+                trigger.to_string(),
+                json!({"hmacSha256KeyRef":format!("secret:file/{file}")}),
+            )
+        })
+        .collect();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
@@ -375,18 +385,18 @@ async fn coordinator(
         .as_object_mut()
         .unwrap()
         .remove("applications");
-    runtime["database"] = json!({"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url"});
+    runtime["database"] = json!({"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url","transport":"loopback-plaintext"});
     runtime["eventSources"] = json!({"scheduling":{
         "source":format!("urn:registrystack:scheduling:{}", support::scheduling::SCHEDULING_ID),
-        "signingKeyRef":"secret:file/event-key"
+        "triggers":{"scheduling-lifecycle":trigger_keys}
     }});
     runtime["deployment"] = json!({
         "databaseId":format!("coordinator-scheduling-{}", uuid::Uuid::new_v4().simple()),
         "runtimeRole":role,
         "packages":[{"root":package,"expectedDigest":digest}],
-        "listener":{"bind":address.to_string(),"tlsTermination":"development-loopback"},
-        "authentication":{"issuer":issuer.issuer(),"audience":"urn:coordinator:scheduling-lifecycle",
-            "scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},
+        "listener":{"bind":address.to_string(),"tlsTermination":"loopback-plaintext"},
+        "authentication":{"issuers":{"main":{"issuer":issuer.issuer(),"audience":"urn:coordinator:scheduling-lifecycle",
+            "scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"allowedClients":"from-policies"}},
             "policies":{"lifecycle-operator":{"subjects":["operations-lead"],"requiredScopes":["coordinator:operate"],
                 "workflows":["scheduling-lifecycle"],"actions":["status","inspect"],"operator":true}}},
         "auditFile":root.join("audit/coordinator.ndjson"),
@@ -510,10 +520,12 @@ async fn wait_for_delivery(relay: &Relay, event_type: &str) -> Delivery {
             .lock()
             .unwrap()
             .iter()
-            .find(|(_, headers, _, _, _)| {
-                headers
-                    .get("ce-type")
-                    .is_some_and(|value| value == event_type)
+            .find(|(_, headers, body, _, _)| {
+                serde_json::from_slice::<Value>(body).is_ok_and(|envelope| {
+                    headers.get("webhook-id").and_then(|id| id.to_str().ok())
+                        == envelope["id"].as_str()
+                        && envelope["type"] == event_type
+                })
             })
             .cloned()
         {
@@ -528,34 +540,20 @@ async fn wait_for_delivery(relay: &Relay, event_type: &str) -> Delivery {
 }
 
 fn refresh_signature(headers: &mut HeaderMap, body: &[u8], target: &str) {
-    headers.insert(
-        "x-registry-delivery-time",
-        Utc::now()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            .parse()
-            .unwrap(),
-    );
-    let value = |name| headers.get(name).unwrap().to_str().unwrap();
-    let signature = sign_v1(
-        support::scheduling::HOOK_KEY,
-        SignatureFields {
-            id: value("ce-id"),
-            source: value("ce-source"),
-            event_type: value("ce-type"),
-            time: value("ce-time"),
-            data_schema: value("ce-dataschema"),
-            generation: value("x-registry-event-generation"),
-            attempt: value("x-registry-delivery-attempt"),
-            delivery_time: value("x-registry-delivery-time"),
-            method: "POST",
-            request_target: target,
-            content_type: "application/json",
-            idempotency_key: value("idempotency-key"),
-            body,
-        },
+    headers.remove("content-length");
+    let id = headers["webhook-id"].to_str().unwrap();
+    let timestamp = chrono::Utc::now().timestamp().try_into().unwrap();
+    let keys = DeliveryKeys::new(
+        DeliveryKey::new(support::scheduling::event_key(
+            target.rsplit('/').next().unwrap(),
+        ))
+        .unwrap(),
+        None,
     )
     .unwrap();
-    headers.insert("x-registry-signature", signature.parse().unwrap());
+    let signature = sign(&keys, id, timestamp, body).unwrap();
+    headers.insert("webhook-timestamp", timestamp.to_string().parse().unwrap());
+    headers.insert("webhook-signature", signature.parse().unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -690,7 +688,7 @@ async fn native_scheduling_lifecycle_drives_one_message_per_signed_event() {
         "duplicate event does not repeat Messaging"
     );
     let mut unsigned = headers.clone();
-    unsigned.remove("x-registry-signature");
+    unsigned.remove("webhook-signature");
     assert_eq!(
         http.post(format!("{coordinator_origin}{target}"))
             .headers(unsigned)
@@ -702,15 +700,14 @@ async fn native_scheduling_lifecycle_drives_one_message_per_signed_event() {
         reqwest::StatusCode::UNAUTHORIZED
     );
     let mut wrong_source = headers.clone();
-    wrong_source.insert(
-        "ce-source",
-        "urn:registrystack:scheduling:untrusted".parse().unwrap(),
-    );
-    refresh_signature(&mut wrong_source, &body, &target);
+    let mut wrong_envelope: Value = serde_json::from_slice(&body).unwrap();
+    wrong_envelope["source"] = json!("urn:registrystack:scheduling:untrusted");
+    let wrong_body = canonicalize_json(&wrong_envelope).unwrap();
+    refresh_signature(&mut wrong_source, &wrong_body, &target);
     assert_eq!(
         http.post(format!("{coordinator_origin}{target}"))
             .headers(wrong_source)
-            .body(body)
+            .body(wrong_body)
             .send()
             .await
             .unwrap()
@@ -801,8 +798,8 @@ async fn native_signed_scheduling_confirmation_drives_one_deduplicated_message()
     *relay.destination.lock().unwrap() = Some(coordinator_origin.clone());
     let scheduling = Scheduling::start_with_signed_reminders(
         &relay_origin,
-        REMINDER_CONFIRMATION_TARGET,
-        None,
+        REMINDER_TARGET,
+        Some(REMINDER_CONFIRMATION_TARGET),
         None,
     )
     .await;

@@ -4,6 +4,7 @@
 //! integrator, out of band. The client never replaces it with keys a response
 //! or a discovery document named.
 
+use crate::PeerPolicy;
 use std::{fmt, sync::Arc, time::Duration};
 
 use registry_evidence_verifier::{
@@ -70,6 +71,7 @@ enum VerificationStance {
 
 /// Everything the client needs, decided before the first request.
 pub struct EvidenceClientConfig {
+    pub(crate) peer_policy: PeerPolicy,
     pub(crate) base_url: Url,
     pub(crate) token_provider: Arc<dyn TokenProvider>,
     pub(crate) trusted_jwks: JwksDocument,
@@ -84,9 +86,13 @@ pub struct EvidenceClientConfig {
 }
 
 impl EvidenceClientConfig {
-    pub(crate) fn progressive(base_url: Url) -> Result<Self, EvidenceClientError> {
+    pub(crate) fn progressive(
+        base_url: Url,
+        peer_policy: PeerPolicy,
+    ) -> Result<Self, EvidenceClientError> {
         let token_provider = Arc::new(crate::StaticToken::new("profile-metadata-only")?);
         Ok(Self {
+            peer_policy,
             base_url,
             token_provider,
             trusted_jwks: JwksDocument { keys: Vec::new() },
@@ -101,6 +107,22 @@ impl EvidenceClientConfig {
         })
     }
 
+    /// Refuses development peers. Use [`Self::new`] to choose the policy.
+    pub fn new_without_peer_policy(
+        base_url: Url,
+        token_provider: Arc<dyn TokenProvider>,
+        trusted_jwks: JwksDocument,
+        revoked_key_ids: Vec<String>,
+    ) -> Self {
+        Self::new(
+            base_url,
+            token_provider,
+            trusted_jwks,
+            revoked_key_ids,
+            PeerPolicy::RefuseDevelopmentPeer,
+        )
+    }
+
     /// Configure a client against one deployment.
     ///
     /// `trusted_jwks` is the key set the relying party pinned out of band. It
@@ -113,8 +135,10 @@ impl EvidenceClientConfig {
         token_provider: Arc<dyn TokenProvider>,
         trusted_jwks: JwksDocument,
         revoked_key_ids: Vec<String>,
+        peer_policy: PeerPolicy,
     ) -> Self {
         Self {
+            peer_policy,
             base_url,
             token_provider,
             trusted_jwks,
@@ -127,6 +151,14 @@ impl EvidenceClientConfig {
             maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             max_metadata_bytes: DEFAULT_MAX_METADATA_BYTES,
         }
+    }
+
+    /// Refuses development peers. Use [`Self::without_verification`] to choose the policy.
+    pub fn without_verification_without_peer_policy(
+        base_url: Url,
+        token_provider: Arc<dyn TokenProvider>,
+    ) -> Self {
+        Self::without_verification(base_url, token_provider, PeerPolicy::RefuseDevelopmentPeer)
     }
 
     /// Configure a relying party that does not verify what it receives.
@@ -145,8 +177,13 @@ impl EvidenceClientConfig {
     /// path is unaffected: it still requires a pinned key set, and still
     /// verifies.
     #[must_use]
-    pub fn without_verification(base_url: Url, token_provider: Arc<dyn TokenProvider>) -> Self {
+    pub fn without_verification(
+        base_url: Url,
+        token_provider: Arc<dyn TokenProvider>,
+        peer_policy: PeerPolicy,
+    ) -> Self {
         Self {
+            peer_policy,
             base_url,
             token_provider,
             trusted_jwks: JwksDocument { keys: Vec::new() },
@@ -351,7 +388,7 @@ mod tests {
     use crate::token::StaticToken;
 
     fn config(base_url: &str) -> EvidenceClientConfig {
-        EvidenceClientConfig::new(
+        EvidenceClientConfig::new_without_peer_policy(
             Url::parse(base_url).expect("the test URL parses"),
             Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
             one_key(),
@@ -612,7 +649,7 @@ mod tests {
     }
 
     fn non_verifying_config(base_url: &str) -> EvidenceClientConfig {
-        EvidenceClientConfig::without_verification(
+        EvidenceClientConfig::without_verification_without_peer_policy(
             Url::parse(base_url).expect("the test URL parses"),
             Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
         )

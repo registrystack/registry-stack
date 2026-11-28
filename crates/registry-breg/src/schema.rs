@@ -319,8 +319,7 @@ mod tests {
             "identity": {
                 "environment": "production",
                 "instanceId": "registry-primary",
-                "databaseId": "registry-db",
-                "databaseInitializationEnvironment": "production"
+                "databaseId": "registry-db"
             },
             "secretProviders": {
                 "environment": {},
@@ -344,15 +343,19 @@ mod tests {
             },
             "authentication": {
                 "oidc": {
-                    "issuer": "https://issuer.example",
-                    "audience": "urn:breg:test",
-                    "allowedAlgorithm": "EdDSA",
-                    "accessTokenType": "JWT",
-                    "scopeClaim": "scope",
-                    "scopeSeparator": " ",
-                    "allowedClients": "unrestricted",
-                    "maximumTokenLifetimeSeconds": 300,
-                    "leewayMilliseconds": 60000
+                    "issuers": {
+                        "primary": {
+                            "issuer": "https://issuer.example",
+                            "audience": "urn:breg:test",
+                            "allowedAlgorithm": "EdDSA",
+                            "accessTokenType": "JWT",
+                            "scopeClaim": "scope",
+                            "scopeSeparator": " ",
+                            "allowedClients": "unrestricted",
+                            "maximumTokenLifetimeSeconds": 300,
+                            "leewayMilliseconds": 60000
+                        }
+                    }
                 },
                 "authorityClaims": {
                     "principal": "registry_principal"
@@ -395,7 +398,14 @@ mod tests {
         mutate(&mut instance);
         let raw = serde_json::to_string(&instance).expect("the mutated runtime is JSON");
         assert!(
-            parse_runtime_config(&raw).is_err(),
+            parse_runtime_config(
+                &raw,
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Production,
+                    source: registry_platform_config::PostureSource::Default
+                }
+            )
+            .is_err(),
             "{label}: parser accepted the representative invalid runtime"
         );
         assert!(
@@ -1347,18 +1357,19 @@ mod tests {
             &schema,
             "OIDC maximum token lifetime",
             |instance| {
-                instance["authentication"]["oidc"]["maximumTokenLifetimeSeconds"] =
-                    Value::from(7_201_u64);
+                instance["authentication"]["oidc"]["issuers"]["primary"]
+                    ["maximumTokenLifetimeSeconds"] = Value::from(7_201_u64);
             },
         );
         assert_schema_rejects_parser_refused_runtime(&schema, "OIDC leeway", |instance| {
-            instance["authentication"]["oidc"]["leewayMilliseconds"] = Value::from(300_001_u64);
+            instance["authentication"]["oidc"]["issuers"]["primary"]["leewayMilliseconds"] =
+                Value::from(300_001_u64);
         });
         assert_schema_rejects_parser_refused_runtime(
             &schema,
             "OIDC scope claim grammar",
             |instance| {
-                instance["authentication"]["oidc"]["scopeClaim"] =
+                instance["authentication"]["oidc"]["issuers"]["primary"]["scopeClaim"] =
                     Value::String("bad claim".into());
             },
         );
@@ -1366,16 +1377,17 @@ mod tests {
             &schema,
             "OIDC scope separator grammar",
             |instance| {
-                instance["authentication"]["oidc"]["scopeSeparator"] = Value::String("a".into());
+                instance["authentication"]["oidc"]["issuers"]["primary"]["scopeSeparator"] =
+                    Value::String("a".into());
             },
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
             "OIDC client decision omitted",
             |instance| {
-                instance["authentication"]["oidc"]
+                instance["authentication"]["oidc"]["issuers"]["primary"]
                     .as_object_mut()
-                    .expect("the OIDC section is a mapping")
+                    .expect("the issuer entry is a mapping")
                     .remove("allowedClients");
             },
         );
@@ -1383,21 +1395,23 @@ mod tests {
             &schema,
             "OIDC client list empty",
             |instance| {
-                instance["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
+                instance["authentication"]["oidc"]["issuers"]["primary"]["allowedClients"] =
+                    serde_json::json!([]);
             },
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
             "OIDC client decision spelled as another word",
             |instance| {
-                instance["authentication"]["oidc"]["allowedClients"] = Value::String("any".into());
+                instance["authentication"]["oidc"]["issuers"]["primary"]["allowedClients"] =
+                    Value::String("any".into());
             },
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
             "OIDC client list uniqueness",
             |instance| {
-                instance["authentication"]["oidc"]["allowedClients"] =
+                instance["authentication"]["oidc"]["issuers"]["primary"]["allowedClients"] =
                     serde_json::json!(["client-a", "client-a"]);
             },
         );
@@ -1405,14 +1419,15 @@ mod tests {
             &schema,
             "OIDC denied key list that names no key",
             |instance| {
-                instance["authentication"]["oidc"]["revokedKeyIds"] = serde_json::json!([]);
+                instance["authentication"]["oidc"]["issuers"]["primary"]["revokedKeyIds"] =
+                    serde_json::json!([]);
             },
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
             "OIDC assertion issuer client listed with no issuer",
             |instance| {
-                instance["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+                instance["authentication"]["oidc"]["issuers"]["primary"]["assertionIssuers"] = serde_json::json!({
                     "registry-client": [],
                     "other-client": ["https://issuer.example"]
                 });
@@ -1422,7 +1437,7 @@ mod tests {
             &schema,
             "OIDC assertion issuer list uniqueness",
             |instance| {
-                instance["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+                instance["authentication"]["oidc"]["issuers"]["primary"]["assertionIssuers"] = serde_json::json!({
                     "registry-client": ["https://issuer.example", "https://issuer.example"]
                 });
             },
@@ -1436,7 +1451,8 @@ mod tests {
                     "c".repeat(513),
                     serde_json::json!(["https://issuer.example"]),
                 );
-                instance["authentication"]["oidc"]["assertionIssuers"] = Value::Object(clients);
+                instance["authentication"]["oidc"]["issuers"]["primary"]["assertionIssuers"] =
+                    Value::Object(clients);
             },
         );
         assert_schema_rejects_parser_refused_runtime(
@@ -1451,7 +1467,7 @@ mod tests {
             &schema,
             "JWKS cache document size",
             |instance| {
-                instance["authentication"]["oidc"]["jwksCache"] =
+                instance["authentication"]["oidc"]["issuers"]["primary"]["jwksCache"] =
                     serde_json::json!({"maximumDocumentBytes": 1_048_577});
             },
         );
@@ -1459,7 +1475,7 @@ mod tests {
             &schema,
             "JWKS negative cache lower bound",
             |instance| {
-                instance["authentication"]["oidc"]["jwksCache"] =
+                instance["authentication"]["oidc"]["issuers"]["primary"]["jwksCache"] =
                     serde_json::json!({"negativeCacheTtlSeconds": 0});
             },
         );

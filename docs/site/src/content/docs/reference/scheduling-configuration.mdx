@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: 2026-11-17
+last_reviewed: 2026-11-28
 doc_type: reference
 locale: en
 standards_referenced:
@@ -52,6 +52,25 @@ that every value is accepted.
 
 {/* Generated from src/data/generated/scheduling-configuration.json by
     docs/site/scripts/generate-scheduling-configuration.mjs. Run npm run generate from docs/site. */}
+
+## Deployment posture
+
+With neither `--posture` nor `REGISTRY_STACK_POSTURE`, the deployment uses `production`.
+The two inputs must agree when both are present.
+Use `--posture development` for a development runtime file.
+`check` reports development settings as errors in production and warnings in development.
+
+The listener's `tlsTermination: loopback-plaintext` restricts its bind address to loopback in either posture.
+`database.transport: loopback-plaintext` allows a PostgreSQL socket, a loopback IP, or `localhost`.
+`database.transport: private-network-plaintext` requires development.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+A non-loopback HTTP issuer requires development and `allowInsecureHttp: true` in its entry under `authentication.oidc.issuers`.
+A loopback HTTP issuer needs no opt-in.
+
+{/* Evidence: crates/registry-scheduling/src/config.rs finish_load, check_database, check_oidc;
+    crates/registry-platform-config/src/blocks.rs permitted_transport;
+    crates/registry-platform-postgres/src/lib.rs postgres_connection. */}
 
 ## Runtime file
 
@@ -153,7 +172,7 @@ Each refusal names `schedulingctl plan --runtime-config FILE` then
 `listener` is required.
 `listener.bind` is required and is one numeric socket address, including bracketed IPv6 forms.
 `listener.tlsTermination` is required.
-Use `operator-controlled-upstream` behind an operator-managed TLS edge, or `development-loopback`
+Use `operator-controlled-upstream` behind an operator-managed TLS edge, or `loopback-plaintext`
 for direct local development, which the runtime refuses on any non-loopback bind.
 `listener.networkExposure` defaults to `private-address`; `container-private` permits an
 unspecified bind only for a listener kept on a private container network.
@@ -186,15 +205,17 @@ The maintained example uses mounted files.
 
 A secret reference is `secret:env/NAME` with an uppercase environment name, or `secret:file/name`
 with a lowercase file name, each of at most 128 bytes.
-A resolved value is non-empty text of at most 64 KiB without NUL bytes.
-A secret file must be a regular file owned by the runtime user, with mode 0400 or 0600 and exactly
-one hard link.
+Text secrets resolve to non-empty text of at most 64 KiB without NUL bytes.
+Delivery signing keys are read as exact bytes.
+A secret file must meet the [secret file rule](../../security/hardening-checklist/#secret-files),
+for example a regular file owned by the runtime user, with mode 0400 or 0600 and exactly one hard
+link.
 Generate the audit key with `openssl rand -hex 32`.
 
-{/* Evidence: crates/registry-scheduling/src/config.rs secret_reference,
+{/* Evidence: crates/registry-scheduling/src/config.rs present_reminder_key_reference,
     a_hook_binding_secret_is_checked_against_the_enabled_providers,
     a_reminder_signing_secret_is_checked_against_the_enabled_providers;
-    crates/registry-scheduling/src/runtime.rs secret_providers. */}
+    crates/registry-scheduling/src/runtime.rs secret_providers, resolve_delivery_key. */}
 
 ## Database
 
@@ -207,15 +228,9 @@ the last apply, is refused with `schedulingctl.activation.ledger-unreadable`.
 The refusal names `schedulingctl apply --runtime-config FILE` to grant the read, then
 `schedulingctl plan --runtime-config FILE`.
 
-Scheduling sets `sslmode` to `Require` on both connections and refuses a connection it cannot
-protect.
-`database.caBundleRef` is optional and selects the PEM bundle of a private CA in
-front of PostgreSQL.
-The one plaintext escape is `database.testOnlyPlaintext: true`, and only a build carrying the
-`postgres-test` feature accepts it; a production build refuses the setting at startup instead of
-opening an unencrypted connection.
-A test build that skips because its database URL is absent is not database verification, and the
-escape never turns a deployed runtime into a plaintext client.
+Scheduling uses verified TLS by default.
+`database.caBundleRef` adds a private CA.
+A `postgres-test` build also accepts `database.testOnlyPlaintext: true`.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs plaintext_postgres_is_refused_outside_the_test_suite;
     crates/registry-scheduling/src/store.rs test_only_plaintext;
@@ -273,7 +288,7 @@ After `REVOKE TRIGGER ON <table> FROM <grantee>`, `REVOKE CREATE ON SCHEMA <sche
 
 ## Authentication
 
-`authentication.oidc` requires `issuer` and `audience`.
+Each entry under `authentication.oidc.issuers` requires `issuer` and `audience`.
 `jwksSource` defaults to `type: discovery`.
 `type: uri` with `uri` fetches the key set from a fixed HTTPS address instead of the one discovery
 names; plain `http` is accepted only for a loopback host under development loopback.
@@ -289,7 +304,7 @@ read never discloses.
 A read or explain request whose token lacks the required scope is refused with
 `profile.not-authorized`.
 A rate-limited `info` diagnostic names the fixed `scope` stage and the
-`authentication.oidc.scopeClaim`, `readsScope`, and `explainScope` remediation keys, without claim
+`authentication.oidc.issuers.ISSUER_ID.scopeClaim`, `readsScope`, and `explainScope` remediation keys, without claim
 or scope values.
 
 `allowedClients` lists the exact client ids the runtime admits, and every file writes it,
@@ -318,7 +333,8 @@ Every commitment takes its authority from a task grant, described in
 access-token profile: algorithms, token type, audience, scope and actor separation, issuer network
 policy, lifetime, and safe diagnostics.
 
-{/* Evidence: crates/registry-scheduling/src/config.rs OidcConfig, default_scope_claim,
+{/* Evidence: crates/registry-platform-config/src/caller_issuers.rs default_scope_claim;
+    crates/registry-scheduling/src/config.rs OidcConfig,
     default_reads_scope, default_explain_scope,
     a_removed_jwks_uri_names_its_replacement, a_jwks_source_tagged_by_kind_names_type,
     every_deployment_must_name_the_clients_it_admits,
@@ -561,14 +577,14 @@ separate connection that changes nothing:
   `service.unavailable`, because it may have taken effect.
   A retry under the same idempotency key then replays whatever committed.
 
-`/readyz` reports unavailable while the destination refuses writes.
+`/ready` and `/readyz` report unavailable while the destination refuses writes.
 An expired hold writes its history entry as `system` and no audit entry.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs AuditConfig,
     the_audit_block_takes_a_file_or_stdout_destination, MAXIMUM_AUDIT_ROTATE_BYTES;
     crates/registry-scheduling/src/audit.rs; crates/registry-scheduling/src/service.rs
     commitment.unfinished, idempotency.expired;
-    crates/registry-scheduling/src/http.rs readyz;
+    crates/registry-scheduling/src/http.rs ready and readyz;
     crates/registry-scheduling/tests/postgres_commitments.rs. */}
 
 ## Destinations
@@ -577,30 +593,29 @@ An expired hold writes its history entry as `system` and no audit entry.
 
 ### Reminder destination
 
-`destinations.reminders` is the one place due reminder intents are delivered, as the shared hook
-envelope with `content-type: application/json` over HTTPS POST (see
-[Send reminders and appointment events](../../configure/scheduling/#send-reminders-and-appointment-events)), with
-`bearerTokenRef` as the optional bearer secret.
-The independent optional `hmacSha256KeyRef` enables the shared signed CloudEvents delivery
-contract and must resolve to a key of at least 32 bytes.
-Destinations without this key keep their unsigned behaviour.
-Signed destinations can also use bearer authentication; receiving an event does not authorise
-downstream capacity changes or message delivery.
+Scheduling POSTs due reminder intents as canonical JSON with Standard Webhooks signatures
+(see [Send reminders and appointment events](../../configure/scheduling/#send-reminders-and-appointment-events)).
+The fallback `url` and every destination in `purposes` require an `hmacSha256KeyRef` that
+resolves to 32 to 64 exact key bytes. An optional `previousHmacSha256KeyRef` adds a second
+signature after the current key's signature during rotation. Omit the previous reference when
+there is no previous key. Every current and previous key must be distinct across reminder and
+hook destinations. See [Signed hook deliveries](../delivery-signing/) for the key generation
+command, the trailing-newline warning, and the rotation procedure.
 
-`url` is the fallback endpoint.
-An optional closed `purposeUrls` block may override it for any of `confirmation`, `change`,
-`cancellation`, and `reminder`; omitted purposes keep using `url`.
-Every override must use the fallback's scheme, host, and effective port.
-For example:
+The optional `purposes` block accepts `confirmation`, `change`, `cancellation`, and `reminder`.
+Every entry requires its own `url` with the fallback's scheme, host, and effective port.
+Omitted purposes use the fallback URL and key. Configure each receiver with the key for the URL
+it serves.
 
 ```yaml
 destinations:
   reminders:
     url: https://events.example.org/scheduling
-    purposeUrls:
-      confirmation: https://events.example.org/scheduling/confirmed
-      reminder: https://events.example.org/scheduling/reminder
     hmacSha256KeyRef: secret:file/reminder-signing-key
+    purposes:
+      confirmation:
+        url: https://events.example.org/scheduling/confirmed
+        hmacSha256KeyRef: secret:file/confirmation-signing-key
 ```
 
 Each URL is one reviewed absolute endpoint without userinfo, query, or fragment and with a safe
@@ -625,7 +640,7 @@ An absent reminders destination is a supported deployment: the intents stay read
 and are set aside as local, never pretended delivered.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs ReminderDestinationConfig,
-    ReminderPurposeUrls, reminder_purpose_urls_are_typed_and_optional,
+    ReminderPurposes, reminder_purposes_are_typed_and_optional,
     invalid_reminder_purpose_urls_are_refused_without_repeating_values, valid_destination_url;
     crates/registry-scheduling/src/runtime.rs; crates/registry-platform-dispatch/src/retry.rs. */}
 
@@ -638,8 +653,19 @@ lowercase letters, digits, `-`, or `_`.
 Each entry requires `url` and `hmacSha256KeyRef`.
 `attemptTimeoutMilliseconds` defaults to 5000 and is bounded from 100 through 10000, while
 `maximumAttempts` defaults to 8 and is bounded from 1 through 20.
-URLs use the same HTTPS and explicit-loopback rules as the reminder destination.
-A signing key must contain at least 32 bytes.
+URLs use the same HTTPS and explicit-loopback rules as the reminder destination, with one
+addition: an `https` URL to a loopback address or the exact name `localhost`, such as
+`https://localhost:9443/hooks`, is accepted.
+`localhost` is delivered to only when every address it resolves to is loopback.
+A name under `localhost` or the absolute name `localhost.` is refused by `schedulingctl check`
+and at startup with `config.invalid-value` at the destination's `url`, for example
+`/destinations/hooks/appointment-events/url`.
+Port zero, such as `https://localhost:0/hooks`, is refused by both with
+`scheduling.runtime.invalid-destination-url` at the same pointer.
+Startup names the same code and pointer as `schedulingctl check` for a refused hook destination
+`url`, `transport` or private range.
+The key size, rotation field, and distinct-key requirement are the same as for the
+[reminder destination](#reminder-destination).
 
 Every destination the current policy names must be configured.
 Explicit extra bindings are allowed so retained events captured under an earlier policy can finish

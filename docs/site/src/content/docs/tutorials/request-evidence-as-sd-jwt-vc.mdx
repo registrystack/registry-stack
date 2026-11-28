@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -88,11 +88,16 @@ on that profile may ask for the SD-JWT VC representation once a deployment appli
 project:
 
 ```sh
+# rstack dev sets this for the processes it starts.
+export REGISTRY_STACK_POSTURE=development
 rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-excerpt
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml:1:1 /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 ```
 
 {/* Evidence: products/evidence/examples/standalone/evidence.yaml, representations;

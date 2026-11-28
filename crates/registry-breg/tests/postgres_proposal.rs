@@ -42,9 +42,12 @@ fn map(value: Value) -> Map<String, Value> {
 }
 async fn application_queue_age(fixture: &client_http::ClientFixture) -> f64 {
     use tower::util::ServiceExt;
-    let router = registry_breg::metrics::metrics_app(std::sync::Arc::new(
-        registry_breg::metrics::Metrics::with_pool_for_test(fixture.pool.clone()),
-    ));
+    let router = registry_breg::metrics::metrics_app(
+        std::sync::Arc::new(registry_breg::metrics::Metrics::with_pool_for_test(
+            fixture.pool.clone(),
+        )),
+        registry_platform_config::Posture::Production,
+    );
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -69,6 +72,33 @@ async fn application_queue_age(fixture: &client_http::ClientFixture) -> f64 {
         .expect("current Proposal tables produce the queue sample")
         .parse()
         .unwrap()
+}
+/// The refusal counter, read the way an operator reads it: from the metrics
+/// listener. The recorder is process-wide, so a test that shares its process
+/// with others asserts a rise of at least what it caused.
+async fn refusal_count(check: &str) -> u64 {
+    use tower::util::ServiceExt;
+    let response = registry_breg::metrics::metrics_app(
+        std::sync::Arc::new(registry_breg::metrics::Metrics::without_pool_for_test()),
+        registry_platform_config::Posture::Production,
+    )
+    .oneshot(
+        axum::http::Request::builder()
+            .uri("/metrics")
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let prefix = format!("breg_request_refusals_total{{check=\"{check}\"}} ");
+    std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix.as_str()))
+        .map_or(0, |value| value.parse().unwrap())
 }
 fn registry_source(automatic: bool) -> Value {
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
@@ -3443,7 +3473,9 @@ impl registry_platform_httputil::TokenProvider for NoToken {
 fn local_review_binding() -> std::sync::Arc<registry_breg::review_store::ReviewAuthorityRegistry> {
     use registry_breg::review_store::{ReviewAuthorityClient, ReviewAuthorityRegistry};
     let client = registry_review_client::ReviewClient::new(
-        registry_review_client::ReviewClientConfig::new("http://127.0.0.1:9/".parse().unwrap()),
+        registry_review_client::ReviewClientConfig::new_without_peer_policy(
+            "http://127.0.0.1:9/".parse().unwrap(),
+        ),
     )
     .unwrap();
     let authority = std::sync::Arc::new(
@@ -5598,9 +5630,13 @@ async fn missing_review_binding_preserves_unrelated_builtin_work_and_fails_revie
             .push(grant);
     }
     let registry = compile(source);
-    let runtime = registry_breg::runtime_config::parse_runtime_config(include_str!(
-        "../../../products/breg/examples/minimal/runtime.example.yaml"
-    ))
+    let runtime = registry_breg::runtime_config::parse_runtime_config(
+        include_str!("../../../products/breg/examples/minimal/runtime.example.yaml"),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
     .unwrap();
     assert!(
         runtime
@@ -6373,6 +6409,33 @@ async fn review_context_projects_an_omitted_optional_input_as_null() {
         batch["items"][1],
         json!({"id": missing, "status":"concealed"})
     );
+    // Each concealed item counts once under its own check, though the batch
+    // answers 200. Other tests share the recorder, so the rise is a lower
+    // bound that one note per response could not reach.
+    let before = refusal_count("visibility").await;
+    let unknown = (0..3)
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect::<Vec<_>>();
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/proposals/review-context",
+            fixture.http.base_url
+        ))
+        .query(&[("accessProfile", "clerk"), ("ids", &unknown.join(","))])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let batch: Value = response.json().await.unwrap();
+    assert!(batch["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item["status"] == "concealed"));
+    assert!(
+        refusal_count("visibility").await - before >= 3,
+        "each concealed batch item counts under visibility"
+    );
     let before = fixture.audit_capture.entries().len();
     let excessive = (0..101)
         .map(|_| uuid::Uuid::new_v4().to_string())
@@ -6866,7 +6929,7 @@ async fn apply_receipt_replay_refuses_a_task_grant_expiring_at_the_idempotency_l
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
         AuthorityClaimConfig::new("sub", Some("registry_purpose".into())),
     )

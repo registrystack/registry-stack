@@ -85,7 +85,7 @@ fn hook_listener_schema(generator: &mut schemars::SchemaGenerator) -> schemars::
             },
             "then": {
                 "properties": {
-                    "tlsTermination": { "const": "development-loopback" }
+                    "tlsTermination": { "const": "loopback-plaintext" }
                 }
             }
         }],
@@ -235,10 +235,10 @@ struct PostgresSource {
     password_ref: SecretReference,
     /// The namespace every item key of this source carries.
     namespace: String,
-    /// The TLS posture of the connection; absent, the system roots with
-    /// TLS required.
+    /// The TLS posture of the connection. Absent, verified TLS with the
+    /// system roots. Plaintext requires a loopback host.
     #[serde(default)]
-    tls: Option<SourceTls>,
+    tls: Option<PostgresSourceTls>,
 }
 
 /// One manually settled RabbitMQ source. The broker must independently enforce
@@ -371,7 +371,7 @@ fn required_true_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     })
 }
 
-/// The TLS posture of one postgres or RabbitMQ source connection.
+/// The TLS policy of one RabbitMQ source connection.
 /// Plaintext is a test-build posture only and is not part of the format.
 #[allow(dead_code)]
 #[derive(JsonSchema)]
@@ -391,6 +391,24 @@ enum SourceTls {
     },
 }
 
+/// How the PostgreSQL source connection is protected.
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum PostgresSourceTls {
+    /// Require verified TLS with the platform roots.
+    SystemRoots,
+    /// Require TLS with an additional trusted CA bundle.
+    CaBundle { ca_bundle_file: String },
+    /// Plaintext to a Unix socket, numeric loopback address or localhost.
+    LoopbackPlaintext,
+}
+
 /// The job store block: the item table's single connection reference.
 /// Secret references only, resolved by the job host.
 #[allow(dead_code)]
@@ -408,6 +426,9 @@ struct JobStore {
     /// feature.
     #[serde(default)]
     test_only_plaintext: Option<bool>,
+    /// PostgreSQL transport. Absent means verified TLS.
+    #[serde(default)]
+    transport: Option<registry_platform_config::Gated<registry_platform_config::DatabaseTransport>>,
 }
 
 #[cfg(test)]
@@ -564,7 +585,7 @@ mod tests {
     fn the_schema_member_lists_are_the_readers() {
         let schema = schema();
         let definitions = &schema["$defs"];
-        let ca_bundle = definitions["SourceTls"]["oneOf"]
+        let ca_bundle = definitions["PostgresSourceTls"]["oneOf"]
             .as_array()
             .unwrap()
             .iter()
@@ -619,7 +640,7 @@ mod tests {
                 "the {definition} members drifted from the reader"
             );
         }
-        let tls_kinds: BTreeSet<String> = definitions["SourceTls"]["oneOf"]
+        let tls_kinds: BTreeSet<String> = definitions["PostgresSourceTls"]["oneOf"]
             .as_array()
             .unwrap()
             .iter()
@@ -683,7 +704,7 @@ mod tests {
         let mut development_ephemeral = maximum_port.clone();
         development_ephemeral["hookIngress"]["listener"]["bind"] = serde_json::json!("[::1]:0");
         development_ephemeral["hookIngress"]["listener"]["tlsTermination"] =
-            serde_json::json!("development-loopback");
+            serde_json::json!("loopback-plaintext");
         for document in [maximum_port, development_ephemeral] {
             assert!(
                 validator.validate(&document).is_ok(),

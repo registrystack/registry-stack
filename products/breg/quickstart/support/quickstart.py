@@ -32,11 +32,6 @@ def copy_header(report_path: Path, destination: Path):
     if len(credentials)!=1: raise QuickstartError('token report must name exactly one credential')
     shutil.copyfile(credentials[0]['header_file'],destination); destination.chmod(0o600)
 
-def add_dev_plan(example: Path, project: Path):
-    """Add the example's `rstack dev` plan and scenarios to an initialized project."""
-    if (project/'dev.yaml').exists(): raise QuickstartError('project already has a dev.yaml')
-    shutil.copyfile(example/'dev.yaml',project/'dev.yaml'); shutil.copytree(example/'dev',project/'dev')
-
 def prepare_spatial(fixture: Path, project: Path):
     if fixture.is_symlink() or not fixture.is_dir() or project.exists():
         raise QuickstartError('spatial fixture and output must be ordinary paths')
@@ -102,7 +97,6 @@ def main():
     for name in ('run-id','ready'):
         q=s.add_parser(name); q.add_argument('--report',type=Path,required=True)
     q=s.add_parser('copy-header'); q.add_argument('--report',type=Path,required=True); q.add_argument('--to',type=Path,required=True)
-    q=s.add_parser('add-dev-plan'); q.add_argument('--example',type=Path,required=True); q.add_argument('--project',type=Path,required=True)
     q=s.add_parser('prepare-spatial-project'); q.add_argument('--fixture',type=Path,required=True); q.add_argument('--project',type=Path,required=True)
     q=s.add_parser('request'); q.add_argument('--root',type=Path,required=True); q.add_argument('--action',choices=['create','get','list','refusal'],required=True); q.add_argument('--name'); q.add_argument('--email'); q.add_argument('--record-id')
     q=s.add_parser('spatial-smoke'); q.add_argument('--root',type=Path,required=True); q.add_argument('--seed',type=Path,required=True)
@@ -110,7 +104,6 @@ def main():
     if a.cmd=='run-id': run_id(a.report)
     elif a.cmd=='ready': ready(a.report)
     elif a.cmd=='copy-header': copy_header(a.report,a.to)
-    elif a.cmd=='add-dev-plan': add_dev_plan(a.example,a.project)
     elif a.cmd=='prepare-spatial-project': prepare_spatial(a.fixture,a.project)
     elif a.cmd=='request': directory(a.root,a.action,a.name,a.email,a.record_id)
     else: spatial_smoke(a.root,a.seed)

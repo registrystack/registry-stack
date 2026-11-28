@@ -135,3 +135,12 @@ test('revision reads keep the Proposal link the server sent', async t => {
   const single = JSON.parse((await client.getRecordRevision('applications', id, 2, { accessProfile: 'auditor' })).body);
   assert.deepEqual(single.data.proposal, proposal);
 });
+
+test('the binding accepts a development peer by default', async t => {
+  const client = await serveDownload(t, response => {
+    response.setHeader('registry-posture', 'development');
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ status: 'alive' }));
+  });
+  assert.equal((await client.health()).value.status, 'alive');
+});

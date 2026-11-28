@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End to end through `messagingctl dev`: start a session on a fresh starter
+# End to end through `rstack dev`: start a session on a fresh starter
 # package whose SMS provider is the example mock provider, send one email and
 # one SMS, and require the SMS to be reported delivered by a signed callback,
 # the email to be submitted to Mailpit, and the session to remove its
@@ -20,7 +20,7 @@ dev_log "starter package with the mock SMS provider at $dev_project"
 dev_start
 dev_log "session ready: api $dev_api, mailpit $dev_mailpit"
 
-header=$("$messagingctl_bin" dev token case-system "$dev_project" --format json | dev_member headerFile)
+header=$(dev_header case-system)
 dev_log "token header file written for case-system"
 
 submit() {

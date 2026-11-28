@@ -35,10 +35,13 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use registry_platform_authcommon::validate_compact_access_token;
+use registry_platform_authcommon::{
+    validate_compact_access_token, DeclaredScope, FailedCheck, RefusalRecorder,
+};
 use registry_platform_oidc::{
-    actor_kind, grant_claims, ClaimNames, JwksFetcher, OidcError, TokenVerifier,
-    TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
+    grant_claims, refuses_development_assertion, ClaimError, ClaimNames, DeclaredKinds,
+    IssuerEntry, IssuerSet, IssuerSetError, JwksFetcher, OidcError, TokenVerifier,
+    TokenVerifierConfig, VerifiedCaller, ASSERTION_ISSUER_CLAIM,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -53,52 +56,191 @@ use crate::source_busy::{
     authorize_busy_source, AuthorizedBusySource, BusyImportProfileConfig, BusySourceIdentity,
 };
 
-pub struct SchedulingAuthenticator {
-    verifier: TokenVerifier,
-    claim_names: ClaimNames,
+/// The actor kind recorded for a caller that neither the operator nor the
+/// token gave a kind.
+pub const UNSPECIFIED_ACTOR_KIND: &str = "unspecified";
+
+/// Why [`SchedulingAuthenticator::new`] refused its sources.
+#[derive(Debug, thiserror::Error)]
+pub enum AuthenticatorBuildError {
+    /// Two sources carry one id, so one would replace the other's settings.
+    #[error("two issuer sources share the id {0}")]
+    DuplicateId(String),
+    #[error(transparent)]
+    Set(#[from] IssuerSetError),
+}
+
+/// One configured issuer: its id, the verifier profile it is held to, the
+/// source of its signing keys, the caller kinds the operator declared for it,
+/// and the audience the task grants it carries are bound to.
+pub struct IssuerSource {
+    id: String,
+    verifier: TokenVerifierConfig,
+    keys: Arc<JwksFetcher>,
+    declared: DeclaredKinds,
     audience: String,
+}
+
+impl IssuerSource {
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        verifier: TokenVerifierConfig,
+        keys: Arc<JwksFetcher>,
+        declared: DeclaredKinds,
+        audience: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            verifier,
+            keys,
+            declared,
+            audience: audience.into(),
+        }
+    }
+}
+
+/// The scopes and profiles of the deployment that hold for every issuer: what
+/// each route family requires of a caller, whichever issuer signed its token.
+#[derive(Clone, Debug)]
+pub struct AuthorizationProfiles {
+    pub reads_scope: String,
+    pub explain_scope: String,
+    pub appointment_read_profiles: BTreeMap<String, OperationalReadProfileConfig>,
+    pub busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
+}
+
+impl From<&OidcConfig> for AuthorizationProfiles {
+    fn from(oidc: &OidcConfig) -> Self {
+        Self {
+            reads_scope: oidc.reads_scope.clone(),
+            explain_scope: oidc.explain_scope.clone(),
+            appointment_read_profiles: oidc.appointment_read_profiles.clone(),
+            busy_import_profiles: oidc.busy_import_profiles.clone(),
+        }
+    }
+}
+
+/// What the deployment declared about one issuer entry, which a token it
+/// verified is held to after verification.
+struct IssuerSettings {
+    /// The audience this entry's task grants are bound to.
+    audience: String,
+    /// The claim the entry reads scopes from, as configured.
+    scope_claim: String,
+    /// Whether the entry declared any assertion authority at all.
+    binds_assertion_issuers: bool,
+}
+
+/// A credential the issuer set verified, resolved to its caller.
+struct Authenticated {
+    caller: Caller,
+    scopes: Vec<String>,
+    client: Option<String>,
+    /// The scope claim of the entry that verified the credential.
+    scope_claim: String,
+}
+
+pub struct SchedulingAuthenticator {
+    peer_policy: registry_platform_httputil::PeerPolicy,
+    issuers: IssuerSet,
+    settings: BTreeMap<String, IssuerSettings>,
+    claim_names: ClaimNames,
     reads_scope: String,
     explain_scope: String,
     appointment_read_profiles: BTreeMap<String, OperationalReadProfileConfig>,
     busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
-    /// Whether the deployment declared any assertion authority at all.
-    binds_assertion_issuers: bool,
+    /// Counts and logs every refusal the HTTP edge answers, by failed check.
+    refusals: Arc<RefusalRecorder>,
 }
 
 impl SchedulingAuthenticator {
-    pub(crate) fn record_header_refusal(&self) {
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            registry_platform_oidc::AuthenticationStage::Header,
-            "Scheduling authentication refused"
-        );
+    /// The recorder the HTTP edge reports each refusal to, and whose counter
+    /// the metrics listener exposes.
+    #[must_use]
+    pub fn refusals(&self) -> &Arc<RefusalRecorder> {
+        &self.refusals
     }
 
+    /// Whether the audit qualifies each granted principal by its token
+    /// issuer: with more than one issuer entry one subject can come from two
+    /// issuers, and a deployment of one entry keeps the pseudonyms it always
+    /// wrote.
     #[must_use]
-    pub fn new(oidc: &OidcConfig, verifier: TokenVerifierConfig, keys: Arc<JwksFetcher>) -> Self {
+    pub fn qualifies_audit_principals(&self) -> bool {
+        self.settings.len() > 1
+    }
+
+    /// The authenticator over `sources`, one entry per issuer. Two entries
+    /// that name one issuer are refused.
+    pub fn new(
+        profiles: impl Into<AuthorizationProfiles>,
+        sources: Vec<IssuerSource>,
+    ) -> Result<Self, AuthenticatorBuildError> {
+        let profiles = profiles.into();
         // The default contextual-claim profile is the closed one this product
         // speaks; validating it here keeps a future name change honest.
         let claim_names = ClaimNames::default();
         claim_names
             .validate()
             .expect("the default contextual claim names are valid");
-        Self {
-            verifier: TokenVerifier::new(verifier, keys),
-            claim_names,
-            audience: oidc.provider.audience.clone(),
-            reads_scope: oidc.reads_scope.clone(),
-            explain_scope: oidc.explain_scope.clone(),
-            appointment_read_profiles: oidc.appointment_read_profiles.clone(),
-            busy_import_profiles: oidc.busy_import_profiles.clone(),
-            binds_assertion_issuers: !oidc.clients.assertion_issuers.is_empty(),
+        let mut settings = BTreeMap::new();
+        let mut entries = Vec::new();
+        for source in sources {
+            let replaced = settings.insert(
+                source.id.clone(),
+                IssuerSettings {
+                    audience: source.audience,
+                    scope_claim: source.verifier.scope_claim.clone(),
+                    binds_assertion_issuers: !source.verifier.assertion_issuers.is_empty(),
+                },
+            );
+            // A repeated id would let the second entry's audience, scope
+            // claim and assertion binding stand in for the first's.
+            if replaced.is_some() {
+                return Err(AuthenticatorBuildError::DuplicateId(source.id));
+            }
+            entries.push(IssuerEntry::new(
+                source.id,
+                TokenVerifier::new(source.verifier, source.keys),
+                source.declared,
+            ));
         }
+        Ok(Self {
+            peer_policy: registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+            issuers: IssuerSet::new(entries, ClaimNames::default())?,
+            settings,
+            claim_names,
+            reads_scope: profiles.reads_scope,
+            explain_scope: profiles.explain_scope,
+            appointment_read_profiles: profiles.appointment_read_profiles,
+            busy_import_profiles: profiles.busy_import_profiles,
+            refusals: Arc::new(
+                RefusalRecorder::new("scheduling").expect("the refusal counter is declared once"),
+            ),
+        })
+    }
+
+    #[must_use]
+    pub fn with_peer_policy(mut self, peer_policy: registry_platform_httputil::PeerPolicy) -> Self {
+        self.peer_policy = peer_policy;
+        self
+    }
+
+    /// The issuer set's verdict on `token`: the entry that verified it with
+    /// the caller kind settled, or the refusal with the check that failed.
+    pub async fn verify(
+        &self,
+        token: &str,
+    ) -> Result<VerifiedCaller, registry_platform_oidc::CallerRefusal> {
+        self.issuers.verify(token).await
     }
 
     /// The profile every catalogue, availability, and owned-record read
     /// demands: the caller holds the configured reads scope.
-    pub async fn authenticate_read(&self, token: &str) -> Result<Caller, AuthenticationError> {
-        let (caller, scopes, _) = self.verified_caller(token).await?;
-        self.require_scope(caller, &scopes, &self.reads_scope, "readsScope")
+    pub async fn authenticate_read(&self, token: &str) -> Result<Caller, AuthenticationFailure> {
+        let authenticated = self.verified_caller(token).await?;
+        self.require_scope(authenticated, &self.reads_scope)
     }
 
     /// Authenticate the one appointment-detail route. Ordinary owner reads
@@ -115,11 +257,16 @@ impl SchedulingAuthenticator {
     pub async fn authenticate_appointment_detail(
         &self,
         token: &str,
-    ) -> Result<(Caller, DetailAdmission), AuthenticationError> {
-        let (caller, scopes, _) = self.verified_caller(token).await?;
-        if scopes.iter().any(|scope| scope == &self.reads_scope) {
-            return Ok((caller, DetailAdmission::ReadsScope));
+    ) -> Result<(Caller, DetailAdmission), AuthenticationFailure> {
+        let authenticated = self.verified_caller(token).await?;
+        if authenticated
+            .scopes
+            .iter()
+            .any(|scope| scope == &self.reads_scope)
+        {
+            return Ok((authenticated.caller, DetailAdmission::ReadsScope));
         }
+        let caller = authenticated.caller;
         if caller.grant.as_ref().is_some_and(|grant| {
             grant
                 .bounds()
@@ -135,44 +282,49 @@ impl SchedulingAuthenticator {
         }) {
             return Ok((caller, DetailAdmission::Grant));
         }
-        Err(AuthenticationError::Profile)
+        Err(
+            AuthenticationFailure::from(AuthenticationError::Profile(FailedCheck::Scope))
+                .declaring(
+                    DeclaredScope::new(&authenticated.scope_claim)
+                        .with_required_scope(&self.reads_scope),
+                ),
+        )
     }
 
     /// The profile the separately authorized explain path demands: the caller
     /// holds the explain scope, which is never the reads scope.
-    pub async fn authenticate_explain(&self, token: &str) -> Result<Caller, AuthenticationError> {
-        let (caller, scopes, _) = self.verified_caller(token).await?;
-        self.require_scope(caller, &scopes, &self.explain_scope, "explainScope")
+    pub async fn authenticate_explain(&self, token: &str) -> Result<Caller, AuthenticationFailure> {
+        let authenticated = self.verified_caller(token).await?;
+        self.require_scope(authenticated, &self.explain_scope)
     }
 
     /// Admit a verified caller holding `required`, or refuse it as a profile
-    /// miss. Diagnostics name only the fixed stage, never scope or claim values.
+    /// miss. Nothing about the refusal's answer names a scope or claim value.
+    /// The values the deployment declared for the scope ride with the refusal
+    /// to the operator's log line.
     fn require_scope(
         &self,
-        caller: Caller,
-        scopes: &[String],
+        authenticated: Authenticated,
         required: &str,
-        _key: &str,
-    ) -> Result<Caller, AuthenticationError> {
-        if scopes.iter().any(|scope| scope == required) {
-            return Ok(caller);
+    ) -> Result<Caller, AuthenticationFailure> {
+        if authenticated.scopes.iter().any(|scope| scope == required) {
+            return Ok(authenticated.caller);
         }
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            registry_platform_oidc::AuthenticationStage::Scope,
-            "Scheduling authentication profile refused",
-            remedy = "check authentication.oidc.scopeClaim and readsScope or explainScope"
-        );
-        Err(AuthenticationError::Profile)
+        Err(
+            AuthenticationFailure::from(AuthenticationError::Profile(FailedCheck::Scope))
+                .declaring(
+                    DeclaredScope::new(&authenticated.scope_claim).with_required_scope(required),
+                ),
+        )
     }
 
     /// The profile the commitments demand: no product scope, because the
     /// authority for a mutation is the task grant the service checks against
     /// the offering's service, location, and action.
-    pub async fn authenticate_mutate(&self, token: &str) -> Result<Caller, AuthenticationError> {
+    pub async fn authenticate_mutate(&self, token: &str) -> Result<Caller, AuthenticationFailure> {
         self.verified_caller(token)
             .await
-            .map(|(caller, _, _)| caller)
+            .map(|authenticated| authenticated.caller)
     }
 
     /// Select exactly one operator-configured busy source profile. Holding a
@@ -181,18 +333,40 @@ impl SchedulingAuthenticator {
         &self,
         token: &str,
         profile_selector: &str,
-    ) -> Result<AuthorizedBusySource, AuthenticationError> {
-        let (caller, scopes, client) = self.verified_caller(token).await?;
-        let client = client.ok_or(AuthenticationError::Claims)?;
-        let identity = BusySourceIdentity::new(caller.issuer, caller.subject, client)
-            .map_err(|_| AuthenticationError::Profile)?;
+    ) -> Result<AuthorizedBusySource, AuthenticationFailure> {
+        let authenticated = self.verified_caller(token).await?;
+        let client = authenticated
+            .client
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClient))?;
+        let identity = BusySourceIdentity::new(
+            authenticated.caller.issuer,
+            authenticated.caller.subject,
+            client,
+        )
+        .map_err(|_| AuthenticationError::Profile(FailedCheck::TokenClaims))?;
         authorize_busy_source(
             &self.busy_import_profiles,
-            &scopes,
+            &authenticated.scopes,
             Some(profile_selector),
             identity,
         )
-        .map_err(|_| AuthenticationError::Profile)
+        .map_err(|error| {
+            AuthenticationFailure::from(AuthenticationError::Profile(error.failed_check()))
+                .declaring(self.declared_busy_scope(&authenticated.scope_claim, profile_selector))
+        })
+    }
+
+    /// The configured values a source-busy scope refusal's log line names:
+    /// the profile's scope, and the profile id when the deployment declares
+    /// that profile.
+    fn declared_busy_scope(&self, scope_claim: &str, profile_selector: &str) -> DeclaredScope {
+        let declared = DeclaredScope::new(scope_claim);
+        match self.busy_import_profiles.get(profile_selector) {
+            Some(profile) => declared
+                .with_required_scope(&profile.scope)
+                .with_access_profile(profile_selector),
+            None => declared,
+        }
     }
 
     /// Verify one token and authorize exactly one opt-in operational profile
@@ -204,66 +378,76 @@ impl SchedulingAuthenticator {
         profile_selector: Option<&str>,
         filter: OperationalReadFilter,
         now: DateTime<Utc>,
-    ) -> Result<AuthorizedOperationalRead, AuthenticationError> {
-        let (caller, scopes, client) = self.verified_caller(token).await?;
-        let client = client.ok_or(AuthenticationError::Claims)?;
-        let identity = OperationalIdentity::new(caller.issuer, caller.subject, client)
-            .map_err(|_| AuthenticationError::Claims)?;
+    ) -> Result<AuthorizedOperationalRead, AuthenticationFailure> {
+        let authenticated = self.verified_caller(token).await?;
+        let client = authenticated
+            .client
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClient))?;
+        let identity = OperationalIdentity::new(
+            authenticated.caller.issuer,
+            authenticated.caller.subject,
+            client,
+        )
+        .map_err(|_| AuthenticationError::Claims(FailedCheck::TokenClaims))?;
         authorize_operational_read(
             &self.appointment_read_profiles,
-            &scopes,
+            &authenticated.scopes,
             profile_selector,
             identity,
             filter,
             now,
         )
-        .map_err(|_| AuthenticationError::Profile)
+        .map_err(|_| {
+            AuthenticationFailure::from(AuthenticationError::Profile(FailedCheck::AccessProfile))
+        })
     }
 
     /// Verify one credential and resolve its caller. A present grant is bound
-    /// to the verified client and this deployment's audience before the
+    /// to the verified client and the verifying entry's audience before the
     /// caller ever reaches the service.
-    async fn verified_caller(
-        &self,
-        token: &str,
-    ) -> Result<(Caller, Vec<String>, Option<String>), AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| {
-            self.record_header_refusal();
-            AuthenticationError::Refused
+    async fn verified_caller(&self, token: &str) -> Result<Authenticated, AuthenticationFailure> {
+        validate_compact_access_token(token)
+            .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
+        let verified = self.verify(token).await.map_err(|refusal| {
+            let mut failure = AuthenticationFailure::from(verifier_failure(&refusal.error));
+            failure.remedy = refusal.remedy;
+            failure
         })?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                error.authentication_stage(),
-                "Scheduling authentication refused"
-            );
-            verifier_failure(&error)
-        })?;
-        // An exchanged token names the authority whose assertion produced it.
-        // The platform applies no rule while the deployment's map is empty, so
-        // an empty map would trust every authority the issuer federates.
-        // Refuse the exchange instead: a deployment that means to accept one
-        // says which authorities, and which client may present them.
-        if !self.binds_assertion_issuers
-            && verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM)
-        {
-            tracing::debug!(
-                "an exchanged credential arrived at a deployment that declared no assertion authority"
-            );
-            return Err(AuthenticationError::Profile);
+        if refuses_development_assertion(&verified.token, self.peer_policy) {
+            return Err(AuthenticationError::DevelopmentAssertion.into());
         }
-        let kind = actor_kind(&verified.claims, &self.claim_names)
-            .map_err(|_| AuthenticationError::Claims)?;
-        let grant = grant_claims(&verified.claims, &self.claim_names, unix_now()?)
-            .map_err(|_| AuthenticationError::Claims)?;
+        let settings = self
+            .settings
+            .get(&*verified.issuer_id)
+            .ok_or(AuthenticationError::Refused(FailedCheck::TokenIssuer))?;
+        let claims = &verified.token.claims;
+        // An exchanged token names the authority whose assertion produced it.
+        // The platform applies no rule while the entry's map is empty, so an
+        // empty map would trust every authority the issuer federates. Refuse
+        // the exchange instead: a deployment that means to accept one says
+        // which authorities, and which client may present them.
+        if !settings.binds_assertion_issuers && claims.extra.contains_key(ASSERTION_ISSUER_CLAIM) {
+            return Err(AuthenticationError::Profile(FailedCheck::TokenAssertionIssuer).into());
+        }
+        let actor_kind = verified
+            .kind
+            .kind()
+            .map_or(UNSPECIFIED_ACTOR_KIND, |kind| kind.as_str());
+        let grant = grant_claims(claims, &self.claim_names, unix_now()?).map_err(|error| {
+            AuthenticationError::Claims(match error {
+                ClaimError::Expired => FailedCheck::TaskGrantExpired,
+                _ => FailedCheck::TaskGrantClaims,
+            })
+        })?;
         if let Some(grant) = &grant {
             grant
-                .verify_context(&verified, &self.audience)
-                .map_err(|_| AuthenticationError::Profile)?;
+                .verify_context(&verified.token, &settings.audience, self.peer_policy)
+                .map_err(|_| AuthenticationError::Profile(FailedCheck::TaskGrantBinding))?;
         }
         let client = verified
+            .token
             .matched_client_id()
-            .map_err(|_| AuthenticationError::Claims)?
+            .map_err(|_| AuthenticationError::Claims(FailedCheck::TokenClient))?
             .filter(|client| !client.is_empty())
             .map(str::to_owned);
         // A task-grant exchange preserves the subjects its source authority
@@ -275,42 +459,41 @@ impl SchedulingAuthenticator {
         // service that lists status authorities fails that miss closed before
         // capacity is touched.
         let task_grant_subjects = grant.as_ref().and_then(|_| {
-            verified
-                .claims
+            claims
                 .extra
                 .get("identity")
                 .cloned()
                 .and_then(|value| serde_json::from_value::<BTreeMap<String, Value>>(value).ok())
         });
-        let issuer = verified
-            .claims
+        // The issuer is the verifying entry's own, which the token's `iss`
+        // matched exactly, so one subject from two issuers is two principals.
+        let issuer = claims
             .iss
             .clone()
             .filter(|issuer| !issuer.is_empty())
-            .ok_or(AuthenticationError::Claims)?;
-        let subject = verified
-            .claims
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
+        let subject = claims
             .sub
             .clone()
             .filter(|subject| !subject.is_empty())
-            .ok_or(AuthenticationError::Claims)?;
-        let credential_exp_unix = verified
-            .claims
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
+        let credential_exp_unix = claims
             .exp
             .and_then(|value| u64::try_from(value).ok())
-            .ok_or(AuthenticationError::Claims)?;
-        Ok((
-            Caller {
-                actor_kind: kind.as_str().to_owned(),
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
+        Ok(Authenticated {
+            caller: Caller {
+                actor_kind: actor_kind.to_owned(),
                 issuer,
                 subject,
                 credential_exp_unix,
                 grant,
                 task_grant_subjects,
             },
-            verified.scopes,
+            scopes: verified.token.scopes,
             client,
-        ))
+            scope_claim: settings.scope_claim.clone(),
+        })
     }
 }
 
@@ -318,8 +501,7 @@ impl std::fmt::Debug for SchedulingAuthenticator {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SchedulingAuthenticator")
-            .field("verifier", &"<redacted>")
-            .field("audience", &"<redacted>")
+            .field("issuers", &"<redacted>")
             .field("reads_scope", &self.reads_scope)
             .field("explain_scope", &self.explain_scope)
             .field(
@@ -330,17 +512,50 @@ impl std::fmt::Debug for SchedulingAuthenticator {
     }
 }
 
+/// Why authentication refused a request. Each refusal carries the check it
+/// failed, which only the operator sees: the answer to the caller is the same
+/// for every check of one kind.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum AuthenticationError {
     #[error("the bearer credential was refused")]
-    Refused,
+    Refused(FailedCheck),
     #[error("the verified identity claims are invalid")]
-    Claims,
+    Claims(FailedCheck),
     #[error("the caller's authentication profile is not authorized for this request")]
-    Profile,
+    Profile(FailedCheck),
+    #[error("production refuses task assertions issued in development")]
+    DevelopmentAssertion,
     /// The verifier could not reach a verdict at all.
     #[error("the credential could not be verified because this verifier cannot answer")]
     Unavailable,
+}
+
+/// A refusal of authentication with what the deployment declared about it:
+/// the scope values of a scope refusal, and the sentence that names the
+/// setting a verifier refusal involves. Both are for the operator's log line
+/// and never enter a response body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticationFailure {
+    pub error: AuthenticationError,
+    pub declared: Option<DeclaredScope>,
+    pub remedy: Option<&'static str>,
+}
+
+impl AuthenticationFailure {
+    fn declaring(mut self, declared: DeclaredScope) -> Self {
+        self.declared = Some(declared);
+        self
+    }
+}
+
+impl From<AuthenticationError> for AuthenticationFailure {
+    fn from(error: AuthenticationError) -> Self {
+        Self {
+            error,
+            declared: None,
+            remedy: None,
+        }
+    }
 }
 
 /// Separate a verifier outage from a bad credential.
@@ -368,8 +583,9 @@ fn verifier_failure(error: &OidcError) -> AuthenticationError {
         // signal, not an outage, and answering 503 there would let a caller
         // probe the key set. A variant added to the platform later is read as
         // a credential refusal until it is classified here, so a new outcome
-        // can never widen the door.
-        _ => AuthenticationError::Refused,
+        // can never widen the door. The check the refusal records is the
+        // shared verifier's own map.
+        _ => AuthenticationError::Refused(error.failed_check()),
     }
 }
 
@@ -387,6 +603,8 @@ fn unix_now() -> Result<u64, AuthenticationError> {
 /// committing capacity for as long as the clock stayed unreadable, and the
 /// deployment would be told nothing. Nothing has been learned about the
 /// credential either, so the answer is the outage answer, not a challenge.
+/// The edge counts that answer as `key-source-unavailable` because no member
+/// names a clock failure. The error line above names the clock.
 fn unix_seconds(observed: SystemTime) -> Result<u64, AuthenticationError> {
     observed
         .duration_since(UNIX_EPOCH)
@@ -417,19 +635,8 @@ mod tests {
     const CLIENT: &str = "task-agent";
     const SECRET: &[u8] = b"01234567890123456789012345678901";
 
-    fn oidc() -> OidcConfig {
-        OidcConfig {
-            provider: crate::config::OidcIssuerConfig {
-                issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
-                audience: AUDIENCE.to_owned(),
-                jwks_source: crate::config::JwksSource::Discovery {},
-                allow_insecure_http: false,
-            },
-            clients: crate::config::OidcClientsConfig {
-                allowed_clients: vec![CLIENT.to_owned()],
-                assertion_issuers: std::collections::BTreeMap::new(),
-            },
-            scope_claim: "registry_scopes".to_owned(),
+    fn profiles() -> AuthorizationProfiles {
+        AuthorizationProfiles {
             reads_scope: "scheduling-read".to_owned(),
             explain_scope: "scheduling-explain".to_owned(),
             appointment_read_profiles: BTreeMap::new(),
@@ -437,8 +644,8 @@ mod tests {
         }
     }
 
-    fn oidc_with_operational_profiles() -> OidcConfig {
-        let mut oidc = oidc();
+    fn profiles_with_operational_profiles() -> AuthorizationProfiles {
+        let mut oidc = profiles();
         oidc.appointment_read_profiles = BTreeMap::from([
             (
                 "north-desk".to_owned(),
@@ -509,29 +716,57 @@ mod tests {
     }
 
     fn authenticator() -> SchedulingAuthenticator {
-        authenticator_with(oidc())
+        authenticator_with(profiles())
+    }
+
+    /// The verifier profile of the entry every test reads: one audience, one
+    /// client, the scope claim the tests sign under.
+    fn verifier(
+        algorithm: Algorithm,
+        assertion_issuers: BTreeMap<String, Vec<String>>,
+    ) -> TokenVerifierConfig {
+        TokenVerifierConfig::access_token_profile(
+            ISSUER,
+            vec![AUDIENCE.to_owned()],
+            vec![algorithm],
+            vec!["at+jwt".to_owned()],
+        )
+        .with_scope_claim("registry_scopes")
+        .with_allowed_clients(vec![CLIENT.to_owned()])
+        .with_assertion_issuers(assertion_issuers)
+    }
+
+    /// One issuer entry, `main`, over `keys` with no declared caller kinds.
+    fn main_source(
+        verifier: TokenVerifierConfig,
+        keys: Arc<JwksFetcher>,
+        declared: DeclaredKinds,
+    ) -> IssuerSource {
+        IssuerSource::new("main", verifier, keys, declared, AUDIENCE)
     }
 
     /// Build the authenticator the way the runtime does, so the verifier and
     /// the authenticator read the same deployment settings.
-    fn authenticator_with(oidc: OidcConfig) -> SchedulingAuthenticator {
-        authenticator_over(oidc, keys())
+    fn authenticator_with(profiles: AuthorizationProfiles) -> SchedulingAuthenticator {
+        authenticator_over(profiles, keys())
     }
 
     /// The same deployment reading a different key source, so a test can put
     /// the issuer's key endpoint out of service without changing anything
     /// else about the caller or the profile.
-    fn authenticator_over(oidc: OidcConfig, keys: Arc<JwksFetcher>) -> SchedulingAuthenticator {
-        let verifier = TokenVerifierConfig::access_token_profile(
-            ISSUER,
-            vec![AUDIENCE.to_owned()],
-            vec![Algorithm::HS256],
-            vec!["at+jwt".to_owned()],
+    fn authenticator_over(
+        profiles: AuthorizationProfiles,
+        keys: Arc<JwksFetcher>,
+    ) -> SchedulingAuthenticator {
+        SchedulingAuthenticator::new(
+            profiles,
+            vec![main_source(
+                verifier(Algorithm::HS256, BTreeMap::new()),
+                keys,
+                DeclaredKinds::None,
+            )],
         )
-        .with_scope_claim("registry_scopes")
-        .with_allowed_clients(vec![CLIENT.to_owned()])
-        .with_assertion_issuers(oidc.clients.assertion_issuers.clone());
-        SchedulingAuthenticator::new(&oidc, verifier, keys)
+        .unwrap()
     }
 
     /// Sign an access token, filling in the claims a real token always
@@ -641,7 +876,10 @@ mod tests {
         assert_eq!(admission, DetailAdmission::Grant);
         assert!(matches!(
             authenticator.authenticate_read(&credential).await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Profile(FailedCheck::Scope),
+                ..
+            })
         ));
 
         let without_action = token(merged("scheduling-explain", grant_claims_value(AUDIENCE)));
@@ -649,7 +887,10 @@ mod tests {
             authenticator
                 .authenticate_appointment_detail(&without_action)
                 .await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Profile(FailedCheck::Scope),
+                ..
+            })
         ));
     }
 
@@ -664,7 +905,10 @@ mod tests {
         let authenticator = authenticator();
         assert!(matches!(
             authenticator.authenticate_read(&credential).await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Profile(FailedCheck::Scope),
+                ..
+            })
         ));
         // Mutating routes demand no product scope: their authority is the
         // task grant, checked per offering in the service.
@@ -676,7 +920,7 @@ mod tests {
 
     #[tokio::test]
     async fn operational_authority_comes_only_from_one_selected_profile_scope() {
-        let authenticator = authenticator_with(oidc_with_operational_profiles());
+        let authenticator = authenticator_with(profiles_with_operational_profiles());
         let catalogue_reader = token(json!({
             "sub": "principal-1",
             "azp": CLIENT,
@@ -692,16 +936,24 @@ mod tests {
                     Utc::now(),
                 )
                 .await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationFailure::from(AuthenticationError::Profile(
+                FailedCheck::AccessProfile
+            )))
         );
 
         let grant_only = token(merged("", grant_claims_value(AUDIENCE)));
-        assert_eq!(
+        // A grant is not a scope. With no scope and no declared kind the token
+        // is an identity-only token, which the issuer set refuses before any
+        // profile is consulted.
+        assert!(matches!(
             authenticator
                 .authenticate_operational_read(&grant_only, None, operational_filter(), Utc::now(),)
                 .await,
-            Err(AuthenticationError::Profile)
-        );
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Refused(FailedCheck::ActorKind),
+                ..
+            })
+        ));
 
         let two_roles = token(json!({
             "sub": "principal-1",
@@ -713,7 +965,9 @@ mod tests {
             authenticator
                 .authenticate_operational_read(&two_roles, None, operational_filter(), Utc::now(),)
                 .await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationFailure::from(AuthenticationError::Profile(
+                FailedCheck::AccessProfile
+            )))
         );
         let authorized = authenticator
             .authenticate_operational_read(
@@ -738,7 +992,10 @@ mod tests {
         }));
         assert!(matches!(
             authenticator.authenticate_explain(&reader).await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Profile(FailedCheck::Scope),
+                ..
+            })
         ));
         let explainer = token(json!({
             "sub": "principal-2",
@@ -750,6 +1007,22 @@ mod tests {
             .authenticate_explain(&explainer)
             .await
             .expect("the explain scope opens the explain path");
+    }
+
+    #[tokio::test]
+    async fn production_refuses_a_marked_token_without_grant_claims() {
+        let mut claims = merged("scheduling-read", json!({}));
+        let unmarked = token(claims.clone());
+        authenticator().authenticate_read(&unmarked).await.unwrap();
+        claims[registry_platform_oidc::POSTURE_CLAIM] = json!("development");
+        let marked = token(claims);
+        assert!(matches!(
+            authenticator().authenticate_read(&marked).await,
+            Err(AuthenticationFailure {
+                error: AuthenticationError::DevelopmentAssertion,
+                ..
+            })
+        ));
     }
 
     #[tokio::test]
@@ -772,6 +1045,25 @@ mod tests {
             .actions()
             .iter()
             .any(|action| action == "hold.create"));
+    }
+
+    #[tokio::test]
+    async fn production_refuses_a_development_task_assertion() {
+        let mut grant = grant_claims_value(AUDIENCE);
+        grant["registry_posture"] = json!("development");
+        let credential = token(merged("scheduling-read", grant));
+        assert!(matches!(
+            authenticator().authenticate_mutate(&credential).await,
+            Err(AuthenticationFailure {
+                error: AuthenticationError::DevelopmentAssertion,
+                ..
+            })
+        ));
+        authenticator()
+            .with_peer_policy(registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer)
+            .authenticate_mutate(&credential)
+            .await
+            .expect("a development peer admits the same grant");
     }
 
     #[tokio::test]
@@ -799,7 +1091,10 @@ mod tests {
         ));
         assert!(matches!(
             authenticator().authenticate_mutate(&credential).await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Profile(FailedCheck::TaskGrantBinding),
+                ..
+            })
         ));
     }
 
@@ -812,7 +1107,10 @@ mod tests {
         let credential = token(merged("scheduling-read", grant));
         assert!(matches!(
             authenticator().authenticate_mutate(&credential).await,
-            Err(AuthenticationError::Claims)
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Claims(FailedCheck::TaskGrantClaims),
+                ..
+            })
         ));
     }
 
@@ -826,7 +1124,10 @@ mod tests {
         }));
         assert!(matches!(
             authenticator().authenticate_read(&credential).await,
-            Err(AuthenticationError::Claims)
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Refused(FailedCheck::ActorKind),
+                ..
+            })
         ));
     }
 
@@ -843,15 +1144,29 @@ mod tests {
         assert!(
             matches!(
                 authenticator().authenticate_read(&credential).await,
-                Err(AuthenticationError::Profile)
+                Err(AuthenticationFailure {
+                    error: AuthenticationError::Profile(FailedCheck::TokenAssertionIssuer),
+                    ..
+                })
             ),
             "an exchanged token was accepted by a deployment that declared no assertion authority"
         );
 
-        let mut declared = oidc();
-        declared.clients.assertion_issuers =
-            std::collections::BTreeMap::from([(CLIENT.to_owned(), vec![AUTHORITY.to_owned()])]);
-        authenticator_with(declared.clone())
+        let declared = || {
+            SchedulingAuthenticator::new(
+                profiles(),
+                vec![main_source(
+                    verifier(
+                        Algorithm::HS256,
+                        BTreeMap::from([(CLIENT.to_owned(), vec![AUTHORITY.to_owned()])]),
+                    ),
+                    keys(),
+                    DeclaredKinds::None,
+                )],
+            )
+            .unwrap()
+        };
+        declared()
             .authenticate_read(&credential)
             .await
             .expect("a declared authority's exchanged token reads");
@@ -866,8 +1181,11 @@ mod tests {
             ASSERTION_ISSUER_CLAIM: "https://unrelated.example.test",
         }));
         assert!(matches!(
-            authenticator_with(declared).authenticate_read(&other).await,
-            Err(AuthenticationError::Refused)
+            declared().authenticate_read(&other).await,
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Refused(FailedCheck::TokenAssertionIssuer),
+                ..
+            })
         ));
     }
 
@@ -927,17 +1245,20 @@ mod tests {
             "registry_actor_kind": "service",
         }));
         let during_outage = authenticator_over(
-            oidc(),
+            profiles(),
             Arc::new(JwksFetcher::new_with_fetch_url_policy(
                 format!("{}/jwks.json", issuer_keys.uri()),
                 JwksFetcherConfig::defaults(),
-                FetchUrlPolicy::dev(),
+                FetchUrlPolicy::https_or_loopback(),
             )),
         );
         assert!(
             matches!(
                 during_outage.authenticate_read(&credential).await,
-                Err(AuthenticationError::Unavailable)
+                Err(AuthenticationFailure {
+                    error: AuthenticationError::Unavailable,
+                    ..
+                })
             ),
             "a key endpoint that cannot answer was reported as a bad credential"
         );
@@ -985,7 +1306,7 @@ mod tests {
         ] {
             assert_eq!(
                 verifier_failure(&refusal),
-                AuthenticationError::Refused,
+                AuthenticationError::Refused(refusal.failed_check()),
                 "{refusal} was excused as an outage"
             );
         }
@@ -1016,40 +1337,59 @@ mod tests {
         .unwrap();
         assert!(matches!(
             authenticator().authenticate_read(&forged).await,
-            Err(AuthenticationError::Refused)
+            Err(AuthenticationFailure {
+                error: AuthenticationError::Refused(FailedCheck::TokenSignature),
+                ..
+            })
         ));
     }
     #[tokio::test]
-    async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
-        use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
+    async fn malformed_compact_tokens_are_refused_as_malformed_credentials_and_logged_value_free() {
+        use registry_platform_testing::CapturedDiagnosticLogs;
         use tracing::instrument::WithSubscriber;
         let captured = CapturedDiagnosticLogs::default();
         let subscriber = captured.subscriber();
-        let tokens = malformed_access_token_fixtures();
+        let tokens = registry_platform_testing::malformed_access_token_fixtures();
         let auth = authenticator();
-        for _ in 0..3 {
-            for token in &tokens {
-                assert!(matches!(
-                    auth.authenticate_read(token)
-                        .with_subscriber(subscriber.clone())
-                        .await,
-                    Err(AuthenticationError::Refused)
-                ));
-                assert!(matches!(
-                    auth.authenticate_explain(token)
-                        .with_subscriber(subscriber.clone())
-                        .await,
-                    Err(AuthenticationError::Refused)
-                ));
-                assert!(matches!(
-                    auth.authenticate_mutate(token)
-                        .with_subscriber(subscriber.clone())
-                        .await,
-                    Err(AuthenticationError::Refused)
-                ));
-            }
+        let malformed = Some(AuthenticationError::Refused(
+            FailedCheck::CredentialMalformed,
+        ));
+        for token in &tokens {
+            assert_eq!(
+                auth.authenticate_read(token)
+                    .with_subscriber(subscriber.clone())
+                    .await
+                    .err()
+                    .map(|failure| failure.error),
+                malformed
+            );
+            assert_eq!(
+                auth.authenticate_explain(token)
+                    .with_subscriber(subscriber.clone())
+                    .await
+                    .err()
+                    .map(|failure| failure.error),
+                malformed
+            );
+            assert_eq!(
+                auth.authenticate_mutate(token)
+                    .with_subscriber(subscriber.clone())
+                    .await
+                    .err()
+                    .map(|failure| failure.error),
+                malformed
+            );
         }
-        captured.assert_one_value_free_header_diagnostic(&tokens);
+        // The refusal line is written at the HTTP edge. Whatever the
+        // authenticator itself logs carries no part of a credential.
+        let rendered = captured.text();
+        assert!(!rendered.contains("canary"));
+        for token in tokens.iter().filter(|token| !token.is_empty()) {
+            assert!(
+                !rendered.contains(token),
+                "diagnostics must not contain credentials"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1058,15 +1398,15 @@ mod tests {
             let key = registry_platform_testing::access_token_test_key(algorithm);
             let jwks = serde_json::from_value(json!({"keys":[key.public()]})).unwrap();
             let source = Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults()));
-            let verifier = TokenVerifierConfig::access_token_profile(
-                ISSUER,
-                vec![AUDIENCE.to_owned()],
-                vec![algorithm],
-                vec!["at+jwt".to_owned()],
+            let auth = SchedulingAuthenticator::new(
+                profiles(),
+                vec![main_source(
+                    verifier(algorithm, BTreeMap::new()),
+                    source,
+                    DeclaredKinds::None,
+                )],
             )
-            .with_scope_claim("registry_scopes")
-            .with_allowed_clients(vec![CLIENT.to_owned()]);
-            let auth = SchedulingAuthenticator::new(&oidc(), verifier, source);
+            .unwrap();
             let now = Utc::now().timestamp();
             let claims = json!({"iss":ISSUER,"aud":AUDIENCE,"azp":CLIENT,"sub":"canary-person","registry_scopes":"scheduling-read","registry_actor_kind":"human","iat":now,"exp":now+300});
             let sign = |claims: serde_json::Value, typ: &str| {
@@ -1084,7 +1424,7 @@ mod tests {
                     let auth = &auth;
                     async move { auth.authenticate_read(&token).await }
                 },
-                |error| matches!(error, AuthenticationError::Refused),
+                |failure| matches!(failure.error, AuthenticationError::Refused(_)),
             )
             .await;
             // A valid symmetric JWT is outside the asymmetric production baseline.
@@ -1093,22 +1433,567 @@ mod tests {
             );
             assert!(matches!(
                 auth.authenticate_read(&token).await,
-                Err(AuthenticationError::Refused)
+                Err(AuthenticationFailure {
+                    error: AuthenticationError::Refused(_),
+                    ..
+                })
             ));
             let mut wrong_actor = claims.clone();
             wrong_actor["registry_actor_kind"] = json!("canary-invalid-actor");
             let token = sign(wrong_actor, "at+jwt");
             assert!(matches!(
                 auth.authenticate_read(&token).await,
-                Err(AuthenticationError::Claims)
+                Err(AuthenticationFailure {
+                    error: AuthenticationError::Refused(FailedCheck::ActorKind),
+                    ..
+                })
             ));
             let mut missing = claims.clone();
-            missing["registry_scopes"] = json!("");
+            missing["registry_scopes"] = json!("scheduling-other");
             let token = sign(missing, "at+jwt");
             assert!(matches!(
                 auth.authenticate_read(&token).await,
-                Err(AuthenticationError::Profile)
+                Err(AuthenticationFailure {
+                    error: AuthenticationError::Profile(FailedCheck::Scope),
+                    ..
+                })
             ));
         }
+    }
+
+    // Helpers for the issuer-set tests.
+
+    const PARTNER_ISSUER: &str = "https://partner.test";
+    const PARTNER_AUDIENCE: &str = "urn:registry-scheduling:partner";
+    const PARTNER_CLIENT: &str = "partner-agent";
+    const PARTNER_SECRET: &[u8] = b"abcdefghijklmnopqrstuvwxyz012345";
+
+    fn without(mut claims: serde_json::Value, key: &str) -> serde_json::Value {
+        claims.as_object_mut().unwrap().remove(key);
+        claims
+    }
+
+    fn with(
+        mut claims: serde_json::Value,
+        key: &str,
+        value: serde_json::Value,
+    ) -> serde_json::Value {
+        claims[key] = value;
+        claims
+    }
+
+    /// Sign `claims` as `typ` with `secret`, filling in the times.
+    fn signed_as(mut claims: serde_json::Value, typ: &str, secret: &[u8]) -> String {
+        let now = Utc::now().timestamp();
+        let object = claims.as_object_mut().unwrap();
+        object.entry("iss").or_insert(json!(ISSUER));
+        object.entry("aud").or_insert(json!(AUDIENCE));
+        object.entry("iat").or_insert(json!(now));
+        object.entry("exp").or_insert(json!(now + 300));
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("test".to_owned());
+        header.typ = Some(typ.to_owned());
+        jsonwebtoken::encode(&header, &claims, &EncodingKey::from_secret(secret)).unwrap()
+    }
+
+    fn jwt_typed(claims: serde_json::Value) -> String {
+        signed_as(claims, "JWT", SECRET)
+    }
+
+    fn read_claims() -> serde_json::Value {
+        json!({
+            "sub": "principal-1",
+            "azp": CLIENT,
+            "registry_scopes": "scheduling-read",
+            "registry_actor_kind": "service",
+        })
+    }
+
+    fn typed_verifier(
+        access_token_type: registry_platform_config::AccessTokenType,
+    ) -> TokenVerifierConfig {
+        TokenVerifierConfig::access_token_profile(
+            ISSUER,
+            vec![AUDIENCE.to_owned()],
+            vec![Algorithm::HS256],
+            registry_platform_oidc::access_token_types(access_token_type),
+        )
+        .with_scope_claim("registry_scopes")
+        .with_allowed_clients(vec![CLIENT.to_owned()])
+    }
+
+    fn keys_for(secret: &[u8]) -> Arc<JwksFetcher> {
+        Arc::new(JwksFetcher::new_static(
+            serde_json::from_value(json!({"keys": [{
+                "kty": "oct",
+                "kid": "test",
+                "alg": "HS256",
+                "use": "sig",
+                "k": URL_SAFE_NO_PAD.encode(secret),
+            }]}))
+            .unwrap(),
+            JwksFetcherConfig::defaults(),
+        ))
+    }
+
+    /// Two issuers, `main` and `partner`, each with its own keys, audience,
+    /// scope claim and client.
+    fn two_issuers() -> SchedulingAuthenticator {
+        let partner = TokenVerifierConfig::access_token_profile(
+            PARTNER_ISSUER,
+            vec![PARTNER_AUDIENCE.to_owned()],
+            vec![Algorithm::HS256],
+            vec!["at+jwt".to_owned()],
+        )
+        .with_scope_claim("scp")
+        .with_allowed_clients(vec![PARTNER_CLIENT.to_owned()]);
+        SchedulingAuthenticator::new(
+            profiles(),
+            vec![
+                main_source(
+                    verifier(Algorithm::HS256, BTreeMap::new()),
+                    keys(),
+                    DeclaredKinds::None,
+                ),
+                IssuerSource::new(
+                    "partner",
+                    partner,
+                    keys_for(PARTNER_SECRET),
+                    DeclaredKinds::None,
+                    PARTNER_AUDIENCE,
+                ),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn partner_claims() -> serde_json::Value {
+        json!({
+            "iss": PARTNER_ISSUER,
+            "aud": PARTNER_AUDIENCE,
+            "sub": "principal-1",
+            "azp": PARTNER_CLIENT,
+            "scp": "scheduling-read",
+            "registry_actor_kind": "service",
+        })
+    }
+
+    fn partner_token(claims: serde_json::Value) -> String {
+        signed_as(claims, "at+jwt", PARTNER_SECRET)
+    }
+
+    async fn read_refusal(credential: &str) -> AuthenticationFailure {
+        authenticator()
+            .authenticate_read(credential)
+            .await
+            .err()
+            .expect("the credential was accepted")
+    }
+
+    // The access token type
+
+    #[tokio::test]
+    async fn a_jwt_typed_token_is_refused_by_default_and_the_log_names_the_setting() {
+        let refused = read_refusal(&jwt_typed(read_claims())).await;
+        assert_eq!(
+            refused.error,
+            AuthenticationError::Refused(FailedCheck::TokenType)
+        );
+        assert!(
+            refused
+                .remedy
+                .is_some_and(|remedy| remedy.contains("accessTokenType")),
+            "{:?}",
+            refused.remedy
+        );
+    }
+
+    #[tokio::test]
+    async fn a_jwt_typed_token_is_admitted_when_the_issuer_states_it() {
+        let stating = SchedulingAuthenticator::new(
+            profiles(),
+            vec![main_source(
+                typed_verifier(registry_platform_config::AccessTokenType::Jwt),
+                keys(),
+                DeclaredKinds::None,
+            )],
+        )
+        .unwrap();
+        stating
+            .authenticate_read(&jwt_typed(read_claims()))
+            .await
+            .expect("an entry that states accessTokenType: JWT admits a JWT-typed token");
+        assert_eq!(
+            stating
+                .authenticate_read(&token(read_claims()))
+                .await
+                .err()
+                .expect("JWT admits that type alone")
+                .error,
+            AuthenticationError::Refused(FailedCheck::TokenType)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_id_token_is_refused_whether_or_not_jwt_is_admitted() {
+        let mut id_claims = read_claims();
+        id_claims["nonce"] = json!("n-0S6_WzA2Mj");
+        id_claims["at_hash"] = json!("77QmUPtjPfzWtF2AnpK9RQ");
+        let id_token = jwt_typed(id_claims);
+        assert_eq!(
+            read_refusal(&id_token).await.error,
+            AuthenticationError::Refused(FailedCheck::TokenType)
+        );
+        let stating = SchedulingAuthenticator::new(
+            profiles(),
+            vec![main_source(
+                typed_verifier(registry_platform_config::AccessTokenType::Jwt),
+                keys(),
+                DeclaredKinds::None,
+            )],
+        )
+        .unwrap();
+        let refused = stating
+            .authenticate_read(&id_token)
+            .await
+            .err()
+            .expect("an ID token is not an access token under JWT either");
+        assert_eq!(
+            refused.error,
+            AuthenticationError::Refused(FailedCheck::TokenType)
+        );
+        assert!(
+            refused.remedy.is_some(),
+            "the log line names what to change"
+        );
+    }
+
+    // The caller kind
+
+    #[tokio::test]
+    async fn a_token_without_a_kind_authenticates_as_unspecified() {
+        let caller = authenticator()
+            .authenticate_read(&token(without(read_claims(), "registry_actor_kind")))
+            .await
+            .expect("a token that names no kind authenticates");
+        assert_eq!(caller.actor_kind, UNSPECIFIED_ACTOR_KIND);
+    }
+
+    #[tokio::test]
+    async fn a_declared_client_kind_admits_a_token_without_a_kind() {
+        let declared = DeclaredKinds::Clients(
+            [(
+                CLIENT.to_owned(),
+                registry_platform_oidc::ActorKind::Service,
+            )]
+            .into(),
+        );
+        let caller = SchedulingAuthenticator::new(
+            profiles(),
+            vec![main_source(
+                verifier(Algorithm::HS256, BTreeMap::new()),
+                keys(),
+                declared,
+            )],
+        )
+        .unwrap()
+        .authenticate_read(&token(without(read_claims(), "registry_actor_kind")))
+        .await
+        .expect("the declared kind stands for the missing claim");
+        assert_eq!(caller.actor_kind, "service");
+    }
+
+    #[tokio::test]
+    async fn a_token_kind_that_contradicts_the_declared_kind_is_refused() {
+        let declared = DeclaredKinds::Issuer(registry_platform_oidc::ActorKind::Service);
+        let human = token(with(read_claims(), "registry_actor_kind", json!("human")));
+        let refused = SchedulingAuthenticator::new(
+            profiles(),
+            vec![main_source(
+                verifier(Algorithm::HS256, BTreeMap::new()),
+                keys(),
+                declared,
+            )],
+        )
+        .unwrap()
+        .authenticate_read(&human)
+        .await
+        .err()
+        .expect("a person's token is never served as a service");
+        assert_eq!(
+            refused.error,
+            AuthenticationError::Refused(FailedCheck::ActorKind)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_client_is_refused() {
+        let stranger = token(with(read_claims(), "azp", json!("unrelated-app")));
+        assert_eq!(
+            read_refusal(&stranger).await.error,
+            AuthenticationError::Refused(FailedCheck::TokenClient)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_identity_only_token_is_refused_without_a_declared_kind() {
+        let identity_only = token(json!({
+            "sub": "principal-1",
+            "azp": CLIENT,
+            "registry_scopes": "openid profile email",
+        }));
+        assert_eq!(
+            read_refusal(&identity_only).await.error,
+            AuthenticationError::Refused(FailedCheck::ActorKind)
+        );
+        // The operator's statement of the client's kind lets it through
+        // authentication. The route still requires its scope.
+        let declared = DeclaredKinds::Clients(
+            [(
+                CLIENT.to_owned(),
+                registry_platform_oidc::ActorKind::Service,
+            )]
+            .into(),
+        );
+        let refused = SchedulingAuthenticator::new(
+            profiles(),
+            vec![main_source(
+                verifier(Algorithm::HS256, BTreeMap::new()),
+                keys(),
+                declared,
+            )],
+        )
+        .unwrap()
+        .authenticate_read(&identity_only)
+        .await
+        .err()
+        .expect("the route requires a scope the token lacks");
+        assert_eq!(
+            refused.error,
+            AuthenticationError::Profile(FailedCheck::Scope)
+        );
+    }
+
+    // Several issuers
+
+    #[tokio::test]
+    async fn a_token_from_each_configured_issuer_is_verified_under_its_own_rules() {
+        let auth = two_issuers();
+        let main = auth
+            .authenticate_read(&token(read_claims()))
+            .await
+            .expect("the main issuer's token authenticates");
+        assert_eq!(main.issuer, ISSUER);
+        let partner = auth
+            .authenticate_read(&partner_token(partner_claims()))
+            .await
+            .expect("the partner issuer's token authenticates under its own scope claim");
+        assert_eq!(partner.issuer, PARTNER_ISSUER);
+        // The partner entry reads `scp`, not the main entry's claim.
+        let wrong_claim = partner_token(with(
+            with(partner_claims(), "scp", json!("scheduling-other")),
+            "registry_scopes",
+            json!("scheduling-read"),
+        ));
+        assert_eq!(
+            auth.authenticate_read(&wrong_claim)
+                .await
+                .err()
+                .expect("the partner entry does not read the main scope claim")
+                .error,
+            AuthenticationError::Profile(FailedCheck::Scope)
+        );
+        // The main entry's audience is not the partner's.
+        let main_audience = partner_token(with(partner_claims(), "aud", json!(AUDIENCE)));
+        assert_eq!(
+            auth.authenticate_read(&main_audience)
+                .await
+                .err()
+                .expect("each entry holds its own audience")
+                .error,
+            AuthenticationError::Refused(FailedCheck::TokenAudience)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_naming_one_issuer_signed_by_the_other_is_refused() {
+        let auth = two_issuers();
+        let partner_signed_as_main = signed_as(partner_claims(), "at+jwt", SECRET);
+        assert_eq!(
+            auth.authenticate_read(&partner_signed_as_main)
+                .await
+                .err()
+                .expect("the partner entry verifies with the partner's keys")
+                .error,
+            AuthenticationError::Refused(FailedCheck::TokenSignature)
+        );
+        let main_signed_as_partner = signed_as(read_claims(), "at+jwt", PARTNER_SECRET);
+        assert_eq!(
+            auth.authenticate_read(&main_signed_as_partner)
+                .await
+                .err()
+                .expect("the main entry verifies with the main keys")
+                .error,
+            AuthenticationError::Refused(FailedCheck::TokenSignature)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_from_an_unconfigured_issuer_is_refused() {
+        let stranger = token(with(read_claims(), "iss", json!("https://elsewhere.test")));
+        assert_eq!(
+            two_issuers()
+                .authenticate_read(&stranger)
+                .await
+                .err()
+                .expect("no entry names this issuer")
+                .error,
+            AuthenticationError::Refused(FailedCheck::TokenIssuer)
+        );
+    }
+
+    #[test]
+    fn an_authenticator_refuses_two_entries_that_name_one_issuer() {
+        let error = SchedulingAuthenticator::new(
+            profiles(),
+            vec![
+                main_source(
+                    verifier(Algorithm::HS256, BTreeMap::new()),
+                    keys(),
+                    DeclaredKinds::None,
+                ),
+                IssuerSource::new(
+                    "second",
+                    verifier(Algorithm::HS256, BTreeMap::new()),
+                    keys(),
+                    DeclaredKinds::None,
+                    AUDIENCE,
+                ),
+            ],
+        )
+        .expect_err("one issuer cannot be two entries");
+        assert!(
+            matches!(
+                error,
+                AuthenticatorBuildError::Set(IssuerSetError::DuplicateIss { .. })
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn audit_principals_are_qualified_by_issuer_only_with_more_than_one_entry() {
+        let one = SchedulingAuthenticator::new(
+            profiles(),
+            vec![main_source(
+                verifier(Algorithm::HS256, BTreeMap::new()),
+                keys(),
+                DeclaredKinds::None,
+            )],
+        )
+        .expect("one entry");
+        assert!(!one.qualifies_audit_principals());
+        let two = SchedulingAuthenticator::new(
+            profiles(),
+            vec![
+                main_source(
+                    verifier(Algorithm::HS256, BTreeMap::new()),
+                    keys(),
+                    DeclaredKinds::None,
+                ),
+                IssuerSource::new(
+                    "second",
+                    TokenVerifierConfig::access_token_profile(
+                        PARTNER_ISSUER,
+                        vec![PARTNER_AUDIENCE.to_owned()],
+                        vec![Algorithm::HS256],
+                        vec!["at+jwt".to_owned()],
+                    )
+                    .with_scope_claim("scp")
+                    .with_allowed_clients(vec![PARTNER_CLIENT.to_owned()]),
+                    keys_for(PARTNER_SECRET),
+                    DeclaredKinds::None,
+                    PARTNER_AUDIENCE,
+                ),
+            ],
+        )
+        .expect("two entries");
+        assert!(two.qualifies_audit_principals());
+    }
+
+    #[test]
+    fn an_authenticator_refuses_two_sources_with_one_id() {
+        let partner = TokenVerifierConfig::access_token_profile(
+            PARTNER_ISSUER,
+            vec![PARTNER_AUDIENCE.to_owned()],
+            vec![Algorithm::HS256],
+            vec!["at+jwt".to_owned()],
+        )
+        .with_scope_claim("scp")
+        .with_allowed_clients(vec![PARTNER_CLIENT.to_owned()]);
+        let error = SchedulingAuthenticator::new(
+            profiles(),
+            vec![
+                main_source(
+                    verifier(Algorithm::HS256, BTreeMap::new()),
+                    keys(),
+                    DeclaredKinds::None,
+                ),
+                IssuerSource::new(
+                    "main",
+                    partner,
+                    keys_for(PARTNER_SECRET),
+                    DeclaredKinds::None,
+                    PARTNER_AUDIENCE,
+                ),
+            ],
+        )
+        .expect_err("two sources cannot share an id, or one would replace the other's settings");
+        assert!(
+            matches!(&error, AuthenticatorBuildError::DuplicateId(id) if id == "main"),
+            "{error}"
+        );
+        let message = error.to_string();
+        assert!(message.contains("main"), "{message}");
+        assert!(!message.contains("one issuer"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn a_client_listed_by_one_issuer_is_refused_in_a_token_from_another() {
+        let auth = two_issuers();
+        let partner_naming_main_client =
+            partner_token(with(partner_claims(), "azp", json!(CLIENT)));
+        assert_eq!(
+            auth.authenticate_read(&partner_naming_main_client)
+                .await
+                .err()
+                .expect("the partner entry admits only its own clients")
+                .error,
+            AuthenticationError::Refused(FailedCheck::TokenClient)
+        );
+        let main_naming_partner_client = token(with(read_claims(), "azp", json!(PARTNER_CLIENT)));
+        assert_eq!(
+            auth.authenticate_read(&main_naming_partner_client)
+                .await
+                .err()
+                .expect("the main entry admits only its own clients")
+                .error,
+            AuthenticationError::Refused(FailedCheck::TokenClient)
+        );
+    }
+
+    #[tokio::test]
+    async fn one_subject_from_two_issuers_is_two_callers() {
+        let auth = two_issuers();
+        let main = auth.authenticate_read(&token(read_claims())).await.unwrap();
+        let partner = auth
+            .authenticate_read(&partner_token(partner_claims()))
+            .await
+            .unwrap();
+        assert_eq!(main.subject, partner.subject);
+        assert_ne!(
+            (&main.issuer, &main.subject),
+            (&partner.issuer, &partner.subject)
+        );
     }
 }

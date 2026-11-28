@@ -1330,7 +1330,6 @@ identity:
   environment: local
   instanceId: webhook-outbox-instance
   databaseId: webhook-outbox-database
-  databaseInitializationEnvironment: local
 secretProviders:
   file:
     root: {}
@@ -1349,23 +1348,25 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: https://issuer.example
-    audience: urn:breg:hook-outbox
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [registry-client]
-    revokedKeyIds: [denied-kid]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 900
+    issuers:
+      primary:
+        issuer: https://issuer.example
+        audience: urn:breg:hook-outbox
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [registry-client]
+        revokedKeyIds: [denied-kid]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
@@ -1398,10 +1399,16 @@ operationalTimeouts:
             self.secret_root.display(),
             self.package_root.display(),
         );
-        parse_runtime_config(&raw)
-            .expect("strict destination configuration parses")
-            .activate_event_destinations(compiled)
-            .expect("exact destination inventory activates")
+        parse_runtime_config(
+            &raw,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("strict destination configuration parses")
+        .activate_event_destinations(compiled)
+        .expect("exact destination inventory activates")
     }
 }
 

@@ -424,7 +424,8 @@ pub async fn prepare_proposal_activation_compatibility(
             let guarded = crate::postgres::begin_registry_transaction(
                 cancellation.client(),
                 crate::postgres::RegistryLockKey::derive(&baseline.registry_id)
-                    .map_err(|_| MutationError::Unavailable)?,
+                    .map_err(|_| MutationError::Unavailable)?
+                    .for_posture(candidate.posture()),
                 Duration::from_secs(2),
                 current,
             )

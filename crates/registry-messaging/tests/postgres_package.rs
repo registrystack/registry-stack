@@ -235,12 +235,12 @@ impl Deployment {
                 "migrationUrlRef": self.migration_reference,
                 "testOnlyPlaintext": true
             },
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:messaging",
                 "jwksSource": {"type": "static", "documentRef": format!("secret:env/{jwks_name}")},
                 "allowedClients": ["case-system", "operations-console"]
-            }},
+            }}}},
             "audit": {
                 "path": self.root.path().join("audit").join("messaging.jsonl"),
                 "hashKeyRef": format!("secret:env/{audit_name}")
@@ -254,7 +254,11 @@ impl Deployment {
     }
 
     fn config(&self) -> RuntimeConfig {
-        RuntimeConfig::load(self.runtime_path()).expect("the runtime configuration")
+        RuntimeConfig::load(
+            self.runtime_path(),
+            registry_messaging::config::DEFAULT_POSTURE,
+        )
+        .expect("the runtime configuration")
     }
 
     fn loaded(&self) -> Package {
@@ -294,6 +298,7 @@ impl Deployment {
             Duration::from_secs(30),
             serve_from_path(
                 self.runtime_path(),
+                registry_messaging::config::DEFAULT_POSTURE,
                 registry_messaging::dispatch::Transports::new(),
             ),
         )
@@ -329,6 +334,81 @@ async fn migrated(isolated: &Isolated) -> Deployment {
         .await
         .expect("the test schema migrations");
     deployment
+}
+
+#[tokio::test]
+async fn activation_posture_is_fixed_and_loopback_postgres_works_in_production() {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+
+    let production = registry_messaging::config::DEFAULT_POSTURE;
+    let development = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+    for (applied, other) in [(production, development), (development, production)] {
+        let isolated = isolated_schema().await;
+        let deployment = Deployment::new(&isolated);
+        let path = deployment.runtime_path();
+        let yaml = std::fs::read_to_string(&path).unwrap();
+        let yaml = yaml.replace("testOnlyPlaintext: true", "transport: loopback-plaintext");
+        assert!(yaml.contains("transport: loopback-plaintext"));
+        std::fs::write(&path, yaml).unwrap();
+
+        let config = RuntimeConfig::load(&path, applied).unwrap();
+        let activation = apply_activation(&config, &ApplyRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(activation.activation.posture, applied.posture);
+        let status = registry_messaging::runtime::activation_status(&config)
+            .await
+            .unwrap();
+        assert_eq!(status.active.unwrap().posture, applied.posture);
+        let other_config = RuntimeConfig::load(&path, other).unwrap();
+        for error in [
+            activation_plan(&other_config).await.unwrap_err(),
+            apply_activation(&other_config, &ApplyRequest::default())
+                .await
+                .unwrap_err(),
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                serve_from_path(
+                    &path,
+                    other,
+                    registry_messaging::dispatch::Transports::new(),
+                ),
+            )
+            .await
+            .expect("startup refuses promptly")
+            .unwrap_err(),
+        ] {
+            assert!(
+                matches!(
+                    error,
+                    RuntimeError::Activation(ActivationError::PostureMismatch { .. })
+                ),
+                "{error}"
+            );
+        }
+        let post_apply = registry_messaging::runtime::activation_status(&other_config)
+            .await
+            .unwrap();
+        assert_eq!(post_apply.history.len(), 1);
+        assert_eq!(post_apply.active.unwrap().posture, applied.posture);
+
+        let audit_path = match config
+            .audit
+            .destination()
+            .unwrap()
+            .for_process("messagingctl")
+            .unwrap()
+        {
+            AuditDestination::File(destination) => destination.path().to_owned(),
+            other => panic!("expected a file journal, got {other:?}"),
+        };
+        let journal = std::fs::read_to_string(audit_path).unwrap();
+        let first: Value = serde_json::from_str(journal.lines().next().unwrap()).unwrap();
+        assert_eq!(first["posture"], applied.posture.as_str());
+    }
 }
 
 #[tokio::test]
@@ -485,7 +565,7 @@ async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal()
         .iter()
         .map(|row| row.get(0))
         .collect();
-    assert_eq!(versions, [100, 101, 199]);
+    assert_eq!(versions, [100, 101, 102, 199]);
 
     let operator_audit = match config
         .audit
@@ -624,8 +704,8 @@ async fn apply_reports_the_active_digest_it_read_under_the_ledger_lock() {
         .batch_execute(&format!(
             "BEGIN; SELECT pg_advisory_xact_lock({LEDGER_LOCK_KEY}); \
              INSERT INTO {}.messaging_activations \
-               (activation_id,apply_order,package_digest,database_id,plan_kind,applied_at,role_mode) \
-             VALUES (gen_random_uuid(),1,'{concurrent}','messaging-test','initial',now(),'single')",
+               (activation_id,apply_order,package_digest,database_id,plan_kind,applied_at,role_mode,posture) \
+             VALUES (gen_random_uuid(),1,'{concurrent}','messaging-test','initial',now(),'single','production')",
             isolated.schema
         ))
         .await
@@ -727,7 +807,10 @@ async fn a_pinned_digest_must_match_the_package_before_any_ledger_write() {
     let digest = deployment.loaded().digest().to_owned();
 
     deployment.write_runtime(Some(&format!("sha256:{}", "0".repeat(64))));
-    match RuntimeConfig::load(deployment.runtime_path()) {
+    match RuntimeConfig::load(
+        deployment.runtime_path(),
+        registry_messaging::config::DEFAULT_POSTURE,
+    ) {
         Err(error @ RuntimeConfigError::Package(_)) => {
             assert_eq!(error.pointer(), "/package/expectedDigest");
             assert_eq!(error.code(), "messaging.package.digest-mismatch");
@@ -812,7 +895,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
     )
     .await
     .expect("one transactional split-role activation");
-    assert_eq!(applied.schema_versions_applied, [100, 101]);
+    assert_eq!(applied.schema_versions_applied, [100, 101, 102]);
     assert!(applied.recorded);
     assert_eq!(applied.activation.database_id, "messaging-test");
     assert_eq!(applied.activation.role_mode.as_str(), "split");
@@ -848,11 +931,13 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
 
     let secrets = config.secret_resolver().expect("secrets");
     let runtime =
-        PostgresStore::connect_runtime(&config.database, &secrets).expect("runtime store");
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .expect("runtime store");
     registry_messaging::activation::check_runtime(
         &runtime,
         config.database_id(),
         deployment.loaded().digest(),
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("the activated runtime boundary");
@@ -860,6 +945,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
         &runtime,
         "another-deployment",
         deployment.loaded().digest(),
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect_err("the database identity is exact");
@@ -880,6 +966,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
         &runtime,
         config.database_id(),
         deployment.loaded().digest(),
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect_err("a widened runtime role is refused");
@@ -898,6 +985,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
         &runtime,
         config.database_id(),
         deployment.loaded().digest(),
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect_err("incomplete runtime grants are refused");
@@ -915,6 +1003,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
         &runtime,
         config.database_id(),
         deployment.loaded().digest(),
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect_err("startup names the unreadable activation ledger");
@@ -948,9 +1037,12 @@ async fn startup_names_unreadable_schema_before_reading_migrations() {
     apply_activation(&config, &ApplyRequest::default())
         .await
         .expect("split-role apply");
-    let runtime =
-        PostgresStore::connect_runtime(&config.database, &config.secret_resolver().unwrap())
-            .expect("runtime store");
+    let runtime = PostgresStore::connect_runtime(
+        &config.database,
+        &config.secret_resolver().unwrap(),
+        config.development_witness(),
+    )
+    .expect("runtime store");
     for denial in [
         format!("REVOKE USAGE ON SCHEMA {} FROM {runtime_role}", isolated.schema),
         format!("GRANT USAGE ON SCHEMA {schema} TO {runtime_role}; REVOKE SELECT ON {schema}.messaging_schema_migrations FROM {runtime_role}", schema = isolated.schema),
@@ -964,6 +1056,7 @@ async fn startup_names_unreadable_schema_before_reading_migrations() {
             &runtime,
             config.database_id(),
             deployment.loaded().digest(),
+            registry_platform_config::Posture::Production,
         )
         .await
         .expect_err("startup refuses unreadable ledger");
@@ -985,6 +1078,7 @@ async fn startup_names_unreadable_schema_before_reading_migrations() {
         &runtime,
         config.database_id(),
         deployment.loaded().digest(),
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("startup recovers after grant repair");
@@ -1070,10 +1164,16 @@ async fn reapplying_the_active_package_over_stale_grants_records_the_repair() {
 
     let secrets = config.secret_resolver().expect("secrets");
     let runtime =
-        PostgresStore::connect_runtime(&config.database, &secrets).expect("runtime store");
-    registry_messaging::activation::check_runtime(&runtime, config.database_id(), &digest)
-        .await
-        .expect("the repaired runtime boundary");
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .expect("runtime store");
+    registry_messaging::activation::check_runtime(
+        &runtime,
+        config.database_id(),
+        &digest,
+        registry_platform_config::Posture::Production,
+    )
+    .await
+    .expect("the repaired runtime boundary");
     let settled = activation_plan(&config).await.expect("a settled plan");
     assert_eq!(settled.change, ActivationChange::None);
 }

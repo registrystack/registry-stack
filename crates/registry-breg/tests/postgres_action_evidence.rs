@@ -172,6 +172,24 @@ fn app_with_client(
     client: impl Into<Option<Arc<registry_breg::action_evidence_client::EvidenceActionClient>>>,
     fault: Option<MutationFaultPoint>,
 ) -> (axum::Router, RuntimePool) {
+    app_with_evaluator(
+        database,
+        registry,
+        identity,
+        client
+            .into()
+            .map(|client| Arc::new(ActionEvidenceEvaluator::new(client))),
+        fault,
+    )
+}
+
+fn app_with_evaluator(
+    database: &TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: ExpectedRegistryIdentity,
+    evaluator: Option<Arc<ActionEvidenceEvaluator>>,
+    fault: Option<MutationFaultPoint>,
+) -> (axum::Router, RuntimePool) {
     let pool = database.runtime_config.build_pool().unwrap();
     let audit =
         database.audit(AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap());
@@ -201,10 +219,8 @@ fn app_with_client(
         Duration::from_secs(5),
         audit,
     );
-    let mutations = match client.into() {
-        Some(client) => {
-            mutations.with_evidence_evaluator(Arc::new(ActionEvidenceEvaluator::new(client)))
-        }
+    let mutations = match evaluator {
+        Some(evaluator) => mutations.with_evidence_evaluator(evaluator),
         None => mutations,
     };
     let mutations = match fault {
@@ -298,9 +314,13 @@ async fn missing_evidence_refuses_guarded_action_while_unrelated_action_commits(
         "/private/tmp",
     )
     .unwrap();
-    let absent =
-        registry_breg::action_evidence_config::activate(&registry, &BTreeMap::new(), &secrets)
-            .unwrap();
+    let absent = registry_breg::action_evidence_config::activate(
+        &registry,
+        &BTreeMap::new(),
+        &secrets,
+        registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+    )
+    .unwrap();
     assert!(
         absent.is_none(),
         "the actual startup activation accepts an absent optional mapping"
@@ -377,11 +397,14 @@ async fn commit_evidence_is_guard_only_and_replay_never_reacquires() {
         "/private/tmp",
     )
     .unwrap();
-    assert!(
-        registry_breg::action_evidence_config::activate(&registry, &BTreeMap::new(), &secrets)
-            .unwrap()
-            .is_none()
-    );
+    assert!(registry_breg::action_evidence_config::activate(
+        &registry,
+        &BTreeMap::new(),
+        &secrets,
+        registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+    )
+    .unwrap()
+    .is_none());
     let (without_mapping, _) = app_with_client(&database, registry.clone(), identity, None, None);
     assert_eq!(
         send(
@@ -923,17 +946,18 @@ async fn real_evidence_service_resolves_exact_selector_and_commits_verified_post
     let provider = real_action_evidence_provider::RealEvidenceProvider::start().await;
     let contracts = provider.contracts();
     let (database, registry, identity) = setup_with_contracts(None, 60, Some(&contracts)).await;
-    let (app, _) = app_with_client(
+    use registry_platform_config::Posture;
+    let (app, _) = app_with_evaluator(
         &database,
         registry.clone(),
         identity.clone(),
-        provider.client(),
+        Some(provider.runtime_evaluator(&registry, Posture::Development)),
         None,
     );
     let (unauthorized, _) = app_with_client(
         &database,
         registry.clone(),
-        identity,
+        identity.clone(),
         provider.unauthorized_client(),
         None,
     );
@@ -1053,6 +1077,25 @@ async fn real_evidence_service_resolves_exact_selector_and_commits_verified_post
         inactive.1
     );
     assert_eq!(provider.requests().len(), calls + 1);
+    assert_eq!(counts(&database, &registry).await, committed);
+    provider.control(&json!({"mode":"match","active":true,"category":"smallholder"}));
+    let (production, _) = app_with_evaluator(
+        &database,
+        registry.clone(),
+        identity,
+        Some(provider.runtime_evaluator(&registry, Posture::Production)),
+        None,
+    );
+    let refused = send(
+        production,
+        ACTION,
+        "real-production-peer-refusal",
+        input("real-production-peer-refusal", false),
+        true,
+    )
+    .await;
+    assert_eq!(refused.0, StatusCode::SERVICE_UNAVAILABLE, "{}", refused.1);
+    assert_eq!(refused.1["code"], "action.evidence_failed");
     assert_eq!(counts(&database, &registry).await, committed);
     database.assert_every_audit_request_answered_once();
     database.cleanup().await;

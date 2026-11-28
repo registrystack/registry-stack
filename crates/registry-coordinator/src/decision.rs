@@ -92,8 +92,12 @@ impl DecisionConfig {
 
     pub fn findings(&self, prefix: &str) -> Vec<CoordinatorError> {
         let loopback = match self.base_url.host() {
-            Some(Host::Ipv4(ip)) => ip.is_loopback(),
-            Some(Host::Ipv6(ip)) => ip.is_loopback(),
+            Some(Host::Ipv4(ip)) => {
+                registry_platform_httputil::loopback::loopback_address(ip.into())
+            }
+            Some(Host::Ipv6(ip)) => {
+                registry_platform_httputil::loopback::loopback_address(ip.into())
+            }
             _ => false,
         };
         let mut errors = Vec::new();
@@ -311,7 +315,7 @@ impl DecisionConnection {
         timeout: Duration,
     ) -> std::result::Result<reqwest::RequestBuilder, CallOutcome> {
         let policy = if self.endpoint.scheme() == "http" {
-            FetchUrlPolicy::dev()
+            FetchUrlPolicy::https_or_loopback()
         } else {
             FetchUrlPolicy {
                 allowed_schemes: vec!["https".into()],

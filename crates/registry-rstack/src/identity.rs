@@ -397,7 +397,9 @@ pub(crate) fn check(
     let report = &checked.report;
     let code = if checked.unreadable {
         3
-    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (deny_warnings && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         1
     } else {
         0

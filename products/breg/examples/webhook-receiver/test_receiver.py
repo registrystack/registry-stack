@@ -1,16 +1,18 @@
 import http.client
 import http.server
 import json
+import secrets
 import sqlite3
 import sys
 import tempfile
+import time
 import threading
 import types
 import unittest
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import closing, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
@@ -43,7 +45,7 @@ finally:
     sys.path.remove(str(HERE))
 
 
-def signed_event(key, contract, values, event_id=None, generation=1, attempt=1, delivery_key=None):
+def signed_event(key, contract, values, event_id=None):
     event_id = event_id or str(uuid.uuid4())
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     source = f"urn:registrystack:registry:{contract['registry_id']}:instance:{contract['instance_id']}"
@@ -63,19 +65,21 @@ def signed_event(key, contract, values, event_id=None, generation=1, attempt=1, 
     body = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     headers = {
         "accept": "application/json", "content-type": "application/json",
-        "ce-specversion": "1.0", "ce-id": event_id, "ce-source": source,
-        "ce-type": document["type"], "ce-time": now, "ce-dataschema": schema,
-        "x-registry-event-generation": str(generation),
-        "x-registry-delivery-attempt": str(attempt), "x-registry-delivery-time": now,
-        "idempotency-key": delivery_key or "sha256:" + uuid.uuid4().hex * 2,
+        "webhook-id": event_id, "webhook-timestamp": str(int(time.time())),
     }
-    headers["x-registry-signature"] = SIGNER.webhook_signature(key, headers, body)
+    sign_headers(key, headers, body)
     return headers, body
 
 
-def post_event(server, headers, body):
+def sign_headers(key, headers, body):
+    headers["webhook-signature"] = SIGNER.webhook_signature(
+        [key], headers["webhook-id"], int(headers["webhook-timestamp"]), body
+    )
+
+
+def post_event(server, headers, body, path="/events"):
     request = urllib.request.Request(
-        f"http://127.0.0.1:{server.server_port}/events", body, headers
+        f"http://127.0.0.1:{server.server_port}{path}", body, headers
     )
     try:
         response = urllib.request.urlopen(request, timeout=3)
@@ -92,6 +96,60 @@ class WebhookAcceptanceInterfaceTests(unittest.TestCase):
 
         with self.assertRaises(NotImplementedError):
             IncompleteAcceptance().accept({}, b"")
+
+
+class ReceiverStartupTests(unittest.TestCase):
+    def test_refuses_invalid_current_or_previous_key_before_serving(self):
+        equal = "--previous-key holds the same bytes as --key. To rotate, write 32 new random bytes to the file --key names and keep the old bytes in the file --previous-key names."
+        for module in (RECEIVER, REFRESH):
+            for option in ("--key", "--previous-key"):
+                for content, reason in (
+                    (b"whsec_" + b"x" * 26, "starts with whsec_"),
+                    (b"x" * 64 + b"\n", "65 bytes including a trailing newline"),
+                    (None, equal),
+                ):
+                    if content is None and option == "--key":
+                        continue
+                    with self.subTest(receiver=module.__name__, option=option, reason=reason):
+                        with tempfile.TemporaryDirectory() as root:
+                            key, previous = Path(root) / "key", Path(root) / "previous"
+                            current_bytes = secrets.token_bytes(32)
+                            key.touch(mode=0o600)
+                            previous.touch(mode=0o600)
+                            key.write_bytes(content if option == "--key" else current_bytes)
+                            previous.write_bytes(current_bytes if content is None else content)
+                            args = [
+                                module.__name__, "--key", str(key),
+                                "--registry-id", "example", "--instance-id", "local",
+                                "--record-type", "person", "--event-id", "person-patched-v1",
+                            ]
+                            if option == "--previous-key":
+                                args.extend(["--previous-key", str(previous)])
+                            if module is RECEIVER:
+                                args.extend(["--field", "name", "--inbox", str(Path(root) / "inbox")])
+                            else:
+                                args.extend([
+                                    "--trigger", "patched", "--schema-digest", "a" * 64,
+                                    "--selector-field", "name", "--destination-origin",
+                                    "http://127.0.0.1:9000", "--plan", "refresh",
+                                    "--projection", "name", "--token-file", str(key),
+                                ])
+                            stderr = StringIO()
+                            with (
+                                patch.object(sys, "argv", args),
+                                patch.object(module, "make_server") as serve,
+                                redirect_stderr(stderr),
+                                self.assertRaises(SystemExit) as stopped,
+                            ):
+                                module.main()
+                            self.assertEqual(stopped.exception.code, 2)
+                            serve.assert_not_called()
+                            if content is None:
+                                self.assertTrue(stderr.getvalue().endswith(equal + "\n"))
+                            else:
+                                self.assertIn(option + " ", stderr.getvalue().split("error: ")[-1])
+                                self.assertIn(reason, stderr.getvalue())
+                                self.assertIn("exact key bytes", stderr.getvalue())
 
 
 class WebhookAcceptanceTests(unittest.TestCase):
@@ -113,19 +171,35 @@ class WebhookAcceptanceTests(unittest.TestCase):
         self.thread.start()
         self.addCleanup(self.stop)
 
+    def test_accepts_a_delivery_signed_with_the_previous_key(self):
+        previous = secrets.token_bytes(32)
+        headers, body = signed_event(previous, self.contract, {"name": "Contact"})
+        self.assertEqual(self.post(headers, body), 400)
+        with RECEIVER.make_server(
+            0, self.key, self.contract, RECEIVER.WebhookInbox(self.inbox_path),
+            previous_key=previous,
+        ) as server:
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                self.assertEqual(post_event(server, headers, body)[0], 204)
+            finally:
+                server.shutdown()
+                thread.join()
+
     def stop(self):
         if self.thread.is_alive():
             self.server.shutdown()
             self.thread.join()
             self.server.server_close()
 
-    def event(self, event_id=None, generation=1, attempt=1, delivery_key=None, name="Contact"):
+    def event(self, event_id=None, name="Contact"):
         return signed_event(
-            self.key, self.contract, {"name": name}, event_id, generation, attempt, delivery_key
+            self.key, self.contract, {"name": name}, event_id
         )
 
     def sign(self, headers, body):
-        headers["x-registry-signature"] = SIGNER.webhook_signature(self.key, headers, body)
+        sign_headers(self.key, headers, body)
 
     def post(self, headers, body):
         return post_event(self.server, headers, body)[0]
@@ -145,26 +219,24 @@ class WebhookAcceptanceTests(unittest.TestCase):
             connection.close()
 
     def counts(self):
-        with sqlite3.connect(self.inbox_path) as connection:
-            return tuple(connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-                         for table in ("accepted_events", "accepted_deliveries"))
+        with closing(sqlite3.connect(self.inbox_path)) as connection:
+            return connection.execute("SELECT count(*) FROM accepted_events").fetchone()[0]
 
     def test_acceptance_survives_restart_and_replay_without_duplicate_work(self):
         headers, body = self.event(name="Jérémie")
         self.assertEqual(self.post(headers, body), 204)
-        self.assertEqual(self.counts(), (1, 1))
+        self.assertEqual(self.counts(), 1)
         self.stop()
         self.start()
-        headers["x-registry-delivery-attempt"] = "2"
+        headers["webhook-timestamp"] = str(int(headers["webhook-timestamp"]) + 1)
         self.sign(headers, body)
         self.assertEqual(self.post(headers, body), 204)
-        headers["x-registry-event-generation"] = "2"
-        headers["idempotency-key"] = "sha256:" + "c" * 64
+        headers["webhook-timestamp"] = str(int(headers["webhook-timestamp"]) + 1)
         self.sign(headers, body)
         self.assertEqual(self.post(headers, body), 204)
-        self.assertEqual(self.counts(), (1, 2))
+        self.assertEqual(self.counts(), 1)
 
-    def test_conflicting_duplicate_and_rebound_delivery_are_refused(self):
+    def test_conflicting_duplicate_is_refused(self):
         headers, body = self.event()
         self.assertEqual(self.post(headers, body), 204)
         changed = json.loads(body)
@@ -172,35 +244,42 @@ class WebhookAcceptanceTests(unittest.TestCase):
         changed_body = json.dumps(changed, sort_keys=True, separators=(",", ":")).encode()
         self.sign(headers, changed_body)
         self.assertEqual(self.post(headers, changed_body), 409)
-        other_headers, other_body = self.event(delivery_key=headers["idempotency-key"])
-        self.assertEqual(self.post(other_headers, other_body), 409)
-        self.assertEqual(self.counts(), (1, 1))
+        self.assertEqual(self.counts(), 1)
 
-    def test_authentication_source_and_delivery_time_are_verified_before_acceptance(self):
-        for mutation in ("signature", "key", "body", "source", "time"):
+    def test_authentication_and_source_are_verified_before_acceptance(self):
+        for mutation in ("signature", "key", "body", "source"):
             with self.subTest(mutation=mutation):
                 headers, body = self.event()
                 if mutation == "signature":
-                    headers["x-registry-signature"] = "v1=invalid"
+                    headers["webhook-signature"] = "v1,invalid"
                 elif mutation == "key":
-                    headers["x-registry-signature"] = SIGNER.webhook_signature(
-                        b"another-receiver-key-material-32b", headers, body
-                    )
+                    sign_headers(b"another-receiver-key-material-32b", headers, body)
                 elif mutation == "body":
                     body = body.replace(b'"Contact"', b'"Tampered"')
-                elif mutation == "source":
-                    headers["ce-source"] = "urn:other"
-                    self.sign(headers, body)
                 else:
-                    headers["x-registry-delivery-time"] = "2000-01-01T00:00:00Z"
+                    document = json.loads(body)
+                    document["source"] = "urn:other"
+                    body = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
                     self.sign(headers, body)
                 self.assertEqual(self.post(headers, body), 400)
-        self.assertEqual(self.counts(), (0, 0))
+        self.assertEqual(self.counts(), 0)
+
+    def test_a_delivery_outside_the_window_is_refused(self):
+        headers, body = self.event()
+        headers["webhook-timestamp"] = str(int(time.time()) - 305)
+        self.sign(headers, body)
+        self.assertEqual(self.post(headers, body), 400)
+        self.assertEqual(self.counts(), 0)
+
+    def test_a_wrong_route_is_refused(self):
+        headers, body = self.event()
+        self.assertEqual(post_event(self.server, headers, body, "/other"), (400, b""))
+        self.assertEqual(self.counts(), 0)
 
     def test_exact_and_cased_duplicate_headers_reach_the_shared_verifier(self):
         for name, value in (
-            ("ce-type", "withheld-exact-duplicate"),
-            ("CE-TYPE", "withheld-cased-duplicate"),
+            ("webhook-id", "withheld-exact-duplicate"),
+            ("WEBHOOK-ID", "withheld-cased-duplicate"),
         ):
             with self.subTest(name=name):
                 headers, body = self.event()
@@ -208,15 +287,15 @@ class WebhookAcceptanceTests(unittest.TestCase):
                     self.post_pairs([*headers.items(), (name, value)], body),
                     400,
                 )
-        self.assertEqual(self.counts(), (0, 0))
+        self.assertEqual(self.counts(), 0)
 
     def test_storage_failure_refuses_acknowledgement_then_recovers(self):
         headers, body = self.event()
         with patch.object(self.server.webhook_acceptance, "accept", side_effect=sqlite3.OperationalError):
             self.assertEqual(self.post(headers, body), 503)
-        self.assertEqual(self.counts(), (0, 0))
+        self.assertEqual(self.counts(), 0)
         self.assertEqual(self.post(headers, body), 204)
-        self.assertEqual(self.counts(), (1, 1))
+        self.assertEqual(self.counts(), 1)
 
     def test_inbox_refuses_non_private_file_and_symlink(self):
         self.inbox_path.chmod(0o644)
@@ -290,7 +369,7 @@ class SourceChangeTests(unittest.TestCase):
         return post_event(self.server, headers, body)
 
     def resign(self, headers, body):
-        headers["x-registry-signature"] = SIGNER.webhook_signature(self.key, headers, body)
+        sign_headers(self.key, headers, body)
 
     def test_person_correction_sends_only_the_approved_selector(self):
         self.configure("person", "person-corrected-v1", ["person-key"])
@@ -308,7 +387,7 @@ class SourceChangeTests(unittest.TestCase):
         headers, body = signed_event(self.key, self.contract, fields)
         self.assertEqual(self.post(headers, body.replace(b"approved-person", b"changed-person")), (400, b""))
         changed = json.loads(body)
-        changed["dataschema"] = headers["ce-dataschema"] = headers["ce-dataschema"][:-1] + "b"
+        changed["dataschema"] = changed["dataschema"][:-1] + "b"
         body = json.dumps(changed, sort_keys=True, separators=(",", ":")).encode()
         self.resign(headers, body)
         self.assertEqual(self.post(headers, body), (400, b""))
@@ -328,12 +407,11 @@ class SourceChangeTests(unittest.TestCase):
         with redirect_stdout(output), redirect_stderr(output):
             self.assertEqual(self.post(headers, body), (503, b""))
             self.assertEqual(len(self.accepted), 1)
-            headers["x-registry-delivery-attempt"] = "2"
+            headers["webhook-timestamp"] = str(int(headers["webhook-timestamp"]) + 1)
             self.resign(headers, body)
             self.assertEqual(self.post(headers, body), (503, b""))
             self.assertEqual(len(self.accepted), 2)
-            headers["x-registry-event-generation"] = "2"
-            headers["idempotency-key"] = "sha256:" + "c" * 64
+            headers["webhook-timestamp"] = str(int(headers["webhook-timestamp"]) + 1)
             self.resign(headers, body)
             self.assertEqual(self.post(headers, body), (204, b""))
         changes = [attempt[2] for attempt in self.attempts]
@@ -363,47 +441,27 @@ class SourceChangeTests(unittest.TestCase):
 
 
 class SignatureContractTests(unittest.TestCase):
-    def test_matches_the_shared_rust_wire_signature_vector(self):
-        # This vector belongs to registry-platform-crypto/delivery_signature.rs.
-        # Its body is arbitrary signed bytes, not a current event schema sample.
-        key = b"webhook-delivery-signing-key-0123456789abcdef"
-        body = b'{"entity":"case","values":{"label":"value"}}'
-        headers = {
-            "ce-specversion": "1.0",
-            "ce-id": "00000000-0000-4000-8000-000000000001",
-            "ce-source": "urn:registrystack:registry:example:instance:primary",
-            "ce-type": "case-created-v1", "ce-time": "2026-08-30T00:00:00Z",
-            "ce-dataschema": "urn:registrystack:registry:example:event:case-created-v1:schema:sha256:aaa",
-            "x-registry-event-generation": "1", "x-registry-delivery-attempt": "1",
-            "x-registry-delivery-time": "2026-08-30T00:00:01Z",
-            "idempotency-key": "sha256:" + "a" * 64,
-        }
-        signature = SIGNER.webhook_signature(key, headers, body, "/hooks/registry")
-        self.assertEqual(signature, "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM")
-        header_pairs = [
-            *headers.items(),
-            ("content-type", "application/json"),
-            ("x-registry-signature", signature),
-        ]
-        verified = RECEIVER.breg.verify_hook_delivery(
-            method="POST", path="/hooks/registry", body=body, key=key,
-            headers=header_pairs,
-        )
-        self.assertEqual(verified["body"], body)
+    def test_signer_reproduces_the_committed_vectors(self):
+        fixture = HERE.parents[3] / "crates/registry-platform-crypto/tests/fixtures/standard-webhooks.json"
+        for vector in json.loads(fixture.read_bytes()):
+            if vector["expected"] != "accepted":
+                continue
+            keys = [bytes.fromhex(vector["keyHex"])]
+            if vector["previousKeyHex"] is not None:
+                keys.append(bytes.fromhex(vector["previousKeyHex"]))
+            arguments = (keys, vector["id"], int(vector["timestamp"]), vector["body"].encode())
+            with self.subTest(vector=vector["name"]):
+                if vector["keyPolicy"] == "below-minimum":
+                    with self.assertRaises(ValueError):
+                        SIGNER.webhook_signature(*arguments)
+                else:
+                    self.assertEqual(SIGNER.webhook_signature(*arguments), vector["signature"])
 
-        for name, value in (
-            ("ce-type", "withheld-exact-duplicate"),
-            ("CE-TYPE", "withheld-cased-duplicate"),
-        ):
-            with self.subTest(name=name):
-                with self.assertRaises(RECEIVER.breg.BaseRegistryClientError) as raised:
-                    RECEIVER.breg.verify_hook_delivery(
-                        method="POST", path="/hooks/registry", body=body, key=key,
-                        headers=[*header_pairs, (name, value)],
-                    )
-                self.assertEqual(raised.exception.kind, "hook-verification")
-                self.assertEqual(raised.exception.code, "duplicate-header")
-                self.assertNotIn(value, str(raised.exception))
+    def test_signer_refuses_empty_and_oversized_keys(self):
+        for keys in ([], [b"x" * 65]):
+            with self.subTest(count=len(keys)):
+                with self.assertRaises(ValueError):
+                    SIGNER.webhook_signature(keys, str(uuid.uuid4()), 1, b"{}")
 
 
 if __name__ == "__main__":

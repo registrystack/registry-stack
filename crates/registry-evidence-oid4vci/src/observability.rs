@@ -23,6 +23,7 @@ use axum::{
     Router,
 };
 
+use registry_platform_authcommon::{DeclaredScope, RefusalNote, RefusalRecorder};
 use registry_platform_metrics::{
     Exposition, HistogramSnapshot, MetricKind, SumCountOrder, CONTENT_TYPE as METRICS_MEDIA_TYPE,
 };
@@ -139,6 +140,9 @@ pub(crate) struct Metrics {
     store_entries: AtomicUsize,
     store_capacity: usize,
     cleanup_expired: AtomicU64,
+    refusals: RefusalRecorder,
+    /// The configured values a scope refusal's log line names.
+    declared_scope: Option<DeclaredScope>,
 }
 
 impl Metrics {
@@ -149,7 +153,31 @@ impl Metrics {
             store_entries: AtomicUsize::new(0),
             store_capacity,
             cleanup_expired: AtomicU64::new(0),
+            refusals: RefusalRecorder::new("evidence_oid4vci").expect(DECLARATION),
+            declared_scope: None,
         }
+    }
+
+    /// Name the configured values a scope refusal's log line carries.
+    pub(crate) fn with_declared_scope(mut self, declared_scope: Option<DeclaredScope>) -> Self {
+        self.declared_scope = declared_scope;
+        self
+    }
+
+    /// Count a refused request under its check and write the admitted log
+    /// line.
+    fn record_refusal(&self, note: RefusalNote) {
+        registry_platform_authcommon::record_refusal!(
+            self.refusals,
+            note,
+            declared = self.declared_scope.as_ref()
+        );
+    }
+
+    /// The recorder that counts each refused request under its check.
+    #[cfg(test)]
+    pub(crate) fn refusal_recorder(&self) -> &RefusalRecorder {
+        &self.refusals
     }
 
     pub(crate) fn record_outcome(&self, outcome: Outcome) {
@@ -295,6 +323,7 @@ impl Metrics {
             self.cleanup_expired.load(Ordering::Relaxed),
         )
         .expect(DECLARATION);
+        self.refusals.counter().write(&mut out).expect(DECLARATION);
         out.finish()
     }
 }
@@ -324,6 +353,9 @@ pub(crate) async fn observe(
         .map_or(NO_ERROR, |problem| normalized_problem(problem.0));
     metrics.record_request(route, method, status, error, started.elapsed());
     log_request(route, method, status, error);
+    if let Some(note) = response.extensions().get::<RefusalNote>() {
+        metrics.record_refusal(*note);
+    }
     response
 }
 
@@ -414,13 +446,17 @@ fn normalized_problem(problem: &str) -> &'static str {
     }
 }
 
-pub(crate) fn metrics_app(metrics: Arc<Metrics>) -> Router {
+pub(crate) fn metrics_app(
+    metrics: Arc<Metrics>,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         // Axum otherwise dispatches HEAD through the GET handler before
         // removing the response body, which would still render the metrics.
         .route("/metrics", get(render_metrics).head(metrics_route_absent))
         .fallback(metrics_route_absent)
         .with_state(metrics)
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 async fn render_metrics(State(metrics): State<Arc<Metrics>>) -> Response {
@@ -630,7 +666,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_metrics_listener_serves_metrics_for_get_only() {
-        let server = axum_test::TestServer::new(metrics_app(Arc::new(Metrics::new(256))));
+        let server = axum_test::TestServer::new(metrics_app(
+            Arc::new(Metrics::new(256)),
+            registry_platform_config::Posture::Production,
+        ));
         let response = server.get("/metrics").await;
         response.assert_status_ok();
         response.assert_header(CONTENT_TYPE, METRICS_MEDIA_TYPE);
@@ -638,8 +677,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metrics_mark_matches_the_declared_posture() {
+        use registry_platform_config::Posture;
+
+        for posture in [Posture::Development, Posture::Production] {
+            let server =
+                axum_test::TestServer::new(metrics_app(Arc::new(Metrics::new(256)), posture));
+            let response = server.get("/metrics").await;
+            if posture == Posture::Development {
+                response.assert_header("registry-posture", "development");
+            } else {
+                assert!(response.maybe_header("registry-posture").is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn the_metrics_listener_refuses_head_without_rendering_metrics() {
-        let server = axum_test::TestServer::new(metrics_app(Arc::new(Metrics::new(256))));
+        let server = axum_test::TestServer::new(metrics_app(
+            Arc::new(Metrics::new(256)),
+            registry_platform_config::Posture::Production,
+        ));
         server
             .method(Method::HEAD, "/metrics")
             .await
@@ -648,7 +706,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_metrics_listener_refuses_other_methods() {
-        let server = axum_test::TestServer::new(metrics_app(Arc::new(Metrics::new(256))));
+        let server = axum_test::TestServer::new(metrics_app(
+            Arc::new(Metrics::new(256)),
+            registry_platform_config::Posture::Production,
+        ));
         server
             .post("/metrics")
             .await
@@ -657,7 +718,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_metrics_listener_refuses_other_paths() {
-        let server = axum_test::TestServer::new(metrics_app(Arc::new(Metrics::new(256))));
+        let server = axum_test::TestServer::new(metrics_app(
+            Arc::new(Metrics::new(256)),
+            registry_platform_config::Posture::Production,
+        ));
         server
             .get(ISSUER_METADATA_PATH)
             .await

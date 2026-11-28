@@ -1,6 +1,352 @@
 # Base Registry Engine changelog
 
 ## Unreleased
+- BREAKING: HTTP 401 answers for bearer authentication now carry `WWW-Authenticate: Bearer`, and the `authentication.refused` problem `detail` changed from `"The bearer credential is missing or refused."` to `"The bearer token or delivery signature was not accepted."`. Clients that matched the old `detail` text must match the HTTP 401 status and the `authentication.refused` `code` instead.
+- `bregctl provision` no longer requires `package.root` to exist on disk, so operators can provision the database before building the package.
+- BReg examples recover exact pending requests after a kept development run restarts on a new loopback port.
+- Run-backed `bregctl examples` and `bregctl prepare-source` refuse an explicit production posture before reading run state.
+- `breg-review` refuses repeated `--posture` flags, including flags on both sides of `serve`.
+- Production refuses verified bearer tokens marked as development even when they carry no task grant.
+- BReg Review reports its loopback HTTP sign-in issuer as an explicit production setting.
+
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
+
+- BREAKING: `bregctl dev start|stop|token|grant|export-client|events|prepare-source` and
+  `bregctl __dev-supervisor` were removed. Use `rstack dev` for local BReg runs and pass
+  the ready run ID to `bregctl examples run --run-id` or `bregctl prepare-source --run-id`.
+  `bregctl check --file` no longer accepts `BRegDevState`, `BRegDevPreparedSource`, or
+  `BRegDevSourceTransition` documents.
+
+- The published runtime schema types each `authentication.oidc.issuers` key as a local identifier (`propertyNames: {$ref: LocalId}`), as the other products' issuer maps do.
+
+
+- BReg accepts development attachment storage and verifier responses when the runtime declares development.
+
+- Production BReg returns HTTP 401 with `platform.task-grant.development-assertion`
+  for a signed development task assertion. The BReg client recognizes this refusal as a typed problem.
+
+- `bregctl status` reports an error with code `platform.activation.posture-mismatch` from the database state row and exits 1 on mismatch.
+- The JSON status report for a posture mismatch carries `ok: false` and `status: domain-refusal`. It includes available activation ledger details.
+- `bregctl doctor` includes the recorded posture mismatch alongside startup refusals for maintenance or a different active digest.
+- Successful development `bregctl plan` and `bregctl apply` report development settings in text and in the JSON `diagnostics` array.
+- A package verification refusal reported alongside a posture refusal points to `arguments` when `--package` supplied the candidate.
+
+- `bregctl provision` reports all runtime posture refusals and includes the resolved `posture` in JSON.
+- BREAKING: Rust client configurations take a peer policy in `BaseRegistryClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, the database connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, a keyword connection string host written as an IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`, is skipped when the transport otherwise permits it and the driver would dial it, as the driver itself fails that entry and tries the next. When no other host is left, the connection is refused when it is configured, with `platform.database.bracketed-host` naming the address. Write `host=::1`. When a keyword host has an authored `hostaddr`, the connection still uses that `hostaddr`. A bracketed IPv6 address in a URL, such as `postgresql://app@[::1]/registry`, still works.
+
+- `bregctl init` writes a plan and scenario for `rstack dev`, including projects derived from PublicSchema.
+- BREAKING: an `attachmentStorage` or `attachmentVerification` URL over https
+  whose host name answers a loopback, link-local, `0.0.0.0` or cloud metadata
+  address is now refused at every request, so attachment uploads and
+  verification fail. Before, such a name was followed wherever it answered.
+  An https URL whose host is a cloud metadata or always-denied address
+  literal is refused at startup. To reach a store or a verifier on the same
+  host, write `https://localhost:<port>` or a loopback literal such as
+  `https://127.0.0.1:<port>`, both admitted. `http://localhost` is now
+  accepted beside the loopback literals.
+  An https URL whose address literal, or an address its name answers, is an
+  IPv4-compatible (`::/96`) or 6to4 (`2002::/16`) IPv6 address carrying a
+  loopback, link-local, `0.0.0.0` or cloud metadata IPv4 address is now
+  refused. To migrate, write the store's or verifier's own IPv4 or native
+  IPv6 address, or a name that answers one.
+
+- BREAKING: BReg signs every URL hook delivery with Standard Webhooks. The
+  POST carries `webhook-id`, `webhook-timestamp` and `webhook-signature`, an
+  HMAC-SHA-256 over the id, the timestamp and the exact body. It no longer
+  sends the Version 1 headers or `Idempotency-Key`. A retry or a replay keeps
+  the same `webhook-id`, so a receiver treats it as the delivery's identity.
+  Each hook destination names its own key with `hmacSha256KeyRef`, 32 to 64
+  bytes. To rotate, keep the old bytes behind `previousHmacSha256KeyRef` and
+  write new bytes behind the current reference. BReg then sends both
+  signatures, the current one first. `bregctl hook sample` renders a Standard
+  Webhooks request.
+
+- BREAKING: a review authority that sends completion notifications declares a
+  `completion` block with its own key, and BReg authenticates each notification
+  with Standard Webhooks. The `Registry-Recipient-Binding` header only selects
+  the authority's key. BReg refuses a timestamp more than 300 seconds from its
+  clock and keeps one completion per authority and `webhook-id` for the
+  authority's recovery window. A first `bregctl apply` now needs the review
+  authority credentials and completion key files to resolve.
+
+- BREAKING: startup, `bregctl doctor`, `bregctl plan` and `bregctl hook drain`,
+  `list`, `replay` and `discard` refuse a key whose bytes equal another
+  destination's or review authority's key, previous keys included. The refusal names both paths and
+  says how to give the second one its own key. A previous key equal to its own
+  current key gets its own refusal with the rotation order.
+
+- `rstack dev` writes a separate delivery key for each compiled hook destination.
+
+- BREAKING: `bregctl check` without a declared posture reports development
+  settings as errors. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: `bregctl package --local` is removed. Migration: Use bregctl package --posture development.
+- BREAKING: `bregctl apply` and `plan` refuse a database activated in the
+  other posture, and `status` and `doctor` report it. Recreate development
+  databases and apply the package with development declared. For a managed development run, run `rstack dev stop RUN_ID --clean`, then `rstack dev start PROJECT`.
+- `bregctl check`, `test`, `plan`, `apply`, `status`, `doctor`, `verify`,
+  and the migration commands accept `--posture`. Their JSON reports include
+  the resolved posture and its source. `provision` accepts the declaration
+  and uses the shared provisioning report format.
+- `bregctl doctor` no longer reports `authentication.insecure-http`.
+  Development settings appear in its advisories and startup lists them.
+  A posture mismatch appears in the normal doctor report, including
+  `checked`, `roleMode`, `diagnostics`, and `advisories`. Doctor exits 0 when
+  its other checks pass. If a later check fails, doctor keeps the posture
+  finding beside the refusal. `status` and `doctor` locate it at `/database`.
+- `bregctl migration reconcile` and the timer operator report
+  `platform.activation.posture-mismatch` when the recorded posture differs.
+- `bregctl verify`, `migration explain`, runtime-bound `diff`, and runtime-backed
+  generation include accepted development settings in their success diagnostics.
+- Hook listing and Proposal retention include accepted development settings
+  in human output and the JSON `diagnostics` member.
+- Hook listing, drain, replay, discard, Proposal retention, and idempotency
+  retention preserve runtime posture refusal codes, pointers, and remedies.
+- Hook operations, external projection maintenance, import authority commands,
+  instance claim commands, and operator identity checks report
+  `platform.activation.posture-mismatch` at `/database` when they detect a mismatch.
+- `bregctl generate odrl` refuses an incompatible `--runtime-config` selector
+  with `generate.arguments` before writing output.
+- `bregctl data import`, `data runs list`, `data runs cancel`,
+  `statistics publish`, and `statistics withdraw` now accept `--posture`.
+  These commands and `data export` accept development peers in development.
+  In production, a development peer produces `data.export.development-peer`,
+  `data.import.development-peer`, `data.runs.list.development-peer`,
+  `data.runs.cancel.development-peer`, or `statistics.development-peer`.
+- BReg accepts development Evidence and Review peers when its own posture is
+  development. Production BReg refuses those peers.
+- `bregctl mcp check`, `mcp serve`, `review check`, and `review serve` accept
+  `--posture` and pass the resolved declaration to the supporting service.
+- Production `package`, `test`, and `migration draft` refuse a
+  `--baseline-package` with group- or world-writable files and report
+  `package.baseline.permissions-refused`.
+- Runtime configuration refusals that contain a posture diagnostic place
+  recovery instructions in each JSON `suggestedAction` and omit the recovery
+  suffix from each diagnostic message.
+- Production startup reports a refused package as `startup.package.refused`
+  at `/package/root` alongside any runtime posture refusals. The startup
+  headline states that the deployment posture was refused.
+- `doctor`, `plan`, and `apply` collect runtime and selected package posture
+  refusals in one report.
+- Malformed loopback HTTP public origins and loopback HTTP origins carrying a
+  path prefix report `breg.runtime.invalid-listener` in either posture.
+
+- **Breaking.** Production is the default posture. It refuses
+  `authentication.oidc.allowInsecureHttp: true` in place of the former startup
+  warning. It also refuses `authentication.oidc.jwksSource.type: test-issuer`,
+  `audit.hashKeyCustody: development-generated`, `fieldEncryption.provider.type: local-file`,
+  a placeholder `canonicalBaseIri` and a loopback HTTP `/listener/publicOrigin`.
+  Non-loopback HTTP public origins are refused in either posture with
+  `breg.runtime.invalid-listener`. Use production
+  settings for deployments and declare `REGISTRY_STACK_POSTURE=development`
+  or `--posture development` for local runs that need these settings.
+- **Breaking.** Delete the retired `identity.databaseInitializationEnvironment`
+  key. If it said `local` and you use the database in development, follow the
+  instruction below to recreate development databases.
+- **Breaking.** Write `networkProfile: loopback-http` in place of
+  `loopback-development-http` for loopback event destinations.
+- **Breaking.** `breg.posture.placeholder-identity` replaces
+  `breg.registry.canonical-base-iri-reserved`. `platform.database.test-only-plaintext`
+  replaces `breg.runtime.plaintext-database`. The
+  `breg.runtime.environment-identity-conflict` code is removed. Update scripts
+  that match the old codes.
+- **Breaking.** The activation ledger records posture. Existing databases
+  read as production. Recreate development databases and apply the package
+  to the fresh database with development declared.
+- `/ready` includes `posture` and `developmentSettings`. Probes can keep
+  checking the status code.
+- The audit line's existing `posture` member can now be `development`.
+  The activation audit record body also gains a `posture` member.
+- Development responses carry `Registry-Posture: development`. A development
+  runtime accepts a development task-grant peer.
+- BReg omits HSTS on development loopback listeners. Production keeps HSTS
+  on every API listener, including a loopback bind behind a TLS proxy.
+- PostgreSQL supports `database.transport: loopback-plaintext` in either posture
+  and `private-network-plaintext` in development.
+
+- Under `accessTokenType: JWT`, a token that carries an ID-token marker (`nonce`, `at_hash`, `c_hash`, `s_hash`, or a `typ` claim of `ID`) is refused at the token-type check.
+
+- A `rowBoundarySets` member declares a named list of row boundaries once
+  per project or module file. A grant, an Action or Proposal target, or a
+  Record type's `accessRequirements` writes
+  `rowBoundaries: {rowBoundarySet: <id>}` and gets the list. Each grant still writes its own `rowBoundaries`,
+  and omitting it is still refused. A set holds at least one boundary and is
+  never `unrestricted`. A reference to an undeclared set is refused with
+  `breg.row-boundary-set.reference-invalid`. The compiled package is the
+  same as one that writes each list inline.
+
+- A date guard can shift the registry-local date by whole calendar months
+  with `currentDateOffsetMonths` (-12000 to 12000), beside
+  `currentDateOffsetDays`. It requires `currentDate` and cannot be combined
+  with the day offset. The day of the month is kept and clamps to the last
+  day of a shorter month. A shift outside years 1 to 9999 fails the guard
+  closed.
+
+- A commit guard with a `reason` can carry a `label`, constant display text
+  of at most 256 bytes. It is returned where `guardReason` is: as `detail`
+  of `412 action.guard_failed` for an Action or a Proposal Submit or Apply,
+  and as `guardLabel` in the availability response. A guard the caller
+  cannot read still answers the fixed `precondition.failed`.
+
+- An immediate Action can declare
+  `execution: {mode: immediate, concurrency: current-revision}`. The caller then sends no condition and no
+  `preconditions`. BReg evaluates the commit guards against the Record it
+  locks and patches that row. `bregctl check` refuses the Action unless
+  every Record it patches has an `equals` or `isNull` guard its own write
+  makes false, and refuses a `revision: unchanged` guard, a function plan
+  that writes an existing Record, and caller-supplied values written into an
+  existing Record. A Proposal cannot declare `concurrency`.
+
+- `bregctl migration draft` writes `descriptor.json` and `rehearsal.json`
+  under `<output>/modules/<module>/migrations/<id>` for a successor whose
+  changes are access or disclosure changes that alter no table, column or
+  index, beside any compatible-additive changes (such as an optional field)
+  that BReg applies through its own additive plan and a reviewed migration
+  never covers. It measures the schema fingerprint and PostgreSQL major on the
+  disposable database and binds them to the verified baseline package. It
+  refuses, before reading the runtime configuration, when nothing needs
+  review (`migration.draft.nothing-to-review`), a change needs SQL
+  (`migration.draft.sql-required`), the module is unknown
+  (`migration.draft.module-unknown`), the directory exists
+  (`migration.draft.output-exists`), the identifier is not a local id
+  (`migration.draft.id-invalid`), or `--output` is not a safe absolute path
+  (`migration.draft.output-invalid`). It never overwrites.
+
+- Migration note: registry revisions change on upgrade because the
+  availability response schema gained `guardLabel`. A package built before
+  this release is a new revision, so rebuild, test and package successors.
+
+- A secret file BReg refuses at startup reports the check that failed and
+  its fix under `breg.runtime.secret`, instead of one fixed sentence.
+
+- `bregctl provision` creates the PostgreSQL objects a Registry needs, from the
+  two database URLs in its runtime file and an administrator URL read from
+  `--admin-url-file` or `--admin-url-env`. It creates or adopts the migration
+  and runtime login roles, each with no privilege beyond `LOGIN`, and the
+  database, closed to `PUBLIC`. Both roles get `CONNECT` on the database. It
+  installs `btree_gist` and creates the five managed schemas, each owned by
+  the migration role and closed to `PUBLIC`. The runtime role gets nothing
+  else, and no `USAGE` on `public`: `apply` grants the rest. With `--package`
+  and a package that needs PostGIS, it also installs PostGIS in
+  `registry_spatial_ext` (the step that needs a superuser), creates the
+  `<runtime role>__spatial_bbox` role, makes the migration role a member of
+  it, and grants `USAGE` on that schema to the migration, runtime and bbox
+  roles. `--print-sql` connects to nothing and prints the script, which holds
+  `\password` prompts and no password. Running the command again creates only
+  what is missing, and it refuses a role that exists with other attributes.
+
+- BReg counts the requests it refuses by the check that refused it, in
+  `breg_request_refusals_total{check}`, published at zero for every check from
+  the first scrape. Each refusal writes one `request refused` line at `INFO`
+  level with `failed_check` and the request's trace id, at most five lines per
+  check per minute. That line replaces the authentication refusal line that
+  carried a `stage` field. A request answered `404 resource.not_found` because
+  the caller may not see the target counts under the rule that hid it, and so
+  does a write refused as outside the caller's boundary. A batch of Proposal
+  review contexts answers `200` and counts each concealed item once. An expired
+  task grant counts under `task-grant-expired`, a grant bound to another client
+  or resource under `task-grant-binding`, and a grant token with no `iat`, an
+  `iat` ahead of the clock or an `exp` not after `iat` under
+  `task-grant-claims`. A `412` for a stale version and an unknown route are not
+  counted. A failed field guard counts under `action-guard`, also when it
+  answers the generic `412`. A refusal on the `scope` check also names the
+  claim that carries scopes, the scope the operation needs and the access
+  profile, each as the configuration or package declares it. The line never
+  names a scope the token held. Counting and logging do not change refusal
+  statuses, headers or production bodies. Development refusal bodies add
+  `failedCheck`.
+
+- BReg MCP and BReg Review accept BReg responses marked `Registry-Posture: development` when they run in development. Production refuses marked responses.
+- BREAKING: the BReg MCP gateway (`breg-mcp`) and the review page
+  (`breg-review`) default to production when no posture is declared.
+  Production refuses every development-only setting at startup, and `check`
+  lists each one with its code and pointer. `check` also takes `--production`.
+  Migration: for laptop and test runs, start with `rstack dev`, set
+  `REGISTRY_STACK_POSTURE=development`, or pass `--posture development`.
+
+- BREAKING: in production the BReg MCP gateway refuses plain HTTP in
+  `resourceServer.resource`, `resourceServer.issuer` and
+  `service.reviewBaseUrl`, on loopback too. It also refuses
+  `resourceServer.allowInsecureHttp: true`, a `test-issuer` key source and
+  `audit.hashKeyCustody: development-generated`. Development accepts each one
+  and lists it. A plain HTTP issuer beyond loopback also needs
+  `allowInsecureHttp` in development, and the finding
+  `breg.mcp-runtime.plain-http-endpoint` at `/resourceServer/issuer` says so.
+  Migration: publish the HTTPS URLs the chat host and the browser reach.
+
+- BREAKING: in production the review page refuses an HTTP `publicOrigin`,
+  an issuer whose discovery document names an HTTP `authorization_endpoint`
+  (`breg.posture.review-http-authorization-endpoint` at `/signIn/issuer`),
+  and `audit.hashKeyCustody: development-generated`. Plain HTTP transport to
+  a loopback issuer still works in both postures. Migration: publish an
+  HTTPS `publicOrigin`, and use an issuer that publishes an HTTPS
+  `authorization_endpoint`.
+
+- BREAKING: production sends HSTS and `Secure` cookies with `__Host-` names on
+  every listener, including `loopback-plaintext` behind a same-host TLS
+  proxy. Only development on a loopback listener omits HSTS, and only an HTTP
+  `publicOrigin`, which only development accepts, drops `Secure` and the
+  `__Host-` prefix. Migration: write `tlsTermination: loopback-plaintext` for
+  a listener behind a TLS proxy on the same host.
+
+- The BReg MCP gateway and the review page answer `/ready` with `posture` and
+  `developmentSettings`. Probes that read only the status code see no change.
+
+- BREAKING: BReg MCP and review page audit lines carry `posture`, and their
+  development responses carry `Registry-Posture: development`. Migration:
+  audit readers with a closed line parser accept the `posture` member, and
+  production runtimes call production peers.
+
+- BREAKING: the Rust API builds a runtime only from what
+  `load_with_posture` returned. `registry_breg_mcp::runtime::build` and
+  `registry_breg_review::router` are removed. Use
+  `registry_breg_mcp::runtime::build_with_posture(config, posture, witness)`
+  or `serve(config, posture, witness, shutdown)`, and
+  `registry_breg_review::router_with_posture(loaded)` or
+  `router_with_audit_writer(loaded, sink)`. Each refuses a witness that does
+  not match the posture report, and in production each refuses a
+  configuration whose `development_settings()` is not empty.
+  `registry_breg_mcp::breg_binding` takes the witness after `service`.
+  `ResourceServerConfig.resource` and `.issuer` are private: read them with
+  `resource_url(witness)` and `issuer_url(witness)`, and `options(witness, ..)`
+  returns a `Result`. `ServiceConfig.review_base_url` is private: read it with
+  `review_base_url(witness)`. The review page's `RuntimeConfig::origin(witness)`
+  and `redirect_uri(witness)` return a `Result`.
+
+- The BReg MCP gateway and the review page read loopback the way every
+  other service does. Under `development-loopback`, plain HTTP to the
+  IPv4-mapped form of a loopback address, for example `[::ffff:127.0.0.1]`, is
+  now accepted. The rest of `127.0.0.0/8`, `[::1]` and `localhost` were already
+  accepted. `localhost.` and `*.localhost` stay refused. A
+  static key set the BReg MCP gateway refuses is logged with the reason, and
+  its startup code is unchanged.
+
+- The Rust BReg client decodes `/health` and `/ready` answers that carry
+  members besides `status`, and ignores them. `status` is still required and
+  checked.
+
+- The Rust, Node and Python hook verifiers in the BReg clients refuse a
+  delivery time more than 300 seconds from the receiver clock, either way,
+  with the new code `stale-delivery`. A receiver that passed nothing gets that
+  window. `maxSkewSeconds` (Python `max_skew_seconds`, 1 to 3600) sets another
+  window, and `callerEnforcedFreshness: true` (Python
+  `caller_enforced_freshness=True`) keeps the earlier behaviour of checking
+  only that the time is well formed. Rust callers that build
+  `BRegHookDelivery` as a struct literal add the `freshness` member
+  (`BRegHookFreshness::default()` for the window).
+- A pinned static key set (`authentication.oidc.jwksSource.type: static`)
+  follows the shared public-key rule every product uses. Members BReg does not
+  name, such as `x5c` or `ext`, and members beside `keys` no longer refuse the
+  document. BReg still reads `use` and `key_ops`, and refuses a `use` other
+  than `sig` and a `key_ops` other than `["verify"]`. A private or symmetric
+  key member, a repeated member name, and a missing or repeated `kid` are still
+  refused. When the shared rule refuses a key set, the startup log and
+  `bregctl doctor` name the rule and, for a rule about one key, the key's
+  position, and the refusal keeps the `startup.oidc.refused` code. A listener
+  origin treats an IPv4-mapped
+  loopback literal, such as `[::ffff:127.0.0.1]`, as loopback.
 
 - Refused Record file downloads use the same attachment audit operation as
   served downloads, including refusals before database access. The slot suffix
@@ -106,6 +452,10 @@
   a non-empty string naming the derived relation the registry uses to work the
   field out when the record is read. `bregctl explain model` already emitted
   it. Stored fields still omit it.
+- Each OpenAPI query profile (`x-registry-queryProfile` and
+  `x-registry-queryProfiles`) now carries `requiredFilters`: the alternatives
+  a list by that profile must satisfy, each a list of API property names. It is
+  an empty list when the grant requires none.
 
 ## 0.48.0 - 2026-11-23
 

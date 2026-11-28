@@ -182,15 +182,7 @@ impl ProductRunner<'_> {
                 .iter()
                 .filter(|provider| provider.kind == ProviderKind::Smtp)
             {
-                connections.insert(
-                    provider.id.clone(),
-                    json!({
-                        "type": "smtp",
-                        "host": "127.0.0.1",
-                        "port": mailpit.smtp_port,
-                        "tls": "development-loopback",
-                    }),
-                );
+                connections.insert(provider.id.clone(), smtp_connection(mailpit.smtp_port));
                 self.sinks.insert(
                     provider.id.clone(),
                     json!({
@@ -206,15 +198,18 @@ impl ProductRunner<'_> {
             .filter(|provider| provider.kind == ProviderKind::Http)
             .collect();
         if !http.is_empty() {
-            let token = random_secret()?;
-            let callback_key = random_secret()?;
-            let token_ref = self.secret("messaging-gateway-token", token.as_bytes())?;
-            let key_ref = self.secret("messaging-gateway-callback-key", callback_key.as_bytes())?;
+            let token_file = "messaging-gateway-token";
+            let key_file = "messaging-gateway-callback-key";
+            let token_ref = self.secret(token_file, random_secret()?.as_bytes())?;
+            let key_ref = self.secret(key_file, random_secret()?.as_bytes())?;
             let gateway = GatewayServer::start(GatewaySettings {
                 providers: http.iter().map(|provider| provider.id.clone()).collect(),
-                token,
-                callback_key: zeroize::Zeroizing::new(callback_key.as_bytes().to_vec()),
+                token: zeroize::Zeroizing::new(fs::read_to_string(self.root.join(token_file))?),
+                callback_key: zeroize::Zeroizing::new(fs::read(self.root.join(key_file))?),
                 runtime_origin: format!("http://{bind}"),
+                response_latency: mock_gateway_latency(
+                    std::env::var_os(MOCK_LATENCY_ENV).as_deref(),
+                )?,
             })
             .map_err(operational)?;
             for provider in http {
@@ -247,6 +242,29 @@ impl ProductRunner<'_> {
     }
 }
 
+const MOCK_LATENCY_ENV: &str = "RSTACK_DEV_MESSAGING_MOCK_LATENCY_MS";
+
+fn mock_gateway_latency(value: Option<&std::ffi::OsStr>) -> Result<Duration> {
+    let Some(value) = value else {
+        return Ok(Duration::ZERO);
+    };
+    let milliseconds = value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value <= 9_000)
+        .with_context(|| format!("{MOCK_LATENCY_ENV} must be a whole number from 0 to 9000"))?;
+    Ok(Duration::from_millis(milliseconds))
+}
+
+fn smtp_connection(port: u16) -> Value {
+    json!({
+        "type": "smtp",
+        "host": "127.0.0.1",
+        "port": port,
+        "tls": "loopback-plaintext",
+    })
+}
+
 /// The Messaging runtime configuration the run writes, before its bindings.
 /// `providers` connects each declared provider to its sink; a provider it
 /// omits is not activated, and a message that needs one fails with
@@ -270,9 +288,9 @@ pub(super) fn messaging_config(
     );
     config["apiVersion"] = json!("id.registrystack.org/formats/messaging/runtime/v1alpha1");
     config["kind"] = json!("MessagingRuntimeConfig");
-    config["listener"] = json!({"bind": bind, "tlsTermination": "development-loopback"});
+    config["listener"] = json!({"bind": bind, "tlsTermination": "loopback-plaintext"});
     config["identity"] = json!({"databaseId": identity});
-    config["authentication"] = json!({"oidc": oidc});
+    config["authentication"] = json!({"oidc": super::issuer_set(oidc)});
     config["audit"]["destination"] = json!("file");
     config["retention"] = json!({
         "payloadRetentionDays": 7,
@@ -288,6 +306,20 @@ pub(super) fn messaging_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_latency_is_optional_and_below_the_provider_timeout() {
+        use std::ffi::OsStr;
+
+        assert_eq!(mock_gateway_latency(None).unwrap(), Duration::ZERO);
+        assert_eq!(
+            mock_gateway_latency(Some(OsStr::new("200"))).unwrap(),
+            Duration::from_millis(200)
+        );
+        for value in ["", "-1", "9001", "invalid"] {
+            assert!(mock_gateway_latency(Some(OsStr::new(value))).is_err());
+        }
+    }
 
     fn plan() -> Plan {
         serde_json::from_value(json!({
@@ -360,7 +392,7 @@ mod tests {
 
     #[test]
     fn the_runtime_configuration_names_the_run_issuer_keys_and_the_given_providers() {
-        let providers = json!({"mail-relay": {"type": "smtp"}});
+        let providers = json!({"mail-relay": smtp_connection(2525)});
         let config = messaging_config(
             &plan(),
             "messaging",
@@ -373,15 +405,17 @@ mod tests {
         assert_eq!(config["kind"], "MessagingRuntimeConfig");
         assert_eq!(config["listener"]["bind"], "127.0.0.1:9");
         assert_eq!(config["audit"]["destination"], "file");
-        assert_eq!(
-            config["authentication"]["oidc"]["allowedClients"],
-            json!(["operations-console"])
-        );
-        assert_eq!(
-            config["authentication"]["oidc"]["jwksSource"]["type"],
-            "static"
-        );
+        let entry = &config["authentication"]["oidc"]["issuers"]["main"];
+        assert_eq!(entry["allowedClients"], json!(["operations-console"]));
+        assert_eq!(entry["jwksSource"]["type"], "test-issuer");
+        assert!(config["authentication"]["oidc"].get("issuer").is_none());
+        assert_eq!(config["audit"]["hashKeyCustody"], "development-generated");
+        assert_eq!(config["listener"]["tlsTermination"], "loopback-plaintext");
         assert_eq!(config["providers"], providers);
+        assert_eq!(
+            config["providers"]["mail-relay"]["tls"],
+            "loopback-plaintext"
+        );
         let bare = messaging_config(
             &plan(),
             "messaging",

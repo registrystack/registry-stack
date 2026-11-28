@@ -64,6 +64,8 @@ pub struct SignatureField {
     /// The field's partial name, `/T`. Non-empty, at most
     /// [`MAX_FIELD_NAME_LEN`] bytes, no period and no control character.
     pub field_name: String,
+    /// Whether the signed dictionary identifies a local test seal.
+    pub test_only: bool,
 }
 
 /// Render's PDF with the signature field appended. Only [`prepare`] makes
@@ -570,6 +572,9 @@ fn write_update(
         )
         .as_bytes(),
     );
+    if field.test_only {
+        out.extend_from_slice(b"/Reason (Registry Stack test seal: not an official document)");
+    }
     let byte_range_at = out.len();
     out.extend_from_slice(&byte_range_text([0; 4]).expect("zeros fit the ByteRange text"));
     out.extend_from_slice(CONTENTS_KEY);
@@ -645,6 +650,7 @@ mod tests {
             signing_time: Utc.with_ymd_and_hms(2026, 11, 6, 9, 30, 15).unwrap(),
             contents_capacity: 64,
             field_name: "Seal".to_owned(),
+            test_only: false,
         }
     }
 

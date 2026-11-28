@@ -71,17 +71,18 @@ schemars = { workspace = true, optional = true }
 async-trait.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
+registry-platform-postgres.workspace = true
 registry-platform-crypto = { workspace = true, features = ["transit"] }
 registry-platform-httputil.workspace = true
 registry-platform-script.workspace = true
-registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httpsec = { workspace = true, features = ["server", "refusal-trace-id"] }
 registry-platform-metrics.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-yaml.workspace = true
 axum.workspace = true
 clap.workspace = true
 jsonwebtoken.workspace = true
-registry-platform-authcommon.workspace = true
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 rustls.workspace = true
 rhai.workspace = true
 serde.workspace = true
@@ -101,6 +102,6 @@ proptest.workspace = true
 # dependency.
 rcgen.workspace = true
 tokio-rustls.workspace = true
-registry-platform-testing.workspace = true
+registry-platform-testing = { workspace = true, features = ["token-fixtures"] }
 tempfile.workspace = true
 serde_norway.workspace = true

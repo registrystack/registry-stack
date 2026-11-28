@@ -23,8 +23,9 @@ use std::{
 use async_trait::async_trait;
 use registry_evidence_client::{
     EvidenceClientConfig, EvidenceClientError, HolderBoundRequestSpec, NonVerifyingEvidenceClient,
-    PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider,
+    PeerPolicy, PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider,
 };
+use registry_platform_config::Posture;
 use registry_platform_crypto::PrivateJwk;
 use tokio::sync::Mutex;
 use url::Url;
@@ -72,9 +73,9 @@ impl From<EvidenceClientError> for IssuanceError {
             EvidenceClientError::Configuration { .. } | EvidenceClientError::Nonce(_) => {
                 Self::Configuration("the prepared request was refused before it was sent")
             }
-            EvidenceClientError::Protocol { .. } | EvidenceClientError::Verification(_) => {
-                Self::Malformed
-            }
+            EvidenceClientError::Protocol { .. }
+            | EvidenceClientError::Verification(_)
+            | EvidenceClientError::DevelopmentPeer => Self::Malformed,
             // The client's error type is non-exhaustive. A failure this mapping
             // has never seen is one it cannot describe, so it becomes the
             // category that commits to nothing about a subject and tells the
@@ -127,8 +128,14 @@ impl EvidenceIssuer {
         let provider = PrivateKeyJwt::new(provider_config)
             .map_err(|_| IssuanceError::Configuration("the token client identity is unusable"))?;
         let provider: Arc<dyn TokenProvider> = Arc::new(provider);
+        let peer_policy = match config.posture.posture() {
+            Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+            Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+        };
         let client = NonVerifyingEvidenceClient::new(EvidenceClientConfig::without_verification(
-            base_url, provider,
+            base_url,
+            provider,
+            peer_policy,
         ))
         .map_err(|_| IssuanceError::Configuration("the Evidence client is unusable"))?;
         Ok(Self {
@@ -248,6 +255,117 @@ mod tests {
         );
         assert_eq!(form.get("scope"), Some(&"evidence:invoke".to_owned()));
         assert_eq!(form.get("client_id"), Some(&"evidence-oid4vci".to_owned()));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn response_posture_follows_the_delivery_declaration() {
+        use registry_evidence_client::{
+            AssuranceProfile, EvidenceResponseFormat, ExpectedFormDocument, ExpectedOutputDocument,
+            ExpectedScalarFormDocument, SubjectExpectations, SubjectRequest,
+            EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
+        };
+        use registry_platform_config::{DeclaredPosture, Posture, PostureReport, PostureSource};
+
+        let app = Router::new()
+            .route(
+                "/oauth2/token",
+                post(|| async {
+                    Json(json!({
+                        "access_token": "synthetic-access-token",
+                        "token_type": "Bearer",
+                        "expires_in": 300,
+                    }))
+                }),
+            )
+            .route(
+                "/v1/evidence-definitions",
+                get(|| async {
+                    (
+                        [
+                            ("registry-posture", "development"),
+                            (
+                                "traceparent",
+                                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                            ),
+                        ],
+                        Json(crate::metadata::tests::document()),
+                    )
+                }),
+            )
+            .route(
+                "/v1/evidence",
+                post(|| async {
+                    (
+                        [
+                            ("registry-posture", "development"),
+                            ("content-type", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE),
+                            (
+                                "traceparent",
+                                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                            ),
+                        ],
+                        json!({
+                            "schema": SD_JWT_VC_BATCH_SCHEMA_V1,
+                            "type": "SdJwtVcBatchEnvelope",
+                            "credentials": ["synthetic-credential~"],
+                        })
+                        .to_string(),
+                    )
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut config = valid_config();
+        config.evidence.base_url = origin.clone();
+        config.token_client.token_endpoint = format!("{origin}/oauth2/token");
+        config.token_client.client_assertion_audience = origin;
+        for posture in [Posture::Production, Posture::Development] {
+            config.posture = PostureReport::new(DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            });
+            let issuer = EvidenceIssuer::new(&config, &private_jwk("delivery-client")).unwrap();
+            let catalog = issuer.catalog().await;
+            match posture {
+                Posture::Production => assert_eq!(catalog.unwrap_err(), IssuanceError::Malformed),
+                Posture::Development => assert!(!catalog.unwrap().is_empty()),
+            }
+            let spec = HolderBoundRequestSpec {
+                response_format: EvidenceResponseFormat::SdJwtVcBatch,
+                requirement: "urn:example:requirement".to_owned(),
+                purpose: "fixture-check".to_owned(),
+                evidence_type: "urn:example:evidence-type".to_owned(),
+                issued_by: "urn:example:issuer".to_owned(),
+                provided_by: "urn:example:provider".to_owned(),
+                configuration_revision: format!("sha256:{}", "a".repeat(64)),
+                expected_assurance_profile: AssuranceProfile::Local,
+                subjects: vec![SubjectRequest {
+                    role: "subject".to_owned(),
+                    selector_profile: "by-id".to_owned(),
+                    selector_values: None,
+                }],
+                holder_keys: vec![serde_json::from_value(crate::testing::public_jwk(
+                    &private_jwk("holder"),
+                ))
+                .unwrap()],
+                expected_outputs: vec![ExpectedOutputDocument {
+                    handle: "status".to_owned(),
+                    concept: "urn:example:status".to_owned(),
+                    required: true,
+                    form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
+                }],
+                maximum_assertion_lifetime_seconds: 60,
+                clock_skew_seconds: 0,
+                subject_expectations: SubjectExpectations::AcceptFirstUse,
+            };
+            let expected = match posture {
+                Posture::Production => Err(IssuanceError::Malformed),
+                Posture::Development => Ok(vec!["synthetic-credential~".to_owned()]),
+            };
+            assert_eq!(issuer.issue(spec).await, expected, "{posture:?}");
+        }
         server.abort();
     }
 

@@ -30,31 +30,34 @@ def breg_runtime(h, name, package, origin, casework):
             "environment": "acceptance",
             "instanceId": "reviewed-evidence-" + name,
             "databaseId": "reviewed-evidence-" + name,
-            "databaseInitializationEnvironment": "acceptance",
         },
         "package": {"root": str(package)},
         "secretProviders": {"file": {"root": str(h.secret_root)}},
         "database": h.db_configs[name],
         "authentication": {
             "oidc": {
-                "issuer": h.issuer_url,
-                "audience": "urn:journey:breg",
-                "allowedAlgorithm": "ES256",
-                "accessTokenType": "at+jwt",
-                "scopeClaim": "scope",
-                "scopeSeparator": " ",
-                "allowedClients": list(h.tokens),
-                "maximumTokenLifetimeSeconds": 3600,
-                "leewayMilliseconds": 60000,
-                "jwksCache": {
-                    "cacheTtlSeconds": 600,
-                    "negativeCacheTtlSeconds": 60,
-                    "refreshCooldownSeconds": 30,
-                    "maximumDocumentBytes": 65536,
-                    "attemptTimeoutMilliseconds": 5000,
-                    "outageToleranceSeconds": 0,
+                "issuers": {
+                    "primary": {
+                        "issuer": h.issuer_url,
+                        "audience": "urn:journey:breg",
+                        "allowedAlgorithm": "ES256",
+                        "accessTokenType": "at+jwt",
+                        "scopeClaim": "scope",
+                        "scopeSeparator": " ",
+                        "allowedClients": list(h.tokens),
+                        "maximumTokenLifetimeSeconds": 3600,
+                        "leewayMilliseconds": 60000,
+                        "jwksCache": {
+                            "cacheTtlSeconds": 600,
+                            "negativeCacheTtlSeconds": 60,
+                            "refreshCooldownSeconds": 30,
+                            "maximumDocumentBytes": 65536,
+                            "attemptTimeoutMilliseconds": 5000,
+                            "outageToleranceSeconds": 0,
+                        },
+                        "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"},
+                    },
                 },
-                "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"},
             },
             "authorityClaims": {"principal": "registry_principal", "purpose": "registry_purpose"},
         },
@@ -194,11 +197,14 @@ def activate_casework(h, source_package, source, origin):
         "database": h.db_configs["casework"],
         "authentication": {
             "oidc": {
-                "issuer": h.issuer_url,
-                "audience": "urn:journey:casework",
-                "allowedClients": list(h.tokens),
-                "scopeClaim": "scope",
-                "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"},
+                "issuers": {
+                    "main": {
+                        "issuer": h.issuer_url,
+                        "audience": "urn:journey:casework",
+                        "allowedClients": list(h.tokens),
+                        "jwksSource": {"type": "static", "documentRef": "secret:file/oidc-jwks"},
+                    }
+                }
             }
         },
         "audit": {"path": str(h.output / "review-audit/audit.ndjson"), "hashKeyRef": "secret:file/audit-key"},

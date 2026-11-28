@@ -771,10 +771,7 @@ fn build_request_for_project(
     }
 }
 
-fn publish_and_load(
-    request: PackageBuildRequest,
-    context: PackageLoadContext<'_>,
-) -> PublishedPackage {
+fn publish_and_load(request: PackageBuildRequest, context: PackageLoadContext) -> PublishedPackage {
     let prepared = prepare_package(request).expect("package prepares");
     let root = tempfile::Builder::new()
         .prefix("registry-immediate-action-activation-package-")
@@ -1019,9 +1016,9 @@ async fn prepare_startup_for(
     .await
 }
 
-fn package_context() -> PackageLoadContext<'static> {
+fn package_context() -> PackageLoadContext {
     PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Production,
     }
 }
 

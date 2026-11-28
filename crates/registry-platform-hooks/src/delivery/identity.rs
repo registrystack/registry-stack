@@ -10,6 +10,7 @@
 //! than serving work under a package that is no longer active.
 
 use registry_platform_activation::{check_active_package, Layout};
+use registry_platform_config::Posture;
 use tokio_postgres::Transaction;
 
 use super::seams::DeliveryError;
@@ -30,12 +31,13 @@ use super::seams::DeliveryError;
 /// # Errors
 ///
 /// [`DeliveryError::Unavailable`] when the read fails, nothing is activated,
-/// or the active package or database differs. The reason is never carried.
+/// or the active package, database or posture differs. The reason is never carried.
 pub async fn verify_active_package(
     transaction: &Transaction<'_>,
     layout: &Layout,
     database_id: &str,
     package_digest: &str,
+    posture: Posture,
     lock_timeout_ms: u32,
 ) -> Result<(), DeliveryError> {
     transaction
@@ -45,7 +47,7 @@ pub async fn verify_active_package(
         )
         .await
         .map_err(|_| DeliveryError::Unavailable)?;
-    check_active_package(transaction, layout, database_id, package_digest)
+    check_active_package(transaction, layout, database_id, package_digest, posture)
         .await
         .map(drop)
         .map_err(|_| DeliveryError::Unavailable)

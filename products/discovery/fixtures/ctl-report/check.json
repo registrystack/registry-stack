@@ -10,5 +10,9 @@
   "mappings": 1,
   "origins": 1,
   "warnings": 0,
+  "posture": {
+    "value": "production",
+    "source": "default"
+  },
   "diagnostics": []
 }

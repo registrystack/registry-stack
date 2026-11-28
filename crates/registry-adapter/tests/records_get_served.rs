@@ -420,10 +420,14 @@ async fn every_401_path_leaves_a_value_free_log_line() {
     assert_eq!(status, 401);
 
     let stderr = served.stop_and_read_stderr();
-    for stage in ["header", "client", "profile"] {
+    for check in [
+        "credential-missing",
+        "token-assertion-issuer",
+        "token-claims",
+    ] {
         assert!(
-            stderr.contains(&format!("\"stage\":\"{stage}\"")),
-            "no {stage}-stage refusal was logged: {stderr}"
+            stderr.contains(&format!("\"failed_check\":\"{check}\"")),
+            "no {check} refusal was logged: {stderr}"
         );
     }
     assert!(
@@ -635,9 +639,10 @@ async fn a_static_authorization_endpoint_sends_its_declared_scheme_and_token() {
 }
 
 #[tokio::test]
-async fn a_plain_http_origin_outside_the_allowed_private_ranges_refuses_startup() {
-    // 10.0.0.7 is private and not in the served harness's allowed range, so
-    // startup refuses the deployment before any socket opens.
+async fn a_plain_http_origin_beyond_loopback_refuses_startup() {
+    // 10.0.0.7 is plain HTTP beyond loopback, and Adapter sources are https
+    // or loopback only, so startup refuses the deployment before any socket
+    // opens, whatever range the harness allows.
     let stderr =
         Served::refusal_with_project("http://10.0.0.7:9", &Served::example_project()).await;
 

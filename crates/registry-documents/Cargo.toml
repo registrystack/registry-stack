@@ -52,6 +52,16 @@ name = "restore_drill"
 path = "tests/restore_drill.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "refusal_golden"
+path = "tests/refusal_golden.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "refusal_key_source"
+path = "tests/refusal_key_source.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = []
@@ -79,14 +89,15 @@ jsonwebtoken.workspace = true
 registry-documents-core.workspace = true
 registry-platform-activation.workspace = true
 registry-platform-audit.workspace = true
-registry-platform-authcommon.workspace = true
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
+registry-platform-postgres.workspace = true
 registry-platform-dispatch = { workspace = true, features = ["postgres"] }
 registry-platform-objectstore.workspace = true
 registry-platform-hooks = { workspace = true, features = ["postgres"] }
-registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httpsec = { workspace = true, features = ["server", "refusal-trace-id"] }
 registry-platform-httputil.workspace = true
 registry-platform-metrics.workspace = true
 registry-platform-oidc.workspace = true
@@ -110,7 +121,8 @@ aws-lc-rs.workspace = true
 base64.workspace = true
 jsonschema.workspace = true
 registry-documents-client.workspace = true
-registry-platform-testing = { workspace = true, features = ["migration-pins"] }
+registry-platform-crypto.workspace = true
+registry-platform-testing = { workspace = true, features = ["migration-pins", "token-fixtures"] }
 reqwest.workspace = true
 serde_norway.workspace = true
 tempfile.workspace = true

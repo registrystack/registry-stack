@@ -10,7 +10,7 @@ class RenderClientError(Exception):
     trace_id: str | None
 
 class RenderClient:
-    def __init__(self, config: dict[str, Any]) -> None: ...
+    def __init__(self, config: dict[str, Any], refuse_development_peer: bool = False) -> None: ...
     def render(
         self,
         token: str | Callable[[], str] | Any,

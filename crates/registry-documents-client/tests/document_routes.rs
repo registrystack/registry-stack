@@ -22,15 +22,15 @@ use registry_documents_client::{
 use support::*;
 
 fn config(url: &url::Url) -> DocumentsClientConfig {
-    DocumentsClientConfig::new(url.clone())
+    DocumentsClientConfig::new_without_peer_policy(url.clone())
 }
 
 fn reservation_request() -> ReserveDocumentRequest {
     ReserveDocumentRequest {
         policy_id: "birth-certificate".to_owned(),
-        custodian: CustodianRef {
+        custodian: Some(CustodianRef {
             subject: ExternalId::new("citizen-0001").expect("fixture subject"),
-        },
+        }),
         expected_digest: Digest::new(content_digest()).expect("fixture digest"),
         length: CONTENT.len() as u64,
         media_type: MEDIA_TYPE.to_owned(),

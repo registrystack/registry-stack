@@ -10,13 +10,14 @@ use registry_platform_config::{SecretProvider, SecretResolver};
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Mutex,
 };
 
 #[derive(Clone)]
 struct StateData {
     response: Arc<Mutex<Value>>,
+    development: Arc<AtomicBool>,
     status_calls: Arc<AtomicUsize>,
     token_calls: Arc<AtomicUsize>,
     rejected_token_calls: Arc<AtomicUsize>,
@@ -44,13 +45,26 @@ async fn token(
         serde_json::json!({"access_token":"synthetic-status-service","token_type":"Bearer","expires_in":300,"scope":"casework:grants:status"}),
     ))
 }
-async fn status(State(state): State<StateData>, headers: HeaderMap) -> Json<Value> {
+async fn status(
+    State(state): State<StateData>,
+    headers: HeaderMap,
+) -> impl axum::response::IntoResponse {
     assert_eq!(
         headers.get("authorization").unwrap(),
         "Bearer synthetic-status-service"
     );
     state.status_calls.fetch_add(1, Ordering::SeqCst);
-    Json(state.response.lock().unwrap().clone())
+    let mut response_headers = HeaderMap::new();
+    if state.development.load(Ordering::SeqCst) {
+        response_headers.insert(
+            "registry-posture",
+            axum::http::HeaderValue::from_static("development"),
+        );
+    }
+    (
+        response_headers,
+        Json(state.response.lock().unwrap().clone()),
+    )
 }
 fn binding() -> TaskGrantBinding {
     serde_json::from_value(serde_json::json!({"grantId":Uuid::new_v4().to_string(),"sourceIssuer":"https://casework.test","principal":"agent","client":"agent-client","resource":"urn:breg:test","purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"records","operations":["get","patch"]}]},"subjects":{"subject_reference":"synthetic-subject","active":true},"expiresAt":chrono::Utc::now().timestamp()+900})).unwrap()
@@ -67,6 +81,7 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     let issuer = format!("http://{address}");
     let state = StateData {
         response: response.clone(),
+        development: Arc::new(AtomicBool::new(false)),
         status_calls: Arc::new(AtomicUsize::new(0)),
         token_calls: Arc::new(AtomicUsize::new(0)),
         rejected_token_calls: Arc::new(AtomicUsize::new(0)),
@@ -113,7 +128,13 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     let mut wrong = config.clone();
     wrong.client_assertion_audience =
         registry_platform_yaml::ExternalId::new(format!("http://{address}/token")).unwrap();
-    let wrong = TaskGrantStatusRegistry::activate(&[wrong], "urn:breg:test", &secrets).unwrap();
+    let wrong = TaskGrantStatusRegistry::activate(
+        &[wrong],
+        "urn:breg:test",
+        &secrets,
+        registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+    )
+    .unwrap();
     assert_eq!(
         wrong.check(&binding).await,
         Err(TaskGrantError::Unavailable)
@@ -121,7 +142,13 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     assert_eq!(state.rejected_token_calls.load(Ordering::SeqCst), 1);
     assert_eq!(state.status_calls.load(Ordering::SeqCst), 0);
 
-    let client = TaskGrantStatusRegistry::activate(&[config], "urn:breg:test", &secrets).unwrap();
+    let client = TaskGrantStatusRegistry::activate(
+        std::slice::from_ref(&config),
+        "urn:breg:test",
+        &secrets,
+        registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+    )
+    .unwrap();
     client.check(&binding).await.unwrap();
     *response.lock().unwrap() = serde_json::json!({"active":false});
     assert_eq!(client.check(&binding).await, Err(TaskGrantError::Refused));
@@ -169,6 +196,18 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
         12,
         "expired authority is refused before I/O"
     );
+    state.development.store(true, Ordering::SeqCst);
+    let refused = client.check(&binding).await.unwrap_err();
+    assert_eq!(refused, TaskGrantError::DevelopmentPeer);
+    assert_eq!(refused.code(), Some("platform.task-grant.development-peer"));
+    let development = TaskGrantStatusRegistry::activate(
+        &[config],
+        "urn:breg:test",
+        &secrets,
+        registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
+    )
+    .unwrap();
+    development.check(&binding).await.unwrap();
     server.abort();
 }
 

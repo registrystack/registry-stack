@@ -17,7 +17,6 @@
 //! platform grammar is a later extraction.
 
 use std::fmt;
-use std::net::IpAddr;
 use std::time::Duration;
 
 use ipnet::IpNet;
@@ -1291,12 +1290,10 @@ fn split_base_url(
     let development = match parsed.scheme() {
         "https" => false,
         "http" => {
-            let loopback = match parsed.host() {
-                Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-                Some(url::Host::Ipv4(address)) => IpAddr::V4(address).is_loopback(),
-                Some(url::Host::Ipv6(address)) => IpAddr::V6(address).is_loopback(),
-                None => false,
-            };
+            let loopback = parsed
+                .host_str()
+                .and_then(registry_platform_httputil::loopback::loopback_host)
+                .is_some();
             if !loopback {
                 return Err(invalid(
                     field,
@@ -1411,4 +1408,39 @@ fn token_form_body(
         }
     }
     Ok(Zeroizing::new(serializer.finish().into_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_http_is_allowed_only_to_a_loopback_host() {
+        for base_url in [
+            "http://127.0.0.1:9/v1/",
+            "http://127.4.5.6:9/v1/",
+            "http://[::1]:9/v1/",
+            "http://[::ffff:127.0.0.1]:9/v1/",
+            "http://localhost:9/v1/",
+            "http://LOCALHOST:9/v1/",
+        ] {
+            let (_, _, development) = split_base_url("baseUrl", base_url, true)
+                .unwrap_or_else(|error| panic!("{base_url}: {error}"));
+            assert!(development, "{base_url}");
+        }
+        for base_url in [
+            "http://localhost.:9/v1/",
+            "http://gateway.localhost:9/v1/",
+            "http://10.0.0.1:9/v1/",
+            "http://0.0.0.0:9/v1/",
+            "http://[::]:9/v1/",
+            "http://[::ffff:10.0.0.1]:9/v1/",
+            "http://169.254.169.254/v1/",
+        ] {
+            let error = split_base_url("baseUrl", base_url, true)
+                .expect_err(base_url)
+                .to_string();
+            assert!(error.contains("loopback"), "{base_url}: {error}");
+        }
+    }
 }

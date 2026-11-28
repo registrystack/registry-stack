@@ -51,10 +51,33 @@ fn registry(readable: &[&str]) -> registry_breg::CompiledRegistry {
     registry_with_current_date_offset(readable, None)
 }
 
+/// `offset` names a `currentDate` guard member and its value: either
+/// `currentDateOffsetDays` or `currentDateOffsetMonths`.
 fn registry_with_current_date_offset(
     readable: &[&str],
-    offset_days: Option<i32>,
+    offset: Option<(&str, i32)>,
 ) -> registry_breg::CompiledRegistry {
+    compile_source(guard_project(readable, offset))
+}
+
+const TARGET_NOT_OPEN_LABEL: &str = "Only an open target can be corrected.";
+const BELOW_MINIMUM_LABEL: &str = "The target is below the requested capacity.";
+
+/// The guards of `registry` with an authored label on each.
+fn registry_with_guard_labels(readable: &[&str]) -> registry_breg::CompiledRegistry {
+    let mut source = guard_project(readable, None);
+    let guards = &mut source["actions"]["correct-name"]["commitGuards"]["targets"];
+    guards[1]["label"] = json!(TARGET_NOT_OPEN_LABEL);
+    guards[2]["label"] = json!(BELOW_MINIMUM_LABEL);
+    compile_source(source)
+}
+
+fn compile_source(source: Value) -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    compile_project(&project, &[], CompileProfile::Authoring).expect("guard project compiles")
+}
+
+fn guard_project(readable: &[&str], offset: Option<(&str, i32)>) -> Value {
     let mut source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"guard-failure-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://guard.example.test"},
         "datasets":{"directory": {}},
@@ -84,7 +107,7 @@ fn registry_with_current_date_offset(
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
                     "ownership":"caller","targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
-    if let Some(offset_days) = offset_days {
+    if let Some((member, offset)) = offset {
         source["project"]["timezone"] = json!("UTC");
         source["recordTypes"]["target"]["fields"]
             .as_array_mut()
@@ -97,11 +120,10 @@ fn registry_with_current_date_offset(
             .unwrap()
             .push(json!({
                 "input":"target", "field":"eligible-on", "currentDate":"on-or-after",
-                "currentDateOffsetDays":offset_days, "reason":"outside-date-window"
+                member:offset, "reason":"outside-date-window"
             }));
     }
-    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
-    compile_project(&project, &[], CompileProfile::Authoring).expect("guard project compiles")
+    source
 }
 
 /// A draft over a fresh target Record whose status is `status` and whose
@@ -297,7 +319,7 @@ async fn proposal_apply_reevaluates_the_configured_current_date_offset() {
     let fixture = client_http::ClientFixture::start(
         registry_with_current_date_offset(
             &["name", "status", "capacity", "eligible-on", "jurisdiction"],
-            Some(30),
+            Some(("currentDateOffsetDays", 30)),
         ),
         claims(),
     )
@@ -323,6 +345,105 @@ async fn proposal_apply_reevaluates_the_configured_current_date_offset() {
         Some(BRegProblemCode::ActionGuardFailed)
     );
     assert_eq!(refusal.guard_reason(), Some("outside-date-window"));
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proposal_apply_reevaluates_the_configured_current_date_month_offset() {
+    let fixture = client_http::ClientFixture::start(
+        registry_with_current_date_offset(
+            &["name", "status", "capacity", "eligible-on", "jurisdiction"],
+            Some(("currentDateOffsetMonths", 1)),
+        ),
+        claims(),
+    )
+    .await;
+    let today = fixture
+        .registry
+        .local_date_at(time::OffsetDateTime::now_utc())
+        .unwrap();
+    let threshold = today.checked_add_months(chrono::Months::new(1)).unwrap();
+    let (draft, target_id) = draft(&fixture, "open", 10, "month-guard-apply").await;
+    set_eligible_on(&fixture, &target_id, threshold).await;
+    let submitted = submit(&fixture, &draft, "month-guard-submit")
+        .await
+        .unwrap();
+
+    // Change only the guarded date. Apply reads current state and enforces the
+    // same month offset again.
+    set_eligible_on(&fixture, &target_id, today).await;
+    let refusal = apply(&fixture, &submitted, "month-guard-apply-key")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal.problem_code(),
+        Some(BRegProblemCode::ActionGuardFailed)
+    );
+    assert_eq!(refusal.guard_reason(), Some("outside-date-window"));
+    fixture.finish().await;
+}
+
+/// The refusal a transition answers on the wire: its status and problem body.
+/// The client error type keeps only the problem code and reason, so the
+/// authored label is read from the raw response.
+async fn raw_transition(
+    fixture: &client_http::ClientFixture,
+    proposal: &BRegProposal,
+    operation: &str,
+    body: Value,
+    key: &str,
+) -> (u16, Value) {
+    let link = serde_json::to_value(proposal).unwrap()["links"][operation].clone();
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}{}",
+            fixture.http.base_url,
+            link["path"].as_str().unwrap()
+        ))
+        .query(&[("accessProfile", link["accessProfile"].as_str().unwrap())])
+        .header("idempotency-key", key)
+        .header("if-match", link["ifMatch"].as_str().unwrap_or("*"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    (status, response.json().await.unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn submit_and_apply_carry_the_guard_label_only_where_the_reason_rides() {
+    let fixture = client_http::ClientFixture::start(
+        registry_with_guard_labels(&["name", "status", "capacity", "jurisdiction"]),
+        claims(),
+    )
+    .await;
+    let (retired, _) = draft(&fixture, "retired", 10, "label-submit").await;
+    let (status, problem) =
+        raw_transition(&fixture, &retired, "submit", json!({}), "label-submit-key").await;
+    assert_eq!(status, 412, "{problem}");
+    assert_eq!(problem["code"], "action.guard_failed");
+    assert_eq!(problem["guardReason"], "target-not-open");
+    assert_eq!(problem["detail"], TARGET_NOT_OPEN_LABEL);
+
+    // Apply holds its guards without labels, so a reworded label never
+    // strands a frozen Proposal, and the refusal names the current label.
+    let (open, open_id) = draft(&fixture, "open", 10, "label-apply").await;
+    let submitted = submit(&fixture, &open, "label-apply-submit").await.unwrap();
+    set_status(&fixture, &open_id, "retired").await;
+    let (status, problem) = raw_transition(
+        &fixture,
+        &submitted,
+        "apply",
+        json!({"submissionVersion":submitted.submission_version(),
+            "effectDigest":submitted.effect_digest().unwrap()}),
+        "label-apply-key",
+    )
+    .await;
+    assert_eq!(status, 412, "{problem}");
+    assert_eq!(problem["code"], "action.guard_failed");
+    assert_eq!(problem["guardReason"], "target-not-open");
+    assert_eq!(problem["detail"], TARGET_NOT_OPEN_LABEL);
     fixture.finish().await;
 }
 
@@ -360,5 +481,117 @@ async fn an_unreadable_guard_field_stays_a_generic_precondition_refusal() {
         Some(BRegProblemCode::PreconditionFailed)
     );
     assert_eq!(refusal.guard_reason(), None);
+    fixture.finish().await;
+}
+
+/// Remove the per-request `traceId` from a JSON problem body and normalize its
+/// raw wire bytes so two refusals can be compared for byte-identity.
+fn strip_trace_bytes(raw: &[u8]) -> (Vec<u8>, Value) {
+    let body: Value = serde_json::from_slice(raw).expect("problem body is JSON");
+    let trace_id = body["traceId"]
+        .as_str()
+        .expect("problem body carries traceId");
+    let text = std::str::from_utf8(raw).expect("problem body is UTF-8");
+    let normalized_bytes = text.replacen(trace_id, "<trace>", 1).into_bytes();
+    let mut normalized_json = body;
+    if let Some(object) = normalized_json.as_object_mut() {
+        object.remove("traceId");
+    }
+    (normalized_bytes, normalized_json)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concealed_guard_in_development_posture_matches_an_unknown_target() {
+    let fixture =
+        client_http::ClientFixture::start(registry(&["name", "jurisdiction"]), claims()).await;
+    let dev_service =
+        std::sync::Arc::new((*fixture.service()).clone().with_declared_posture_for_test(
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        ));
+    let dev_http =
+        client_http::ClientHttp::start(registry_breg::api::router(dev_service), claims()).await;
+    let http = reqwest::Client::new();
+
+    // Control: development posture attaches `failedCheck` on ordinary refusals
+    // served through this router.
+    let control = http
+        .get(format!(
+            "{}/v1/proposals?accessProfile=no-such-profile",
+            dev_http.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    let control_status = control.status().as_u16();
+    let control_body: Value = control.json().await.unwrap();
+    assert_eq!(control_status, 404, "{control_body}");
+    assert!(
+        control_body.get("failedCheck").is_some(),
+        "development router must attach failedCheck to non-concealed refusals: {control_body}"
+    );
+
+    // Concealed guard: the profile cannot read `status`, so submit takes the
+    // concealed guard branch and must not attach `failedCheck`.
+    let (concealed_draft, _) = draft(&fixture, "retired", 10, "dev-guard-hidden").await;
+    let link = serde_json::to_value(&concealed_draft).unwrap()["links"]["submit"].clone();
+    let concealed_response = http
+        .post(format!(
+            "{}{}",
+            dev_http.base_url,
+            link["path"].as_str().unwrap()
+        ))
+        .query(&[("accessProfile", link["accessProfile"].as_str().unwrap())])
+        .header("idempotency-key", "dev-guard-hidden-submit")
+        .header("if-match", link["ifMatch"].as_str().unwrap_or("*"))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    let concealed_status = concealed_response.status().as_u16();
+    let concealed_bytes = concealed_response.bytes().await.unwrap();
+
+    // Unknown target: starting the proposal action against a nonexistent target
+    // UUID answers generic precondition failure with no `failedCheck`.
+    let unknown_response = http
+        .post(format!(
+            "{}/v1/actions/correct-name/proposals?accessProfile=clerk",
+            dev_http.base_url
+        ))
+        .header("idempotency-key", "dev-guard-unknown-target")
+        .json(&json!({
+            "input": {
+                "target": "7f3c9a52-4f0e-4d8b-9a61-2b5e8c1d0f47",
+                "value": "After",
+                "minimum": 5,
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    let unknown_status = unknown_response.status().as_u16();
+    let unknown_bytes = unknown_response.bytes().await.unwrap();
+
+    assert_eq!(concealed_status, 412);
+    assert_eq!(unknown_status, 412);
+    let (concealed_norm_bytes, concealed_json) = strip_trace_bytes(&concealed_bytes);
+    let (unknown_norm_bytes, unknown_json) = strip_trace_bytes(&unknown_bytes);
+    assert_eq!(concealed_json["code"], "precondition.failed");
+    assert!(
+        concealed_json.get("failedCheck").is_none(),
+        "concealed guard 412 must carry no failedCheck in development posture: {concealed_json}"
+    );
+    assert_eq!(
+        concealed_json, unknown_json,
+        "concealed guard and unknown target must answer with identical problem bodies"
+    );
+    assert_eq!(
+        concealed_norm_bytes, unknown_norm_bytes,
+        "concealed guard and unknown target must be byte-identical ignoring traceId"
+    );
+
+    drop(dev_http);
     fixture.finish().await;
 }

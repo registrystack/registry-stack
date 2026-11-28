@@ -17,18 +17,46 @@ use registry_evidence_oid4vci::{
     config::{check_file, DeliveryConfig},
     service::{inspect as inspect_service, serve, DeliveryService},
 };
+use registry_platform_config::{declared, DeclaredPosture, Posture, PostureSource};
 use registry_platform_yaml::{Diagnostic, Report};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let posture = match &cli.command {
+        Command::Check { posture, .. }
+        | Command::Serve { posture, .. }
+        | Command::Inspect { posture, .. } => posture.as_deref(),
+        Command::Openapi { .. } => None,
+    };
+    let resolved = match declared(posture) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            eprintln!(
+                "{}: {} {}",
+                error.code(),
+                error.message(),
+                error.suggested_action()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let declared = if matches!(cli.command, Command::Openapi { .. }) {
+        DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Default,
+        }
+    } else {
+        resolved
+    };
     if let Command::Check {
         config,
         format,
         deny_warnings,
         environment,
+        ..
     } = &cli.command
     {
-        return check(config, *format, *deny_warnings, *environment);
+        return check(config, *format, *deny_warnings, *environment, declared);
     }
 
     tracing_subscriber::fmt()
@@ -39,7 +67,7 @@ fn main() -> ExitCode {
         .json()
         .init();
 
-    match run(cli) {
+    match run(cli, declared) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             // Startup failures name the failing stage, never the key material
@@ -50,22 +78,23 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<(), String> {
+fn run(cli: Cli, declared: DeclaredPosture) -> Result<(), String> {
     match cli.command {
         Command::Check {
             config,
             format,
             deny_warnings,
             environment,
+            ..
         } => {
-            if check(&config, format, deny_warnings, environment) == ExitCode::SUCCESS {
+            if check(&config, format, deny_warnings, environment, declared) == ExitCode::SUCCESS {
                 Ok(())
             } else {
                 Err("the configuration check did not pass".to_owned())
             }
         }
-        Command::Inspect { config } => {
-            let config = load_config(&config)?;
+        Command::Inspect { config, .. } => {
+            let config = load_config(&config, declared)?;
             let runtime = runtime()?;
             let document = runtime
                 .block_on(inspect_service(&config))
@@ -90,8 +119,9 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             Ok(())
         }
-        Command::Serve { config } => {
-            let config = load_config(&config)?;
+        Command::Serve { config, .. } => {
+            let config = load_config(&config, declared)?;
+            config.posture.log_startup();
             let runtime = runtime()?;
             runtime.block_on(async move {
                 // Installed before anything is served, so a failure to install
@@ -122,10 +152,10 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
 /// A refusal prints the same position-first lines `check` prints to standard
 /// error before the startup failure is logged, and a warning the file carries
 /// is printed the same way without stopping startup.
-fn load_config(path: &Path) -> Result<DeliveryConfig, String> {
+fn load_config(path: &Path, declared: DeclaredPosture) -> Result<DeliveryConfig, String> {
     let absolute = absolute_lexical(path)
         .map_err(|_| "the configuration path cannot be resolved".to_owned())?;
-    match DeliveryConfig::load_reporting(&absolute) {
+    match DeliveryConfig::load_reporting(&absolute, declared) {
         Ok((config, warnings)) => {
             if !warnings.is_empty() {
                 eprint!(
@@ -154,13 +184,20 @@ const CHECK_REPORT_KIND: &str = "EvidenceCtlReport";
 /// Exits 0 when the file passes, 1 when it breaks a rule or, under
 /// `deny_warnings`, carries a warning, and 3 when it cannot be read. clap
 /// exits 2 for an invalid command line before this runs.
-fn check(path: &Path, format: OutputFormat, deny_warnings: bool, environment: bool) -> ExitCode {
-    let (diagnostics, unavailable) = match absolute_lexical(path) {
+fn check(
+    path: &Path,
+    format: OutputFormat,
+    deny_warnings: bool,
+    environment: bool,
+    declared: DeclaredPosture,
+) -> ExitCode {
+    let (diagnostics, unavailable, explicit_settings) = match absolute_lexical(path) {
         Ok(absolute) => {
-            let check = check_file(&absolute, environment);
+            let check = check_file(&absolute, environment, declared);
             (
                 as_given(check.diagnostics, &absolute, path),
                 check.unavailable,
+                check.explicit_settings,
             )
         }
         Err(_) => (
@@ -171,19 +208,38 @@ fn check(path: &Path, format: OutputFormat, deny_warnings: bool, environment: bo
                 "Pass an absolute path, or run the command from a directory that exists.",
             )],
             true,
+            vec![],
         ),
     };
     let mut report = Report::new(diagnostics);
     report.set_files_checked(usize::from(!unavailable));
     let (status, code) = if unavailable {
         ("operational-failure", 3)
-    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (deny_warnings
+            && report.diagnostics().iter().any(|diagnostic| {
+                diagnostic.severity == registry_platform_yaml::Severity::Warning
+                    && diagnostic.accepted_reason.is_none()
+                    && !diagnostic.code.starts_with("platform.posture.")
+                    && !diagnostic.code.starts_with("evidence.posture.")
+            }))
+    {
         ("domain-refusal", 1)
     } else {
         ("complete", 0)
     };
     match format {
-        OutputFormat::Human => eprint!("{}", report.render_human()),
+        OutputFormat::Human => {
+            for found in explicit_settings {
+                eprintln!(
+                    "Explicit production setting {} at {}. {}.",
+                    found.setting.code,
+                    found.pointer.as_deref().unwrap_or_default(),
+                    found.setting.summary
+                );
+            }
+            eprint!("{}", report.render_human());
+        }
         OutputFormat::Json => println!(
             "{}",
             serde_json::json!({
@@ -194,6 +250,9 @@ fn check(path: &Path, format: OutputFormat, deny_warnings: bool, environment: bo
                 "kind": CHECK_REPORT_KIND,
                 "filesChecked": usize::from(!unavailable),
                 "diagnostics": report.to_json_value(),
+                "explicitProductionSettings": explicit_settings.iter()
+                    .map(|found| registry_cli_report::ExplicitSettingLine::from_found(found, path.to_str()))
+                    .collect::<Vec<_>>(),
             })
         ),
     }
@@ -272,11 +331,17 @@ mod tests {
     fn an_openapi_write_failure_keeps_the_operating_system_cause() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let missing_parent = directory.path().join("missing").join("contract.json");
-        let error = run(Cli {
-            command: Command::Openapi {
-                output: Some(missing_parent),
+        let error = run(
+            Cli {
+                command: Command::Openapi {
+                    output: Some(missing_parent),
+                },
             },
-        })
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+        )
         .expect_err("writing below a missing directory fails");
 
         assert!(

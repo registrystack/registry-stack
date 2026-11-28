@@ -85,6 +85,8 @@ class ProfileExchangeTest(unittest.TestCase):
             def reply(self, status, payload, media):
                 encoded = json.dumps(payload).encode()
                 self.send_response(status)
+                if self.path == "/.well-known/oauth-protected-resource":
+                    self.send_header("registry-posture", "development")
                 self.send_header("content-type", media)
                 self.send_header("content-length", str(len(encoded)))
                 self.send_header("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
@@ -116,6 +118,11 @@ class ProfileExchangeTest(unittest.TestCase):
                     }}},
                 }))
                 profile_path.chmod(0o600)
+
+                profile_client = revc.EvidenceClient.from_profile(str(profile_path), KEY)
+                profile_client.refresh_metadata()
+                self.assertTrue(any(path == "/.well-known/evidence/jwks.json" for _, path, _, _ in requests))
+                self.assertFalse(any(path == "/token" for _, path, _, _ in requests))
 
                 def authorization(resource):
                     return {"exchange": {

@@ -46,9 +46,14 @@ separate disposable registry database and issuer session.
 
 Authored `workflow.eventTriggers` selects a logical source, exact event type,
 exact data schema, typed event schema and ordinary input Mapping. Deployment
-`eventSources` supplies the producer URI and a protected HMAC key reference.
-Its `signingKeyRef` resolves the raw HMAC-SHA-256 secret bytes, at least 32
-bytes, through an enabled secret provider.
+`eventSources` supplies the producer URI and a separate protected key reference for
+each event URL. Set `triggers.<workflow>.<trigger>.hmacSha256KeyRef` to a file
+containing 32 to 64 exact bytes and give the same file to that trigger's sender.
+
+```sh
+(umask 077 && openssl rand -hex 32 | tr -d '\n' > key)
+```
+
 The accepted Run pins the active reviewed Workflow snapshot. Event input never
 chooses a principal, connection or credential.
 
@@ -69,14 +74,14 @@ workflow:
       input: {type: input}
 ```
 
-Intake accepts at most 1 MiB, the Version 1 signable bound, and the admitted
+Intake accepts at most 1 MiB of signed JSON, and the admitted
 event must fit the 128 KiB structured value profile, so use minimized producer
 projections. A signed event over that profile is refused with `event.too-large`
 (413), whose detail lists each bound. The producer refreshes its signed delivery time for each attempt; the receiver
-allows 30 seconds of delivery-time skew.
+allows 300 seconds of skew in either direction.
 
 Stable event identity deduplicates retries and operator replay even when the
-transport generation or active Workflow revision changes. The entire event is
+delivery timestamp or active Workflow revision changes. The entire event is
 bound, including projected fields that the mapping ignores. Exact historical
 replay returns its original Run; conflicting bytes refuse admission. Signature
 freshness applies to the refreshed delivery time, so a retained event can be

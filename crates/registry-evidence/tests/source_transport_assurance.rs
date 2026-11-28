@@ -151,7 +151,18 @@ fn prepare_drifted_deployment(
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
         .expect("fixture runtime is immutable");
 
-    let deployment = DeploymentInputs::load(&runtime_path).expect("deployment inputs load");
+    let deployment = DeploymentInputs::load(
+        &runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: if assurance == "local" {
+                registry_platform_config::Posture::Development
+            } else {
+                registry_platform_config::Posture::Production
+            },
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("deployment inputs load");
     let secrets = Arc::new(
         SecretResolver::new([SecretProvider::File], &secret_root)
             .expect("empty secret resolver initializes"),

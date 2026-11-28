@@ -1,0 +1,34 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "supabase-api-key-service-role",
+  "class": "negative",
+  "provider": "supabase-auth",
+  "kind": "api-key",
+  "tokenUse": "api-key",
+  "subjectKind": "unspecified",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "self-hosted Supabase stack",
+    "note": "Observed from a self-hosted Supabase Auth issuer on 27 November 2026, the legacy key. Claim values are synthetic. Signed by the corpus test key."
+  },
+  "header": {
+    "alg": "HS256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "exp": {
+      "offsetSeconds": 157680000
+    },
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "iss": "supabase",
+    "role": "service_role"
+  },
+  "notes": "The observed header has no kid. The corpus schema requires one, so the fixture carries a generated kid. The lifetime, five years, is the observed one. The asymmetric variant of the key (ES256, with a kid, same claims) was also observed and is not a separate fixture."
+}

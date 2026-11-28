@@ -37,18 +37,21 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use registry_documents::config::check_runtime_file;
+use registry_documents::config::check_runtime_file_with_posture;
 use registry_documents::package::{package_limits, PACKAGE_COMMAND};
 use registry_documents::verification::MAXIMUM_DEAD_LETTER_LISTING;
 use registry_documents_core::{
     DocumentsProject, DOCUMENTS_PROJECT_KIND, DOCUMENTS_RUNTIME_KIND, PROJECT_FILE,
 };
+use registry_platform_config::{declared_with_production_alias, DeclaredPosture};
 use registry_platform_config::{plan_package, write_package, PackageErrorKind};
 use registry_platform_yaml::{Diagnostic, Report, Source};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+mod identity_facts;
 mod operate;
+mod provision;
 mod report;
 mod starter;
 
@@ -82,14 +85,21 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Write the starter project into a new directory.
     Init(InitArgs),
     /// Check a project, a runtime configuration, or both, offline.
     Check(CheckArgs),
     /// Build the deployable package from a checked project.
     Package(PackageArgs),
+    /// Generate bounded contracts for another tool from a checked project.
+    #[command(subcommand)]
+    Generate(GenerateCommand),
     /// Report what apply would change in the database, writing nothing.
     Plan(ActivationArgs),
+    /// Create the roles and the database the runtime file names, or print the SQL.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Apply the schema and record the configured package as active.
     Apply(ApplyArgs),
     /// Report the active package and the activation history.
@@ -100,6 +110,36 @@ enum Command {
     /// Report erasure, and inspect and replay dead-lettered erasure jobs.
     #[command(subcommand)]
     Erasure(ErasureCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum GenerateCommand {
+    /// Write the identity facts this runtime states about one issuer.
+    IdentityFacts(GenerateIdentityFactsArgs),
+}
+
+#[derive(Debug, Args)]
+struct GenerateIdentityFactsArgs {
+    /// The project directory holding documents.yaml.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+    /// Runtime configuration file: its authentication.oidc block and the
+    /// project's access profiles state the facts.
+    #[arg(long, value_name = "ABSOLUTE_FILE")]
+    runtime_config: PathBuf,
+    /// New YAML file to create. Existing files are never overwritten.
+    #[arg(long, value_name = "FILE")]
+    output: PathBuf,
+    /// The id under authentication.oidc.issuers to describe. Required when
+    /// the runtime declares more than one issuer.
+    #[arg(long, value_name = "ISSUER_ID")]
+    issuer: Option<String>,
+    #[arg(
+        long,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -159,6 +199,15 @@ struct CheckArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
+    #[arg(long)]
+    /// Check under the production posture.
+    production: bool,
 
     /// Substitute `${VAR}` references in the runtime configuration from the
     /// environment instead of checking them as stand-ins.
@@ -166,6 +215,7 @@ struct CheckArgs {
     environment: bool,
 
     /// Refuse the check when it finds a warning.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
 }
@@ -191,6 +241,12 @@ struct ActivationArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
+    #[arg(
+        long,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -272,6 +328,7 @@ enum View {
     Diagnostics,
     Init,
     Package,
+    GenerateIdentityFacts,
     Activation,
     DeadLetters(Job),
     Replayed,
@@ -336,6 +393,22 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         "config.unresolvable" => (
             "command-arguments",
             "Name a runtime configuration path that resolves from the working directory, then retry.",
+        ),
+        "output.exists" => (
+            "filesystem",
+            "Name an --output file that does not exist yet, then rerun the command.",
+        ),
+        "output.failed" => (
+            "filesystem",
+            "Make the --output parent directory writable, then rerun the command.",
+        ),
+        identity_facts::ISSUER_REQUIRED_CODE | identity_facts::UNKNOWN_ISSUER_CODE => (
+            "command-arguments",
+            "Pass --issuer with the id of one entry under authentication.oidc.issuers.",
+        ),
+        "identity.facts.unstatable" => (
+            "documents-project",
+            "Correct the access profile or the issuer setting the message names, then rerun the command.",
         ),
         "init.exists" => (
             "filesystem",
@@ -510,42 +583,102 @@ where
             return ExitCode::from(USAGE_EXIT);
         }
     };
+    if let Command::RstackDev(args) = cli.command {
+        return registry_rstack_dev::run(args, stdout, stderr);
+    }
     let command = command_path(&cli.command);
-    let outcome = match &cli.command {
+    let (posture_flag, production) = match &cli.command {
+        Command::Check(args) => (args.posture.as_deref(), args.production),
+        Command::Provision(args) => (args.posture.as_deref(), false),
+        Command::Plan(args)
+        | Command::Status(args)
+        | Command::Erasure(ErasureCommand::Status(args)) => (args.posture.as_deref(), false),
+        Command::Apply(args) => (args.activation.posture.as_deref(), false),
+        Command::Verification(VerificationCommand::List(args))
+        | Command::Erasure(ErasureCommand::List(args)) => {
+            (args.activation.posture.as_deref(), false)
+        }
+        Command::Verification(VerificationCommand::Replay(args))
+        | Command::Erasure(ErasureCommand::Replay(args)) => {
+            (args.activation.posture.as_deref(), false)
+        }
+        Command::Generate(GenerateCommand::IdentityFacts(args)) => (args.posture.as_deref(), false),
+        Command::Init(_) | Command::Package(_) => (None, false),
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
+    };
+    let mut refusal = |code, message, action| {
+        let mut outcome = Outcome::refused(USAGE_EXIT, code, "arguments", message);
+        outcome.report["diagnostics"][0]["suggestedAction"] = json!(action);
+        finish(&outcome, command, cli.format, stdout, stderr)
+    };
+    if production && posture_flag == Some("development") {
+        return refusal(
+            "platform.posture.conflict",
+            "--production and --posture development contradict each other".to_owned(),
+            "Use one of them.",
+        );
+    }
+    let declared = match declared_with_production_alias(posture_flag, production) {
+        Ok(declared) => declared,
+        Err(error) => {
+            return refusal(
+                error.code(),
+                error.message().to_owned(),
+                error.suggested_action(),
+            )
+        }
+    };
+    let mut outcome = match &cli.command {
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
+        Command::Provision(args) => return provision(args, cli.format, declared),
         Command::Init(args) => init(&args.directory),
-        Command::Check(args) => check(args),
+        Command::Check(args) => check(args, declared),
         Command::Package(args) => package(args),
-        Command::Plan(args) => operate::plan(&args.runtime_config),
+        Command::Generate(GenerateCommand::IdentityFacts(args)) => {
+            generate_identity_facts(args, declared)
+        }
+        Command::Plan(args) => operate::plan(&args.runtime_config, declared),
         Command::Apply(args) => operate::apply(
             &args.activation.runtime_config,
+            declared,
             args.operator_reference.as_deref(),
             &args.backups,
         ),
-        Command::Status(args) => operate::status(&args.runtime_config),
+        Command::Status(args) => operate::status(&args.runtime_config, declared),
         Command::Verification(VerificationCommand::List(args)) => operate::dead_letters(
             Job::Verification,
             &args.activation.runtime_config,
+            declared,
             args.limit,
         ),
         Command::Verification(VerificationCommand::Replay(args)) => operate::replay(
             Job::Verification,
             &args.activation.runtime_config,
+            declared,
             args.version_id,
             args.expected_generation,
         ),
         Command::Erasure(ErasureCommand::Status(args)) => {
-            operate::erasure_status(&args.runtime_config)
+            operate::erasure_status(&args.runtime_config, declared)
         }
-        Command::Erasure(ErasureCommand::List(args)) => {
-            operate::dead_letters(Job::Erasure, &args.activation.runtime_config, args.limit)
-        }
+        Command::Erasure(ErasureCommand::List(args)) => operate::dead_letters(
+            Job::Erasure,
+            &args.activation.runtime_config,
+            declared,
+            args.limit,
+        ),
         Command::Erasure(ErasureCommand::Replay(args)) => operate::replay(
             Job::Erasure,
             &args.activation.runtime_config,
+            declared,
             args.version_id,
             args.expected_generation,
         ),
     };
+    outcome.report["posture"] = json!({
+        "value": declared.posture.as_str(),
+        "source": declared.source.as_str(),
+    });
     finish(&outcome, command, cli.format, stdout, stderr)
 }
 
@@ -555,7 +688,10 @@ fn command_path(command: &Command) -> &'static str {
         Command::Init(_) => "init",
         Command::Check(_) => "check",
         Command::Package(_) => "package",
+        Command::Generate(GenerateCommand::IdentityFacts(_)) => "generate identity-facts",
         Command::Plan(_) => "plan",
+        Command::RstackDev(_) => "rstack-dev",
+        Command::Provision(_) => "provision",
         Command::Apply(_) => "apply",
         Command::Status(_) => "status",
         Command::Verification(VerificationCommand::List(_)) => "verification list",
@@ -564,6 +700,28 @@ fn command_path(command: &Command) -> &'static str {
         Command::Erasure(ErasureCommand::List(_)) => "erasure list",
         Command::Erasure(ErasureCommand::Replay(_)) => "erasure replay",
     }
+}
+
+/// Runs the shared `provision` command, which writes its own report and sets
+/// its own exit code. The global `--format` selects its report as it selects
+/// every other command's.
+fn provision(
+    args: &registry_platform_provision::ProvisionArgs,
+    format: OutputFormat,
+    declared: DeclaredPosture,
+) -> ExitCode {
+    let shared = match format {
+        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+    };
+    registry_platform_provision::run_provision(
+        "documentsctl",
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        args,
+        shared,
+        declared,
+        |path| provision::load(path, declared),
+    )
 }
 
 fn init(directory: &Path) -> Outcome {
@@ -677,12 +835,81 @@ fn package(args: &PackageArgs) -> Outcome {
     }
 }
 
-fn check(args: &CheckArgs) -> Outcome {
+fn generate_identity_facts(args: &GenerateIdentityFactsArgs, declared: DeclaredPosture) -> Outcome {
+    // Refuse before reading anything when the output cannot be created.
+    if args.output.exists() {
+        return Outcome::refused(
+            DOMAIN_REFUSAL_EXIT,
+            "output.exists",
+            "--output",
+            "the output file already exists, and generate never overwrites".to_owned(),
+        );
+    }
+    let (project_report, unavailable, project) = check_project(&args.project);
+    let Some(project) = project else {
+        let exit = if unavailable {
+            OPERATIONAL_FAILURE_EXIT
+        } else {
+            DOMAIN_REFUSAL_EXIT
+        };
+        return Outcome::diagnosed(exit, &project_report);
+    };
+    let runtime = match operate::load(&args.runtime_config, declared) {
+        Ok(runtime) => runtime,
+        Err(refused) => return refused,
+    };
+    let facts = match identity_facts::facts(&runtime.config, &project, args.issuer.as_deref()) {
+        Ok(facts) => facts,
+        Err(error) => {
+            return match error.issuer_code() {
+                Some(code) => {
+                    Outcome::refused(DOMAIN_REFUSAL_EXIT, code, "--issuer", error.to_string())
+                }
+                None => Outcome::refused(
+                    DOMAIN_REFUSAL_EXIT,
+                    "identity.facts.unstatable",
+                    "/",
+                    error.to_string(),
+                ),
+            }
+        }
+    };
+    match identity_facts::write(&facts, &args.output) {
+        Ok(()) => Outcome::new(
+            json!({
+                "ok": true,
+                "output": args.output,
+                "accessProfiles": facts.access_profiles.len(),
+                "claims": facts.claims.len(),
+            }),
+            View::GenerateIdentityFacts,
+        ),
+        Err(identity_facts::FactsError::Write(error))
+            if error.kind() == io::ErrorKind::AlreadyExists =>
+        {
+            Outcome::refused(
+                DOMAIN_REFUSAL_EXIT,
+                "output.exists",
+                "--output",
+                "the output file already exists, and generate never overwrites".to_owned(),
+            )
+        }
+        Err(error) => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "output.failed",
+            "--output",
+            error.to_string(),
+        ),
+    }
+}
+
+fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
     let mut combined = Report::new(Vec::new());
     combined.set_files_checked(0);
     let mut unavailable = false;
     let mut report = json!({});
     let mut project = None;
+    let mut settings = None;
     if let Some(root) = &args.project {
         let (checked, project_unavailable, decoded) = check_project(root);
         unavailable |= project_unavailable;
@@ -704,8 +931,41 @@ fn check(args: &CheckArgs) -> Outcome {
         };
         // With a project beside it, the runtime document is also checked
         // against the project it serves.
-        let runtime = check_runtime_file(&absolute, args.environment, project.as_ref());
+        let runtime = check_runtime_file_with_posture(
+            &absolute,
+            args.environment,
+            project.as_ref(),
+            declared,
+        );
         unavailable |= runtime.unavailable;
+        // The settings the operator stated on purpose are facts for a
+        // reviewer, not findings, so they never change the verdict. A file
+        // that never decoded reports no list, since an empty one would say
+        // none were stated of a file nothing read. A file that was read
+        // reports its list, empty or not, whether or not a rule refused it.
+        if let Some(explicit) = &runtime.explicit_settings {
+            let file = path.display().to_string();
+            match explicit
+                .iter()
+                .map(|found| {
+                    serde_json::to_value(registry_cli_report::ExplicitSettingLine::from_found(
+                        found,
+                        Some(&file),
+                    ))
+                })
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(lines) => settings = Some(lines),
+                Err(error) => {
+                    return Outcome::refused(
+                        OPERATIONAL_FAILURE_EXIT,
+                        "report.unreadable",
+                        "/explicitProductionSettings",
+                        format!("the explicit production settings could not be reported: {error}"),
+                    )
+                }
+            }
+        }
         combined.extend(runtime.report);
         report["runtimeConfig"] = json!(path);
     }
@@ -714,6 +974,9 @@ fn check(args: &CheckArgs) -> Outcome {
     }
     report["filesChecked"] = json!(combined.files_checked().unwrap_or(0));
     report["diagnostics"] = combined.to_json_value();
+    if let Some(lines) = settings {
+        report["explicitProductionSettings"] = json!(lines);
+    }
     let exit = check_exit(&combined, args.deny_warnings, unavailable);
     Outcome {
         report,
@@ -727,7 +990,9 @@ fn check(args: &CheckArgs) -> Outcome {
 fn check_exit(report: &Report, deny_warnings: bool, unavailable: bool) -> u8 {
     if unavailable {
         OPERATIONAL_FAILURE_EXIT
-    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (deny_warnings && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         DOMAIN_REFUSAL_EXIT
     } else {
         0
@@ -882,7 +1147,21 @@ fn render_human(
         write!(stderr, "{}", shared.render_human())?;
     }
     match outcome.view {
-        View::Check | View::Diagnostics => writeln!(stdout, "checked: {}", shared.summary()),
+        View::Check | View::Diagnostics => {
+            for setting in report["explicitProductionSettings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                writeln!(
+                    stdout,
+                    "explicit production setting: {} ({})",
+                    text(&setting["summary"]),
+                    text(&setting["pointer"]),
+                )?;
+            }
+            writeln!(stdout, "checked: {}", shared.summary())
+        }
         View::Init => {
             writeln!(stdout, "created: {}", text(&report["directory"]))?;
             for file in report["created"].as_array().into_iter().flatten() {
@@ -901,6 +1180,11 @@ fn render_human(
             };
             writeln!(stdout, "{verb}: {}", text(&report["output"]))?;
             writeln!(stdout, "package digest: {}", text(&report["packageDigest"]))
+        }
+        View::GenerateIdentityFacts => {
+            writeln!(stdout, "created: {}", text(&report["output"]))?;
+            writeln!(stdout, "access profiles: {}", report["accessProfiles"])?;
+            writeln!(stdout, "claims: {}", report["claims"])
         }
         View::Activation => render_activation(report, stdout),
         View::DeadLetters(job) => {
@@ -1316,7 +1600,12 @@ mod tests {
         assert_eq!(report["status"], "complete");
         assert_eq!(
             report["created"],
-            json!(["documents.yaml", "runtime.example.yaml"])
+            json!([
+                "documents.yaml",
+                "runtime.example.yaml",
+                "dev.yaml",
+                "dev-scenarios.yaml"
+            ])
         );
         let (code, _) = json_report(&["check", "--project", target]);
         assert_eq!(code, ExitCode::SUCCESS, "the starter checks clean");

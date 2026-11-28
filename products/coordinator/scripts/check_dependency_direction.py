@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """Check Coordinator dependency direction from Cargo's resolved graph.
 
-The Coordinator composes products only through their public product clients.
-Its runtime may reach product clients, their named runtime-free support
-contracts, product cores, `registry-record` and shared platform primitives,
-and nothing else of the workspace: never another product's runtime, adopter
-tooling, supporting service or binding. A support package or core in a
-client-only map below is reached only through its product client, never as a
-direct dependency of the runtime. Its client
-reaches the runtime over the public HTTP contract only and links shared
-platform primitives alone. No crate outside the Coordinator depends on a
-Coordinator crate unless it is named below.
+The combined runtime and CLI crate may reach product clients, named support
+contracts and product cores, `registry-record`, shared platform primitives,
+and the named CLI and identity-facts helpers. Every path to a client-only
+contract goes through its named product client. The runtime may reach a
+client-only core through transitive dependencies. Coordinator client crates
+may reach the Rust client and shared platform primitives. Outside crates may
+reach Coordinator crates only through the named exceptions below.
 
 Edges are read with every feature enabled and on every target. A package's own
 dev-dependencies count, so a test cannot link what the package may not. The
@@ -22,9 +19,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import runpy
 import subprocess
 import sys
 from pathlib import Path
+
+# products/platform/scripts/check_dev_runner_reach.py owns the host permits.
+_dev_runner_gate = runpy.run_path(str(
+    Path(__file__).resolve().parents[2] / "platform/scripts/check_dev_runner_reach.py"
+))
+_DEV_RUNNER = _dev_runner_gate["DEV_RUNNER"]
+_DEV_RUNNER_HOSTS = _dev_runner_gate["ALLOWLIST"][_DEV_RUNNER]
 
 COORDINATOR_PREFIX = "registry-coordinator"
 
@@ -49,9 +54,16 @@ CLIENT_ONLY_SUPPORT = {
     "registry-payment-protocol": "registry-payment-client",
 }
 
-# The combined Coordinator crate also publishes coordinatorctl. This helper
-# supplies its product-neutral request/connection CLI and reaches no product.
-CLI_SUPPORT = frozenset({"registry-cli-api"})
+# The combined Coordinator crate also publishes coordinatorctl. These helpers
+# supply product-neutral request and report handling and identity facts
+# authoring. Their forward dependencies are subject to the same boundary.
+CLI_SUPPORT = frozenset(
+    {
+        "registry-cli-api",
+        "registry-cli-report",
+        "registry-thunderid-tooling",
+    }
+)
 
 # Product cores the runtime reaches only through their product client. The
 # core is in the runtime's forward closure through that client, so only the
@@ -123,7 +135,7 @@ def runtime_may_reach(name: str) -> bool:
         return True
     if name in CLIENT_ONLY_SUPPORT:
         return True
-    if name in CLI_SUPPORT:
+    if name in CLI_SUPPORT or (name == _DEV_RUNNER and COORDINATOR_RUNTIME in _DEV_RUNNER_HOSTS):
         return True
     if name.endswith("-core"):
         return True

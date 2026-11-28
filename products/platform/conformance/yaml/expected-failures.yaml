@@ -33,12 +33,6 @@ unreachedFormats:
   reason: syntax json; the corpus mutates YAML text
 - format: breg/data-import-state
   reason: syntax json; the corpus mutates YAML text
-- format: breg/dev-prepared-source
-  reason: syntax json; the corpus mutates YAML text
-- format: breg/dev-source-transition
-  reason: syntax json; the corpus mutates YAML text
-- format: breg/dev-state
-  reason: syntax json; the corpus mutates YAML text
 - format: breg/evidence-source-export
   reason: syntax json; the corpus mutates YAML text
 - format: breg/example-scenarios
@@ -62,8 +56,6 @@ unreachedFormats:
 - format: evidence/source-import-state
   reason: syntax json; the corpus mutates YAML text
 - format: evidence/source-resolution
-  reason: syntax json; the corpus mutates YAML text
-- format: messaging/dev-state
   reason: syntax json; the corpus mutates YAML text
 - format: messaging/template-contracts
   reason: syntax json; the corpus mutates YAML text

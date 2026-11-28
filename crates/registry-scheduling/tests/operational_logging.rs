@@ -44,11 +44,11 @@ fn serve_with_stdout_audit(rust_log: Option<&str>) -> std::process::Output {
             "runtimeUrlRef": "secret:env/SCHEDULING_TEST_RUNTIME_URL",
             "migrationUrlRef": "secret:env/SCHEDULING_TEST_MIGRATION_URL"
         },
-        "authentication": {"oidc": {
+        "authentication": {"oidc": {"issuers": {"main": {
             "issuer": "https://identity.example.test",
             "audience": "urn:example:scheduling",
             "allowedClients": ["scheduling-test-client"]
-        }},
+        }}}},
         "taskGrantStatus": "unchecked-final-fifteen-minutes",
         "audit": {"destination": "stdout", "hashKeyRef": "secret:env/SCHEDULING_TEST_AUDIT_KEY"},
         "destinations": {},

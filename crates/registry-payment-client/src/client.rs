@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::PeerPolicy;
 use std::fmt;
 
 use registry_payment_protocol::{
@@ -15,6 +16,7 @@ use registry_platform_httputil::client::{
 };
 use registry_platform_httputil::{
     read_bounded, retry_after_seconds, url::append_path_segments, validate_response_headers,
+    ResponseHeaderError,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Response, StatusCode, Url};
@@ -37,6 +39,7 @@ pub struct PaymentComplete<T> {
 }
 
 pub struct PaymentClient {
+    peer_policy: PeerPolicy,
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     connection: String,
@@ -67,6 +70,7 @@ impl PaymentClient {
         })
         .map_err(|_| PaymentClientError::configuration("the HTTP client could not be built"))?;
         Ok(Self {
+            peer_policy: config.peer_policy,
             http,
             base_url,
             connection: config.connection,
@@ -382,13 +386,16 @@ impl PaymentClient {
             .map_err(|error| PaymentClientError::Transport {
                 kind: send_failure_kind(&error),
             })?;
-        validate_response_headers(response.headers()).map_err(|_| {
-            protocol(
-                response.status(),
-                PaymentProtocolFailure::HeaderBounds,
-                None,
-            )
-        })?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => PaymentClientError::DevelopmentPeer,
+                _ => protocol(
+                    response.status(),
+                    PaymentProtocolFailure::HeaderBounds,
+                    None,
+                ),
+            },
+        )?;
         Ok(response)
     }
 
@@ -540,5 +547,49 @@ fn protocol(
         status: status.as_u16(),
         failure,
         trace_id,
+    }
+}
+
+#[cfg(test)]
+mod peer_posture_tests {
+    use super::*;
+    use axum::http::header::{HeaderMap, HeaderValue};
+    use axum::{routing::any, Router};
+
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        for posture in [None, Some("production"), Some("development")] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            );
+            if let Some(posture) = posture {
+                headers.insert("registry-posture", HeaderValue::from_static(posture));
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url =
+                url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let server = tokio::spawn(async move {
+                let router = Router::new().fallback(any(move || async move { (headers, r#"{}"#) }));
+                axum::serve(listener, router).await.unwrap();
+            });
+            for policy in [
+                PeerPolicy::RefuseDevelopmentPeer,
+                PeerPolicy::AcceptDevelopmentPeer,
+            ] {
+                let client =
+                    PaymentClient::new(PaymentClientConfig::new(url.clone(), "fixture", policy))
+                        .unwrap();
+                let response = client.send(client.http.get(url.clone())).await;
+                if posture == Some("development") && policy == PeerPolicy::RefuseDevelopmentPeer {
+                    assert!(matches!(response, Err(PaymentClientError::DevelopmentPeer)));
+                } else {
+                    response.expect("peer response accepted");
+                }
+            }
+            server.abort();
+        }
     }
 }

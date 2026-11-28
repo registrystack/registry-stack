@@ -400,6 +400,7 @@ SchedulingProblemCode: TypeAlias = Literal[
     "cursor.expired",
     "cursor.invalid",
     "eligibility.unavailable",
+    "grant.lifetime-too-long",
     "hold.expired",
     "hold.released",
     "hook.unavailable",
@@ -409,6 +410,7 @@ SchedulingProblemCode: TypeAlias = Literal[
     "location.closed",
     "operation.not-authorized",
     "party.capacity-inadequate",
+    "platform.task-grant.development-assertion",
     "policy.changed",
     "precondition.failed",
     "precondition.required",
@@ -452,7 +454,7 @@ class SchedulingClientError(Exception):
     outcome_unknown: bool
 
 class SchedulingClient:
-    def __init__(self, base_url: str, attempt_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, maximum_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None, maximum_mutation_retries: int | None = None) -> None: ...
+    def __init__(self, base_url: str, attempt_timeout_seconds: float | None = None, connect_timeout_seconds: float | None = None, maximum_response_bytes: int | None = None, user_agent: str | None = None, trusted_root_certificates: bytes | None = None, maximum_mutation_retries: int | None = None, refuse_development_peer: bool = False) -> None: ...
     def get_scheduling(self, token: str) -> Complete[SchedulingServiceDocument]: ...
     def list_services(self, token: str, cursor: str | None = None) -> Complete[PageDocument[ServiceDocument]]: ...
     def list_offerings(self, token: str, cursor: str | None = None) -> Complete[PageDocument[OfferingDocument]]: ...

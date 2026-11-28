@@ -5,6 +5,12 @@ on:
   schedule:
     - cron: "19 0 * * *"
   workflow_dispatch:
+    inputs:
+      arm64_images:
+        description: Also build native Linux arm64 image layouts, retained for inspection and not published. Builds only when no nightly has published this commit yet, and only from the canonical repository's protected main.
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -214,6 +220,70 @@ jobs:
         with:
           name: nightly-arm64-${{ github.run_id }}-${{ github.run_attempt }}
           path: platform
+          retention-days: 7
+          if-no-files-found: error
+
+  arm64-images:
+    name: Build native Linux arm64 nightly image layouts
+    needs: [select, arm64]
+    if: needs.select.outputs.skip != 'true' && inputs.arm64_images
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.select.outputs.source_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Download exact arm64 binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: nightly-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: arm64
+      - name: Stage the arm64 image binaries
+        env:
+          IMAGE_NAMES: ${{ needs.select.outputs.image_names }}
+          BASE_VERSION: ${{ needs.select.outputs.base_version }}
+          NIGHTLY_TAG: ${{ needs.select.outputs.tag }}
+        run: |
+          mkdir -p dist/image-bin
+          operator_tools="$(python3 release/scripts/release_candidate.py image-operator-tools --version "${BASE_VERSION}")"
+          for name in ${IMAGE_NAMES}; do
+            install -m 0755 "arm64/${name}-${NIGHTLY_TAG}-linux-arm64" "dist/image-bin/${name}"
+            for pair in ${operator_tools}; do
+              if [[ "${pair%%=*}" == "${name}" ]]; then
+                tool="${pair#*=}"
+                install -m 0755 "arm64/${tool}-${NIGHTLY_TAG}-linux-arm64" "dist/image-bin/${tool}"
+              fi
+            done
+          done
+      - name: Set up pinned Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          version: ${{ env.RELEASE_BUILDX_VERSION }}
+          driver-opts: image=${{ env.RELEASE_BUILDKIT_IMAGE }}
+      - name: Build arm64 image layouts without publication credentials
+        env:
+          IMAGE_NAMES: ${{ needs.select.outputs.image_names }}
+          NIGHTLY_VERSION: ${{ needs.select.outputs.version }}
+          SOURCE_SHA: ${{ needs.select.outputs.source_sha }}
+          RELEASE_BUILDX_BUILDER: ${{ steps.buildx.outputs.name }}
+          RELEASE_IMAGE_PLATFORM: linux/arm64
+        run: |
+          mkdir -p dist/images-arm64
+          for name in ${IMAGE_NAMES}; do
+            reference="ghcr.io/registrystack/${name}-candidate:candidate-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            RELEASE_IMAGE_OCI_LAYOUT="${GITHUB_WORKSPACE}/dist/images-arm64/${name}.oci" \
+              release/scripts/build-release-image.sh "${name}" "${reference}" \
+                "https://github.com/${GITHUB_REPOSITORY}" "${SOURCE_SHA}" "${NIGHTLY_VERSION}" "dist/images-arm64/${name}.metadata.json"
+          done
+      - name: Retain arm64 image layouts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: arm64-image-layouts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/images-arm64
           retention-days: 7
           if-no-files-found: error
 

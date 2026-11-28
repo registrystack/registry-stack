@@ -493,7 +493,7 @@ fn publish_and_load(prepared: registry_breg::package::PreparedPackage) -> Verifi
     load_package(
         &package,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .expect("published package loads")

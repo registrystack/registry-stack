@@ -313,7 +313,7 @@ mod tests {
     };
 
     fn client(fixture: &SignedEvidenceFixture) -> EvidenceClient {
-        EvidenceClient::new(EvidenceClientConfig::new(
+        EvidenceClient::new(EvidenceClientConfig::new_without_peer_policy(
             Url::parse("http://127.0.0.1:9").expect("the loopback URL parses"),
             Arc::new(StaticToken::new("unused-token").expect("the token is usable")),
             fixture.trusted_jwks.clone(),

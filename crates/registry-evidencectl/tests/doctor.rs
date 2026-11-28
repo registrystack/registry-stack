@@ -272,7 +272,8 @@ fn doctor_accepts_only_the_runtime_owner_only_secret_modes() {
         );
         assert!(
             diagnostics.contains("secrets/audit-hmac-key")
-                && diagnostics.contains("requires exactly 0400 or 0600"),
+                && diagnostics.contains("platform.secret-file.")
+                && diagnostics.contains("0400 or 0600"),
             "doctor did not report unsupported secret mode {mode:04o}:\n{diagnostics}"
         );
     }
@@ -1214,6 +1215,58 @@ fn delegated_runtime_version_handshake_bounds_are_operational_and_value_safe() {
 }
 
 #[test]
+fn doctor_keeps_posture_conflict_and_reports_audit_findings() {
+    let workspace = tempfile::tempdir().unwrap();
+    let runtime = workspace.path().join("runtime.yaml");
+    fs::write(&runtime, "version: 1\n").unwrap();
+    let binary = workspace.path().join("evidence");
+    fs::write(
+        &binary,
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'evidence {}\n'; exit 0; fi
+case " $* " in *" --format json "*) ;; *) exit 2 ;; esac
+printf '%s' '{{"diagnostics":[{{"severity":"error","code":"evidence.posture.assurance-profile-conflict","path":"/assuranceProfile","artifact":"EvidenceBundle","message":"posture conflict","suggestedAction":"use development package"}}'
+case " $* " in *" --offline-dependencies-only --require-audit-under "*) printf '%s' ',{{"severity":"error","code":"evidence.deployment.audit-outside-root","path":"","artifact":"EvidenceRuntimeConfig","message":"audit root refused","suggestedAction":"correct the audit root"}}';; esac
+printf '%s\n' ']}}'
+exit 1
+"#,
+            registry_platform_buildinfo::DISPLAY_VERSION,
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::wait_until_executable(&binary);
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args([
+            "--format",
+            "json",
+            "doctor",
+            "--posture",
+            "development",
+            "--runtime-config",
+        ])
+        .arg(&runtime)
+        .arg("--evidence-bin")
+        .arg(&binary)
+        .arg("--require-audit-under")
+        .arg(workspace.path())
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        rendered.contains("evidence.posture.assurance-profile-conflict"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("evidence.deployment.audit-outside-root"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
     for format in ["human", "json"] {
         let workspace = tempfile::tempdir().expect("tempdir");
@@ -1237,6 +1290,7 @@ fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
             .arg(&runtime)
             .arg("--evidence-bin")
             .arg(&binary)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .output()
             .expect("runtime doctor");
         assert_eq!(output.status.code(), Some(1), "{format}");
@@ -1246,7 +1300,7 @@ fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(
-            rendered.contains("runtime configuration is invalid"),
+            rendered.contains("evidence.runtime.report-unreadable"),
             "{format}: {rendered}"
         );
         if format == "json" {
@@ -1256,12 +1310,62 @@ fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
             assert_eq!(report["status"], "domain-refusal");
             assert_eq!(
                 report["diagnostics"][0]["code"],
-                "evidence.runtime.configuration-refused"
+                "evidence.runtime.report-unreadable"
             );
         } else {
+            assert!(
+                rendered.contains("runtime configuration is invalid"),
+                "{rendered}"
+            );
             assert!(output.stdout.is_empty());
         }
     }
+}
+
+#[test]
+fn doctor_refuses_malformed_successful_dependency_output() {
+    let workspace = tempfile::tempdir().unwrap();
+    let runtime = workspace.path().join("runtime.yaml");
+    fs::write(&runtime, "version: 1\n").unwrap();
+    let binary = workspace.path().join("evidence");
+    fs::write(
+        &binary,
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'evidence {}\n'; exit 0; fi
+case " $* " in
+  *" --require-runtime-dependencies "*) printf '%s\n' '{{malformed';;
+  *) printf '%s\n' '{{"diagnostics":[]}}';;
+esac
+exit 0
+"#,
+            registry_platform_buildinfo::DISPLAY_VERSION,
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::wait_until_executable(&binary);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["--format", "json", "doctor", "--runtime-config"])
+        .arg(&runtime)
+        .arg("--evidence-bin")
+        .arg(&binary)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "operational-failure");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "evidence.runtime.report-unreadable"),
+        "{report}"
+    );
 }
 
 /// An all-green report that never mentions the signer reads as a ready target

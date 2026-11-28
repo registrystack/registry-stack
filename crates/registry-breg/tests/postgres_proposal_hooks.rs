@@ -83,18 +83,20 @@ fn runtime(
     std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let mut config = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml")
         .replace("/var/lib/breg/secrets", root.path().to_str().unwrap())
-        .replace("environment: example", "environment: local")
-        .replace(
-            "databaseInitializationEnvironment: example",
-            "databaseInitializationEnvironment: local",
-        );
+        .replace("environment: example", "environment: local");
     if let Some(port) = port {
-        config.push_str(&format!("\ndestinations:\n  hooks:\n    observer:\n      origin: http://127.0.0.1:{port}/\n      path: /events\n      networkProfile: loopback-development-http\n      dnsFamily: dual-stack-strict\n      allowedPrivateCidrs: []\n      hmacSha256KeyRef: secret:file/observer-key\n      classificationCeiling: internal\n      deliveryCeilings:\n        attemptTimeoutMilliseconds: 1000\n        maximumAttempts: 2\n"));
+        config.push_str(&format!("\ndestinations:\n  hooks:\n    observer:\n      origin: http://127.0.0.1:{port}/\n      path: /events\n      networkProfile: loopback-http\n      dnsFamily: dual-stack-strict\n      allowedPrivateCidrs: []\n      hmacSha256KeyRef: secret:file/observer-key\n      classificationCeiling: internal\n      deliveryCeilings:\n        attemptTimeoutMilliseconds: 1000\n        maximumAttempts: 2\n"));
     }
-    let destinations = registry_breg::runtime_config::parse_runtime_config(&config)
-        .unwrap()
-        .activate_event_destinations(registry)
-        .unwrap();
+    let destinations = registry_breg::runtime_config::parse_runtime_config(
+        &config,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
+    .unwrap()
+    .activate_event_destinations(registry)
+    .unwrap();
     (root, Arc::new(destinations))
 }
 fn audit() -> registry_breg::audit::RegistryAudit {
@@ -412,47 +414,44 @@ async fn native_url_delivery_keeps_exact_bytes_tightened_budgets_and_expired_lea
     let requests = received.lock().await;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].1, bytes);
-    assert_eq!(requests[0].0["ce-type"], "proposal.submitted");
+    let (headers, body) = &requests[0];
+    let application_headers = headers
+        .keys()
+        .map(|name| name.as_str())
+        .filter(|name| !matches!(*name, "host" | "content-length"))
+        .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
-        requests[0].0["ce-dataschema"],
+        application_headers,
+        std::collections::BTreeSet::from([
+            "accept",
+            "content-type",
+            "webhook-id",
+            "webhook-timestamp",
+            "webhook-signature",
+        ])
+    );
+    let envelope: Value = serde_json::from_slice(body).unwrap();
+    assert_eq!(envelope["type"], "proposal.submitted");
+    assert_eq!(
+        envelope["dataschema"],
         registry_breg::proposal_hooks::PROPOSAL_EVENT_SCHEMA
     );
-    assert_eq!(requests[0].0["x-registry-delivery-attempt"], "2");
-    assert!(requests[0].0["x-registry-signature"]
-        .to_str()
-        .unwrap()
-        .starts_with("v1="));
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    use hmac::{Hmac, KeyInit, Mac};
-    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(&[7u8; 32]).unwrap();
-    mac.update(b"breg-webhook-signature-v1");
-    for value in [
-        "ce-specversion",
-        "ce-id",
-        "ce-source",
-        "ce-type",
-        "ce-time",
-        "ce-dataschema",
-        "x-registry-event-generation",
-        "x-registry-delivery-attempt",
-        "x-registry-delivery-time",
-    ]
-    .into_iter()
-    .map(|name| requests[0].0[name].as_bytes())
-    .chain([
-        b"POST".as_slice(),
-        b"/events".as_slice(),
-        b"application/json".as_slice(),
-        requests[0].0["idempotency-key"].as_bytes(),
-        requests[0].1.as_slice(),
-    ]) {
-        mac.update(&(value.len() as u64).to_be_bytes());
-        mac.update(value);
-    }
-    assert_eq!(
-        requests[0].0["x-registry-signature"].to_str().unwrap(),
-        format!("v1={}", URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
-    );
+    assert_eq!(envelope["id"], headers["webhook-id"].to_str().unwrap());
+    use registry_platform_crypto::delivery_signature::{
+        verify, DeliveryKey, DeliveryKeys, SignedContent, DELIVERY_TOLERANCE,
+    };
+    verify(
+        &DeliveryKeys::new(DeliveryKey::new(&[7; 32]).unwrap(), None).unwrap(),
+        SignedContent {
+            id: headers["webhook-id"].to_str().unwrap(),
+            timestamp: headers["webhook-timestamp"].to_str().unwrap(),
+            signature: headers["webhook-signature"].to_str().unwrap(),
+            body,
+        },
+        std::time::SystemTime::now(),
+        DELIVERY_TOLERANCE,
+    )
+    .unwrap();
     drop(requests);
     drop(http);
     receiver.abort();

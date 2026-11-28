@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -18,11 +18,10 @@ checkout, as the [overview](../../start/documents/#status) explains.
 
 ## What you provide
 
-- **PostgreSQL 17 or newer**, reached over TLS, with one database and two login roles: a migration
-  role that owns the schema, and a runtime role that serves. `documentsctl apply` uses the first
-  and grants the second what serving needs. Both connections verify the server certificate and its
-  host name, so a local database needs a certificate too; an operator build refuses
-  `database.testOnlyPlaintext`.
+- **PostgreSQL 17 or newer** with a migration role that owns the schema and a
+  runtime role that serves. The default transport verifies the server
+  certificate and host name. Set `database.transport: loopback-plaintext` for
+  PostgreSQL on the same host over a socket or loopback TCP.
 - **Your OpenID Connect issuer.** Every route except `GET /health` and `GET /ready` takes a
   bearer access token it signed; the token's client, scopes, and actor kind select one access profile in the project.
   [Access tokens](#access-tokens) lists what each token must carry.
@@ -42,18 +41,59 @@ checkout, as the [overview](../../start/documents/#status) explains.
 
 ## Provision PostgreSQL
 
-Create the roles and the database:
+Your runtime file already names the roles, their passwords, and the database. They are the URLs in
+`database.migrationUrlRef` and `database.runtimeUrlRef`. Put both URLs in their secret files, then
+run `documentsctl provision` once as a PostgreSQL role that can create roles and databases:
 
-```sql
-CREATE ROLE documents_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS;
-CREATE ROLE documents_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS;
-CREATE DATABASE documents;
+```sh
+documentsctl provision --runtime-config runtime.yaml --admin-url-file admin-url
 ```
 
-Set each role's password with `\password documents_migration` and `\password documents_runtime` in
-`psql`, which prompts for it instead of taking it in a statement.
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
+`CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable instead,
+use `--admin-url-env NAME`. The connection requires TLS and verifies the server certificate. Set
+`database.caBundleRef` in the runtime file to trust a private CA. The administrator URL must name the
+same host and port as the two product URLs, and a database other than the product database, such
+as `postgres`. The command refuses it otherwise, as `platform.provision.target-mismatch` for the host
+and port and as `platform.provision.target-invalid` for the database. Where the administrator may
+connect only to the product database, `provision` cannot run: add `--print-sql` and give the script
+to the person who administers the server. It never prints the administrator URL or a password.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Gives the migration role `USAGE` and `CREATE` on the `public` schema and the runtime role `USAGE`
+  on it, and takes `CREATE` on it from `PUBLIC`.
+
+Run it again at any time. It creates only what is missing. It refuses a role that exists with a
+different password than its URL holds, and tells you which role.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
+`\password` line that prompts for the password in `psql`, so the script holds no password:
+
+```sql
+-- provision script, product documents. Nothing was run.
+-- For a server where these objects do not exist yet. Review, then run with psql as an
+-- administrator that has CREATEROLE and CREATEDB. It stops at the first error.
+\set ON_ERROR_STOP on
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "documents_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "documents_migration"
+CREATE ROLE "documents_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "documents_runtime"
+CREATE DATABASE "documents" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "documents" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "documents" TO "documents_migration", "documents_runtime";
+ALTER DATABASE "documents" ALLOW_CONNECTIONS true;
+\connect "documents"
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "documents_migration"; GRANT USAGE ON SCHEMA public TO "documents_runtime";
+```
+
+The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
 
 Document content is stored as `bytea`, so the database is slightly larger than the stored payload.
 A custom-format `pg_dump` is larger than the payload because `pg_dump` writes `bytea` as hex, so plan
@@ -61,20 +101,13 @@ backup space above the database size.
 
 {/* Evidence: crates/registry-documents/migrations/0100_documents.sql, content bytea. */}
 
-In the `documents` database, hand the schema to the migration role:
-
-```sql
-REVOKE ALL ON DATABASE documents FROM PUBLIC;
-GRANT CONNECT ON DATABASE documents TO documents_migration, documents_runtime;
-ALTER SCHEMA public OWNER TO documents_migration;
-REVOKE ALL ON SCHEMA public FROM PUBLIC;
-```
-
-Grant the runtime role nothing more. `apply` grants it what serving needs, and `serve` refuses a
-runtime role that holds authority over the schema. If the runtime role later loses `USAGE` on the
-schema or read access to the activation ledger, `serve` refuses to start and the operator commands
-answer `documentsctl.activation.ledger-unreadable` at `database.runtimeUrlRef`. Run `apply` again
-with the migration credential to restore its grants.
+`provision` grants the runtime role `CONNECT` on the database and `USAGE` on the `public` schema.
+`apply` grants it the rest of what serving needs, and `serve` refuses a runtime role that holds
+authority over the schema. If the runtime role later loses `USAGE` on the schema, run `provision`
+again: it restores that grant, and `apply` does not. If the runtime role loses read access to the
+activation ledger, `serve` refuses to start and the operator commands answer
+`documentsctl.activation.ledger-unreadable` at `/database/runtimeUrlRef`. Run `apply` again with the
+migration credential to restore those grants.
 
 {/* Evidence: crates/registry-documents/src/activation.rs, apply (grant_runtime_role and
     stray_authority) and check_runtime;
@@ -94,11 +127,11 @@ matter most:
 | `identity.databaseId` | A name for the one database this deployment owns. The service refuses a database recorded for another. |
 | `package.root` and `package.expectedDigest` | The package directory, and the digest `documentsctl package` printed. |
 | `database.caBundleRef` | The PEM bundle of the CA that signs the database certificate, when a private CA does. It replaces the system roots. |
-| `authentication.oidc` | The `issuer`, the `audience` your tokens carry, every client in `allowedClients`, and `jwksSource` when the runtime should not fetch the issuer's keys itself. See [Access tokens](#access-tokens). |
+| `authentication.oidc.issuers` | One entry per issuer, keyed by an id you choose: the `issuer`, the `audience` your tokens carry, `allowedClients` (a list that covers every client an access profile names, or `from-package`), and `jwksSource` when the runtime should not fetch the issuer's keys itself. See [Access tokens](#access-tokens). |
 | `storage.type` | `database` or `s3`. The first upload pins the choice: a later start under another backend or bucket is refused. |
 | `storage.maximumDocumentBytes` | The largest version the deployment takes: 16 MiB by default on both backends. On `s3` you may raise it up to 64 MiB. |
 | `contentVerification` | `type: http` with the verifier's `url`, `authorizationRef`, and `policyId`. `type: disabled` approves everything and is accepted only on a development loopback listener. |
-| `destinations.hooks` | One entry per destination id the project's hooks name: the receiver's `url` and its `hmacSha256KeyRef`. See [Events](#events). |
+| `destinations.hooks` | One entry per destination id the project's hooks name: the receiver's `url`, its `hmacSha256KeyRef`, and an optional `previousHmacSha256KeyRef` for rotation. See [Events](#events). |
 | `retention.receiptRetentionDays` | How long a retry with the same `Idempotency-Key` gets the same answer. Seven days is a placeholder for your retention schedule to approve. |
 | `retention.hookPayloadRetentionDays` | How long an event waits to be delivered, from 1 to 30 days and 7 by default. |
 | `audit.rotateBytes` and `audit.retentionDays` | For a file journal: the size at which the active file is sealed, 100 MiB by default, and how many days a sealed file is kept, 90 by default. Ship the records you must keep off the host before `retentionDays` deletes them. |
@@ -130,8 +163,8 @@ profile. Every token must have:
 | Part | Requirement |
 | ---- | ----------- |
 | Header | `typ: at+jwt` (or `application/at+jwt`), `alg` `RS256` or `ES256`, and a `kid` naming a key in the issuer's key set |
-| `iss` | Exactly `authentication.oidc.issuer` |
-| `aud` | `authentication.oidc.audience` |
+| `iss` | Exactly the `issuer` of an entry in `authentication.oidc.issuers` |
+| `aud` | That entry's `audience` |
 | `exp` | A time in the future; `nbf`, when present, is checked too |
 | `azp`, or `client_id` when there is no `azp` | A client in `allowedClients` and in the `requesterClients` of the profile the caller should resolve to |
 | `scope` (or the claim `scopeClaim` names) | Every scope in that profile's `requiredScopes`, as a space-separated string or an array |
@@ -141,7 +174,7 @@ profile. Every token must have:
 A token that fails verification, lacks its principal, or carries a `registry_actor_kind` that is not
 a string answers `401 authentication.refused`. A verified token that resolves to no profile, because
 of its client, a missing scope, or its actor kind, answers `403 profile.not-authorized`. A token issued through a token exchange is refused
-unless `authentication.oidc.assertionIssuers` names the authority it came from.
+unless the issuer entry's `assertionIssuers` names the authority it came from.
 
 By default the runtime fetches the issuer's keys through its discovery document and follows its key
 rotation. When the runtime cannot reach the issuer, or a local test issuer publishes no discovery
@@ -150,21 +183,31 @@ document, pin the keys instead:
 ```yaml
 authentication:
   oidc:
-    jwksSource:
-      type: static
-      documentRef: secret:file/jwks.json
+    issuers:
+      main:
+        jwksSource:
+          type: static
+          documentRef: secret:file/jwks.json
 ```
 
 The secret holds a JSON Web Key Set of RSA or EC public keys, and every key needs its own non-empty
-`kid`: startup refuses a key without one, a repeated `kid`, and a symmetric key. The set is read
-once at startup and never rotates, so to change keys, replace the secret and restart `serve`.
+`kid`: startup refuses a key without one, a repeated `kid`, and a symmetric key. It also refuses a
+key that carries a private member (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth` or `k`) or a repeated
+member name. The startup error names the rule it broke, and the key's position for a rule about one key,
+never a key value. Members
+the runtime does not know, such as `x5c`, `x5t` or `ext`, are ignored. The set is read once at
+startup and never rotates, so to change keys, replace the secret and restart `serve`.
 
 {/* Evidence: products/documents/generated/runtime/runtime.schema.json;
-    crates/registry-documents/src/config.rs, verifier_profile and DOCUMENTS_ACCESS_TOKEN_TYPE;
+    crates/registry-documents/src/config.rs, verifier_profile and AccessTokenType;
     crates/registry-documents/src/auth.rs, authenticate;
     crates/registry-documents-core/src/access.rs, AccessProfiles::resolve;
     crates/registry-platform-oidc/src/lib.rs, verify_access_token, match_client, and
     parse_static_jwks;
+    crates/registry-platform-oidc/src/static_jwks.rs, StaticJwksError, PrivateKeyMember;
+    crates/registry-documents/src/config.rs, parse_static_key_set,
+    a_static_key_set_that_holds_a_private_member_is_refused_by_rule_and_not_by_value,
+    a_static_key_set_with_unknown_public_members_loads;
     crates/registry-platform-oidc/src/authorization_claims.rs, ClaimNames (registry_actor_kind). */}
 
 ## Create the secret files
@@ -186,19 +229,38 @@ unset value
 Write the other files the runtime file names the same way: `migration-database-url` for
 `documents_migration`, `content-verifier-authorization`, each key the S3 storage names, and the
 signing key of each hook destination. The verifier file holds the token alone; the runtime sends it
-as `Bearer <token>`. Generate a hook key like the audit key, at least 32 bytes, and give the
-receiver the same bytes through its own secret store. Each file must be a regular file owned by the
-runtime user, mode `0400` or `0600`, with one link.
+as `Bearer <token>`. Generate a distinct key per hook destination. The Document Store uses exactly
+32 to 64 bytes from each signing key file. This example writes 64 hexadecimal characters without
+a trailing newline.
+
+```bash
+(umask 077; openssl rand -hex 32 | tr -d '\n' \
+  > /run/secrets/registry-documents/owning-system-events-hmac)
+```
+
+Give the receiver the same bytes through its own secret store. Each file must be a regular file
+owned by the runtime user, mode `0400` or `0600`, with one link. The offline `documentsctl check`
+checks the secret reference and its provider. Startup also reads and validates the key bytes.
 
 `serve` never reads the migration credential; only `apply` connects with it. Write
 `migration-database-url` only on the host that runs `apply`.
 
 {/* Evidence: crates/registry-platform-config/src/secrets.rs, file provider checks;
     crates/registry-platform-objectstore/src/verifier.rs, HttpVerifier authorization;
-    crates/registry-platform-crypto/src/delivery_signature.rs, MIN_HMAC_SHA256_KEY_BYTES;
-    crates/registry-documents/src/runtime.rs, connect_migration only in apply. */}
+    crates/registry-platform-crypto/src/delivery_signature.rs, DeliveryKey::new;
+    crates/registry-platform-hooks/src/delivery/url_binding.rs, activate_url_hook_destinations;
+    crates/registry-documents/src/config.rs, check_runtime_file;
+    crates/registry-documents/src/runtime.rs, connect_migration_with_posture only in apply. */}
 
 ## Check, apply, and start
+
+Use the same declared posture for `plan`, `apply` and startup. The activation
+ledger records that posture, and existing activation rows read as production.
+Startup, `plan` and `apply` refuse a database activated under the other
+posture. To change postures, apply to a fresh database.
+`documentsctl status` reports a mismatch and returns the ledger.
+
+{/* Evidence: crates/registry-documents/src/activation.rs plan, status, apply, check_runtime. */}
 
 Check the file and the package before you deploy them:
 
@@ -255,10 +317,15 @@ documents --runtime-config /etc/registry-documents/runtime.yaml serve
 
 It logs JSON lines on standard error, starting with `the Document Store is serving` and the
 address. `DOCUMENTS_LOG` sets the level to `error`, `warn`, or `info`, the default; any other value
-stops `documents serve` with exit status 2. The log has no line per request: a request is logged only when
-something fails behind it, such as the database or the token verifier, or when its token lacks a
-scope its profile requires. A refused request is explained by its problem response, and every
-audited operation, such as an upload, a download, or a grant, is in the audit journal.
+stops `documents serve` with exit status 2. A request that succeeds writes no log line. A refused request writes one
+`request refused` line that names `failed_check`, at most five per check per minute, with `suppressed`
+counting the rest, and `documents_request_refusals_total` counts every one (see
+[Metrics](#watch-the-metrics)). A token verifier that cannot fetch, read or use its key set answers 503.
+A key endpoint it refuses to contact answers the refusal a bad credential gets. Both are logged as
+`request refused` with `failed_check` `key-source-unavailable`, not as a warning, so
+`DOCUMENTS_LOG=warn` shows no line for them and the counter is the signal to alert on. A failure behind
+a request, such as the database, is logged where it happens. Every audited operation, such as an
+upload, a download, or a grant, is in the audit journal.
 
 `serve` never applies the schema. Before it connects to the database, it refuses a runtime file
 that `documentsctl check --project` refuses against the package's project, such as a hook
@@ -293,6 +360,7 @@ and `503 service.unavailable` otherwise, with the cause in the operational log. 
 balancer's health check at `/ready`. Once `documentsctl apply` activates another package, a
 process still serving the previous one answers `/ready` with `503` until it restarts onto the
 new package.
+The 200 body contains `status: ready`, `posture` and `developmentSettings`. Development responses carry `Registry-Posture: development`.
 
 Every other route answers `401 authentication.refused` without a valid token. The operator
 commands write their own audit journal beside the service's.
@@ -519,14 +587,29 @@ hour, until the destination's `maximumAttempts` (8 by default, at most 20) are s
 then dead-lettered. Each attempt is recorded in the audit journal as `documents.hook-delivery`. No
 `documentsctl` command lists, replays, or discards a delivery.
 
-A receiver verifies the signature with its copy of the key, then reads what it needs through the
-API under its own token. An event grants nothing: it carries identifiers, and receiving one gives
+Each attempt uses an HTTP `POST` with `Accept: application/json`, `Content-Type: application/json`,
+`webhook-id`, `webhook-timestamp`, and `webhook-signature`. The id equals the envelope's `id`
+and stays the same on retry. The timestamp is the attempt time in Unix seconds. Each signature
+entry has the form `v1,<base64>`.
+
+To rotate a key, save the old bytes under a separate secret reference and set
+`previousHmacSha256KeyRef` to that reference. Replace the bytes at the existing
+`hmacSha256KeyRef` and restart. The delivery includes two signature entries separated by a
+space, with the current key's signature first. After the receiver switches to the current key,
+remove `previousHmacSha256KeyRef` and restart.
+
+The receiver verifies the exact request body, checks the timestamp window, and confirms that
+`webhook-id` matches the authenticated envelope id. Follow the [delivery signing reference](../../reference/delivery-signing/).
+The receiver then reads what it needs through the API under its own token.
+An event grants nothing: it carries identifiers, and receiving one gives
 the receiver no standing in the Document Store. An observer cannot answer with a change of its
 own; the Document Store refuses every proposal, records it as
 `documents.hook.proposal-unsupported`, and changes nothing.
 
 {/* Evidence: crates/registry-documents/src/hooks.rs, DocumentEvent::subject, projected,
     proposal_refusal, INITIAL_BACKOFF_MS, MAXIMUM_BACKOFF_MS, and record_audit;
+    crates/registry-documents/tests/postgres_hooks.rs, delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal;
+    crates/registry-platform-hooks/src/receiver.rs, verify_hook_delivery;
     crates/registry-documents-core/src/project.rs, HookTrigger::fields;
     crates/registry-platform-config/src/blocks.rs, UrlHookDestinationConfig;
     products/documents/generated/events/;
@@ -584,6 +667,7 @@ answers the series below and nothing else. The document listener does not route 
 | `documents_hook_oldest_overdue_age_seconds` | none | Gauge of how many seconds the oldest pending hook delivery is past its due time. Zero when none is overdue |
 | `documents_worker_last_success_age_seconds` | `worker`: `cleanup` | Gauge of seconds since the cleanup pass last finished without leaving an orphaned object unconfirmed |
 | `documents_metrics_sample_failures_total` | `sample`: `verification-jobs`, `erasure-jobs`, `hook-deliveries` | Scrapes in which that queue could not be read |
+| `documents_request_refusals_total` | `check`: the closed set of 45 failed checks, every value published at zero | Requests refused, by the check that failed. Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute, with `suppressed` counting what a window held back. Neither carries a token, claim, client, subject or identifier |
 
 Every state is listed, with a zero when no row is in it. Watch the `dead-lettered` state of each
 gauge, the work that gave up and needs a person. Replay a verification or erasure job as

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::PeerPolicy;
 use std::{fmt, time::Duration};
 
 use registry_platform_httputil::client::{
@@ -18,6 +19,7 @@ const MAXIMUM_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 /// refuses an unusable configuration before any client exists.
 #[derive(Clone)]
 pub struct MessagingClientConfig {
+    pub(crate) peer_policy: PeerPolicy,
     pub(crate) base_url: Url,
     pub(crate) attempt_timeout: Duration,
     pub(crate) connect_timeout: Duration,
@@ -28,9 +30,14 @@ pub struct MessagingClientConfig {
 }
 
 impl MessagingClientConfig {
+    pub fn new_without_peer_policy(base_url: Url) -> Self {
+        Self::new(base_url, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
     #[must_use]
-    pub fn new(base_url: Url) -> Self {
+    pub fn new(base_url: Url, peer_policy: PeerPolicy) -> Self {
         Self {
+            peer_policy,
             base_url,
             attempt_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
@@ -138,7 +145,7 @@ mod tests {
 
     #[test]
     fn debug_withholds_url_and_certificate_material() {
-        let config = MessagingClientConfig::new(
+        let config = MessagingClientConfig::new_without_peer_policy(
             Url::parse("https://secret.example.invalid/private").expect("fixture URL"),
         )
         .with_user_agent("secret-agent")
@@ -154,24 +161,28 @@ mod tests {
     fn configuration_bounds_are_enforced_before_any_client_exists() {
         let url = Url::parse("https://messaging.example.invalid/").expect("fixture URL");
         assert_eq!(
-            MessagingClientConfig::new(url.clone()).maximum_response_bytes,
+            MessagingClientConfig::new_without_peer_policy(url.clone()).maximum_response_bytes,
             DEFAULT_MAXIMUM_RESPONSE_BYTES
         );
         let refused = [
-            MessagingClientConfig::new(url.clone()).with_attempt_timeout(Duration::ZERO),
-            MessagingClientConfig::new(url.clone()).with_connect_timeout(Duration::ZERO),
-            MessagingClientConfig::new(url.clone()).with_maximum_response_bytes(0),
-            MessagingClientConfig::new(url.clone())
+            MessagingClientConfig::new_without_peer_policy(url.clone())
+                .with_attempt_timeout(Duration::ZERO),
+            MessagingClientConfig::new_without_peer_policy(url.clone())
+                .with_connect_timeout(Duration::ZERO),
+            MessagingClientConfig::new_without_peer_policy(url.clone())
+                .with_maximum_response_bytes(0),
+            MessagingClientConfig::new_without_peer_policy(url.clone())
                 .with_maximum_response_bytes(MAXIMUM_RESPONSE_BYTES + 1),
-            MessagingClientConfig::new(url.clone()).with_trusted_root_certificates(vec![
-                0;
-                MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES
-                    + 1
-            ]),
-            MessagingClientConfig::new(
+            MessagingClientConfig::new_without_peer_policy(url.clone())
+                .with_trusted_root_certificates(vec![
+                    0;
+                    MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES
+                        + 1
+                ]),
+            MessagingClientConfig::new_without_peer_policy(
                 Url::parse("https://user:pass@messaging.example.invalid/").expect("fixture URL"),
             ),
-            MessagingClientConfig::new(url.clone())
+            MessagingClientConfig::new_without_peer_policy(url.clone())
                 .with_maximum_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1),
         ];
         for config in refused {
@@ -184,15 +195,17 @@ mod tests {
             );
         }
         for retries in 0..=MAXIMUM_MUTATION_RETRIES {
-            assert!(MessagingClientConfig::new(url.clone())
+            assert!(MessagingClientConfig::new_without_peer_policy(url.clone())
                 .with_maximum_mutation_retries(retries)
                 .validate()
                 .is_ok());
         }
-        assert!(MessagingClientConfig::new(url.clone())
+        assert!(MessagingClientConfig::new_without_peer_policy(url.clone())
             .with_maximum_response_bytes(MAXIMUM_RESPONSE_BYTES)
             .validate()
             .is_ok());
-        assert!(MessagingClientConfig::new(url).validate().is_ok());
+        assert!(MessagingClientConfig::new_without_peer_policy(url)
+            .validate()
+            .is_ok());
     }
 }

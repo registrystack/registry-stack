@@ -274,9 +274,10 @@ async fn client_with_provider(
         .await
         .unwrap();
     });
-    let config =
-        BaseRegistryClientConfig::new(Url::parse(&format!("http://{address}/tenant")).unwrap())
-            .with_token_provider(token);
+    let config = BaseRegistryClientConfig::new_without_peer_policy(
+        Url::parse(&format!("http://{address}/tenant")).unwrap(),
+    )
+    .with_token_provider(token);
     (BaseRegistryClient::new(config).unwrap(), captured)
 }
 
@@ -985,8 +986,9 @@ async fn statistics_release_dry_run_is_sent_once_after_a_connection_reset() {
             drop(stream);
         }
     });
-    let config =
-        BaseRegistryClientConfig::new(Url::parse(&format!("http://{address}/tenant")).unwrap());
+    let config = BaseRegistryClientConfig::new_without_peer_policy(
+        Url::parse(&format!("http://{address}/tenant")).unwrap(),
+    );
     let client = BaseRegistryClient::new(config).unwrap();
     assert!(client
         .statistics_release_dry_run(

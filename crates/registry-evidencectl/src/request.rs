@@ -114,6 +114,12 @@ pub struct PrepareArgs {
         conflicts_with = "profile"
     )]
     runtime_config: Option<PathBuf>,
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
 
     /// Response format to request and verify.
     #[arg(
@@ -340,20 +346,38 @@ struct LocalRelyingProcedure {
     clock_skew_seconds: u64,
 }
 
-pub fn run(command: RequestCommand) -> Result<ExitCode> {
+impl RequestCommand {
+    pub(crate) fn posture_flag(&self) -> Option<Option<&str>> {
+        match self {
+            Self::Prepare(args) => Some(args.posture.as_deref()),
+        }
+    }
+}
+
+pub fn run(
+    command: RequestCommand,
+    declared: Option<registry_platform_config::DeclaredPosture>,
+) -> Result<ExitCode> {
     match command {
-        RequestCommand::Prepare(args) => prepare(args),
+        RequestCommand::Prepare(args) => prepare(args, declared),
     }
 }
 
-fn prepare(args: PrepareArgs) -> Result<ExitCode> {
+fn prepare(
+    args: PrepareArgs,
+    declared: Option<registry_platform_config::DeclaredPosture>,
+) -> Result<ExitCode> {
+    let declared = declared.unwrap_or(crate::DEFAULT_POSTURE);
     if args.profile.is_some() {
-        return prepare_progressive(args);
+        return prepare_progressive(args, declared);
     }
-    prepare_local(args)
+    prepare_local(args, declared)
 }
 
-fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
+fn prepare_progressive(
+    args: PrepareArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
     if args.purpose.is_some() {
         bail!("progressive preparation accepts profile, requirement, and subject fields");
@@ -369,8 +393,9 @@ fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
         .as_deref()
         .ok_or_else(|| anyhow!("progressive preparation requires a public Requirement URI"))?;
     let (selectors, subjects) = progressive_subject_inputs(&args)?;
-    let client = EvidenceClient::from_profile_path(profile)
-        .map_err(|_| anyhow!("progressive request preparation failed"))?;
+    let client =
+        EvidenceClient::from_profile_path(profile, crate::evidence_peer_policy(declared.posture))
+            .map_err(|_| anyhow!("progressive request preparation failed"))?;
     let mut request = AudienceScopedRequest::for_requirement_uri(requirement, selectors);
     if let Some(subjects) = subjects {
         request = request.with_subjects(subjects);
@@ -587,7 +612,10 @@ fn progressive_curl_config(
     )))
 }
 
-fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
+fn prepare_local(
+    args: PrepareArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
     let (evidence_url, header, runtime) = match (
         args.evidence_url.as_deref(),
@@ -609,11 +637,13 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
         .enable_all()
         .build()
         .context("failed to start the Evidence discovery runtime")?;
+    let peer_policy = crate::evidence_peer_policy(declared.posture);
     let catalog = {
         let discovery =
             NonVerifyingEvidenceClient::new(EvidenceClientConfig::without_verification(
                 evidence_origin.clone(),
                 token_provider.clone(),
+                peer_policy,
             ))
             .context("the Evidence discovery client is invalid")?;
         runtime_threads
@@ -642,7 +672,8 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
     let procedure_input = canonicalize_json(&serde_json::to_value(procedure_input)?)
         .context("failed to serialize the local relying procedure input")?;
     write_private_bytes(&procedure_input_path, &procedure_input)?;
-    let procedure = prepare_local_relying_procedure(&evidence, runtime, &procedure_input_path)?;
+    let procedure =
+        prepare_local_relying_procedure(&evidence, runtime, &procedure_input_path, declared)?;
     fs::remove_file(&procedure_input_path)
         .context("failed to remove the private relying procedure input")?;
     validate_local_relying_procedure(&procedure, definition, audience, args.format)?;
@@ -652,6 +683,7 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
         token_provider,
         procedure.trusted_jwks.clone(),
         procedure.revoked_key_ids.clone(),
+        peer_policy,
     );
     let evidence_client =
         EvidenceClient::new(client_config).context("the local Evidence client is invalid")?;
@@ -949,6 +981,7 @@ fn prepare_local_relying_procedure(
     evidence: &Path,
     runtime: &Path,
     input: &Path,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<LocalRelyingProcedure> {
     let mut child = Command::new(evidence)
         .arg("prepare-local-relying-procedure")
@@ -957,6 +990,7 @@ fn prepare_local_relying_procedure(
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .arg("--input")
         .arg(input)
+        .args(["--posture", declared.posture.as_str()])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -976,6 +1010,9 @@ fn prepare_local_relying_procedure(
     }
     let status = child.wait().context("failed to wait for Evidence")?;
     if !status.success() {
+        if let Some(report) = crate::authored::runtime_refusal(&output) {
+            return Err(report.into());
+        }
         bail!("Evidence relying procedure preparation failed");
     }
     serde_json::from_slice(&output)
@@ -1280,6 +1317,7 @@ mod tests {
             evidence_url: None,
             header: None,
             runtime_config: None,
+            posture: None,
             format: PreparedResponseFormat::SignedJws,
             project: PathBuf::from("."),
             evidence_bin: None,

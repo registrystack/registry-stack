@@ -4,7 +4,7 @@ use std::os::unix::process::CommandExt;
 use std::{
     env,
     path::PathBuf,
-    process::{Command as ProcessCommand, ExitCode},
+    process::{Command as ProcessCommand, ExitCode, Stdio},
 };
 
 use anyhow::Result;
@@ -32,6 +32,15 @@ pub(crate) struct Oid4vciArgs {
 }
 
 impl Oid4vciArgs {
+    pub(crate) fn posture_flag(&self) -> Option<Option<&str>> {
+        match &self.command {
+            Oid4vciCommand::Check { posture, .. }
+            | Oid4vciCommand::Inspect { posture, .. }
+            | Oid4vciCommand::Serve { posture, .. } => Some(posture.as_deref()),
+            Oid4vciCommand::Openapi { .. } => None,
+        }
+    }
+
     pub(crate) fn is_check(&self) -> bool {
         matches!(self.command, Oid4vciCommand::Check { .. })
     }
@@ -48,6 +57,12 @@ enum Oid4vciCommand {
             env = "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
         )]
         config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         /// Exit 1 when a warning is reported.
         #[arg(long)]
         deny_warnings: bool,
@@ -64,6 +79,12 @@ enum Oid4vciCommand {
             env = "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
         )]
         config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
     },
     /// Render the OpenAPI 3.1 document.
     Openapi {
@@ -80,10 +101,20 @@ enum Oid4vciCommand {
             env = "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
         )]
         config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
     },
 }
 
-pub(crate) fn run(args: Oid4vciArgs, format: OutputFormat) -> Result<ExitCode> {
+pub(crate) fn run(
+    args: Oid4vciArgs,
+    format: OutputFormat,
+    declared: Option<registry_platform_config::DeclaredPosture>,
+) -> Result<ExitCode> {
     let binary = evidence_binary::resolve_matching_helper_with_environment(
         HELPER,
         args.oid4vci_bin.as_deref(),
@@ -93,12 +124,14 @@ pub(crate) fn run(args: Oid4vciArgs, format: OutputFormat) -> Result<ExitCode> {
         env::var_os("RSTACK_RELEASE_TAG").as_deref(),
         env::var_os("PATH").as_deref(),
     )?;
+    let json_check = args.is_check() && format == OutputFormat::Json;
     let mut child = ProcessCommand::new(binary);
     match args.command {
         Oid4vciCommand::Check {
             config,
             deny_warnings,
             environment,
+            ..
         } => {
             child.arg("check").arg("--runtime-config").arg(config);
             child.arg("--format").arg(match format {
@@ -112,7 +145,7 @@ pub(crate) fn run(args: Oid4vciArgs, format: OutputFormat) -> Result<ExitCode> {
                 child.arg("--environment");
             }
         }
-        Oid4vciCommand::Inspect { config } => {
+        Oid4vciCommand::Inspect { config, .. } => {
             child.arg("inspect").arg("--runtime-config").arg(config);
         }
         Oid4vciCommand::Openapi { output } => {
@@ -121,12 +154,51 @@ pub(crate) fn run(args: Oid4vciArgs, format: OutputFormat) -> Result<ExitCode> {
                 child.arg("--output").arg(output);
             }
         }
-        Oid4vciCommand::Serve { config } => {
+        Oid4vciCommand::Serve { config, .. } => {
             child.arg("serve").arg("--runtime-config").arg(config);
         }
     }
+    if let Some(declared) = declared {
+        child.args(["--posture", declared.posture.as_str()]);
+    }
+    if let (true, Some(declared)) = (json_check, declared) {
+        return check_json(child, declared);
+    }
     let failure = child.exec();
     Err(anyhow::Error::new(failure).context("cannot launch selected wallet-delivery binary"))
+}
+
+fn check_json(
+    mut command: ProcessCommand,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
+    const MAX_REPORT_BYTES: u64 = 8 * 1024 * 1024;
+    let mut capture = tempfile::tempfile()?;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(capture.try_clone()?))
+        .spawn()?;
+    let status = evidence_binary::wait_bounded(
+        &mut child,
+        "wallet-delivery configuration check",
+        evidence_binary::DELEGATED_RUN_DEADLINE,
+        &|| Ok(()),
+        &|| evidence_binary::capture_over_limit(&capture, MAX_REPORT_BYTES),
+    )?;
+    let stdout = evidence_binary::drain_capture(
+        &mut capture,
+        MAX_REPORT_BYTES,
+        "wallet-delivery configuration report",
+    )?;
+    let report: serde_json::Value = serde_json::from_slice(&stdout)?;
+    registry_cli_report::Report::new(&report, registry_platform_buildinfo::DISPLAY_VERSION)?;
+    crate::report::print_with_posture(&report, Some(declared))?;
+    Ok(ExitCode::from(
+        status
+            .code()
+            .and_then(|code| u8::try_from(code).ok())
+            .unwrap_or(1),
+    ))
 }
 
 #[cfg(test)]

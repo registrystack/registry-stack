@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashSet, fmt, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    fmt,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use axum::{
     body::Body,
@@ -10,7 +15,11 @@ use axum::{
     response::Response,
 };
 use registry_platform_audit::AuditKeyHasher;
-use registry_platform_authcommon::{parse_bearer_token, BearerParseError};
+use registry_platform_authcommon::{
+    parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
+    RefusalRecorder,
+};
+use registry_platform_httputil::loopback::loopback_host;
 pub use registry_platform_oidc::AccessTokenAlgorithm;
 use registry_platform_oidc::{
     access_token_typ_set, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
@@ -19,12 +28,16 @@ use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
 };
 use serde_json::{json, Value};
-use url::{Host, Url};
+use url::Url;
 use zeroize::Zeroizing;
 
 use crate::server::{problem, METADATA_PREFIX};
 
 const MAXIMUM_TOKEN_LIFETIME: Duration = Duration::from_secs(86_400);
+
+/// The least time between two log lines for a request the gateway could not
+/// admit because of its own fault.
+const ADMIT_FAULT_LOG_WINDOW: Duration = Duration::from_secs(60);
 
 /// Complete product-neutral inbound resource-server settings.
 #[derive(Clone, Debug)]
@@ -37,8 +50,7 @@ pub struct ResourceServerOptions {
     /// and protected-resource metadata. URL parsing validates this value but
     /// must not normalize it, because JWT issuer matching is exact.
     pub issuer: String,
-    /// Permit a non-loopback HTTP issuer for an explicitly insecure deployment.
-    /// The protected resource URL remains HTTPS or loopback HTTP only.
+    /// Permit a non-loopback HTTP issuer when the process declares development.
     pub allow_insecure_http: bool,
     pub algorithms: Vec<AccessTokenAlgorithm>,
     pub allowed_clients: Vec<String>,
@@ -53,10 +65,18 @@ pub struct ResourceServerOptions {
 }
 
 impl ResourceServerOptions {
-    /// Validates resource admission settings without constructing a verifier,
-    /// acquiring credentials, or opening a socket.
+    /// Validates resource admission settings for production without
+    /// constructing a verifier, acquiring credentials, or opening a socket.
     pub fn validate(&self) -> Result<(), ResourceServerError> {
-        validate_options(self)
+        self.validate_with_posture(registry_platform_config::Posture::Production)
+    }
+
+    /// Validates resource admission settings under the declared posture.
+    pub fn validate_with_posture(
+        &self,
+        posture: registry_platform_config::Posture,
+    ) -> Result<(), ResourceServerError> {
+        validate_options(self, posture)
     }
 }
 
@@ -223,10 +243,12 @@ impl CallerContext<'_> {
     }
 }
 
+/// What the edge answers, and for the answers that carry a check, the check
+/// that failed. The check is operator-side only and never reaches a response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Refusal {
-    Missing,
-    InvalidToken,
+    Missing(FailedCheck),
+    InvalidToken(FailedCheck),
     InsufficientScope,
     KeySource,
     RateLimited { retry_after_seconds: u64 },
@@ -245,6 +267,18 @@ pub struct ResourceServer {
     challenge: String,
     scope_challenge: String,
     metadata: Value,
+    refusals: Arc<RefusalRecorder>,
+    /// When the gateway last logged that it could not admit a request, and
+    /// how many requests failed the same way since.
+    admit_fault_logged: Mutex<AdmitFaultLog>,
+    /// The configured claim and scopes a scope refusal line names.
+    declared_scope: DeclaredScope,
+}
+
+#[derive(Default)]
+struct AdmitFaultLog {
+    logged: Option<Instant>,
+    suppressed: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -257,16 +291,45 @@ pub enum ResourceServerError {
     Options,
     #[error("the {0} rate limit is not usable")]
     RateLimit(&'static str),
+    #[error("the refusal recorder is not usable")]
+    Recorder,
 }
 
 impl ResourceServer {
+    /// The production resource server: [`Self::new_with_posture`] with
+    /// [`registry_platform_config::Posture::Production`].
     pub fn new(
         options: &ResourceServerOptions,
         verifier: TokenVerifier,
         hasher: AuditKeyHasher,
         limits: RateLimitOptions,
     ) -> Result<Self, ResourceServerError> {
-        options.validate()?;
+        Self::new_with_posture(
+            options,
+            verifier,
+            hasher,
+            limits,
+            registry_platform_config::Posture::Production,
+        )
+    }
+
+    pub fn new_with_posture(
+        options: &ResourceServerOptions,
+        verifier: TokenVerifier,
+        hasher: AuditKeyHasher,
+        limits: RateLimitOptions,
+        posture: registry_platform_config::Posture,
+    ) -> Result<Self, ResourceServerError> {
+        options.validate_with_posture(posture)?;
+        Self::build(options, verifier, hasher, limits)
+    }
+
+    fn build(
+        options: &ResourceServerOptions,
+        verifier: TokenVerifier,
+        hasher: AuditKeyHasher,
+        limits: RateLimitOptions,
+    ) -> Result<Self, ResourceServerError> {
         let resource = Url::parse(&options.resource).map_err(|_| ResourceServerError::Resource)?;
         let metadata_url = metadata_url(&resource).ok_or(ResourceServerError::Resource)?;
         let challenge = format!("Bearer resource_metadata=\"{metadata_url}\"");
@@ -278,6 +341,8 @@ impl ResourceServer {
             .map_err(|_| ResourceServerError::RateLimit("perPrincipal"))?;
         let per_client =
             limiter(limits.per_client).map_err(|_| ResourceServerError::RateLimit("perClient"))?;
+        let refusals =
+            Arc::new(RefusalRecorder::new("mcp_edge").map_err(|_| ResourceServerError::Recorder)?);
         let metadata = json!({
             "resource": options.resource.as_str(),
             "authorization_servers": [options.issuer.as_str()],
@@ -297,7 +362,18 @@ impl ResourceServer {
             challenge,
             scope_challenge,
             metadata,
+            refusals,
+            admit_fault_logged: Mutex::new(AdmitFaultLog::default()),
+            declared_scope: DeclaredScope::new(&options.scope_claim)
+                .with_required_scope(options.required_scopes.join(" ")),
         })
+    }
+
+    /// Counts every refusal by the check that failed. The edge has no metrics
+    /// listener, so the counter is read in tests and the log line is the
+    /// operator's signal.
+    pub(crate) const fn refusal_recorder(&self) -> &Arc<RefusalRecorder> {
+        &self.refusals
     }
 
     #[must_use]
@@ -310,19 +386,16 @@ impl ResourceServer {
         &self,
         verified: &VerifiedToken,
         token: &str,
-    ) -> Result<VerifiedCaller, ()> {
-        self.caller(verified, token).map_err(|_| ())
+    ) -> Result<VerifiedCaller, Refusal> {
+        self.caller(verified, token)
     }
 
     async fn authenticate(&self, headers: &HeaderMap) -> Result<VerifiedCaller, Refusal> {
         let token = bearer_token(headers)?;
         let verified = match self.verifier.verify(token).await {
             Ok(verified) => verified,
-            Err(error) if is_key_source_failure(&error) => {
-                tracing::warn!("the access-token key set is unavailable");
-                return Err(Refusal::KeySource);
-            }
-            Err(_) => return Err(Refusal::InvalidToken),
+            Err(error) if is_key_source_failure(&error) => return Err(Refusal::KeySource),
+            Err(error) => return Err(Refusal::InvalidToken(error.failed_check())),
         };
         let caller = self.caller(&verified, token)?;
         admit(&self.per_principal, caller.principal_pseudonym()).await?;
@@ -333,19 +406,21 @@ impl ResourceServer {
     fn caller(&self, verified: &VerifiedToken, token: &str) -> Result<VerifiedCaller, Refusal> {
         let claims = &verified.claims;
         if claims.extra.contains_key("act") || claims.extra.contains_key("may_act") {
-            return Err(Refusal::InvalidToken);
+            return Err(Refusal::InvalidToken(FailedCheck::Delegation));
         }
         let subject = claims
             .sub
             .as_deref()
             .filter(|subject| !subject.is_empty())
-            .ok_or(Refusal::InvalidToken)?;
+            .ok_or(Refusal::InvalidToken(FailedCheck::TokenClaims))?;
         let client = verified
             .matched_client_id()
             .ok()
             .flatten()
-            .ok_or(Refusal::InvalidToken)?;
-        let expires_at = claims.exp.ok_or(Refusal::InvalidToken)?;
+            .ok_or(Refusal::InvalidToken(FailedCheck::TokenClient))?;
+        let expires_at = claims
+            .exp
+            .ok_or(Refusal::InvalidToken(FailedCheck::TokenClaims))?;
         let present: HashSet<&str> = verified.scopes.iter().map(String::as_str).collect();
         if !self
             .required_scopes
@@ -370,10 +445,48 @@ impl ResourceServer {
             .map_err(|_| Refusal::Unavailable)
     }
 
-    pub(crate) fn refusal_response(&self, refusal: Refusal) -> Response {
+    /// Counts and logs the refusal, then builds its answer.
+    pub(crate) fn refuse(&self, refusal: Refusal) -> Response {
+        match refusal.failed_check() {
+            Some(check) => record_refusal!(
+                self.refusals,
+                RefusalNote::new(check),
+                declared = Some(&self.declared_scope)
+            ),
+            // The gateway could not derive a pseudonym or run its limiter.
+            // That is a fault of this service, not a check a caller failed.
+            None => {
+                if let Some(suppressed) = self.admit_fault_due(Instant::now()) {
+                    tracing::error!(suppressed, "the gateway could not admit a request");
+                }
+            }
+        }
+        self.refusal_response(refusal)
+    }
+
+    /// `Some` at most once per `ADMIT_FAULT_LOG_WINDOW`, so a limiter that has
+    /// reached its capacity cannot write a line for every request. The value
+    /// is how many requests failed the same way since the last line.
+    fn admit_fault_due(&self, now: Instant) -> Option<u64> {
+        let mut log = self
+            .admit_fault_logged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if log
+            .logged
+            .is_some_and(|logged| now.saturating_duration_since(logged) < ADMIT_FAULT_LOG_WINDOW)
+        {
+            log.suppressed = log.suppressed.saturating_add(1);
+            return None;
+        }
+        log.logged = Some(now);
+        Some(std::mem::take(&mut log.suppressed))
+    }
+
+    fn refusal_response(&self, refusal: Refusal) -> Response {
         let (status, challenge) = match refusal {
-            Refusal::Missing => (StatusCode::UNAUTHORIZED, Some(self.challenge.clone())),
-            Refusal::InvalidToken => (
+            Refusal::Missing(_) => (StatusCode::UNAUTHORIZED, Some(self.challenge.clone())),
+            Refusal::InvalidToken(_) => (
                 StatusCode::UNAUTHORIZED,
                 Some(
                     self.challenge
@@ -401,17 +514,23 @@ impl ResourceServer {
     }
 }
 
-fn validate_options(options: &ResourceServerOptions) -> Result<(), ResourceServerError> {
+fn validate_options(
+    options: &ResourceServerOptions,
+    posture: registry_platform_config::Posture,
+) -> Result<(), ResourceServerError> {
     let Ok(resource) = Url::parse(&options.resource) else {
         return Err(ResourceServerError::Resource);
     };
-    if !valid_protected_url(&resource) || resource.path() != crate::MCP_PATH {
+    if !valid_protected_url(&resource, posture) || resource.path() != crate::MCP_PATH {
         return Err(ResourceServerError::Resource);
     }
     let Ok(issuer) = Url::parse(&options.issuer) else {
         return Err(ResourceServerError::Issuer);
     };
-    if !valid_issuer_url(&issuer, options.allow_insecure_http) {
+    if (posture == registry_platform_config::Posture::Production
+        && (options.allow_insecure_http || issuer.scheme() != "https"))
+        || !valid_issuer_url(&issuer, options.allow_insecure_http)
+    {
         return Err(ResourceServerError::Issuer);
     }
     if options.algorithms.is_empty()
@@ -429,11 +548,12 @@ fn validate_options(options: &ResourceServerOptions) -> Result<(), ResourceServe
     Ok(())
 }
 
-fn valid_protected_url(url: &Url) -> bool {
+fn valid_protected_url(url: &Url, posture: registry_platform_config::Posture) -> bool {
+    let http_allowed = posture == registry_platform_config::Posture::Development;
     url.host().is_some()
         && url.query().is_none()
         && url.fragment().is_none()
-        && (url.scheme() == "https" || url.scheme() == "http" && loopback(url))
+        && (url.scheme() == "https" || url.scheme() == "http" && http_allowed)
 }
 
 fn valid_issuer_url(url: &Url, allow_insecure_http: bool) -> bool {
@@ -445,9 +565,8 @@ fn valid_issuer_url(url: &Url, allow_insecure_http: bool) -> bool {
 }
 
 fn loopback(url: &Url) -> bool {
-    matches!(url.host(), Some(Host::Ipv4(ip)) if ip.is_loopback())
-        || matches!(url.host(), Some(Host::Ipv6(ip)) if ip.is_loopback())
-        || matches!(url.host(), Some(Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost"))
+    url.host_str()
+        .is_some_and(|host| loopback_host(host).is_some())
 }
 
 fn limiter(options: TokenBucketOptions) -> Result<TokenBucketLimiter, TokenBucketError> {
@@ -458,10 +577,22 @@ fn limiter(options: TokenBucketOptions) -> Result<TokenBucketLimiter, TokenBucke
 }
 
 impl Refusal {
+    /// The check a caller failed, or `None` for a fault of this service.
+    #[deny(clippy::wildcard_enum_match_arm)]
+    const fn failed_check(self) -> Option<FailedCheck> {
+        match self {
+            Self::Missing(check) | Self::InvalidToken(check) => Some(check),
+            Self::InsufficientScope => Some(FailedCheck::Scope),
+            Self::KeySource => Some(FailedCheck::KeySourceUnavailable),
+            Self::RateLimited { .. } => Some(FailedCheck::RateLimit),
+            Self::Unavailable => None,
+        }
+    }
+
     const fn code(self) -> &'static str {
         match self {
-            Self::Missing => "unauthorized",
-            Self::InvalidToken => "invalid-token",
+            Self::Missing(_) => "unauthorized",
+            Self::InvalidToken(_) => "invalid-token",
             Self::InsufficientScope => "insufficient-scope",
             Self::KeySource | Self::Unavailable => "temporarily-unavailable",
             Self::RateLimited { .. } => "rate-limited",
@@ -470,8 +601,8 @@ impl Refusal {
 
     const fn detail(self) -> &'static str {
         match self {
-            Self::Missing => "A bearer access token is required.",
-            Self::InvalidToken => "The access token is not valid for this resource.",
+            Self::Missing(_) => "A bearer access token is required.",
+            Self::InvalidToken(_) => "The access token is not valid for this resource.",
             Self::InsufficientScope => "The access token lacks a required scope.",
             Self::KeySource | Self::Unavailable => {
                 "The gateway cannot verify the request right now."
@@ -492,7 +623,7 @@ pub(crate) async fn require_caller(
             request.extensions_mut().insert(Arc::new(caller));
             next.run(request).await
         }
-        Err(refusal) => server.refusal_response(refusal),
+        Err(refusal) => server.refuse(refusal),
     }
 }
 
@@ -516,14 +647,19 @@ pub(crate) fn retry_after_seconds(retry_after: Duration) -> u64 {
 
 fn bearer_token(headers: &HeaderMap) -> Result<&str, Refusal> {
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
-    let value = values.next().ok_or(Refusal::Missing)?;
+    let value = values
+        .next()
+        .ok_or(Refusal::Missing(FailedCheck::CredentialMissing))?;
     if values.next().is_some() {
-        return Err(Refusal::InvalidToken);
+        return Err(Refusal::InvalidToken(FailedCheck::CredentialMalformed));
     }
-    let value = value.to_str().map_err(|_| Refusal::InvalidToken)?;
+    let value = value
+        .to_str()
+        .map_err(|_| Refusal::InvalidToken(FailedCheck::CredentialMalformed))?;
     parse_bearer_token(value).map_err(|error| match error {
-        BearerParseError::Malformed | BearerParseError::InvalidScheme => Refusal::Missing,
-        _ => Refusal::InvalidToken,
+        BearerParseError::InvalidScheme => Refusal::Missing(FailedCheck::CredentialMissing),
+        BearerParseError::Malformed => Refusal::Missing(FailedCheck::CredentialMalformed),
+        _ => Refusal::InvalidToken(FailedCheck::CredentialMalformed),
     })
 }
 
@@ -572,3 +708,6 @@ fn is_key_source_failure(error: &OidcError) -> bool {
             | OidcError::MissingIssuer
     )
 }
+
+#[cfg(test)]
+mod refusal_tests;

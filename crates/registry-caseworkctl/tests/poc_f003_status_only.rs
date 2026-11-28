@@ -125,6 +125,8 @@ exit 1
             "provider",
             "add",
             project.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             root.to_str().unwrap(),
             "--action",

@@ -30,10 +30,10 @@ PLATFORM_TRIPLES = {
     "linux-arm64-gnu": "aarch64-unknown-linux-gnu",
     "linux-x64-gnu": "x86_64-unknown-linux-gnu",
 }
-PLATFORM_README = """# `@registrystack/client-{platform}`
+PLATFORM_README = """# `@registrystack/client-node-{platform}`
 
 This is the **{triple}** native binary package for
-[`@registrystack/client`](https://www.npmjs.com/package/@registrystack/client).
+[`@registrystack/client-node`](https://www.npmjs.com/package/@registrystack/client-node).
 It is installed automatically as an optional dependency of that package at the
 same version. Do not depend on it directly. See
 https://github.com/registrystack/registry-stack for details.

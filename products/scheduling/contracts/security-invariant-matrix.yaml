@@ -56,7 +56,11 @@ invariants:
       capacity transaction and receipt replay, without holding a database
       lock, and refuses a grant from an unlisted source rather than falling
       back to the offline path. The unchecked-final-fifteen-minutes keyword
-      admits only grants with at most 900 seconds remaining. The transaction
+      admits only grants with at most 900 seconds remaining, and answers an
+      unexpired grant with more left with grant.lifetime-too-long once the
+      bounds have matched, on a route that creates a hold or an appointment.
+      A route that names an existing hold or appointment answers
+      operation.not-authorized instead. The transaction
       re-checks the earlier of the verified access-token and grant
       deadlines after every lock wait and immediately before commit. Status is
       an observation, not a distributed transaction: withdrawal after a
@@ -406,7 +410,8 @@ invariants:
     enforcementPoint: >-
       A declared assertion-issuer map binding each accepted authority to the
       client that may exchange from it, matched when the exchanged credential
-      is authenticated, and bounded in the runtime schema.
+      is authenticated, and bounded in the runtime schema. Production also
+      refuses a development task assertion and a development status peer.
     refusal: >-
       Refuse the credential until its authority is declared; an undeclared
       authority is a credentials problem, never a silent acceptance.
@@ -551,12 +556,12 @@ invariants:
     enforcementPoint: >-
       scheduling serve reads the activation ledger with the runtime
       credential before it binds the listener, compares the ledger's
-      identity.databaseId and active package digest with the verified
-      package, and writes no activation state. package.expectedDigest still
+      identity.databaseId, active package digest, and posture with the
+      deployment, and writes no activation state. package.expectedDigest still
       pins the package at package.root. serve is the runtime's only command.
     refusal: >-
       Refuse to start when the ledger holds no row, names another package, or
-      belongs to another identity.databaseId, and refuse records apply when
+      belongs to another identity.databaseId or posture, and refuse records apply when
       another package is active, naming schedulingctl plan
       --runtime-config FILE then schedulingctl apply --runtime-config FILE;
       refuse a pin mismatch naming package.expectedDigest; exit 2 as a usage
@@ -800,25 +805,25 @@ invariants:
   - id: SCHEDULING-SEC-38
     state: enforced
     threat: >-
-      A signed reminder is accepted under a different request target or loses
-      its event identity on retry, causing forged or duplicate downstream work.
-      A purpose override sends shared delivery credentials to another origin.
+      An unauthenticated reminder or a reminder signed for a different
+      destination causes forged downstream work. A retry that loses its event
+      identity causes duplicate downstream work.
     enforcementPoint: >-
-      When reminder HMAC is configured, the shared delivery signature binds
-      method, target, content type, event metadata and canonical body. The
-      closed purpose routing selects one same-origin fixed request template
-      before rendering and signing, with the configured URL as fallback. The
-      event identity and dispatch idempotency key remain stable while attempt
-      number and canonical RFC 3339 signature time advance. Bearer authentication
-      is independent.
+      Standard Webhooks signatures bind the exact envelope bytes, the outbox id
+      and the database lease time in Unix seconds. The outbox id stays stable
+      across retries. The closed purpose routing selects one same-origin fixed
+      destination and its keys before signing. Omitted purposes use the
+      fallback. Each configured reminder and hook destination has distinct
+      current and previous signing keys.
     refusal: >-
-      Refuse unsupported key providers, undersized keys, unknown purposes,
-      cross-origin overrides and URLs outside the existing destination rules. A downstream
-      event receiver verifies its exact configured source and signature;
-      accepting an event never grants authority for a capacity mutation.
+      Refuse missing keys, unsupported key providers, invalid key lengths,
+      reused key bytes, unknown purposes, cross-origin overrides and URLs
+      outside the destination rules. The receiver verifies its configured
+      source and destination key. Accepting a delivery confers no capacity
+      mutation authority.
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
-      name: a_signed_reminder_uses_the_shared_event_delivery_contract
+      name: a_signed_reminder_uses_the_standard_webhooks_delivery_contract
   - id: SCHEDULING-SEC-39
     state: enforced
     threat: >-

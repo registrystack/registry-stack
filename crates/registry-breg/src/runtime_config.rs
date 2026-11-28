@@ -15,19 +15,22 @@ use base64::Engine as _;
 use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
-    check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, JwksSource,
-    MetricsBindError, OidcIssuerConfig, PackageConfig as SharedPackageConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretReference, SecretResolver,
-    TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
+    check_metrics_bind_address, check_metrics_bind_apart, Admitted, AllowedClients, AuditKeyConfig,
+    CallerIssuerCore, CallerIssuerEntry, CallerIssuers, ClientRule, DatabaseTransport,
+    DatabaseTransportError, DeclaredPosture, DevelopmentWitness, FoundExplicitSetting, JwksSource,
+    LoadedRuntimeConfig, MetricsBindError, PackageConfig as SharedPackageConfig, Posture,
+    PostureReport, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretFileCheck,
+    SecretReference, SecretResolver, TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
-use registry_platform_crypto::{parse_json_strict, PublicJwk, SigningAlgorithm};
+use registry_platform_crypto::{delivery_signature::DeliveryKeys, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
 use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, AccessTokenAlgorithm, ClaimNames,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    fetch_discovery_for_issuer, public_jwks_document, AccessTokenAlgorithm, ClaimNames,
+    DeclaredKinds, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    StaticJwksError, TokenVerifierConfig,
 };
 use registry_platform_yaml::{
     lookalike_local_id_pairs, Diagnostic, Report, RetiredApiVersion, Severity, Source, Url,
@@ -43,10 +46,13 @@ use crate::contract::{external_id_map, local_id_map};
 #[cfg(feature = "schema")]
 use crate::contract::{external_id_map_schema, local_id_map_schema};
 use crate::{
-    auth::{AuthenticationConfigError, AuthorityClaimConfig},
+    auth::{AuthenticationConfigError, AuthenticatorIssuer, AuthorityClaimConfig},
     cursor::CursorCodec,
     event_destination::{
-        ActivatedEventDestinationRegistry, EventDestinationConfigs, RawEventDestinationConfigs,
+        labeled_delivery_keys, present_hook_key_reference, resolve_delivery_keys,
+        signing_key_action, ActivatedEventDestinationRegistry, EventDestinationActivationError,
+        EventDestinationConfigs, RawEventDestinationConfigs, CURRENT_KEY_MEMBER,
+        PREVIOUS_KEY_MEMBER,
     },
     model::CompiledRegistry,
     package::{
@@ -158,6 +164,18 @@ const RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>] = &[RetiredApi
 /// replaces it.
 const REMOVED_KEYS: &[RemovedKey] = &[
     RemovedKey {
+        path: "reviewAuthorities.*.completionTokenRef",
+        replacement: "Replace completionTokenRef with completion.hmacSha256KeyRef. Casework signs review completions with Standard Webhooks.",
+    },
+    RemovedKey {
+        path: "reviewAuthorities.*.completionRecipient",
+        replacement: "Move completionRecipient to completion.recipientBinding.",
+    },
+    RemovedKey {
+        path: "identity.databaseInitializationEnvironment",
+        replacement: "Delete identity.databaseInitializationEnvironment. If it said local, recreate the development database and apply the package with development declared.",
+    },
+    RemovedKey {
         path: "database.url",
         replacement: "delete database.url and name the connection URL by secret reference in database.runtimeUrlRef and database.migrationUrlRef",
     },
@@ -174,20 +192,92 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename database.pool.maxSize to database.pool.maximumConnections; the value stays as it is",
     },
     RemovedKey {
+        path: "authentication.oidc.issuer",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.issuer, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.audience",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.audience, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksSource",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.jwksSource, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowInsecureHttp",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.allowInsecureHttp, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowedAlgorithm",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.allowedAlgorithm, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.accessTokenType",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.accessTokenType, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.scopeClaim",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.scopeClaim, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.scopeSeparator",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.scopeSeparator, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowedClients",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.allowedClients, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.revokedKeyIds",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.revokedKeyIds, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.assertionIssuers",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.assertionIssuers, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.maximumTokenLifetimeSeconds",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.maximumTokenLifetimeSeconds, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.leewayMilliseconds",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.leewayMilliseconds, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksCache",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.jwksCache, in the entry of the issuer it belongs to; the value stays as it is",
+    },
+    RemovedKey {
         path: "authentication.oidc.maxTokenLifetimeSeconds",
-        replacement: "rename authentication.oidc.maxTokenLifetimeSeconds to authentication.oidc.maximumTokenLifetimeSeconds; the value stays as it is",
+        replacement: "declare it as authentication.oidc.issuers.ISSUER_ID.maximumTokenLifetimeSeconds, in the entry of the issuer it belongs to; the value stays as it is",
     },
     RemovedKey {
         path: "authentication.oidc.deniedKids",
-        replacement: "rename `authentication.oidc.deniedKids` to `authentication.oidc.revokedKeyIds`; the values stay as they are",
+        replacement: "declare it as `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds`, in the entry of the issuer it belongs to; the values stay as they are",
     },
     RemovedKey {
-        path: "authentication.oidc.jwksCache.maxDocumentBytes",
-        replacement: "rename authentication.oidc.jwksCache.maxDocumentBytes to authentication.oidc.jwksCache.maximumDocumentBytes; the value stays as it is",
+        path: "authentication.oidc.issuers.*.maxTokenLifetimeSeconds",
+        replacement: "rename authentication.oidc.issuers.ISSUER_ID.maxTokenLifetimeSeconds to authentication.oidc.issuers.ISSUER_ID.maximumTokenLifetimeSeconds; the value stays as it is",
     },
     RemovedKey {
-        path: "authentication.oidc.jwksCache.requestTimeoutMilliseconds",
-        replacement: "rename authentication.oidc.jwksCache.requestTimeoutMilliseconds to authentication.oidc.jwksCache.attemptTimeoutMilliseconds; the value stays as it is",
+        path: "authentication.oidc.issuers.*.deniedKids",
+        replacement: "rename `authentication.oidc.issuers.ISSUER_ID.deniedKids` to `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds`; the values stay as they are",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksCache.maxDocumentBytes",
+        replacement: "rename authentication.oidc.issuers.ISSUER_ID.jwksCache.maxDocumentBytes to authentication.oidc.issuers.ISSUER_ID.jwksCache.maximumDocumentBytes; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksCache.requestTimeoutMilliseconds",
+        replacement: "rename authentication.oidc.issuers.ISSUER_ID.jwksCache.requestTimeoutMilliseconds to authentication.oidc.issuers.ISSUER_ID.jwksCache.attemptTimeoutMilliseconds; the value stays as it is",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksSource.kind",
+        replacement: "Write `authentication.oidc.issuers.ISSUER_ID.jwksSource.type` with the same value.",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksUri",
+        replacement: "Declare `authentication.oidc.issuers.ISSUER_ID.jwksSource` with `type: uri` and `uri` set to the https URL.",
     },
     RemovedKey {
         path: "audit.retainDays",
@@ -270,20 +360,35 @@ const REMOVED_KEYS: &[RemovedKey] = &[
 /// `Debug` names the deciding code and pointer only, so a refusal carried in
 /// a startup error never prints the configured file path.
 #[derive(Clone, Eq, PartialEq)]
-pub struct ReaderRefusal(registry_platform_config::RuntimeConfigError);
+pub struct ReaderRefusal(ReaderRefusalKind);
+
+#[derive(Clone, Eq, PartialEq)]
+enum ReaderRefusalKind {
+    Shared(registry_platform_config::RuntimeConfigError),
+    Diagnostics(Vec<Diagnostic>),
+}
 
 impl ReaderRefusal {
     /// Every diagnostic, in the order the reader reported them.
     #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
-        self.0.diagnostics()
+        match &self.0 {
+            ReaderRefusalKind::Shared(error) => error.diagnostics(),
+            ReaderRefusalKind::Diagnostics(diagnostics) => diagnostics,
+        }
     }
 
     /// The diagnostic the refusal is classified by: the first error of the
     /// earliest kind.
     #[must_use]
     pub fn deciding_diagnostic(&self) -> &Diagnostic {
-        self.0.deciding_diagnostic()
+        match &self.0 {
+            ReaderRefusalKind::Shared(error) => error.deciding_diagnostic(),
+            ReaderRefusalKind::Diagnostics(diagnostics) => diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.severity == Severity::Error)
+                .unwrap_or_else(|| diagnostics.first().expect("a refusal has a diagnostic")),
+        }
     }
 }
 
@@ -339,10 +444,6 @@ pub enum RuntimeConfigError {
         "runtime configuration identity.instanceId must start with a lowercase letter and hold at most 64 lowercase letters, digits, `-`, or `_`; set identity.instanceId to such a value"
     )]
     InvalidInstanceId,
-    #[error(
-        "runtime configuration identity.environment and identity.databaseInitializationEnvironment must be identical; set both to the environment the database was initialized in"
-    )]
-    EnvironmentIdentityConflict,
     #[error("runtime configuration contains an invalid listener binding")]
     InvalidListener,
     #[error("runtime configuration contains an invalid metrics listener binding: {0}")]
@@ -355,8 +456,8 @@ pub enum RuntimeConfigError {
     UnsafeSecretProviderRoot,
     #[error("runtime configuration contains an invalid database binding")]
     InvalidDatabase,
-    #[error("runtime configuration asks for a plaintext database connection")]
-    PlaintextDatabase,
+    #[error(transparent)]
+    DatabaseTransport(DatabaseTransportError),
     #[error("runtime configuration contains an invalid package binding")]
     InvalidPackage,
     #[error("the configured package root is missing or is not a readable directory")]
@@ -365,14 +466,37 @@ pub enum RuntimeConfigError {
     UnsafePackageRoot,
     #[error("runtime configuration contains an invalid OIDC binding")]
     InvalidOidc,
+    // The cause is the remedy `diagnostics` reports, so the message does not repeat it.
+    #[error("the static OIDC key set was refused")]
+    InvalidStaticJwks(StaticJwksError),
     #[error("the OIDC leeway must be a whole number of seconds from 0 to 300000 milliseconds")]
-    InvalidOidcLeeway,
+    InvalidOidcLeeway {
+        /// The `leewayMilliseconds` member of the refused issuer entry.
+        pointer: String,
+    },
+    /// The issuer set breaks a rule that spans its entries, such as two
+    /// entries naming one issuer. Each diagnostic names the member to correct
+    /// and never repeats a value.
+    #[error("{}", .0.first().map_or("the issuer set was refused", |problem| problem.message.as_str()))]
+    IssuerSet(Vec<Diagnostic>),
     #[error("runtime configuration contains an invalid audit binding")]
     InvalidAudit,
     #[error("runtime configuration contains an invalid cursor binding")]
     InvalidCursor,
     #[error("runtime configuration contains an invalid event destination binding")]
     InvalidEventDestination,
+    #[error("{reason} {action}")]
+    InvalidDeliveryKey {
+        path: String,
+        reason: String,
+        action: String,
+    },
+    #[error("{first} and {second} select the same completion recipient.")]
+    DuplicateCompletionRecipient {
+        first: String,
+        second: String,
+        path: String,
+    },
     #[error(
         "runtime configuration destinations.hooks contains identifiers that differ only by `-` versus `_`"
     )]
@@ -408,6 +532,8 @@ pub enum RuntimeConfigError {
     InvalidWasmExecution,
     #[error("runtime configuration secret resolution failed")]
     Secret,
+    #[error("runtime configuration secret file refused: {} ({})", .0.message(), .0.code())]
+    SecretFile(SecretFileCheck),
 }
 
 /// The config path of the exposure key a wildcard metrics refusal names.
@@ -424,22 +550,28 @@ impl RuntimeConfigError {
             Self::InvalidExternalSource { .. } => "breg.runtime.invalid-external-sources",
             Self::InvalidTaskGrantStatus => "breg.runtime.invalid-task-grant-status",
             Self::InvalidInstanceId => "breg.runtime.invalid-instance-id",
-            Self::EnvironmentIdentityConflict => "breg.runtime.environment-identity-conflict",
             Self::InvalidListener => "breg.runtime.invalid-listener",
             Self::InvalidMetricsListener(_) => "breg.runtime.invalid-metrics-listener",
             Self::InvalidSecretProvider => "breg.runtime.invalid-secret-provider",
             Self::SecretProviderRootUnavailable => "breg.runtime.secret-provider-root-unavailable",
             Self::UnsafeSecretProviderRoot => "breg.runtime.unsafe-secret-provider-root",
             Self::InvalidDatabase => "breg.runtime.invalid-database",
-            Self::PlaintextDatabase => "breg.runtime.plaintext-database",
+            Self::DatabaseTransport(error) => error.code(),
             Self::InvalidPackage => "breg.runtime.invalid-package",
             Self::PackageRootUnavailable => "breg.runtime.package-root-unavailable",
             Self::UnsafePackageRoot => "breg.runtime.unsafe-package-root",
-            Self::InvalidOidc => "breg.runtime.invalid-oidc",
-            Self::InvalidOidcLeeway => "breg.runtime.invalid-oidc-leeway",
+            Self::InvalidOidc | Self::InvalidStaticJwks(_) => "breg.runtime.invalid-oidc",
+            Self::InvalidOidcLeeway { .. } => "breg.runtime.invalid-oidc-leeway",
+            Self::IssuerSet(problems) => problems
+                .first()
+                .map_or("breg.runtime.invalid-oidc", |problem| problem.code.as_str()),
             Self::InvalidAudit => "breg.runtime.invalid-audit",
             Self::InvalidCursor => "breg.runtime.invalid-cursor",
             Self::InvalidEventDestination => "breg.runtime.invalid-hook-destination",
+            Self::InvalidDeliveryKey { .. } => "breg.runtime.invalid-delivery-key",
+            Self::DuplicateCompletionRecipient { .. } => {
+                "breg.runtime.duplicate-completion-recipient"
+            }
             Self::EventDestinationIdCollision => "breg.runtime.hook-destination-id-collision",
             Self::EvidenceProviderIdCollision => "breg.runtime.evidence-provider-id-collision",
             Self::ReviewAuthorityIdCollision => "breg.runtime.review-authority-id-collision",
@@ -453,7 +585,7 @@ impl RuntimeConfigError {
             Self::InvalidBounds => "breg.runtime.invalid-bounds",
             Self::PoolBudgetExceeded => "breg.runtime.pool-budget-exceeded",
             Self::InvalidWasmExecution => "breg.runtime.invalid-wasm-execution",
-            Self::Secret => "breg.runtime.secret",
+            Self::Secret | Self::SecretFile(_) => "breg.runtime.secret",
         }
     }
 
@@ -462,11 +594,12 @@ impl RuntimeConfigError {
     fn path(&self) -> &str {
         match self {
             Self::Reader(refusal) => &refusal.deciding_diagnostic().path,
-            Self::InvalidBinding | Self::Secret => "",
-            Self::InvalidExternalSource { path, .. } => path,
+            Self::InvalidBinding | Self::Secret | Self::SecretFile(_) => "",
+            Self::InvalidExternalSource { path, .. }
+            | Self::InvalidDeliveryKey { path, .. }
+            | Self::DuplicateCompletionRecipient { path, .. } => path,
             Self::InvalidTaskGrantStatus => "/taskGrantStatus",
             Self::InvalidInstanceId => "/identity/instanceId",
-            Self::EnvironmentIdentityConflict => "/identity/databaseInitializationEnvironment",
             Self::InvalidListener => "/listener",
             Self::InvalidMetricsListener(_) => "/metricsListener",
             Self::InvalidSecretProvider => "/secretProviders",
@@ -474,11 +607,17 @@ impl RuntimeConfigError {
                 "/secretProviders/file/root"
             }
             Self::InvalidDatabase => "/database",
-            Self::PlaintextDatabase => "/database/testOnlyPlaintext",
+            Self::DatabaseTransport(DatabaseTransportError::TestOnlyPlaintext) => {
+                "/database/testOnlyPlaintext"
+            }
+            Self::DatabaseTransport(_) => "/database/transport",
             Self::InvalidPackage => "/package",
             Self::PackageRootUnavailable | Self::UnsafePackageRoot => "/package/root",
-            Self::InvalidOidc => "/authentication/oidc",
-            Self::InvalidOidcLeeway => "/authentication/oidc/leewayMilliseconds",
+            Self::InvalidOidc | Self::InvalidStaticJwks(_) => ISSUERS_POINTER,
+            Self::InvalidOidcLeeway { pointer } => pointer,
+            Self::IssuerSet(problems) => problems
+                .first()
+                .map_or(ISSUERS_POINTER, |problem| problem.path.as_str()),
             Self::InvalidAudit => "/audit",
             Self::InvalidCursor => "/cursor",
             Self::InvalidEventDestination => "/destinations/hooks",
@@ -501,7 +640,7 @@ impl RuntimeConfigError {
     /// The edit that fixes a refusal this runtime decides itself
     /// (CFG-DIAG-6). A reader refusal carries its own action in each
     /// diagnostic.
-    fn suggested_action(&self) -> &'static str {
+    fn suggested_action(&self) -> &str {
         match self {
             Self::Reader(_) => "",
             Self::InvalidTaskGrantStatus => {
@@ -516,11 +655,8 @@ impl RuntimeConfigError {
             Self::InvalidInstanceId => {
                 "Set identity.instanceId to a lowercase letter followed by at most 63 lowercase letters, digits, `-`, or `_`."
             }
-            Self::EnvironmentIdentityConflict => {
-                "Set identity.environment and identity.databaseInitializationEnvironment to the environment the database was initialized in."
-            }
             Self::InvalidListener => {
-                "Set listener.bind to a numeric address and port, and listener.publicOrigin, when given, to an https origin (http only on loopback) with no query, fragment, or user information."
+                "Set listener.bind to a numeric address and port, and listener.publicOrigin, when given, to an HTTPS origin with no query, fragment, or user information. Development also accepts an HTTP origin on loopback."
             }
             // The remedy depends on the cause, which `diagnostics` states.
             Self::InvalidMetricsListener(_) => "",
@@ -536,9 +672,7 @@ impl RuntimeConfigError {
             Self::InvalidDatabase => {
                 "Name database.runtimeUrlRef, database.migrationUrlRef, and database.caBundleRef (PEM root certificates), when given, by secret reference, give each SQL role a lowercase identifier, and use two references when the roles differ."
             }
-            Self::PlaintextDatabase => {
-                "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
-            }
+            Self::DatabaseTransport(error) => error.suggested_action(),
             Self::InvalidPackage => {
                 "Set package.root to an absolute normal path and package.expectedDigest, when given, to the package's sha256 digest."
             }
@@ -547,15 +681,22 @@ impl RuntimeConfigError {
             }
             Self::UnsafePackageRoot => "Point package.root at a path with no symbolic link in it.",
             Self::InvalidOidc => {
-                "Correct authentication.oidc and authentication.authorityClaims: use an https issuer, loopback http, or set authentication.oidc.allowInsecureHttp: true for a declared non-loopback http issuer; keep values bounded without whitespace, list entries distinct, and claim names non-repeating."
+                "Correct each authentication.oidc.issuers entry and authentication.authorityClaims: use an https issuer, loopback http, or set allowInsecureHttp: true on the entry of a declared non-loopback http issuer; keep values bounded without whitespace, list entries distinct, and claim names non-repeating."
             }
-            Self::InvalidOidcLeeway => {
-                "Set authentication.oidc.leewayMilliseconds to a multiple of 1000 no greater than 300000."
+            // The remedy is the cause's own text, which `diagnostics` states.
+            Self::InvalidStaticJwks(_) => "",
+            Self::InvalidOidcLeeway { .. } => {
+                "Set leewayMilliseconds on the issuer entry to a multiple of 1000 no greater than 300000."
             }
+            Self::IssuerSet(problems) => problems
+                .first()
+                .map_or("", |problem| problem.suggested_action.as_str()),
             Self::InvalidAudit => {
                 "Give the file audit destination an absolute path, and leave audit.path, audit.rotateBytes, and audit.retentionDays out for the stdout destination."
             }
             Self::InvalidCursor => "Name cursor.secretRef by secret reference.",
+            Self::InvalidDeliveryKey { action, .. } => action,
+            Self::DuplicateCompletionRecipient { .. } => "Give each review authority its own completion.recipientBinding.",
             Self::InvalidEventDestination => {
                 "Correct the event destination bindings: an https origin, a path that starts with `/`, and secret references for keys and TLS material."
             }
@@ -591,6 +732,7 @@ impl RuntimeConfigError {
             Self::Secret => {
                 "Make every secret reference resolve through the declared secret providers."
             }
+            Self::SecretFile(check) => check.suggested_action(),
         }
     }
 
@@ -602,11 +744,32 @@ impl RuntimeConfigError {
         if let Self::Reader(refusal) = self {
             return refusal.diagnostics().to_vec();
         }
+        if let Self::IssuerSet(problems) = self {
+            return problems
+                .iter()
+                .cloned()
+                .map(|mut problem| {
+                    if problem.source.is_none() {
+                        problem.source = file.map(|file| Source {
+                            file: file.display().to_string(),
+                            line: None,
+                            column: None,
+                        });
+                    }
+                    problem
+                })
+                .collect();
+        }
         let action = match self {
             Self::InvalidMetricsListener(cause) => cause.remedy(METRICS_NETWORK_EXPOSURE_KEY),
+            Self::InvalidStaticJwks(cause) => cause.to_string(),
             other => other.suggested_action().to_owned(),
         };
-        let mut diagnostic = Diagnostic::error(self.code(), self.path(), self.to_string(), action);
+        let message = match self {
+            Self::InvalidDeliveryKey { reason, .. } => reason.clone(),
+            other => other.to_string(),
+        };
+        let mut diagnostic = Diagnostic::error(self.code(), self.path(), message, action);
         diagnostic.source = file.map(|file| Source {
             file: file.display().to_string(),
             line: None,
@@ -619,15 +782,27 @@ impl RuntimeConfigError {
     /// then the summary line.
     #[must_use]
     pub fn render_human(&self, file: Option<&Path>) -> String {
-        let mut report = Report::new(self.diagnostics(file));
-        report.set_files_checked(1);
+        let diagnostics = self.diagnostics(file);
+        let runtime_file = file.map(Path::to_string_lossy);
+        let files = diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.source.as_ref())
+            .map(|source| source.file.as_str())
+            .chain(runtime_file.as_deref())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let mut report = Report::new(diagnostics);
+        report.set_files_checked(files.max(1));
         report.render_human()
     }
 }
 
 impl From<SecretError> for RuntimeConfigError {
-    fn from(_error: SecretError) -> Self {
-        Self::Secret
+    fn from(error: SecretError) -> Self {
+        match error {
+            SecretError::UnsafeFile(check) => Self::SecretFile(check),
+            _ => Self::Secret,
+        }
     }
 }
 
@@ -648,35 +823,202 @@ fn active_package_envelope_error(
     }
 }
 
-pub fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
-    load_runtime_config_with_env(path, |name| std::env::var(name).ok())
+pub fn load_runtime_config(path: &Path, declared: DeclaredPosture) -> Result<RuntimeConfig> {
+    load_runtime_config_with_env(path, |name| std::env::var(name).ok(), declared)
+}
+
+/// Load the runtime configuration file without requiring `package.root` to
+/// exist on disk yet.
+///
+/// Used by `bregctl provision`, which provisions the database before a package
+/// has been built into `package.root`. Syntax, posture, and file secret
+/// provider root checks still run unchanged.
+pub fn load_runtime_config_without_package_root(
+    path: &Path,
+    declared: DeclaredPosture,
+) -> Result<RuntimeConfig> {
+    load_runtime_config_parts(path, |name| std::env::var(name).ok(), declared, false)
 }
 
 pub fn load_runtime_config_with_env(
     path: &Path,
     lookup: impl Fn(&str) -> Option<String>,
+    declared: DeclaredPosture,
 ) -> Result<RuntimeConfig> {
-    let raw = runtime_config_loader()
+    load_runtime_config_parts(path, lookup, declared, true)
+}
+
+fn load_runtime_config_parts(
+    path: &Path,
+    lookup: impl Fn(&str) -> Option<String>,
+    declared: DeclaredPosture,
+    require_package_root: bool,
+) -> Result<RuntimeConfig> {
+    let raw = runtime_config_loader(declared)
         .load_with::<RawRuntimeConfig>(path, lookup)
-        .map_err(|error| RuntimeConfigError::Reader(ReaderRefusal(error)))?
-        .config;
-    let config = RuntimeConfig::from_raw(raw)?;
-    config.validate_loaded_paths()?;
+        .map_err(|error| {
+            RuntimeConfigError::Reader(ReaderRefusal(ReaderRefusalKind::Shared(error)))
+        })?;
+    let mut config = RuntimeConfig::from_raw(raw)?;
+    config.source_path = Some(path.to_path_buf());
+    if require_package_root {
+        config.validate_loaded_paths()?;
+    } else {
+        config.validate_secret_provider_root()?;
+    }
     Ok(config)
 }
 
-pub fn parse_runtime_config(raw: &str) -> Result<RuntimeConfig> {
-    parse_runtime_config_with_env(raw, |name| std::env::var(name).ok())
+pub(crate) fn load_verified_startup_config(
+    path: &Path,
+    declared: DeclaredPosture,
+    selected_package: Option<&Path>,
+) -> std::result::Result<(RuntimeConfig, VerifiedPackage), crate::startup::StartupError> {
+    use crate::startup::StartupError;
+
+    let check = runtime_config_loader(declared).check_offline::<RawRuntimeConfig>(
+        path,
+        true,
+        runtime_stand_in,
+    );
+    let loaded = check.loaded.ok_or({
+        StartupError::RuntimeConfig(RuntimeConfigError::Reader(ReaderRefusal(
+            ReaderRefusalKind::Diagnostics(check.diagnostics),
+        )))
+    })?;
+    let package = loaded.config.package.shared.clone();
+    let package_root = selected_package.unwrap_or(&package.root);
+    let mut report = loaded.posture.clone();
+    let pending_refusal = report.posture() == Posture::Production && !report.settings().is_empty();
+    // Preserve ordinary configuration validation before reading the package.
+    // A development-only binding can fail construction without a witness, so
+    // a pending posture refusal takes precedence over that typed error.
+    let config = match RuntimeConfig::from_raw(loaded) {
+        Err(error) if !pending_refusal => return Err(StartupError::RuntimeConfig(error)),
+        config => config,
+    };
+    let verify_package = || {
+        package
+            .check()
+            .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidPackage))?;
+        validate_existing_directory(
+            &package.root,
+            RuntimeConfigError::UnsafePackageRoot,
+            RuntimeConfigError::PackageRootUnavailable,
+        )
+        .map_err(StartupError::RuntimeConfig)?;
+        let shared = if let Some(root) = selected_package {
+            crate::package::verify_shared_package(root).map_err(StartupError::PackageRefused)?
+        } else {
+            package
+                .verify_package(&crate::package::shared_package_limits(), "bregctl package")
+                .map_err(|error| {
+                    StartupError::PackageEnvelopeRefused(
+                        error.naming_root_as("package.root").to_string(),
+                    )
+                })?
+        };
+        crate::package::load_verified_package_for_startup(
+            package_root,
+            &PackageLoadContext {
+                posture: declared.posture,
+            },
+            &shared,
+        )
+        .map_err(StartupError::PackageRefused)
+    };
+    let verified = match verify_package() {
+        Ok(verified) => verified,
+        Err(error) if pending_refusal => {
+            let mut diagnostics = report.diagnostics(path);
+            match error {
+                StartupError::RuntimeConfig(cause) => {
+                    diagnostics.extend(cause.diagnostics(Some(path)))
+                }
+                error @ (StartupError::PackageEnvelopeRefused(_)
+                | StartupError::PackageRefused(_)) => {
+                    let message = match error {
+                        StartupError::PackageEnvelopeRefused(message) => message,
+                        StartupError::PackageRefused(cause) => cause.to_string(),
+                        _ => unreachable!(),
+                    };
+                    let mut diagnostic = Diagnostic::error(
+                        "startup.package.refused",
+                        if selected_package.is_some() { "arguments" } else { "/package/root" },
+                        message,
+                        "Verify the selected package directory and deploy the complete reviewed package.",
+                    );
+                    diagnostic.source = Some(Source {
+                        file: package_root.display().to_string(),
+                        line: None,
+                        column: None,
+                    });
+                    diagnostics.push(diagnostic);
+                }
+                _ => unreachable!(
+                    "verifying the package returns only package configuration or closure errors"
+                ),
+            }
+            return Err(StartupError::RuntimeConfig(RuntimeConfigError::Reader(
+                ReaderRefusal(ReaderRefusalKind::Diagnostics(diagnostics)),
+            )));
+        }
+        Err(error) => return Err(error),
+    };
+    decide_startup_posture(&mut report, &verified, path, package_root)
+        .map_err(StartupError::RuntimeConfig)?;
+    let mut config = config.map_err(StartupError::RuntimeConfig)?;
+    config.posture = report;
+    config.source_path = Some(path.to_path_buf());
+    config
+        .validate_loaded_paths()
+        .map_err(StartupError::RuntimeConfig)?;
+    Ok((config, verified))
+}
+
+pub(crate) fn decide_startup_posture(
+    report: &mut PostureReport,
+    package: &VerifiedPackage,
+    runtime_path: &Path,
+    package_root: &Path,
+) -> Result<()> {
+    package.record_posture_settings(report);
+    let mut diagnostics = report.diagnostics(runtime_path);
+    for (found, diagnostic) in report.settings().iter().zip(&mut diagnostics) {
+        if found.origin == registry_platform_config::SettingOrigin::Package {
+            if let Some(source) = &mut diagnostic.source {
+                source.file = package_root
+                    .join(&package.manifest().sources.project)
+                    .display()
+                    .to_string();
+            }
+        }
+    }
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        return Err(RuntimeConfigError::Reader(ReaderRefusal(
+            ReaderRefusalKind::Diagnostics(diagnostics),
+        )));
+    }
+    Ok(())
+}
+
+pub fn parse_runtime_config(raw: &str, declared: DeclaredPosture) -> Result<RuntimeConfig> {
+    parse_runtime_config_with_env(raw, |name| std::env::var(name).ok(), declared)
 }
 
 pub fn parse_runtime_config_with_env(
     raw: &str,
     lookup: impl Fn(&str) -> Option<String>,
+    declared: DeclaredPosture,
 ) -> Result<RuntimeConfig> {
-    let raw = runtime_config_loader()
+    let raw = runtime_config_loader(declared)
         .parse_str::<RawRuntimeConfig>(raw, lookup)
-        .map_err(|error| RuntimeConfigError::Reader(ReaderRefusal(error)))?
-        .config;
+        .map_err(|error| {
+            RuntimeConfigError::Reader(ReaderRefusal(ReaderRefusalKind::Shared(error)))
+        })?;
     RuntimeConfig::from_raw(raw)
 }
 
@@ -686,6 +1028,9 @@ pub struct RuntimeConfigCheck {
     /// Every finding, each naming the file as `path` was given to
     /// [`check_runtime_config`].
     pub diagnostics: Vec<Diagnostic>,
+    /// The explicit production settings the file states, as `check` lists
+    /// them. A file that could not be read lists none.
+    pub explicit_settings: Vec<FoundExplicitSetting>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
 }
@@ -723,12 +1068,32 @@ pub fn check_runtime_config(
     path: &Path,
     substitute: bool,
     registry: Option<&CompiledRegistry>,
+    declared: DeclaredPosture,
 ) -> RuntimeConfigCheck {
-    let mut check = runtime_config_loader().check_offline::<RawRuntimeConfig>(
+    // Decode gated values for offline validation only. The declared posture
+    // still decides the reported severity, and this configuration never runs.
+    let validation_posture = DeclaredPosture {
+        posture: Posture::Development,
+        source: declared.source,
+    };
+    let mut check = runtime_config_loader(validation_posture).check_offline::<RawRuntimeConfig>(
         path,
         substitute,
         runtime_stand_in,
     );
+    if declared.posture == Posture::Production {
+        if let Some(loaded) = &mut check.loaded {
+            let mut report = PostureReport::new(declared);
+            for setting in loaded.posture.settings() {
+                report.record(setting.clone());
+            }
+            for setting in loaded.posture.explicit_settings() {
+                report.record_explicit(setting.clone());
+            }
+            check.diagnostics = report.diagnostics(path);
+            loaded.posture = report;
+        }
+    }
     let id_collisions = check
         .loaded
         .as_ref()
@@ -739,11 +1104,21 @@ pub fn check_runtime_config(
             diagnostics: check
                 .report_with(RUNTIME_CONFIG_KIND, id_collisions)
                 .into_diagnostics(),
+            explicit_settings: Vec::new(),
             unavailable: check.unavailable,
         };
     }
     let mut diagnostics = std::mem::take(&mut check.diagnostics);
+    let mut explicit_settings = Vec::new();
     if let Some(loaded) = check.loaded.take() {
+        explicit_settings = loaded.posture.explicit_settings().to_vec();
+        // The issuer set's own rules, positioned in the file. Startup runs
+        // the same rules, so its refusal of them is not reported twice.
+        diagnostics.extend(loaded.config.authentication.oidc.issuers.check_file(
+            ISSUERS_POINTER,
+            &check,
+            RUNTIME_CONFIG_KIND,
+        ));
         // A metrics bind that passes the address rules alone can only fail the
         // overlap rule, which reads the listener bind. While that bind is an
         // expression the overlap is judged against a stand-in, so it defers.
@@ -756,7 +1131,10 @@ pub fn check_runtime_config(
                     check_metrics_bind_address(metrics.bind.socket_addr(), metrics.network_exposure)
                         .is_ok()
                 });
-        match RuntimeConfig::from_raw(loaded.config) {
+        match RuntimeConfig::from_raw(loaded) {
+            Err(RuntimeConfigError::IssuerSet(_)) => {
+                // `check_file` above reported the issuer set's problems.
+            }
             Err(error) => {
                 for refusal in error.diagnostics(None) {
                     let overlap_deferred = metrics_overlap_deferred
@@ -790,11 +1168,11 @@ pub fn check_runtime_config(
                 }
             }
             Ok(config) => {
-                for index in config.authentication().oidc().wildcard_spelled_clients() {
+                for pointer in config.authentication().oidc().wildcard_spelled_clients() {
                     let mut warning = check.error_at(
                         RUNTIME_CONFIG_KIND,
                         "breg.access.wildcard-spelled-item",
-                        &format!("/authentication/oidc/allowedClients/{index}"),
+                        &pointer,
                         "The item is spelled like a wildcard but names one client: `*` and `unrestricted` match nothing else in this list.",
                         "List each client by its exact identifier, or write allowedClients: unrestricted to admit every client.",
                     );
@@ -830,6 +1208,7 @@ pub fn check_runtime_config(
     }
     RuntimeConfigCheck {
         diagnostics,
+        explicit_settings,
         unavailable: check.unavailable,
     }
 }
@@ -945,10 +1324,9 @@ fn runtime_definition_id_diagnostics(
 /// diagnostic code.
 fn authentication_refusal_site(error: AuthenticationConfigError) -> (&'static str, &'static str) {
     match error {
-        AuthenticationConfigError::NamedClientNotListed => (
-            "/authentication/oidc/allowedClients",
-            "breg.runtime.clients-unlisted",
-        ),
+        AuthenticationConfigError::NamedClientNotListed => {
+            (ISSUERS_POINTER, "breg.runtime.clients-unlisted")
+        }
         AuthenticationConfigError::PrincipalClaimMismatch => (
             "/authentication/authorityClaims/principal",
             "breg.runtime.principal-claim-mismatch",
@@ -971,8 +1349,10 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         ["metricsListener", "bind"] => "127.0.0.1:9100",
         ["metricsListener", "networkExposure"] => "private-address",
         ["listener", "publicOrigin"] => "https://registry.invalid",
-        ["authentication", "oidc", "issuer"] => "https://issuer.invalid",
-        ["authentication", "oidc", "jwksSource", "uri"] => "https://issuer.invalid/jwks",
+        ["authentication", "oidc", "issuers", _, "issuer"] => "https://issuer.invalid",
+        ["authentication", "oidc", "issuers", _, "jwksSource", "uri"] => {
+            "https://issuer.invalid/jwks"
+        }
         ["package", "root"] => "/",
         ["package", "expectedDigest"] => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -1007,11 +1387,14 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
 /// configuration, so every unknown key, its closest accepted key, and every
 /// position reach the operator. The file is held to the shared 1 MiB bound
 /// (CFG-YAML-6).
-const fn runtime_config_loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new(RuntimeEnvelope {
-        api_version: RUNTIME_CONFIG_API_VERSION,
-        kind: RUNTIME_CONFIG_KIND,
-    })
+const fn runtime_config_loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+    RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: RUNTIME_CONFIG_API_VERSION,
+            kind: RUNTIME_CONFIG_KIND,
+        },
+        declared,
+    )
     .removed_keys(REMOVED_KEYS)
     .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
     .require_trusted_ownership()
@@ -1019,6 +1402,10 @@ const fn runtime_config_loader() -> RuntimeConfigLoader {
 
 #[derive(Clone)]
 pub struct RuntimeConfig {
+    posture: PostureReport,
+    development: Option<DevelopmentWitness>,
+    peer_policy: registry_platform_httputil::PeerPolicy,
+    source_path: Option<PathBuf>,
     log_level: LogLevel,
     listener: ListenerConfig,
     identity: DeploymentIdentity,
@@ -1105,30 +1492,47 @@ fn external_source_bindings(
 }
 
 impl RuntimeConfig {
-    fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
+    fn from_raw(loaded: LoadedRuntimeConfig<RawRuntimeConfig>) -> Result<Self> {
+        let LoadedRuntimeConfig {
+            config: raw,
+            posture,
+            development,
+            ..
+        } = loaded;
         validate_runtime_definition_ids(&raw)?;
         let external_sources = external_source_bindings(raw.external_sources)?;
-        let listener = ListenerConfig::from_raw(raw.listener)?;
+        let listener = ListenerConfig::from_raw(raw.listener, development.as_ref())?;
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
         let database = DatabaseConfig::from_raw(raw.database)?;
+        let peer_policy = match posture.posture() {
+            Posture::Production => registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+            Posture::Development => registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
+        };
         validate_attachment_attempt_budget(&raw.attachment_storage, &raw.attachment_verification)?;
-        let attachment_storage =
-            crate::attachment_storage::AttachmentStorageConfig::from_raw(raw.attachment_storage)
-                .map_err(|_| RuntimeConfigError::InvalidAttachmentStorage)?;
+        let attachment_storage = crate::attachment_storage::AttachmentStorageConfig::from_raw(
+            raw.attachment_storage,
+            peer_policy,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidAttachmentStorage)?;
         let attachment_verification =
             crate::attachment_verification::AttachmentVerificationConfig::from_raw(
                 raw.attachment_verification,
+                peer_policy,
             )
             .map_err(|_| RuntimeConfigError::InvalidAttachmentVerification)?;
-        let field_encryption =
-            crate::field_encryption::FieldEncryptionConfig::from_raw(raw.field_encryption)
-                .map_err(|_| RuntimeConfigError::InvalidFieldEncryption)?;
+        let field_encryption = crate::field_encryption::FieldEncryptionConfig::from_raw(
+            raw.field_encryption,
+            development.as_ref(),
+        )
+        .map_err(|_| RuntimeConfigError::InvalidFieldEncryption)?;
         let package = PackageConfig::from_raw(raw.package)?;
         let authentication = AuthenticationConfig::from_raw(raw.authentication)?;
+        // Task-grant status is read with the audience of the first issuer
+        // entry in issuer id order.
         crate::task_grant::TaskGrantStatusRegistry::validate_configuration(
             &raw.task_grant_status,
-            &authentication.oidc.audience,
+            authentication.oidc.first().audience(),
         )
         .map_err(|_| RuntimeConfigError::InvalidTaskGrantStatus)?;
         let audit = AuditConfig::from_raw(raw.audit)?;
@@ -1156,6 +1560,10 @@ impl RuntimeConfig {
             metrics.validate_separate_binding(&listener)?;
         }
         Ok(Self {
+            posture,
+            peer_policy,
+            source_path: None,
+            development,
             log_level: raw.log_level,
             listener,
             identity,
@@ -1192,8 +1600,9 @@ impl RuntimeConfig {
     ) -> Result<Arc<crate::task_grant::TaskGrantStatusRegistry>> {
         let status = crate::task_grant::TaskGrantStatusRegistry::activate(
             &self.task_grant_status,
-            &self.authentication.oidc.audience,
+            self.authentication.oidc.first().audience(),
             &self.secret_resolver()?,
+            self.peer_policy(),
         )
         .map_err(|_| RuntimeConfigError::InvalidBinding)?;
         for issuer in crate::task_grant::required_source_issuers(compiled) {
@@ -1212,6 +1621,7 @@ impl RuntimeConfig {
             compiled,
             &self.evidence_providers,
             &self.secret_resolver()?,
+            self.peer_policy(),
         )
     }
 
@@ -1260,6 +1670,18 @@ impl RuntimeConfig {
         })
     }
 
+    fn review_client(
+        &self,
+        endpoint: reqwest::Url,
+    ) -> Result<registry_review_client::ReviewClient> {
+        registry_review_client::ReviewClient::new(
+            registry_review_client::ReviewClientConfig::new(endpoint, self.peer_policy())
+                .with_attempt_timeout(self.operational_timeouts.http_request)
+                .with_connect_timeout(self.operational_timeouts.http_request),
+        )
+        .map_err(|_| RuntimeConfigError::InvalidBinding)
+    }
+
     pub fn activate_review_authorities(
         &self,
         compiled: &CompiledRegistry,
@@ -1272,6 +1694,7 @@ impl RuntimeConfig {
         }
         let resolver = self.secret_resolver()?;
         let mut activated = BTreeMap::new();
+        let mut recipients = BTreeMap::new();
         // Activate retained operator bindings as well as bindings referenced by
         // the new package. Durable submissions created by the previous package
         // must keep their worker after a review policy is changed or removed.
@@ -1280,24 +1703,54 @@ impl RuntimeConfig {
                 config.token_ref.as_ref(),
                 config.private_key_jwt.as_ref(),
             )?;
-            let completion = config
-                .completion
-                .as_ref()
-                .map(
-                    |(token_ref, recipient)| -> Result<(Zeroizing<String>, String)> {
-                        let token = resolver.resolve_reference(token_ref)?;
-                        let token = std::str::from_utf8(token.expose_secret())
-                            .map_err(|_| RuntimeConfigError::Secret)?;
-                        Ok((Zeroizing::new(token.to_owned()), recipient.clone()))
-                    },
-                )
-                .transpose()?;
-            let client = registry_review_client::ReviewClient::new(
-                registry_review_client::ReviewClientConfig::new(config.endpoint.clone())
-                    .with_attempt_timeout(self.operational_timeouts.http_request)
-                    .with_connect_timeout(self.operational_timeouts.http_request),
-            )
-            .map_err(|_| RuntimeConfigError::InvalidBinding)?;
+            let (completion_keys, recipient) = if let Some(completion) = &config.completion {
+                let block = format!("reviewAuthorities.{authority}.completion");
+                let pointer_authority = authority.replace('~', "~0").replace('/', "~1");
+                let pointer = format!("/reviewAuthorities/{pointer_authority}/completion");
+                if let Some(first) = recipients.insert(&completion.recipient_binding, authority) {
+                    return Err(RuntimeConfigError::DuplicateCompletionRecipient {
+                        first: format!("reviewAuthorities.{first}.completion.recipientBinding"),
+                        second: format!("{block}.recipientBinding"),
+                        path: format!("{pointer}/recipientBinding"),
+                    });
+                }
+                let keys = completion.resolve_keys(&resolver, &block).map_err(|error| {
+                    let (member_path, reason, action) = match error {
+                        EventDestinationActivationError::SigningKeyUnavailable {path, reason, action} => (
+                            path.clone(),
+                            format!("{path} could not be resolved: {reason}."),
+                            action.to_owned(),
+                        ),
+                        EventDestinationActivationError::InvalidSigningKey {
+                            path, length, trailing_newline, reason,
+                        } => (
+                            path.clone(),
+                            format!("{path} has {length} bytes (trailing newline: {trailing_newline})."),
+                            signing_key_action(&reason).to_owned(),
+                        ),
+                        EventDestinationActivationError::PreviousEqualsCurrent { current, previous } => (
+                            previous.clone(),
+                            format!("{previous} holds the same bytes as {current}."),
+                            format!("To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}."),
+                        ),
+                        _ => unreachable!("key resolution returns only key errors"),
+                    };
+                    let member = if member_path.ends_with(PREVIOUS_KEY_MEMBER) {
+                        PREVIOUS_KEY_MEMBER
+                    } else {
+                        CURRENT_KEY_MEMBER
+                    };
+                    RuntimeConfigError::InvalidDeliveryKey {
+                        path: format!("{pointer}/{member}"),
+                        reason,
+                        action,
+                    }
+                })?;
+                (Some(keys), Some(completion.recipient_binding.clone()))
+            } else {
+                (None, None)
+            };
+            let client = self.review_client(config.endpoint.clone())?;
             let authority_client = crate::review_store::ReviewAuthorityClient::new(
                 authority.clone(),
                 client,
@@ -1305,8 +1758,8 @@ impl RuntimeConfig {
                 config.profile.clone(),
                 config.producer_id.clone(),
                 config.recovery_days,
-                completion.as_ref().map(|(token, _)| token.clone()),
-                completion.map(|(_, recipient)| recipient),
+                completion_keys,
+                recipient,
             )
             .map_err(|_| RuntimeConfigError::InvalidBinding)?;
             activated.insert(authority.clone(), Arc::new(authority_client));
@@ -1448,11 +1901,11 @@ impl RuntimeConfig {
     }
 
     /// The idempotency policy every write path of this runtime spends keys
-    /// under: caller keys are scoped under the configured OIDC issuer, the
-    /// only issuer whose tokens this runtime verifies.
+    /// under: caller keys are scoped under the issuer of the first issuer
+    /// entry in issuer id order.
     pub fn idempotency_policy(&self) -> Result<crate::idempotency::IdempotencyPolicy> {
         crate::idempotency::IdempotencyPolicy::new(
-            self.authentication.oidc.issuer(),
+            self.authentication.oidc.first().issuer(),
             self.retention.receipt_retention_days(),
         )
         .map_err(|_| RuntimeConfigError::InvalidBounds)
@@ -1463,11 +1916,15 @@ impl RuntimeConfig {
         &self.field_encryption
     }
 
-    pub async fn oidc_key_source(&self) -> Result<Arc<JwksFetcher>> {
-        self.authentication
-            .oidc
-            .key_source(&self.secret_resolver()?)
-            .await
+    /// One authenticator issuer per issuer entry, in issuer id order, each
+    /// with the key source its `jwksSource` names.
+    pub async fn authenticator_issuers(&self) -> Result<Vec<AuthenticatorIssuer>> {
+        let resolver = self.secret_resolver()?;
+        let mut issuers = Vec::new();
+        for entry in self.authentication.oidc.issuers() {
+            issuers.push(entry.authenticator_issuer(entry.key_source(&resolver).await?));
+        }
+        Ok(issuers)
     }
 
     /// Activate the exact deployment bindings required by the compiled Registry.
@@ -1480,11 +1937,51 @@ impl RuntimeConfig {
     > {
         let resolver = self
             .secret_resolver()
-            .map_err(|_| crate::event_destination::EventDestinationActivationError::Secret)?;
-        ActivatedEventDestinationRegistry::activate(compiled, &self.event_destinations, &resolver)
-            .map(|destinations| {
-                destinations.with_payload_retention(self.retention.payload_retention)
+            .map_err(|_| EventDestinationActivationError::Secret)?;
+        let completion_keys = self
+            .review_authorities
+            .iter()
+            .filter_map(|(authority, config)| Some((authority, config.completion.as_ref()?)))
+            .map(|(authority, completion)| {
+                let block = format!("reviewAuthorities.{authority}.completion");
+                completion
+                    .resolve_keys(&resolver, &block)
+                    .map(|keys| (block, keys))
             })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ActivatedEventDestinationRegistry::activate(
+            compiled,
+            &self.event_destinations,
+            &resolver,
+            completion_keys
+                .iter()
+                .flat_map(|(block, keys)| labeled_delivery_keys(block, keys))
+                .collect(),
+        )
+        .map(|destinations| destinations.with_payload_retention(self.retention.payload_retention))
+    }
+
+    /// Activate hook destinations and check their keys against the active review authorities.
+    pub fn activate_event_destinations_with_review_authorities(
+        &self,
+        compiled: &CompiledRegistry,
+        authorities: Option<&crate::review_store::ReviewAuthorityRegistry>,
+    ) -> std::result::Result<ActivatedEventDestinationRegistry, EventDestinationActivationError>
+    {
+        let resolver = self
+            .secret_resolver()
+            .map_err(|_| crate::event_destination::EventDestinationActivationError::Secret)?;
+        let review_keys = authorities
+            .into_iter()
+            .flat_map(|authority| authority.labeled_completion_keys())
+            .collect();
+        ActivatedEventDestinationRegistry::activate(
+            compiled,
+            &self.event_destinations,
+            &resolver,
+            review_keys,
+        )
+        .map(|destinations| destinations.with_payload_retention(self.retention.payload_retention))
     }
 
     pub fn operational_timeouts(&self) -> &OperationalTimeouts {
@@ -1603,10 +2100,20 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::InvalidDatabase);
         }
         #[cfg(feature = "postgres-test")]
-        if self.database.test_only_plaintext {
+        if self.database.transport.test_only_plaintext {
             return ConnectionConfig::from_test_config(postgres, self.database.pool_bounds)
                 .map_err(|_| RuntimeConfigError::InvalidDatabase);
         }
+        let postgres = match checked_connection(
+            &self.database.transport,
+            postgres,
+            self.development_witness(),
+            self.database.pool_bounds,
+            &registry_platform_config::resolve_database_host,
+        )? {
+            CheckedConnection::Plaintext(connection) => return Ok(connection),
+            CheckedConnection::VerifiedTls(postgres) => postgres,
+        };
         let connection = match &self.database.ca_bundle_ref {
             Some(roots_ref) => {
                 let roots = self.secret_resolver()?.resolve_reference(roots_ref)?;
@@ -1640,14 +2147,33 @@ impl RuntimeConfig {
         .map_err(|_| RuntimeConfigError::InvalidCursor)
     }
 
-    /// How strictly this deployment loads a package: file-mode strictness
-    /// follows the database initialization environment.
-    pub fn package_load_context(&self) -> PackageLoadContext<'_> {
+    pub(crate) fn decide_package_posture(&mut self, package: &VerifiedPackage) -> Result<()> {
+        let path = self
+            .source_path
+            .as_deref()
+            .unwrap_or_else(|| Path::new("<runtime>"));
+        decide_startup_posture(&mut self.posture, package, path, self.package.root())
+    }
+
+    pub(crate) fn peer_policy(&self) -> registry_platform_httputil::PeerPolicy {
+        self.peer_policy
+    }
+
+    pub fn posture_report(&self) -> &PostureReport {
+        &self.posture
+    }
+
+    pub fn development_witness(&self) -> Option<&DevelopmentWitness> {
+        self.development.as_ref()
+    }
+
+    pub fn posture(&self) -> Posture {
+        self.posture.posture()
+    }
+
+    pub fn package_load_context(&self) -> PackageLoadContext {
         PackageLoadContext {
-            database_initialization_environment: self
-                .identity
-                .database_initialization_environment
-                .as_str(),
+            posture: self.posture(),
         }
     }
 
@@ -1657,6 +2183,10 @@ impl RuntimeConfig {
             RuntimeConfigError::UnsafePackageRoot,
             RuntimeConfigError::PackageRootUnavailable,
         )?;
+        self.validate_secret_provider_root()
+    }
+
+    fn validate_secret_provider_root(&self) -> Result<()> {
         if let Some(root) = self.secret_providers.file_root() {
             validate_existing_directory(
                 root,
@@ -1741,14 +2271,22 @@ pub struct ListenerConfig {
 }
 
 impl ListenerConfig {
-    fn from_raw(raw: RawRegistryListener) -> Result<Self> {
+    fn from_raw(
+        raw: RawRegistryListener,
+        development: Option<&DevelopmentWitness>,
+    ) -> Result<Self> {
         let bind = raw.listener.bind.socket_addr();
         Ok(Self {
             bind,
             public_origin: raw
                 .public_origin
-                .as_deref()
-                .map(PublicOrigin::parse)
+                .as_ref()
+                .map(|origin| {
+                    let origin = origin
+                        .get(development)
+                        .map_err(|_| RuntimeConfigError::InvalidListener)?;
+                    PublicOrigin::parse(&origin.0)
+                })
                 .transpose()?,
         })
     }
@@ -1827,7 +2365,10 @@ pub struct PublicOrigin {
 
 impl PublicOrigin {
     pub fn parse(value: &str) -> Result<Self> {
-        if value.len() > MAX_PUBLIC_ORIGIN_BYTES || value.contains(['?', '#', '@']) {
+        if value.len() > MAX_PUBLIC_ORIGIN_BYTES
+            || Url::new(value).is_err()
+            || value.contains(['?', '#', '@'])
+        {
             return Err(RuntimeConfigError::InvalidListener);
         }
         let uri: axum::http::Uri = value
@@ -1838,13 +2379,10 @@ impl PublicOrigin {
             .host()
             .trim_start_matches('[')
             .trim_end_matches(']');
-        let loopback = host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| address.is_loopback());
+        let loopback = registry_platform_httputil::loopback::loopback_host(host).is_some();
         let scheme_allowed = match uri.scheme_str() {
             Some("https") => true,
-            Some("http") => loopback,
+            Some("http") => loopback && uri.path() == "/",
             _ => false,
         };
         let path = uri.path();
@@ -1900,7 +2438,6 @@ pub struct DeploymentIdentity {
     environment: String,
     instance_id: String,
     database_id: String,
-    database_initialization_environment: String,
 }
 
 impl DeploymentIdentity {
@@ -1913,18 +2450,10 @@ impl DeploymentIdentity {
             return Err(RuntimeConfigError::InvalidInstanceId);
         }
         validate_deployment_value(&raw.database_id)?;
-        validate_deployment_value(&raw.database_initialization_environment)?;
-        // Package loading keys its permission and project-identity strictness
-        // on the initialization environment, so a deployment that names
-        // another environment would load its package under the wrong policy.
-        if raw.environment != raw.database_initialization_environment {
-            return Err(RuntimeConfigError::EnvironmentIdentityConflict);
-        }
         Ok(Self {
             environment: raw.environment,
             instance_id: raw.instance_id,
             database_id: raw.database_id,
-            database_initialization_environment: raw.database_initialization_environment,
         })
     }
 
@@ -1939,10 +2468,6 @@ impl DeploymentIdentity {
     pub fn database_id(&self) -> &str {
         &self.database_id
     }
-
-    pub fn database_initialization_environment(&self) -> &str {
-        &self.database_initialization_environment
-    }
 }
 
 impl fmt::Debug for DeploymentIdentity {
@@ -1952,7 +2477,6 @@ impl fmt::Debug for DeploymentIdentity {
             .field("environment", &"<redacted>")
             .field("instance_id", &"<redacted>")
             .field("database_id", &"<redacted>")
-            .field("database_initialization_environment", &"<redacted>")
             .finish()
     }
 }
@@ -1998,29 +2522,28 @@ pub struct DatabaseConfig {
     runtime_url_ref: SecretReference,
     migration_url_ref: SecretReference,
     ca_bundle_ref: Option<SecretReference>,
-    #[cfg(feature = "postgres-test")]
-    test_only_plaintext: bool,
+    transport: registry_platform_config::DatabaseConfig,
     pool_bounds: PoolBounds,
     roles: SqlRoles,
 }
 
 impl DatabaseConfig {
     fn from_raw(raw: RawRegistryDatabase) -> Result<Self> {
-        #[cfg(not(feature = "postgres-test"))]
-        if raw.database.test_only_plaintext {
-            return Err(RuntimeConfigError::PlaintextDatabase);
-        }
+        raw.database
+            .check(cfg!(feature = "postgres-test"))
+            .map_err(RuntimeConfigError::DatabaseTransport)?;
         let runtime_url_ref = parse_secret_reference(
-            raw.database.runtime_url_ref,
+            raw.database.runtime_url_ref.clone(),
             RuntimeConfigError::InvalidDatabase,
         )?;
         let migration_url_ref = parse_secret_reference(
-            raw.database.migration_url_ref,
+            raw.database.migration_url_ref.clone(),
             RuntimeConfigError::InvalidDatabase,
         )?;
         let ca_bundle_ref = raw
             .database
             .ca_bundle_ref
+            .clone()
             .map(|reference| parse_secret_reference(reference, RuntimeConfigError::InvalidDatabase))
             .transpose()?;
         let roles = SqlRoles::from_raw(raw.roles)?;
@@ -2040,8 +2563,7 @@ impl DatabaseConfig {
             runtime_url_ref,
             migration_url_ref,
             ca_bundle_ref,
-            #[cfg(feature = "postgres-test")]
-            test_only_plaintext: raw.database.test_only_plaintext,
+            transport: raw.database,
             pool_bounds,
             roles,
         })
@@ -2055,6 +2577,18 @@ impl DatabaseConfig {
     /// connections trust, when the platform roots are not used.
     pub fn ca_bundle_ref(&self) -> Option<&SecretReference> {
         self.ca_bundle_ref.as_ref()
+    }
+
+    /// The secret reference to the runtime role's PostgreSQL URL, which
+    /// `bregctl provision` reads for the role, database and password.
+    pub fn runtime_url_ref(&self) -> &SecretReference {
+        &self.runtime_url_ref
+    }
+
+    /// The secret reference to the migration role's PostgreSQL URL, which
+    /// `bregctl provision` reads for the role, database and password.
+    pub fn migration_url_ref(&self) -> &SecretReference {
+        &self.migration_url_ref
     }
 }
 
@@ -2106,19 +2640,19 @@ impl fmt::Debug for PackageConfig {
 
 #[derive(Clone)]
 pub struct AuthenticationConfig {
-    oidc: OidcVerifierConfig,
+    oidc: OidcConfig,
     authority_claims: AuthorityClaimsConfig,
 }
 
 impl AuthenticationConfig {
     fn from_raw(raw: RawAuthenticationConfig) -> Result<Self> {
         Ok(Self {
-            oidc: OidcVerifierConfig::from_raw(raw.oidc)?,
+            oidc: OidcConfig::from_raw(&raw.oidc)?,
             authority_claims: AuthorityClaimsConfig::from_raw(raw.authority_claims)?,
         })
     }
 
-    pub fn oidc(&self) -> &OidcVerifierConfig {
+    pub fn oidc(&self) -> &OidcConfig {
         &self.oidc
     }
 
@@ -2131,9 +2665,14 @@ impl AuthenticationConfig {
         &self,
         registry: &CompiledRegistry,
     ) -> std::result::Result<(), AuthenticationConfigError> {
+        let verifiers = self
+            .oidc
+            .issuers()
+            .map(OidcVerifierConfig::token_verifier_config)
+            .collect::<Vec<_>>();
         crate::auth::check_claim_mapping(
             registry,
-            &self.oidc.token_verifier_config(),
+            &verifiers.iter().collect::<Vec<_>>(),
             &self.authority_claim_config(),
         )
     }
@@ -2149,67 +2688,161 @@ impl fmt::Debug for AuthenticationConfig {
     }
 }
 
+/// The JSON pointer of the issuer set in the runtime file.
+const ISSUERS_POINTER: &str = "/authentication/oidc/issuers";
+
+/// The issuers this registry accepts access tokens from, in issuer id order.
+/// It holds at least one.
+#[derive(Clone, Debug)]
+pub struct OidcConfig {
+    issuers: Vec<OidcVerifierConfig>,
+}
+
+impl OidcConfig {
+    /// Check the set as a whole, then read each entry. A rule that spans
+    /// entries is refused with every problem the set's check found.
+    fn from_raw(raw: &RawOidcConfig) -> Result<Self> {
+        let problems = raw.issuers.check(ISSUERS_POINTER);
+        if !problems.is_empty() {
+            return Err(RuntimeConfigError::IssuerSet(problems));
+        }
+        let issuers = raw
+            .issuers
+            .iter()
+            .map(|(id, entry)| OidcVerifierConfig::from_raw(id.as_str(), entry))
+            .collect::<Result<Vec<_>>>()?;
+        if issuers.is_empty() {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        Ok(Self { issuers })
+    }
+
+    /// Every issuer entry, in issuer id order.
+    pub fn issuers(&self) -> impl Iterator<Item = &OidcVerifierConfig> {
+        self.issuers.iter()
+    }
+
+    /// The entry with the issuer id `id`.
+    #[must_use]
+    pub fn issuer(&self, id: &str) -> Option<&OidcVerifierConfig> {
+        self.issuers.iter().find(|entry| entry.id == id)
+    }
+
+    /// The first entry in issuer id order. The set holds at least one.
+    #[must_use]
+    pub fn first(&self) -> &OidcVerifierConfig {
+        &self.issuers[0]
+    }
+
+    /// The operator-visible warning emitted when an entry turns on the plain
+    /// HTTP opt-in.
+    #[must_use]
+    pub fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
+        self.issuers
+            .iter()
+            .any(|entry| entry.allow_insecure_http)
+            .then_some(
+                "an authentication.oidc.issuers entry sets allowInsecureHttp, which permits plain HTTP to its issuer and to a JWKS URI declared in configuration",
+            )
+    }
+
+    /// Whether an entry leaves `allowedClients` unrestricted, so a token
+    /// from any client of its issuer is accepted.
+    #[must_use]
+    pub fn admits_every_client(&self) -> bool {
+        self.issuers
+            .iter()
+            .any(OidcVerifierConfig::admits_every_client)
+    }
+
+    /// The pointer of each listed client spelled like a wildcard, which
+    /// names one client.
+    fn wildcard_spelled_clients(&self) -> impl Iterator<Item = String> + '_ {
+        self.issuers.iter().flat_map(|entry| {
+            entry
+                .wildcard_spelled_clients()
+                .map(move |index| format!("{}/allowedClients/{index}", entry.pointer()))
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct OidcVerifierConfig {
+    id: String,
     issuer: String,
     audience: String,
     allowed_algorithm: AccessTokenAlgorithm,
-    access_token_type: String,
-    scope_claim: String,
-    scope_separator: char,
     allowed_clients: Vec<String>,
     denied_kids: Vec<String>,
     assertion_issuers: BTreeMap<String, Vec<String>>,
     max_token_lifetime: Duration,
-    leeway: Duration,
     jwks_cache: JwksCacheConfig,
     jwks_source: OidcJwksSource,
     allow_insecure_http: bool,
+    verifier: TokenVerifierConfig,
+    declared: DeclaredKinds,
 }
 
 impl OidcVerifierConfig {
-    /// The operator-visible warning emitted when the plain HTTP opt-in is active.
+    /// The issuer id the operator gave this entry.
     #[must_use]
-    pub fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.allow_insecure_http.then_some(
-            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-        )
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
-    /// The one token issuer this runtime verifies.
+    /// The token issuer this entry verifies.
     #[must_use]
     pub fn issuer(&self) -> &str {
         &self.issuer
     }
 
-    fn from_raw(raw: RawOidcVerifierConfig) -> Result<Self> {
-        validate_oidc_value(&raw.provider.issuer)?;
-        validate_oidc_value(&raw.provider.audience)?;
-        // A loopback `http` issuer or key URI stays accepted for the local
-        // development and test deployments that run their issuer beside the
-        // registry; every other issuer and key URI is `https`.
-        raw.provider
-            .check("authentication.oidc", true)
+    /// The audience a token from this entry's issuer must name.
+    #[must_use]
+    pub fn audience(&self) -> &str {
+        &self.audience
+    }
+
+    /// The JSON pointer of this entry in the runtime file.
+    fn pointer(&self) -> String {
+        format!(
+            "{ISSUERS_POINTER}/{}",
+            registry_platform_yaml::escape_pointer_segment(&self.id)
+        )
+    }
+
+    fn from_raw(id: &str, raw: &RawOidcVerifierConfig) -> Result<Self> {
+        let core = &raw.core;
+        validate_oidc_value(core.provider.issuer.as_str())?;
+        validate_oidc_value(&core.provider.audience)?;
+        // Loopback HTTP for the issuer or key URI is accepted in every posture.
+        core.provider
+            .check(&format!("authentication.oidc.issuers.{id}"))
             .map_err(|_| RuntimeConfigError::InvalidOidc)?;
-        validate_oidc_value(&raw.access_token_type)?;
-        validate_claim_name(&raw.scope_claim)?;
+        validate_claim_name(core.scope_claim.get().as_str())?;
         if raw.scope_separator.is_control() || raw.scope_separator.is_alphanumeric() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
-        validate_bounded_list(&raw.allowed_clients)?;
+        let allowed_clients = match core.allowed_clients.admitted() {
+            Admitted::Listed(clients) => clients.to_vec(),
+            Admitted::Unrestricted => Vec::new(),
+            Admitted::FromPackage | Admitted::FromPolicies => {
+                return Err(RuntimeConfigError::InvalidOidc)
+            }
+        };
+        validate_bounded_list(&allowed_clients)?;
         validate_bounded_list(&raw.revoked_key_ids)?;
         let denied_unique = raw.revoked_key_ids.iter().collect::<HashSet<_>>();
         if denied_unique.len() != raw.revoked_key_ids.len() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
-        let allowed_unique = raw.allowed_clients.iter().collect::<HashSet<_>>();
-        if allowed_unique.len() != raw.allowed_clients.len() {
+        let allowed_unique = allowed_clients.iter().collect::<HashSet<_>>();
+        if allowed_unique.len() != allowed_clients.len() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         // Duplicate assertion-issuer client keys are already refused before this
         // point: the shared reader refuses any duplicate YAML mapping key
         // anywhere in the document, including here.
-        let assertion_issuers = raw.assertion_issuers;
+        let assertion_issuers = raw.assertion_issuers.clone();
         let assertion_issuer_clients = assertion_issuers.keys().cloned().collect::<Vec<_>>();
         validate_bounded_list(&assertion_issuer_clients)?;
         for issuers in assertion_issuers.values() {
@@ -2220,24 +2853,52 @@ impl OidcVerifierConfig {
             }
         }
         let max_token_lifetime = Duration::from_secs(raw.maximum_token_lifetime_seconds);
-        let leeway = oidc_leeway(raw.leeway_milliseconds)?;
-        let jwks_source = OidcJwksSource::from_block(raw.provider.jwks_source)?;
+        let leeway = oidc_leeway(raw.leeway_milliseconds).ok_or_else(|| {
+            RuntimeConfigError::InvalidOidcLeeway {
+                pointer: format!(
+                    "{ISSUERS_POINTER}/{}/leewayMilliseconds",
+                    registry_platform_yaml::escape_pointer_segment(id)
+                ),
+            }
+        })?;
+        let jwks_source = OidcJwksSource::from_block(core.provider.jwks_source.clone())?;
+        let jwks_cache = JwksCacheConfig::from_raw(raw.jwks_cache.clone())?;
+        let verifier = TokenVerifierConfig::for_caller_issuer(
+            core,
+            vec![raw.allowed_algorithm.to_jsonwebtoken()],
+            None,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidOidc)?
+        .with_scope_separator(raw.scope_separator)
+        .with_denied_kids(raw.revoked_key_ids.iter().cloned().collect())
+        .with_assertion_issuers(assertion_issuers.clone())
+        .with_max_token_lifetime(Some(max_token_lifetime))
+        .with_leeway(leeway);
+        let declared =
+            DeclaredKinds::from_core(core).map_err(|_| RuntimeConfigError::InvalidOidc)?;
         Ok(Self {
-            issuer: raw.provider.issuer.into_string(),
-            audience: raw.provider.audience,
+            id: id.to_owned(),
+            issuer: core.provider.issuer.as_str().to_owned(),
+            audience: core.provider.audience.clone(),
             allowed_algorithm: raw.allowed_algorithm,
-            access_token_type: raw.access_token_type,
-            scope_claim: raw.scope_claim,
-            scope_separator: raw.scope_separator,
-            allowed_clients: raw.allowed_clients,
-            denied_kids: raw.revoked_key_ids,
+            allowed_clients,
+            denied_kids: raw.revoked_key_ids.clone(),
             assertion_issuers,
             max_token_lifetime,
-            leeway,
-            jwks_cache: JwksCacheConfig::from_raw(raw.jwks_cache)?,
+            jwks_cache,
             jwks_source,
-            allow_insecure_http: raw.provider.allow_insecure_http,
+            allow_insecure_http: core.provider.allow_insecure_http,
+            verifier,
+            declared,
         })
+    }
+
+    /// This entry as the authenticator verifies it, with `key_source` as
+    /// where its signing keys come from.
+    #[must_use]
+    pub fn authenticator_issuer(&self, key_source: Arc<JwksFetcher>) -> AuthenticatorIssuer {
+        AuthenticatorIssuer::new(self.id.clone(), self.token_verifier_config(), key_source)
+            .with_declared_kinds(self.declared.clone())
     }
 
     pub fn discovery_config(&self) -> OidcDiscoveryConfig {
@@ -2260,8 +2921,8 @@ impl OidcVerifierConfig {
         }
     }
 
-    /// Whether the file leaves `allowedClients` unrestricted, so a token from
-    /// any client is accepted.
+    /// Whether this entry leaves `allowedClients` unrestricted, so a token
+    /// from any client of its issuer is accepted.
     #[must_use]
     pub fn admits_every_client(&self) -> bool {
         self.allowed_clients.is_empty()
@@ -2278,25 +2939,10 @@ impl OidcVerifierConfig {
     }
 
     pub fn token_verifier_config(&self) -> TokenVerifierConfig {
-        TokenVerifierConfig::access_token_profile(
-            self.issuer.clone(),
-            vec![self.audience.clone()],
-            vec![self.allowed_algorithm.to_jsonwebtoken()],
-            access_token_typ_set(&self.access_token_type),
-        )
-        .with_scope_claim(self.scope_claim.clone())
-        .with_scope_separator(self.scope_separator)
-        .with_allowed_clients(self.allowed_clients.clone())
-        .with_denied_kids(self.denied_kids.iter().cloned().collect())
-        .with_assertion_issuers(self.assertion_issuers.clone())
-        .with_max_token_lifetime(Some(self.max_token_lifetime))
-        .with_leeway(self.leeway)
+        self.verifier.clone()
     }
 
-    async fn key_source(&self, resolver: &SecretResolver) -> Result<Arc<JwksFetcher>> {
-        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
+    pub(crate) async fn key_source(&self, resolver: &SecretResolver) -> Result<Arc<JwksFetcher>> {
         let network = IssuerNetworkPolicy::new(&self.issuer, self.allow_insecure_http)
             .map_err(|_| RuntimeConfigError::InvalidOidc)?;
         match &self.jwks_source {
@@ -2347,6 +2993,7 @@ impl fmt::Debug for OidcVerifierConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("OidcVerifierConfig")
+            .field("id", &self.id)
             .field("issuer", &"<redacted>")
             .field("audience", &"<redacted>")
             .field("allowed_algorithm", &self.allowed_algorithm)
@@ -2360,7 +3007,7 @@ impl fmt::Debug for OidcVerifierConfig {
                 &self.assertion_issuers.len(),
             )
             .field("max_token_lifetime", &self.max_token_lifetime)
-            .field("leeway", &self.leeway)
+            .field("leeway", &self.verifier.leeway)
             .field("jwks_cache", &self.jwks_cache)
             .field("jwks_source", &self.jwks_source.kind())
             .finish()
@@ -2391,12 +3038,14 @@ impl OidcJwksSource {
             JwksSource::Uri { uri } => Ok(Self::Uri {
                 uri: uri.into_string(),
             }),
-            JwksSource::Static { document_ref } => Ok(Self::Static {
-                document_ref: parse_secret_reference(
-                    document_ref,
-                    RuntimeConfigError::InvalidOidc,
-                )?,
-            }),
+            JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
+                Ok(Self::Static {
+                    document_ref: parse_secret_reference(
+                        document_ref,
+                        RuntimeConfigError::InvalidOidc,
+                    )?,
+                })
+            }
         }
     }
 
@@ -2421,11 +3070,8 @@ fn validate_static_jwks(
     allowed_algorithm: AccessTokenAlgorithm,
     denied_kids: &[String],
 ) -> Result<JwkSet> {
-    let value = parse_json_strict(bytes).map_err(|_| RuntimeConfigError::InvalidOidc)?;
+    let value = public_jwks_document(bytes).map_err(RuntimeConfigError::InvalidStaticJwks)?;
     let object = value.as_object().ok_or(RuntimeConfigError::InvalidOidc)?;
-    if object.len() != 1 || !object.contains_key("keys") {
-        return Err(RuntimeConfigError::InvalidOidc);
-    }
     let keys = object
         .get("keys")
         .and_then(Value::as_array)
@@ -2433,9 +3079,8 @@ fn validate_static_jwks(
     if keys.is_empty() || keys.len() > MAX_LIST_ITEMS {
         return Err(RuntimeConfigError::InvalidOidc);
     }
-    let mut kids = HashSet::new();
     for key in keys {
-        validate_static_jwk(key, allowed_algorithm, denied_kids, &mut kids)?;
+        validate_static_jwk(key, allowed_algorithm, denied_kids)?;
     }
     serde_json::from_value::<JwkSet>(value).map_err(|_| RuntimeConfigError::InvalidOidc)
 }
@@ -2444,10 +3089,8 @@ fn validate_static_jwk(
     value: &Value,
     allowed_algorithm: AccessTokenAlgorithm,
     denied_kids: &[String],
-    kids: &mut HashSet<String>,
 ) -> Result<()> {
     let object = value.as_object().ok_or(RuntimeConfigError::InvalidOidc)?;
-    validate_static_jwk_members(object)?;
     validate_static_jwk_use(object)?;
     validate_static_jwk_key_ops(object)?;
     let kid = object
@@ -2455,7 +3098,7 @@ fn validate_static_jwk(
         .and_then(Value::as_str)
         .ok_or(RuntimeConfigError::InvalidOidc)?;
     validate_bounded_list(&[kid.to_owned()])?;
-    if denied_kids.iter().any(|denied| denied == kid) || !kids.insert(kid.to_owned()) {
+    if denied_kids.iter().any(|denied| denied == kid) {
         return Err(RuntimeConfigError::InvalidOidc);
     }
     if object.get("alg").and_then(Value::as_str) != Some(allowed_algorithm.jwa_name()) {
@@ -2476,19 +3119,6 @@ fn validate_static_jwk(
         return Err(RuntimeConfigError::InvalidOidc);
     }
     validate_static_jwk_shape(object, allowed_algorithm)?;
-    Ok(())
-}
-
-fn validate_static_jwk_members(object: &Map<String, Value>) -> Result<()> {
-    const ALLOWED: &[&str] = &[
-        "kty", "kid", "alg", "use", "key_ops", "crv", "x", "y", "n", "e",
-    ];
-    if object
-        .keys()
-        .any(|member| !ALLOWED.contains(&member.as_str()))
-    {
-        return Err(RuntimeConfigError::InvalidOidc);
-    }
     Ok(())
 }
 
@@ -2967,7 +3597,7 @@ struct ReviewAuthorityConfig {
     private_key_jwt: Option<ReviewPrivateKeyJwtConfig>,
     producer_id: String,
     recovery_days: u32,
-    completion: Option<(SecretReference, String)>,
+    completion: Option<RawReviewCompletionConfig>,
 }
 
 impl ReviewAuthorityConfig {
@@ -2994,19 +3624,14 @@ impl ReviewAuthorityConfig {
                 "endpoint must not carry user information, a query or a fragment",
             ));
         }
-        let completion = match (raw.completion_token_ref, raw.completion_recipient) {
-            (None, None) => None,
-            (Some(token_ref), Some(recipient))
-                if crate::review_store::valid_completion_recipient(&recipient) =>
-            {
-                Some((token_ref, recipient))
-            }
-            _ => {
-                return Err(ReviewAuthorityRefusal(
-                    "completionTokenRef and completionRecipient must be written together, with a recipient of 1 to 256 visible ASCII characters",
-                ))
-            }
-        };
+        let completion = raw.completion;
+        if completion.as_ref().is_some_and(|completion| {
+            !crate::review_store::valid_completion_recipient(&completion.recipient_binding)
+        }) {
+            return Err(ReviewAuthorityRefusal(
+                "completion.recipientBinding must contain 1 to 256 visible ASCII characters",
+            ));
+        }
         let token_ref = raw.token_ref;
         let private_key_jwt = raw
             .private_key_jwt
@@ -3067,18 +3692,43 @@ struct RawReviewAuthorityConfig {
         schemars(with = "BoundedU32<1, { crate::review_store::MAXIMUM_REVIEW_RECOVERY_DAYS }>")
     )]
     recovery_days: u32,
-    /// The bearer token the review authority presents when it notifies this
-    /// registry that a review completed. Written together with
-    /// `completionRecipient`; omitted, no completion notification is
-    /// accepted and the registry polls for results.
+    /// Standard Webhooks authentication for review completion notifications.
+    /// Omit this block to poll for results without notifications.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    completion_token_ref: Option<SecretReference>,
-    /// The logical recipient the review authority names in each completion
-    /// notification. Written together with `completionTokenRef`; omitted, no
-    /// completion notification is accepted and the registry polls for
-    /// results.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    completion_recipient: Option<String>,
+    completion: Option<RawReviewCompletionConfig>,
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawReviewCompletionConfig {
+    /// Recipient binding the completion sender supplies to select this authority.
+    recipient_binding: String,
+    /// Runtime secret reference for 32 to 64 exact HMAC-SHA-256 key bytes.
+    hmac_sha256_key_ref: SecretReference,
+    /// Optional previous completion signing key during rotation.
+    #[serde(
+        default,
+        deserialize_with = "present_hook_key_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    previous_hmac_sha256_key_ref: Option<SecretReference>,
+}
+
+impl RawReviewCompletionConfig {
+    fn resolve_keys(
+        &self,
+        resolver: &SecretResolver,
+        path: &str,
+    ) -> std::result::Result<DeliveryKeys, EventDestinationActivationError> {
+        resolve_delivery_keys(
+            resolver,
+            path,
+            &self.hmac_sha256_key_ref,
+            self.previous_hmac_sha256_key_ref.as_ref(),
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -3239,22 +3889,49 @@ struct RawRegistryListener {
     listener: registry_platform_config::ListenerConfig,
     /// Canonical public origin for QGIS discovery and pagination links, with
     /// an optional deployment path prefix such as
-    /// `https://registry.example.org/breg`. It is `https`; `http` is accepted
-    /// only for a loopback host, for local development. Required when the
+    /// `https://registry.example.org/breg`. Production requires `https`.
+    /// Development also accepts `http` for a loopback host with no deployment
+    /// path prefix. Required when the
     /// registry exposes GIS collections; omitted, the registry builds no
     /// absolute discovery or paging links.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_origin: Option<Url>,
+    public_origin: Option<registry_platform_config::Gated<RawPublicOrigin>>,
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct RawPublicOrigin(#[cfg_attr(feature = "schema", schemars(with = "Url"))] String);
+
+static BREG_HTTP_PUBLIC_ORIGIN: registry_platform_config::DevelopmentSetting =
+    registry_platform_config::DevelopmentSetting {
+        code: "breg.posture.http-public-origin",
+        key: "publicOrigin",
+        summary: "The registry publishes links with a plain HTTP origin",
+        production: "Set listener.publicOrigin to an HTTPS origin.",
+    };
+
+impl registry_platform_config::DevelopmentClass for RawPublicOrigin {
+    const SETTINGS: &'static [&'static registry_platform_config::DevelopmentSetting] =
+        &[&BREG_HTTP_PUBLIC_ORIGIN];
+
+    fn development_setting(&self) -> Option<&'static registry_platform_config::DevelopmentSetting> {
+        let origin = PublicOrigin::parse(&self.0).ok()?;
+        origin
+            .value
+            .starts_with("http://")
+            .then_some(&BREG_HTTP_PUBLIC_ORIGIN)
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawDeploymentIdentity {
+    /// A deployment label recorded in activation audit entries.
     environment: String,
     instance_id: String,
     database_id: String,
-    database_initialization_environment: String,
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
@@ -3333,35 +4010,31 @@ struct RawPackageConfig {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawAuthenticationConfig {
-    oidc: RawOidcVerifierConfig,
+    oidc: RawOidcConfig,
     authority_claims: RawAuthorityClaimsConfig,
 }
 
+/// The issuers this registry accepts access tokens from.
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawOidcConfig {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuers"))]
+    #[cfg_attr(feature = "schema", schemars(flatten), serde(skip_serializing))]
+    issuers: CallerIssuers<RawOidcVerifierConfig>,
+}
+
+/// One issuer a token may come from: the members every caller issuer entry
+/// shares, and the verification rules this registry adds.
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawOidcVerifierConfig {
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
-    #[cfg_attr(feature = "schema", schemars(flatten))]
-    provider: OidcIssuerConfig,
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer-core"))]
+    #[cfg_attr(feature = "schema", schemars(flatten), serde(skip_serializing))]
+    core: CallerIssuerCore<AllowedClients>,
     allowed_algorithm: AccessTokenAlgorithm,
-    /// The one admitted access-token `typ` semantics. Configuring the
-    /// RFC 9068 access-token media type as `at+jwt` or
-    /// `application/at+jwt` admits both spellings of that one type; any
-    /// other value (for example `JWT`) admits only that token type, matched
-    /// case-insensitively.
-    access_token_type: String,
-    scope_claim: String,
     scope_separator: char,
-    /// The OAuth clients whose tokens this registry accepts: `unrestricted`
-    /// to accept a token from every client, or a list of at least one
-    /// client.
-    #[serde(deserialize_with = "crate::contract::sentinel::allowed_clients")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "crate::contract::sentinel::AllowedClients")
-    )]
-    allowed_clients: Vec<String>,
     /// The signing key identifiers this registry refuses locally even while
     /// the issuer publishes them. Omitted, no key is refused; written, it
     /// names at least one key and does not revoke it at the issuer.
@@ -3395,6 +4068,14 @@ struct RawOidcVerifierConfig {
     /// Optional JWKS fetch and cache tuning. Defaults to bounded cache behavior.
     #[serde(default)]
     jwks_cache: RawJwksCacheConfig,
+}
+
+impl CallerIssuerEntry for RawOidcVerifierConfig {
+    type Clients = AllowedClients;
+
+    fn core(&self) -> &CallerIssuerCore<AllowedClients> {
+        &self.core
+    }
 }
 
 /// An empty list is not how the file says "refuse no key" (CFG-EMPTY-2):
@@ -3453,7 +4134,7 @@ impl<'de> Deserialize<'de> for ListedIssuers {
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawJwksCacheConfig {
     /// Defaults to the bounded JWKS cache time-to-live.
@@ -4020,12 +4701,6 @@ fn install_schema_constraints(schema: &mut Value) {
             VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
         ),
         (
-            "/$defs/RawDeploymentIdentity/properties/databaseInitializationEnvironment",
-            1,
-            MAX_DEPLOYMENT_VALUE_BYTES,
-            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
-        ),
-        (
             "/$defs/RawSqlRoles/properties/migration",
             1,
             63,
@@ -4053,12 +4728,6 @@ fn install_schema_constraints(schema: &mut Value) {
             "/$defs/RawOidcVerifierConfig/properties/audience",
             1,
             registry_platform_config::MAX_OIDC_AUDIENCE_CHARACTERS,
-            VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
-        ),
-        (
-            "/$defs/RawOidcVerifierConfig/properties/accessTokenType",
-            1,
-            MAX_OIDC_VALUE_BYTES,
             VALUE_NO_EDGE_WHITESPACE_SCHEMA_PATTERN,
         ),
         (
@@ -4104,7 +4773,7 @@ fn install_schema_constraints(schema: &mut Value) {
     for pointer in [
         // The list arm of `allowedClients`; the other arm is the keyword
         // `unrestricted`.
-        "/$defs/AllowedClients/anyOf/1",
+        "/$defs/RawOidcVerifierConfig/properties/allowedClients/anyOf/1",
         "/$defs/RawOidcVerifierConfig/properties/revokedKeyIds",
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers/additionalProperties",
     ] {
@@ -4414,17 +5083,279 @@ fn validate_bounded_list(values: &[String]) -> Result<()> {
 
 /// The token verifier applies leeway in whole seconds, so a value carrying
 /// sub-second precision would be truncated without the operator being told.
-fn oidc_leeway(milliseconds: u64) -> Result<Duration> {
-    if !milliseconds.is_multiple_of(1_000) {
-        return Err(RuntimeConfigError::InvalidOidcLeeway);
+/// `None` for such a value.
+fn oidc_leeway(milliseconds: u64) -> Option<Duration> {
+    milliseconds
+        .is_multiple_of(1_000)
+        .then(|| Duration::from_millis(milliseconds))
+}
+
+enum CheckedConnection {
+    /// The plaintext connection, dialling only the checked addresses.
+    Plaintext(ConnectionConfig),
+    /// The configuration as written, for the caller to secure with TLS.
+    VerifiedTls(tokio_postgres::Config),
+}
+
+/// Check every host and hostaddr of `postgres` against the configured
+/// transport. Under a plaintext transport every TCP host is replaced by the
+/// numeric addresses its check accepted, so the driver never resolves a name
+/// again.
+fn checked_connection(
+    database: &registry_platform_config::DatabaseConfig,
+    postgres: tokio_postgres::Config,
+    witness: Option<&DevelopmentWitness>,
+    pool_bounds: PoolBounds,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<CheckedConnection> {
+    let (transport, postgres) =
+        registry_platform_postgres::postgres_connection(database, postgres, witness, resolve)
+            .map_err(RuntimeConfigError::DatabaseTransport)?;
+    match transport {
+        DatabaseTransport::VerifiedTls => Ok(CheckedConnection::VerifiedTls(postgres)),
+        DatabaseTransport::LoopbackPlaintext | DatabaseTransport::PrivateNetworkPlaintext => {
+            ConnectionConfig::plaintext_config(postgres, pool_bounds)
+                .map(CheckedConnection::Plaintext)
+                .map_err(|_| RuntimeConfigError::InvalidDatabase)
+        }
     }
-    Ok(Duration::from_millis(milliseconds))
 }
 
 #[cfg(test)]
 mod tests {
     use super::RuntimeConfigError;
     use crate::attachment_verification_worker::ATTEMPT_BUDGET;
+
+    #[test]
+    fn a_loopback_name_reaches_the_pool_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        use registry_platform_config::{DatabaseTransport, Gated};
+        let database = registry_platform_config::DatabaseConfig {
+            runtime_url_ref: "secret:env/DB_RUNTIME".to_owned(),
+            migration_url_ref: "secret:env/DB_MIGRATION".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap()),
+        };
+        let bounds = super::PoolBounds::new(
+            4,
+            super::Duration::from_secs(1),
+            super::Duration::from_secs(1),
+            super::Duration::from_secs(1),
+        )
+        .unwrap();
+        let postgres = "postgresql://registry_runtime@localhost:5433/registry"
+            .parse()
+            .unwrap();
+        let Ok(super::CheckedConnection::Plaintext(connection)) =
+            super::checked_connection(&database, postgres, None, bounds, &fixed)
+        else {
+            panic!("a loopback name under loopback-plaintext is a plaintext connection");
+        };
+        let postgres = connection.postgres();
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
+    }
+
+    #[test]
+    fn declared_posture_selects_task_grant_peer_policy() {
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+        use registry_platform_httputil::PeerPolicy;
+
+        let raw = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml");
+        for (posture, expected) in [
+            (Posture::Production, PeerPolicy::RefuseDevelopmentPeer),
+            (Posture::Development, PeerPolicy::AcceptDevelopmentPeer),
+        ] {
+            let config = super::parse_runtime_config(
+                raw,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            assert_eq!(config.peer_policy(), expected, "{posture:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn attachment_clients_follow_the_runtime_posture() {
+        use crate::attachment_verification::AttachmentVerification;
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+        use registry_platform_objectstore::{ObjectStoreError, Verdict, VerifierError};
+        use sha2::{Digest, Sha256};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let app = axum::Router::new()
+                .route(
+                    "/verify",
+                    axum::routing::post(|| async {
+                        (
+                            [("registry-posture", "development")],
+                            axum::Json(serde_json::json!({"verdict":"approved"})),
+                        )
+                    }),
+                )
+                .fallback(|| async {
+                    (
+                        [("registry-posture", "development")],
+                        "<VersioningConfiguration></VersioningConfiguration>",
+                    )
+                });
+            axum::serve(listener, app).await.unwrap();
+        });
+        let secrets = tempfile::tempdir().unwrap();
+        let credential = secrets.path().join("attachment-peer");
+        std::fs::write(&credential, "synthetic-attachment-peer").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let runtime = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml")
+            .replace("/var/lib/breg/secrets", secrets.path().to_str().unwrap());
+        let runtime = format!(
+            "{runtime}\nattachmentStorage:\n  type: s3\n  url: {endpoint}\n  bucket: synthetic-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-peer\n  secretAccessKeyRef: secret:file/attachment-peer\nattachmentVerification:\n  type: http\n  url: {endpoint}/verify\n  authorizationRef: secret:file/attachment-peer\n  policyId: synthetic-policy\n"
+        );
+        let bytes = b"synthetic attachment".to_vec();
+        let digest = hex::encode(Sha256::digest(&bytes));
+        for posture in [Posture::Production, Posture::Development] {
+            let runtime = super::parse_runtime_config(
+                &runtime,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let storage = runtime
+                .activate_attachment_storage("synthetic-registry")
+                .await;
+            let AttachmentVerification::Http(verifier) =
+                runtime.activate_attachment_verification().unwrap()
+            else {
+                panic!("the configured verifier must be active");
+            };
+            let verdict = verifier
+                .verify(&digest, "application/pdf", bytes.clone())
+                .await;
+            match posture {
+                Posture::Production => {
+                    assert!(
+                        matches!(storage, Err(ObjectStoreError::DevelopmentPeer)),
+                        "{storage:?}"
+                    );
+                    assert_eq!(verdict, Err(VerifierError::DevelopmentPeer));
+                }
+                Posture::Development => {
+                    assert!(storage.is_ok(), "{storage:?}");
+                    assert_eq!(verdict, Ok(Verdict::Approved));
+                }
+            }
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn review_client_respects_the_runtime_posture() {
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+        use registry_review_client::{BearerToken, ReviewAuth, ReviewClientError};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let app = axum::Router::new().fallback(|| async {
+                (
+                    axum::http::StatusCode::NOT_FOUND,
+                    [("registry-posture", "development")],
+                )
+            });
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let runtime = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml");
+        let secrets = tempfile::tempdir().unwrap();
+        let token_file = secrets.path().join("review-token");
+        std::fs::write(&token_file, "synthetic-review-token").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let runtime = runtime.replace("/var/lib/breg/secrets", secrets.path().to_str().unwrap());
+        let runtime = format!(
+            "{runtime}
+reviewAuthorities:
+  test-review:
+    endpoint: {endpoint}
+    profile: review-producer
+    producerId: synthetic-producer
+    recoveryDays: 7
+    tokenRef: secret:file/review-token
+"
+        );
+        let project = crate::contract::parse_project_yaml(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap();
+        let compiled = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .unwrap();
+        let token = BearerToken::new("synthetic-review-token").unwrap();
+        for posture in [Posture::Production, Posture::Development] {
+            let config = super::parse_runtime_config(
+                &runtime,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let registry = config
+                .activate_review_authorities(&compiled)
+                .unwrap()
+                .unwrap();
+            let client = registry.client_for_test("test-review");
+            let result = client
+                .request(
+                    ReviewAuth::new(&token, "review-producer"),
+                    uuid::Uuid::new_v4(),
+                )
+                .await;
+            match posture {
+                Posture::Production => assert!(
+                    matches!(result, Err(ReviewClientError::DevelopmentPeer)),
+                    "{result:?}"
+                ),
+                Posture::Development => assert!(
+                    matches!(result, Err(ReviewClientError::Protocol { status, .. }) if status == 404),
+                    "{result:?}"
+                ),
+            }
+        }
+        server.abort();
+    }
 
     fn review_authority_fragment() -> serde_json::Value {
         serde_json::json!({
@@ -4467,9 +5398,9 @@ mod tests {
                 "exactly one of tokenRef and privateKeyJwt",
             ),
             (
-                "/completionRecipient",
-                serde_json::json!("registry"),
-                "completionTokenRef and completionRecipient",
+                "/completion",
+                serde_json::json!({"recipientBinding": "registry bad", "hmacSha256KeyRef": "secret:file/completion-key"}),
+                "completion.recipientBinding",
             ),
             (
                 "/privateKeyJwt/resource",
@@ -4564,6 +5495,7 @@ mod schema_tests {
     fn schema_types_the_keys_of_a_map_as_the_identifier_the_reader_reads() {
         let schema = super::runtime_config_schema().unwrap();
         for (map, identifier) in [
+            ("/$defs/RawOidcConfig/properties/issuers", "LocalId"),
             ("/$defs/RawDestinationsConfig/properties/hooks", "LocalId"),
             ("/properties/externalSources", "LocalId"),
             ("/$defs/ExternalRefreshConfig/properties/plans", "LocalId"),

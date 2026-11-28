@@ -1,5 +1,5 @@
 {
-  "name": "@registrystack/client-darwin-arm64",
+  "name": "@registrystack/client-node-darwin-arm64",
   "version": "0.49.0",
   "description": "Registry Stack unified native clients for macOS arm64.",
   "license": "Apache-2.0",

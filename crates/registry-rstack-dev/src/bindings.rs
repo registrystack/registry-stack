@@ -414,7 +414,7 @@ fn render(
         }
         // Evidence has no bindings: a caller reaches it with a test token.
         // Messaging has no bindings: a caller reaches it with a test token.
-        Product::Evidence | Product::Messaging => {}
+        _ => {}
     }
 }
 
@@ -850,6 +850,8 @@ mod tests {
     fn plan() -> Plan {
         Plan {
             issuer: "https://identity.example.test/realms/dev".to_owned(),
+            external_jwks_uri: None,
+            external_breg: None,
             products: vec![
                 ProductPlan {
                     product: Product::Breg,
@@ -930,6 +932,8 @@ mod tests {
             casework_principals: BTreeMap::from([("producer".to_owned(), "sub".to_owned())]),
             binaries: BTreeMap::new(),
             managed_database: false,
+            project_key: None,
+            clean: false,
         }
     }
 

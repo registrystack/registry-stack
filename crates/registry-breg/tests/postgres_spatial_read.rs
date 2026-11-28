@@ -57,6 +57,7 @@ async fn rust_geojson_example_reads_real_postgis() {
         client_http::ClientHttp::start(harness.router(None, cursor_codec()), claims(["zone-a"]))
             .await;
     let output = std::process::Command::new(executable)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env("BREG_BASE_URL", &http.base_url)
         .env("BREG_ENTITY_ROUTE", "service-sites")
         .env("BREG_ACCESS_PROFILE", "map-reader")

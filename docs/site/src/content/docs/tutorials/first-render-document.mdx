@@ -27,9 +27,9 @@ prove the two PDFs are the same bytes.
 
 ## Build registry-render
 
-Releases publish a Linux amd64 binary, which
+Releases publish binaries for Linux amd64, Linux arm64, and macOS arm64, which
 [Deploy Registry Render](../../operate/registry-render/#install-the-binary) installs. This
-tutorial builds from the checkout so it also works on macOS. From the checkout's root:
+tutorial builds from the checkout so it needs no release tag. From the checkout's root:
 
 ```sh test-skip="builds from source; the gate puts the binary under test on PATH"
 . scripts/cargo-runtime-library-path.sh

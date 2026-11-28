@@ -66,7 +66,7 @@ pub fn write_runtime(
             "logLevel": "info",
             "listener": {
                 "bind": address.to_string(),
-                "tlsTermination": "development-loopback",
+                "tlsTermination": "loopback-plaintext",
                 "networkExposure": "private-address"
             },
             "secretProviders": {"file": {"root": secrets}},
@@ -144,6 +144,8 @@ impl ServiceProcess {
             .args([
                 "--runtime-config",
                 runtime.to_str().expect("runtime path"),
+                "--posture",
+                "development",
                 "serve",
             ])
             .stdout(Stdio::piped())

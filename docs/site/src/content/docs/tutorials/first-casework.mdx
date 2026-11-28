@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - operator
@@ -61,7 +61,7 @@ cd tutorial-work/casework
   "command": "init",
   "status": "complete",
   "created": "tutorial-work/casework",
-  "next": "Run caseworkctl check, test and types. Write a dev.yaml plan beside casework.yaml and run rstack dev start.",
+  "next": "Run caseworkctl check, test and types. Run rstack dev start with the generated dev.yaml.",
   "template": "standalone-decision"
 }
 ```
@@ -124,7 +124,7 @@ its test tokens under an HTTPS issuer name of your choosing:
 +    subject: requester
 ```
 
-The plan lists the product, the test people and what each may do. It names a scenario file, which
+Replace the generated plan with the following plan. It lists the product, test people and their grants. It names a scenario file, which
 runs when the run starts:
 
 ```yaml title="dev.yaml" test-file
@@ -164,7 +164,7 @@ A new Casework directory has no staff. The scenario has the administrator seat o
 `decisions` queue and put the person `staff` in it:
 
 ```sh
-mkdir tests
+mkdir -p tests
 ```
 
 ```yaml title="tests/scenarios.yaml" test-file

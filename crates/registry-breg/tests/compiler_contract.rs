@@ -1375,11 +1375,12 @@ fn deployment_refuses_a_reserved_canonical_base_iri_that_compilation_accepts() {
         project.project.canonical_base_iri = iri.to_owned();
         let diagnostics = deployment_diagnostics(&project);
         assert_eq!(diagnostics.len(), 1, "{iri}");
+        assert_eq!(diagnostics[0].code, "breg.posture.placeholder-identity");
+        assert_eq!(diagnostics[0].path, "/project/canonicalBaseIri");
         assert_eq!(
-            diagnostics[0].code,
-            "breg.registry.canonical-base-iri-reserved"
+            diagnostics[0].message,
+            "The package uses a reserved placeholder registry identity. Replace canonicalBaseIri and rebuild the package."
         );
-        assert_eq!(diagnostics[0].path, "project.project.canonicalBaseIri");
         // Local development and schema tests compile the placeholder
         // unchanged; only deployment tooling refuses it.
         compile_project(&project, &[], CompileProfile::Authoring)
@@ -1389,7 +1390,7 @@ fn deployment_refuses_a_reserved_canonical_base_iri_that_compilation_accepts() {
         assert!(production
             .diagnostics()
             .iter()
-            .all(|diagnostic| diagnostic.code != "breg.registry.canonical-base-iri-reserved"));
+            .all(|diagnostic| diagnostic.code != "breg.posture.placeholder-identity"));
     }
 
     for iri in [
@@ -3180,6 +3181,7 @@ fn all_acceptance_fixtures_compile_manifest_projection_under_production() {
                     dependencies: Vec::new(),
                     functions: Vec::new(),
                     value_types: Default::default(),
+                    row_boundary_sets: Default::default(),
                     entities: Vec::new(),
                     extend_entities: Vec::new(),
                     actions: Vec::new(),
@@ -6233,6 +6235,20 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
     assert_eq!(generated_compiled_operation_ids, compiled_operation_ids);
     let review_completion = &value["paths"]["/v1/review-completions"]["post"];
     assert_eq!(review_completion["operationId"], "receiveReviewCompletion");
+    assert_eq!(
+        review_completion["security"],
+        json!([{"reviewCompletion": []}])
+    );
+    assert_eq!(
+        value["components"]["securitySchemes"]["reviewCompletion"]["name"],
+        "webhook-signature"
+    );
+    assert_eq!(review_completion["parameters"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        review_completion["responses"]["401"]["headers"]["WWW-Authenticate"]["schema"]["const"],
+        r#"Registry-Signature scheme="standard-webhooks", version="v1""#
+    );
+    assert!(review_completion["responses"].get("413").is_some());
     assert!(review_completion.get("x-registry-recordType").is_none());
     assert_eq!(
         value["components"]["securitySchemes"]["bearerAuth"],

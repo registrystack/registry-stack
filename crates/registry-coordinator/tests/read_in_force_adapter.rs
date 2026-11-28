@@ -186,7 +186,7 @@ async fn a_refused_read_is_a_failure_never_none_in_force() {
                 401,
                 "authentication.refused",
                 "Unauthorized",
-                "The bearer credential is missing or refused.",
+                "The bearer token or delivery signature was not accepted.",
             ),
             "product-forbidden",
         ),

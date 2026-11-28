@@ -2,6 +2,18 @@
 //! provider.
 
 pub mod client_assertion;
+pub mod refusal;
+
+#[doc(hidden)]
+pub use refusal::__refusal_trace_id_seal;
+#[cfg(feature = "refusal-recorder")]
+pub use refusal::{
+    DeclaredScope, RefusalLine, RefusalNote, RefusalRecorder, DECLARED_VALUE_MAX_BYTES,
+    REFUSAL_LOG_LINES_PER_WINDOW, REFUSAL_LOG_WINDOW,
+};
+pub use refusal::{FailedCheck, RefusalTraceId};
+#[cfg(feature = "refusal-recorder")]
+pub use tracing as __tracing;
 
 use std::env;
 use std::fs;

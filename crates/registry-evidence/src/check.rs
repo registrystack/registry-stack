@@ -19,7 +19,9 @@ use std::{
 };
 
 use registry_adapter_engine::evidence::EvidenceCompileError;
+use registry_platform_audit::AuditDestination;
 use registry_platform_config::{contains_environment_expression, PackageError, PackageErrorKind};
+use registry_platform_config::{DeclaredPosture, PostureReport};
 use registry_platform_yaml::{
     escape_pointer_segment, Diagnostic, Node, NodeValue, Position, Reader, Refusal, Report,
     ScalarHook, ScalarSite, Severity, Source, MAXIMUM_DOCUMENT_BYTES,
@@ -63,6 +65,7 @@ pub struct OfflineCheck {
     unavailable: bool,
     package_root: Option<PathBuf>,
     bundle: Option<Bundle>,
+    audit_destination: Option<AuditDestination>,
     /// The bundle document as the reader saw it, for positions.
     bundle_tree: Option<Node>,
 }
@@ -77,8 +80,14 @@ impl OfflineCheck {
             unavailable: false,
             package_root: None,
             bundle: None,
+            audit_destination: None,
             bundle_tree: None,
         }
+    }
+
+    /// The decoded audit destination, when its settings are available offline.
+    pub fn audit_destination(&self) -> Option<&AuditDestination> {
+        self.audit_destination.as_ref()
     }
 
     /// The bundle the runtime file binds, when the package verified and loaded.
@@ -157,18 +166,7 @@ impl OfflineCheck {
     /// inside the package, the path and position inside it when the fault
     /// knows them, and the fault's cause.
     pub fn push_artifact_fault(&mut self, code: &str, fault: &ArtifactFault, action: &str) {
-        let schema = fault.fault();
-        let message = match schema.field() {
-            Some(field) => format!("{} ({field})", schema.cause()),
-            None => schema.cause().to_owned(),
-        };
-        let action = schema.remedy().unwrap_or(action);
         let artifact = fault.artifact();
-        let pointer = schema.path().map(schema_path_pointer).unwrap_or_default();
-        let position = schema.location().map(|location| Position {
-            line: location.line,
-            column: location.column,
-        });
         let (file, kind) = if artifact.is_empty() {
             (self.package_label(), None)
         } else if artifact == RUNTIME_DOCUMENT {
@@ -176,10 +174,8 @@ impl OfflineCheck {
         } else {
             (self.package_file(artifact), artifact_kind(artifact))
         };
-        let mut diagnostic = Diagnostic::error(code, pointer, message, action);
-        diagnostic.artifact = kind.map(str::to_owned);
-        diagnostic.source = Some(source(&file, position));
-        self.diagnostics.push(diagnostic);
+        self.diagnostics
+            .push(artifact_fault_diagnostic(code, fault, action, &file, kind));
     }
 
     /// A file inside the package, as the runtime file names the package.
@@ -230,7 +226,11 @@ impl OfflineCheck {
 /// would need the substituted text is skipped. With it, expressions are
 /// substituted from the current environment as startup substitutes them, and
 /// every value check runs.
-pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
+pub fn check_runtime_file(
+    path: &Path,
+    environment: bool,
+    declared: DeclaredPosture,
+) -> OfflineCheck {
     let mut check = OfflineCheck::new(path.display().to_string());
     let bytes = match read_bounded(path, MAX_CONFIG_BYTES as u64) {
         Ok(bytes) => bytes,
@@ -249,16 +249,9 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
     };
     check.files_checked = 1;
 
-    let decoded = if environment {
-        RuntimeConfig::decode_yaml_with(&bytes, |name| std::env::var(name).ok())
-    } else {
-        // An expression stands for itself: the reader still refuses one that
-        // is malformed or written where substitution is not allowed, and the
-        // value it would fill is never read.
-        RuntimeConfig::decode_yaml_with(&bytes, |name| Some(format!("${{{name}}}")))
-    };
-    let config = match decoded {
-        Ok(loaded) => loaded.config,
+    let decoded = RuntimeConfig::inspect_yaml(path, &bytes, declared, environment);
+    let loaded = match decoded {
+        Ok(loaded) => loaded,
         Err(ConfigError::Refused(report)) if !environment => {
             push_offline_refusal(&mut check, *report, &bytes);
             return check;
@@ -278,7 +271,23 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
             return check;
         }
     };
+    let config = loaded.config;
+    let mut posture = loaded.posture;
+    check.extend(Report::new(posture.diagnostics(path)));
     let layout = Layout::scan(&check.file, &bytes);
+
+    if environment
+        || ![
+            "/audit/path",
+            "/audit/rotateBytes",
+            "/audit/retentionDays",
+            "/audit/destination",
+        ]
+        .iter()
+        .any(|pointer| layout.substituted(pointer))
+    {
+        check.audit_destination = config.audit.destination().ok();
+    }
 
     let package_refused = push_config_findings(&mut check, &layout, &config, !environment);
 
@@ -315,13 +324,14 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
         }
     };
     check.files_checked += verified.files().count();
-    let mut bundle = match Bundle::load_as_found(&root, &verified) {
+    let mut bundle = match Bundle::load_as_found_under(&root, &verified, posture.posture()) {
         Ok(bundle) => bundle,
         Err(error) => {
             push_bundle_error(&mut check, &layout, error);
             return check;
         }
     };
+    report_bundle_posture(&mut check, path, &bundle, Some(&config), &mut posture);
     if let Err(error) = bundle.bind_target_authority(config.authority.as_ref()) {
         check.push_runtime(&layout, "evidence.authority.invalid", "/authority", false,
             error.to_string(), "Activate a valid target authority for this exact package with `evidence authority activate`.");
@@ -345,7 +355,11 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
 /// It applies the runtime's own grammar, listener, signer, secret-provider,
 /// TLS, extract, and acquisition binding rules without resolving a secret,
 /// opening an extract, loading activated authority, or contacting a service.
-pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck {
+pub fn check_runtime_bindings_file(
+    path: &Path,
+    bundle: &Bundle,
+    declared: DeclaredPosture,
+) -> OfflineCheck {
     let mut check = OfflineCheck::new(path.display().to_string());
     let bytes = match read_bounded(path, MAX_CONFIG_BYTES as u64) {
         Ok(bytes) => bytes,
@@ -357,15 +371,16 @@ pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck
                 "Generate a readable runtime file from the selected Evidence target.",
             );
             check.mark_unavailable();
+            check.extend(check_bundle_posture(bundle, declared).report());
             return check;
         }
     };
     check.files_checked = 1;
-    let config = match RuntimeConfig::decode_yaml_with(&bytes, |name| Some(format!("${{{name}}}")))
-    {
-        Ok(loaded) => loaded.config,
+    let loaded = match RuntimeConfig::inspect_yaml(path, &bytes, declared, false) {
+        Ok(loaded) => loaded,
         Err(ConfigError::Refused(report)) => {
             push_offline_refusal(&mut check, *report, &bytes);
+            check.extend(check_bundle_posture(bundle, declared).report());
             return check;
         }
         Err(other) => {
@@ -375,13 +390,46 @@ pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck
                 other.fault().cause(),
                 "Correct the selected target as the message says.",
             );
+            check.extend(check_bundle_posture(bundle, declared).report());
             return check;
         }
     };
+    let config = loaded.config;
+    let mut posture = loaded.posture;
+    check.extend(Report::new(posture.diagnostics(path)));
     let layout = Layout::scan(&check.file, &bytes);
+    report_bundle_posture(&mut check, path, bundle, Some(&config), &mut posture);
     push_config_findings(&mut check, &layout, &config, true);
     push_binding_findings(&mut check, &layout, bundle, &config, true);
     check
+}
+
+/// Check the package posture even when no runtime file was supplied.
+pub fn check_bundle_posture(bundle: &Bundle, declared: DeclaredPosture) -> OfflineCheck {
+    let path = bundle.root().join(BUNDLE_DOCUMENT);
+    let mut check = OfflineCheck::new(path.display().to_string());
+    report_bundle_posture(
+        &mut check,
+        &path,
+        bundle,
+        None,
+        &mut PostureReport::new(declared),
+    );
+    check
+}
+
+fn report_bundle_posture(
+    check: &mut OfflineCheck,
+    path: &Path,
+    bundle: &Bundle,
+    config: Option<&RuntimeConfig>,
+    posture: &mut PostureReport,
+) {
+    let previous = posture.settings().len();
+    let diagnostics = bundle.posture_findings(posture, config, path);
+    check.extend(Report::new(
+        diagnostics.into_iter().skip(previous).collect(),
+    ));
 }
 
 /// Report the runtime's own findings about one decoded document. Findings at a
@@ -891,9 +939,75 @@ fn collect_members_naming(
     }
 }
 
+/// The diagnostic for a fault reported during package loading.
+pub(crate) fn package_fault_diagnostic(error: &BundleError, root: &Path) -> Option<Diagnostic> {
+    let (code, action) = package_fault_guidance(error)?;
+    let fault = error.artifact_fault()?;
+    let artifact = fault.artifact();
+    let file = if artifact.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(artifact)
+    };
+    Some(artifact_fault_diagnostic(
+        code,
+        fault,
+        action,
+        &file.display().to_string(),
+        artifact_kind(artifact),
+    ))
+}
+
+fn package_fault_guidance(error: &BundleError) -> Option<(&'static str, &'static str)> {
+    let rebuild = "Correct the artifact the message names and rebuild the package with `evidencectl package`.";
+    Some(match error {
+        BundleError::Config(_) => ("evidence.bundle.invalid-configuration", rebuild),
+        BundleError::InvalidArtifact(_) => ("evidence.bundle.invalid-artifact", rebuild),
+        BundleError::InvalidScript(_) => ("evidence.bundle.invalid-script", rebuild),
+        BundleError::UnknownFile(_) => (
+            "evidence.bundle.unknown-file",
+            "Remove the file from the project, or reference it from evidence.yaml, and rebuild the package with `evidencectl package`.",
+        ),
+        BundleError::NotImmutable(_) => (
+            "evidence.bundle.not-immutable",
+            "Make the file read-only for every user, or mount the package read-only.",
+        ),
+        _ => return None,
+    })
+}
+
+fn artifact_fault_diagnostic(
+    code: &str,
+    fault: &ArtifactFault,
+    action: &str,
+    file: &str,
+    kind: Option<&str>,
+) -> Diagnostic {
+    let schema = fault.fault();
+    let message = match schema.field() {
+        Some(field) => format!("{} ({field})", schema.cause()),
+        None => schema.cause().to_owned(),
+    };
+    let pointer = schema.path().map(schema_path_pointer).unwrap_or_default();
+    let position = schema.location().map(|location| Position {
+        line: location.line,
+        column: location.column,
+    });
+    let mut diagnostic =
+        Diagnostic::error(code, pointer, message, schema.remedy().unwrap_or(action));
+    diagnostic.artifact = kind.map(str::to_owned);
+    diagnostic.source = Some(source(file, position));
+    diagnostic
+}
+
 /// One refusal from loading the verified bundle.
 fn push_bundle_error(check: &mut OfflineCheck, layout: &Layout, error: BundleError) {
-    let rebuild = "Correct the artifact the message names and rebuild the package with `evidencectl package`.";
+    if let (Some((code, action)), Some(fault)) =
+        (package_fault_guidance(&error), error.artifact_fault())
+    {
+        check.push_artifact_fault(code, fault, action);
+        return;
+    }
     let (code, message) = match error {
         BundleError::Refused(report) => {
             check.extend(*report);
@@ -903,34 +1017,11 @@ fn push_bundle_error(check: &mut OfflineCheck, layout: &Layout, error: BundleErr
             push_package_error(check, layout, &error);
             return;
         }
-        BundleError::Config(fault) => {
-            check.push_artifact_fault("evidence.bundle.invalid-configuration", &fault, rebuild);
-            return;
-        }
-        BundleError::InvalidArtifact(fault) => {
-            check.push_artifact_fault("evidence.bundle.invalid-artifact", &fault, rebuild);
-            return;
-        }
-        BundleError::InvalidScript(fault) => {
-            check.push_artifact_fault("evidence.bundle.invalid-script", &fault, rebuild);
-            return;
-        }
-        BundleError::UnknownFile(fault) => {
-            check.push_artifact_fault(
-                "evidence.bundle.unknown-file",
-                &fault,
-                "Remove the file from the project, or reference it from evidence.yaml, and rebuild the package with `evidencectl package`.",
-            );
-            return;
-        }
-        BundleError::NotImmutable(fault) => {
-            check.push_artifact_fault(
-                "evidence.bundle.not-immutable",
-                &fault,
-                "Make the file read-only for every user, or mount the package read-only.",
-            );
-            return;
-        }
+        BundleError::Config(_)
+        | BundleError::InvalidArtifact(_)
+        | BundleError::InvalidScript(_)
+        | BundleError::UnknownFile(_)
+        | BundleError::NotImmutable(_) => unreachable!("artifact faults were reported above"),
         BundleError::Unavailable => {
             check.mark_unavailable();
             (

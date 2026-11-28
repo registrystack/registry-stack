@@ -131,6 +131,13 @@ pub struct ProfileCreateArgs {
 
 #[derive(Debug, Args)]
 pub struct ContractsFetchArgs {
+    #[arg(
+        long,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    pub(crate) posture: Option<String>,
+
     /// Owner-only client profile.
     #[arg(long)]
     pub(crate) profile: PathBuf,
@@ -212,12 +219,15 @@ pub(crate) struct ExpectedProfile {
     pub(crate) provider: Option<String>,
 }
 
-pub fn run(command: ClientCommand) -> Result<ExitCode> {
+pub fn run(
+    command: ClientCommand,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
     match command {
         ClientCommand::Profile(command) => match *command {
             ProfileCommand::Create(args) => create_profile(args),
         },
-        ClientCommand::Contracts(ContractsCommand::Fetch(args)) => fetch_contracts(args),
+        ClientCommand::Contracts(ContractsCommand::Fetch(args)) => fetch_contracts(args, declared),
     }
 }
 
@@ -355,7 +365,10 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn fetch_contracts(args: ContractsFetchArgs) -> Result<ExitCode> {
+fn fetch_contracts(
+    args: ContractsFetchArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
     validate_new_output(&args.output).context("client contract output is unsafe")?;
     validate_owner_only_input(&args.profile)
         .context("client profile is not a safe owner-only file")?;
@@ -366,8 +379,9 @@ fn fetch_contracts(args: ContractsFetchArgs) -> Result<ExitCode> {
     // here would merely copy the already-reviewed file instead of discovering
     // what the deployment currently publishes.
     profile.contracts = registry_evidence_client::ContractsProfile::Published;
-    let client = EvidenceClient::from_profile(profile)
-        .map_err(|_| anyhow::anyhow!("client contract discovery failed"))?;
+    let client =
+        EvidenceClient::from_profile(profile, crate::evidence_peer_policy(declared.posture))
+            .map_err(|_| anyhow::anyhow!("client contract discovery failed"))?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -413,6 +427,9 @@ fn validate_base_url(url: &Url, allow_local_loopback: bool) -> Result<()> {
     }
 }
 
+/// Exactly `127.0.0.1`, the only loopback address a client profile accepts
+/// for local-loopback discovery, so a profile written here is one the client
+/// library reads back.
 fn is_loopback_host(host: url::Host<&str>) -> bool {
     match host {
         url::Host::Ipv4(address) => address == std::net::Ipv4Addr::LOCALHOST,

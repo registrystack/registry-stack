@@ -70,7 +70,7 @@ fn succeed(command: &mut Command, what: &str) {
 
 async fn start(deployment: &Deployment) -> (Prepared, Api) {
     let verifier = FakeVerifier::new("restore-drill", APPROVE);
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier)
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier, support::TEST_POSTURE)
         .await
         .expect("the runtime prepares");
     let api = Api::new(&prepared);

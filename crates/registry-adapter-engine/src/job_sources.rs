@@ -225,6 +225,8 @@ pub struct JobPageState {
 /// facade document sets aside with `AdapterRuntimeConfig::endpoint_bindings`.
 #[derive(Debug)]
 pub struct JobRuntimeConfig {
+    pub posture: registry_platform_config::PostureReport,
+    pub development: Option<registry_platform_config::DevelopmentWitness>,
     /// The endpoint bindings every mode shares.
     pub core: AdapterEndpointBindings,
     /// The governed-ingestion source bindings. Absent, the deployment
@@ -252,6 +254,12 @@ pub struct JobRuntimeConfig {
     pub metrics_listener: Option<MetricsListenerConfig>,
 }
 
+pub(crate) const PRODUCTION: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Default,
+    };
+
 impl JobRuntimeConfig {
     /// Read the job runtime document through the platform runtime
     /// loader: its own envelope (`AdapterJobRuntimeConfig`, never the
@@ -266,20 +274,60 @@ impl JobRuntimeConfig {
     pub fn load(
         path: &std::path::Path,
     ) -> Result<Self, registry_platform_config::RuntimeConfigError> {
+        Self::load_in_posture(path, PRODUCTION)
+    }
+
+    pub fn load_in_posture(
+        path: &std::path::Path,
+        declared: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self, registry_platform_config::RuntimeConfigError> {
         // The loader refuses a path with a symbolic-link component; the
         // canonical path names the same file without one (the system
         // temporary directory carries such a component on some
         // platforms). A path that cannot be canonicalized is left to
         // the loader's own unreadable refusal.
         let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        RuntimeConfigLoader::new(RuntimeEnvelope {
-            api_version: registry_adapter_core::ADAPTER_JOB_RUNTIME_API_VERSION,
-            kind: registry_adapter_core::ADAPTER_JOB_RUNTIME_KIND,
-        })
+        RuntimeConfigLoader::new(
+            RuntimeEnvelope {
+                api_version: registry_adapter_core::ADAPTER_JOB_RUNTIME_API_VERSION,
+                kind: registry_adapter_core::ADAPTER_JOB_RUNTIME_KIND,
+            },
+            declared,
+        )
         .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS)
         .load::<Self>(&absolute)
-        .map(|loaded| loaded.config)
-        .and_then(|config| {
+        .and_then(|loaded| {
+            let mut config = loaded.config;
+            config.posture = loaded.posture;
+            config.development = loaded.development;
+            registry_adapter_core::record_endpoint_posture(
+                &config.core.endpoints,
+                &mut config.posture,
+            );
+            config.posture.decide(&absolute)?;
+            if let Some(store) = &config.store {
+                store
+                    .database_config()
+                    .check(cfg!(feature = "postgres-test"))
+                    .map_err(|error| {
+                        let pointer = if matches!(
+                            error,
+                            registry_platform_config::DatabaseTransportError::Conflict
+                        ) {
+                            "/store/transport"
+                        } else {
+                            "/store/testOnlyPlaintext"
+                        };
+                        let (message, action) = job_store_transport_diagnostic(&error);
+                        registry_platform_config::RuntimeConfigError::at_pointer(
+                            &absolute,
+                            error.code(),
+                            pointer,
+                            message,
+                            action,
+                        )
+                    })?;
+            }
             config.check_secret_references(&absolute)?;
             Ok(config)
         })
@@ -421,7 +469,7 @@ impl JobRuntimeConfig {
 /// The fixed hook-ingress listener and its per-source Basic-auth bindings.
 /// The first served subset is loopback-only: production traffic arrives from
 /// an operator-controlled TLS reverse proxy, while direct plaintext is limited
-/// to the shared development-loopback posture.
+/// to loopback plaintext placement.
 #[derive(Debug)]
 pub struct HookIngressConfig {
     pub listener: PrivateListenerConfig,
@@ -453,11 +501,14 @@ impl<'de> Deserialize<'de> for HookIngressConfig {
             .into_error());
         }
         if document.listener.bind.socket_addr().port() == 0
-            && document.listener.tls_termination != TlsTermination::DevelopmentLoopback
+            && !matches!(
+                document.listener.tls_termination,
+                TlsTermination::DevelopmentLoopback | TlsTermination::LoopbackPlaintext
+            )
         {
             return Err(Invalid::expected(
-                "hookIngress.listener port 0 only with tlsTermination development-loopback",
-                "Write a fixed port, or set tlsTermination to development-loopback for local development.",
+                "hookIngress.listener port 0 only with tlsTermination loopback-plaintext",
+                "Write a fixed port, or set tlsTermination to loopback-plaintext.",
             )
             .into_error());
         }
@@ -512,8 +563,55 @@ pub struct PostgresSourceBinding {
     pub tls: PostgresSourceTls,
 }
 
-/// The TLS posture the host installs for one PostgreSQL source. Plaintext is
-/// absent from production builds, so no runtime value can select it there.
+#[cfg(feature = "job-postgres")]
+impl PostgresSourceBinding {
+    /// Resolve a loopback-plaintext source to the addresses the driver may
+    /// use, with the shared database host rule. A Unix socket does not need
+    /// an address.
+    pub fn loopback_addresses(
+        &self,
+        lookup: impl Fn(&str, u16) -> std::io::Result<Vec<std::net::IpAddr>>,
+    ) -> Result<Option<Vec<std::net::IpAddr>>, Box<registry_platform_yaml::Diagnostic>> {
+        if cfg!(unix) && std::path::Path::new(&self.host).is_absolute() {
+            return Ok(None);
+        }
+        registry_platform_config::plaintext_host_addresses(
+            registry_platform_config::DatabaseTransport::LoopbackPlaintext,
+            &self.host,
+            &|name| lookup(name, self.port),
+        )
+        .map(Some)
+        .ok_or_else(|| {
+            Box::new(registry_platform_yaml::Diagnostic::error(
+                "platform.database.transport-host-mismatch",
+                format!("/sources/postgres/{}/tls", self.endpoint),
+                "loopback-plaintext requires a loopback host",
+                "Use a loopback address, localhost, or a Unix socket, or configure verified TLS.",
+            ))
+        })
+    }
+
+    /// Apply the plaintext host rule during an offline job check. Verified TLS
+    /// sources do not require a lookup during checking.
+    pub fn check_host(&self) -> Result<(), Box<registry_platform_yaml::Diagnostic>> {
+        if matches!(self.tls, PostgresSourceTls::LoopbackPlaintext) {
+            self.loopback_addresses(resolve_postgres_host)?;
+        }
+        Ok(())
+    }
+}
+
+/// Resolve all addresses once so the caller can validate and pin them.
+#[cfg(feature = "job-postgres")]
+pub fn resolve_postgres_host(host: &str, port: u16) -> std::io::Result<Vec<std::net::IpAddr>> {
+    use std::net::ToSocketAddrs as _;
+    (host, port)
+        .to_socket_addrs()
+        .map(|addresses| addresses.map(|address| address.ip()).collect())
+}
+
+/// The transport the host installs for a PostgreSQL source. Verified TLS
+/// is the default. Plaintext requires a loopback host.
 #[cfg(feature = "job-postgres")]
 #[derive(Clone, Debug)]
 pub enum PostgresSourceTls {
@@ -527,6 +625,8 @@ pub enum PostgresSourceTls {
     /// Plaintext to a loopback disposable database in the PostgreSQL suite.
     #[cfg(feature = "postgres-test")]
     Plaintext,
+    /// Plaintext restricted to loopback hosts.
+    LoopbackPlaintext,
 }
 
 /// The host-visible immutable binding of one SFTP source. The engine keeps
@@ -638,6 +738,8 @@ impl<'de> Deserialize<'de> for JobRuntimeConfig {
             }
         }
         Ok(Self {
+            posture: registry_platform_config::PostureReport::new(PRODUCTION),
+            development: None,
             core: AdapterEndpointBindings {
                 id: document.id,
                 endpoints: document.endpoints,
@@ -674,6 +776,81 @@ pub struct JobStoreConfig {
     /// feature, the way the facade database refuses it.
     #[serde(default)]
     pub test_only_plaintext: bool,
+    /// PostgreSQL transport. Absent means verified TLS.
+    #[serde(default)]
+    pub transport:
+        Option<registry_platform_config::Gated<registry_platform_config::DatabaseTransport>>,
+}
+
+impl JobStoreConfig {
+    /// Adapt the job store's single connection to the shared database rules.
+    pub fn database_config(&self) -> registry_platform_config::DatabaseConfig {
+        registry_platform_config::DatabaseConfig {
+            runtime_url_ref: self.runtime_url_ref.as_str().to_owned(),
+            migration_url_ref: self.runtime_url_ref.as_str().to_owned(),
+            ca_bundle_ref: self
+                .ca_bundle_ref
+                .as_ref()
+                .map(|reference| reference.as_str().to_owned()),
+            test_only_plaintext: self.test_only_plaintext,
+            transport: self.transport.clone(),
+        }
+    }
+}
+
+/// Report the shared transport setting using the job runtime's member name.
+pub fn job_runtime_diagnostic(
+    mut diagnostic: registry_platform_yaml::Diagnostic,
+) -> registry_platform_yaml::Diagnostic {
+    if diagnostic.code == "platform.posture.database-private-plaintext"
+        && diagnostic.path == "/store/transport"
+    {
+        diagnostic.message = match diagnostic.severity {
+            registry_platform_yaml::Severity::Error => {
+                "store.transport selects an unencrypted connection to a private network; it is accepted only when the process declares development"
+            }
+            registry_platform_yaml::Severity::Warning => {
+                "store.transport selects an unencrypted connection to a private network; production refuses it"
+            }
+        }.to_owned();
+        diagnostic.suggested_action = diagnostic
+            .suggested_action
+            .replace("database.transport", "store.transport");
+    }
+    diagnostic
+}
+
+/// Word shared transport refusals in terms of the job runtime document.
+pub fn job_store_transport_diagnostic(
+    error: &registry_platform_config::DatabaseTransportError,
+) -> (&'static str, &'static str) {
+    use registry_platform_config::{DatabaseTransport, DatabaseTransportError};
+    match error {
+        DatabaseTransportError::Conflict => (
+            "store.transport and store.testOnlyPlaintext are both set",
+            "Remove store.testOnlyPlaintext, and keep store.transport.",
+        ),
+        DatabaseTransportError::TestOnlyPlaintext => (
+            "store.testOnlyPlaintext is accepted only by test builds",
+            "Remove store.testOnlyPlaintext, and set store.transport for a plaintext connection on the same host.",
+        ),
+        DatabaseTransportError::DevelopmentOnly(_) => (
+            "store.transport is accepted only when the process declares development",
+            "Write store.transport: verified-tls, and give the database a certificate the runtime trusts. For a laptop or test run, declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+        ),
+        DatabaseTransportError::HostMismatch(DatabaseTransport::PrivateNetworkPlaintext) => (
+            "a job store host is not one the configured plaintext transport permits",
+            "Name a Unix socket, a loopback address, a private-network address or a name that resolves only to such addresses, or write store.transport: verified-tls.",
+        ),
+        DatabaseTransportError::HostMismatch(_) => (
+            "a job store host is not one the configured plaintext transport permits",
+            "Name a Unix socket, a loopback address or localhost, or write store.transport: verified-tls.",
+        ),
+        DatabaseTransportError::BracketedHost(_) => (
+            "a job store host is an IP address written in brackets in a keyword connection string",
+            "Write the IP address host without brackets in a keyword connection string, such as host=::1; brackets belong only in a URL authority.",
+        ),
+    }
 }
 
 /// The job source bindings of one runtime config, keyed by the pack
@@ -790,6 +967,7 @@ impl PostgresSourceConfig {
     pub(crate) fn host_binding(&self, endpoint: &str) -> PostgresSourceBinding {
         let tls = match &self.tls {
             SourceTls::SystemRoots {} => PostgresSourceTls::SystemRoots,
+            SourceTls::LoopbackPlaintext {} => PostgresSourceTls::LoopbackPlaintext,
             SourceTls::CaBundle { ca_bundle_file } => PostgresSourceTls::CaBundle {
                 ca_bundle_file: ca_bundle_file.clone(),
             },
@@ -1103,9 +1281,8 @@ impl SftpSourceConfig {
     }
 }
 
-/// The TLS posture of one postgres source connection. The default is
-/// the secure one: system roots, TLS required. Plaintext exists for the
-/// loopback test database only and refuses in every other build.
+/// The transport for a PostgreSQL source connection. Verified TLS with
+/// system roots is the default. Plaintext requires a loopback host.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
@@ -1135,6 +1312,8 @@ pub(crate) enum SourceTls {
     #[cfg(feature = "postgres-test")]
     #[serde(rename = "plaintext")]
     Plaintext {},
+    /// Plaintext restricted to loopback hosts.
+    LoopbackPlaintext {},
 }
 
 impl Default for SourceTls {
@@ -1837,25 +2016,33 @@ mod tests {
             serde_json::from_str::<AdapterEndpointBindings>(job_json).is_err(),
             "a facade member refuses a job bindings document"
         );
-        let facade_json = r#"{
-                "id": "case-deployment",
-                "endpoints": [],
-                "allowedPrivateCidrs": ["10.0.0.0/8"],
-                "listener": { "bind": "127.0.0.1:8080" },
-                "database": {
-                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
-                    "migrationUrlRef": "secret:env/DB_MIGRATION"
-                },
-                "oidc": { "issuer": "https://issuer.example.invalid", "audience": "case-api" },
-                "allowedClients": ["case-portal"],
-                "audit": { "retentionDays": 90 },
-                "sources": { "file": {} }
-            }"#;
-        assert!(
-            serde_json::from_str::<registry_adapter_core::AdapterRuntimeConfig>(facade_json)
-                .is_err(),
-            "the sources block refuses a facade document"
+        let facade_yaml = r#"apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: case-deployment
+endpoints: []
+allowedPrivateCidrs: ['10.0.0.0/8']
+listener: {bind: '127.0.0.1:8080'}
+database:
+  runtimeUrlRef: secret:env/DB_RUNTIME
+  migrationUrlRef: secret:env/DB_MIGRATION
+oidc:
+  issuers:
+    primary: {issuer: 'https://issuer.example.invalid', audience: case-api, allowedClients: [case-portal]}
+audit: {retentionDays: 90}
+sources: {file: {}}
+"#;
+        let loader = registry_platform_config::RuntimeConfigLoader::new(
+            registry_platform_config::RuntimeEnvelope {
+                api_version: registry_adapter_core::ADAPTER_RUNTIME_API_VERSION,
+                kind: registry_adapter_core::ADAPTER_RUNTIME_KIND,
+            },
+            PRODUCTION,
         );
+        let refused = loader
+            .parse_str::<registry_adapter_core::AdapterRuntimeConfig>(facade_yaml, |_| None)
+            .expect_err("the sources block refuses a facade document");
+        assert_eq!(refused.diagnostics()[0].code, "config.unknown-key");
+        assert_eq!(refused.diagnostics()[0].path, "/sources");
     }
 
     /// The postgres source's CA bundle member is spelled `caBundleFile`,
@@ -2103,6 +2290,7 @@ endpoints: []
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,
             },
+            super::PRODUCTION,
         );
         let read = loader.parse_str::<JobRuntimeConfig>(&document(""), |_| None);
         assert!(read.is_ok(), "{read:?}");
@@ -2117,6 +2305,7 @@ endpoints: []
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,
             },
+            super::PRODUCTION,
         );
         for (text, pointer, line) in [
             (document("conformanceFirst: 1\n"), "/conformanceFirst", 5),
@@ -2152,6 +2341,7 @@ endpoints: []
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,
             },
+            super::PRODUCTION,
         );
         let facade_document = format!(
             "apiVersion: {ADAPTER_RUNTIME_API_VERSION}\nkind: {ADAPTER_RUNTIME_KIND}\nid: job-deployment\nendpoints: []\n"
@@ -2166,6 +2356,7 @@ endpoints: []
                 api_version: ADAPTER_RUNTIME_API_VERSION,
                 kind: ADAPTER_RUNTIME_KIND,
             },
+            super::PRODUCTION,
         );
         assert!(
             facade
@@ -2212,6 +2403,7 @@ endpoints: []
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,
             },
+            super::PRODUCTION,
         );
         let hook = |bind: &str, termination: &str, burst: u32, sources: bool| {
             let source = if sources {
@@ -2240,7 +2432,7 @@ endpoints: []
             ),
             (
                 hook("127.0.0.1:0", "operator-controlled-upstream", 2, true),
-                "development-loopback",
+                "loopback-plaintext",
             ),
             (
                 hook("127.0.0.1:8091", "operator-controlled-upstream", 2, false),
@@ -2266,6 +2458,7 @@ endpoints: []
                 api_version: ADAPTER_JOB_RUNTIME_API_VERSION,
                 kind: ADAPTER_JOB_RUNTIME_KIND,
             },
+            super::PRODUCTION,
         )
     }
 

@@ -13,7 +13,6 @@ use std::{
 };
 
 use super::{
-    clock,
     issuer::Issuer,
     plan::{self, Capture, CapturedHeader, Check, Journey, Product, Step},
     RunInput,
@@ -190,10 +189,12 @@ fn execute_step(
     };
     let path = expand_text(&step.path, lookup)?;
     let mut url = request_url(&urls[&step.product], &path)?;
-    let person = &input.plan.people[&step.person];
-    let grant = &person.grants[&step.product];
+    let person = step.person.as_ref().map(|alias| &input.plan.people[alias]);
     if step.product == Product::Breg {
-        select_access_profile(&mut url, &grant.profile)?;
+        select_access_profile(
+            &mut url,
+            &person.expect("validated BReg step").grants[&step.product].profile,
+        )?;
     }
 
     let headers = step
@@ -231,14 +232,16 @@ fn execute_step(
         }
         add_attempt(attempts)?;
         add_transfer(transferred, request_bytes)?;
-        let token = issuer.token(input, person, step.product, clock()? + 300)?;
-        let mut request = http
-            .request((&step.method).into(), url.clone())
-            .bearer_auth(&*token);
-        if step.product == Product::Casework {
-            request = request
-                .header("Registry-Casework-Profile", &grant.profile)
-                .header("Registry-Review-Profile", &grant.profile);
+        let mut request = http.request((&step.method).into(), url.clone());
+        if let Some(person) = person {
+            let token = issuer.startup_token(input, person, step.product)?;
+            request = request.bearer_auth(&*token);
+            if step.product == Product::Casework {
+                let profile = &person.grants[&step.product].profile;
+                request = request
+                    .header("Registry-Casework-Profile", profile)
+                    .header("Registry-Review-Profile", profile);
+            }
         }
         for (name, value) in &headers {
             request = request.header(name, value);
@@ -345,7 +348,8 @@ fn request_url(base: &str, path: &str) -> Result<url::Url> {
             && url.username().is_empty()
             && url.password().is_none()
             && url.fragment().is_none()
-            && url.path().starts_with("/v1/"),
+            && (url.path().starts_with("/v1/")
+                || (path == plan::ADAPTER_CONTRACT_PATH && url.path() == path)),
         "journey path leaves the product API"
     );
     Ok(url)
@@ -653,6 +657,17 @@ async fn read_response(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_the_exact_adapter_contract_can_leave_the_v1_prefix() {
+        let origin = "http://127.0.0.1:9000";
+        assert!(request_url(origin, plan::ADAPTER_CONTRACT_PATH).is_ok());
+        assert!(request_url(
+            origin,
+            "/v1/../.well-known/registry-adapter/effective-contract"
+        )
+        .is_err());
+    }
+
     use super::*;
     use crate::plan::ExpectedStatus;
     use serde_json::json;
@@ -821,6 +836,8 @@ mod tests {
             casework_principals: BTreeMap::new(),
             binaries: BTreeMap::new(),
             managed_database: false,
+            project_key: None,
+            clean: false,
         }
     }
 

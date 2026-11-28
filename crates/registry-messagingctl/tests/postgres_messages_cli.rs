@@ -35,6 +35,7 @@ fn messagingctl(runtime: &Path, arguments: &[&str]) -> (i32, String, String) {
         .args(arguments)
         .arg("--runtime-config")
         .arg(runtime)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .expect("run messagingctl");
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -55,6 +56,42 @@ fn json(runtime: &Path, arguments: &[&str]) -> (i32, Value) {
     let report =
         serde_json::from_str(&stdout).unwrap_or_else(|error| panic!("{error}: {stdout} {stderr}"));
     (code, report)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn activation_posture_mismatch_is_reported_by_status_plan_and_apply() {
+    for (applied, other) in [("production", "development"), ("development", "production")] {
+        let harness = Harness::start().await;
+        let runtime = harness.runtime_path();
+        assert_eq!(
+            harness
+                .execute("DELETE FROM messaging_activations", &[])
+                .await,
+            1
+        );
+        let document = std::fs::read_to_string(&runtime).unwrap();
+        assert!(document.contains("testOnlyPlaintext: true"));
+        let document = document.replace("testOnlyPlaintext: true", "transport: loopback-plaintext");
+        std::fs::write(&runtime, document).unwrap();
+        let (code, report) = json(&runtime, &["apply", "--posture", applied]);
+        assert_eq!(code, 0, "{report}");
+        for (command, expected_exit, severity) in [
+            ("status", 0, "warning"),
+            ("plan", 1, "error"),
+            ("apply", 1, "error"),
+        ] {
+            let (code, report) = json(&runtime, &[command, "--posture", other]);
+            assert_eq!(code, expected_exit, "{report}");
+            assert_eq!(report["ok"], expected_exit == 0, "{report}");
+            let finding = &report["diagnostics"][0];
+            assert_eq!(finding["severity"], severity, "{report}");
+            assert_eq!(
+                finding["code"], "platform.activation.posture-mismatch",
+                "{report}"
+            );
+            assert_eq!(finding["path"], "/database", "{report}");
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

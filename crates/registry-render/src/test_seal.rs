@@ -38,6 +38,7 @@ pub(crate) fn run(
     document: &str,
     request: &RenderRequest,
     output: &Path,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<Value, RenderProblem> {
     server::mark_not_dumpable()?;
     match fs::symlink_metadata(output) {
@@ -79,6 +80,7 @@ pub(crate) fn run(
             request,
             &token,
             &package_digest,
+            declared,
         ))?;
         Ok((pdf, report, root))
     })();
@@ -221,8 +223,8 @@ fn write_runtime(
         "listener":{"bind":"127.0.0.1:8080"},
         "package":{"root":package_root,"expectedDigest":digest},
         "secretProviders":{"file":{"root":home}},
-        "authentication":{"oidc":{"issuer":ISSUER,"audience":AUDIENCE,"allowedClients":[CLIENT],
-            "jwksSource":{"type":"static","documentRef":"secret:file/jwks.json"}}},
+        "authentication":{"oidc":{"issuers":{"main":{"issuer":ISSUER,"audience":AUDIENCE,"allowedClients":[CLIENT],
+            "jwksSource":{"type":"static","documentRef":"secret:file/jwks.json"}}}}},
         "audit":{"path":home.join("audit.jsonl")}, "assuranceProfile":"local", "signing":{"seals":seals}
     });
     let path = home.join("runtime.yaml");
@@ -236,8 +238,9 @@ async fn seal_request(
     request: &RenderRequest,
     token: &str,
     digest: &str,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<(Vec<u8>, Value), RenderProblem> {
-    let (runtime, _, service) = server::load_service(path).await?;
+    let (runtime, _, service) = server::load_service(path, declared).await?;
     // The serving parent now holds the test signer. Remove its key file before any worker starts.
     fs::remove_file(path.with_file_name("seal.jwk")).map_err(io_problem)?;
     let body = json!({"data":request.data, "issuedAt":request.issued_at.to_rfc3339(),

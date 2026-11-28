@@ -14,7 +14,7 @@
 use anyhow::{ensure, Context, Result};
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -35,6 +35,7 @@ use zeroize::Zeroizing;
 pub(super) const SIGNATURE_HEADER: &str = "x-gateway-signature";
 /// How many of the latest sends the gateway keeps for `GET /sent`.
 const KEPT_SENDS: usize = 1000;
+const HOOK_BODY_LIMIT: usize = 64 * 1024;
 /// How many distinct idempotency keys the gateway remembers.
 const REMEMBERED_KEYS: usize = 100_000;
 /// How long after a send the gateway posts its delivery report.
@@ -53,6 +54,7 @@ pub(super) struct GatewaySettings {
     pub(super) callback_key: Zeroizing<Vec<u8>>,
     /// The runtime's origin, such as `http://127.0.0.1:8107`.
     pub(super) runtime_origin: String,
+    pub(super) response_latency: Duration,
 }
 
 struct Gateway {
@@ -88,10 +90,6 @@ impl GatewayServer {
     }
 
     pub(super) fn start(settings: GatewaySettings) -> Result<Self> {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .context("cannot reserve a loopback port for the mock gateway")?;
-        listener.set_nonblocking(true)?;
-        let address = listener.local_addr()?;
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -107,10 +105,27 @@ impl GatewayServer {
             .route("/sent", get(list))
             .route("/{provider}/v1/{*path}", post(send))
             .with_state(gateway);
+        Self::start_router(router, "rstack-dev-mock-gateway")
+    }
+
+    pub(super) fn start_hooks() -> Result<Self> {
+        let router = Router::new()
+            .route("/events", post(receive_hook))
+            .route("/received", get(list_hooks))
+            .layer(DefaultBodyLimit::max(HOOK_BODY_LIMIT))
+            .with_state(Arc::new(Mutex::new(VecDeque::new())));
+        Self::start_router(router, "rstack-dev-hook-sink")
+    }
+
+    fn start_router(router: Router, name: &str) -> Result<Self> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .context("cannot reserve a loopback port for the HTTP sink")?;
+        listener.set_nonblocking(true)?;
+        let address = listener.local_addr()?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new()
-            .name("rstack-dev-mock-gateway".to_owned())
+            .name(name.to_owned())
             .spawn(move || {
                 let runtime = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -141,7 +156,7 @@ impl GatewayServer {
                             })
                             .await
                         {
-                            eprintln!("the development mock gateway stopped: {error}");
+                            eprintln!("the development HTTP sink stopped: {error}");
                         }
                     };
                     tokio::pin!(server);
@@ -158,17 +173,17 @@ impl GatewayServer {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let _ = thread.join();
-                anyhow::bail!("cannot start the development mock gateway: {error}");
+                anyhow::bail!("cannot start the development HTTP sink: {error}");
             }
             Err(error) => {
                 let _ = shutdown_tx.send(());
                 let _ = thread.join();
-                anyhow::bail!("the development mock gateway did not initialize: {error}");
+                anyhow::bail!("the development HTTP sink did not initialize: {error}");
             }
         }
         ensure!(
             address.ip().is_loopback(),
-            "the mock gateway must bind loopback"
+            "the development HTTP sink must bind loopback"
         );
         Ok(Self {
             origin: format!("http://{address}"),
@@ -176,6 +191,43 @@ impl GatewayServer {
             thread: Some(thread),
         })
     }
+}
+
+type HookDeliveries = Arc<Mutex<VecDeque<Value>>>;
+
+async fn receive_hook(
+    State(deliveries): State<HookDeliveries>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let headers: Vec<_> = headers
+        .iter()
+        .map(|(name, value)| {
+            let value = match value.to_str() {
+                Ok(text) => json!(text),
+                Err(_) => json!({"base64": STANDARD.encode(value.as_bytes())}),
+            };
+            json!({"name": name.as_str(), "value": value})
+        })
+        .collect();
+    let mut deliveries = deliveries.lock().expect("hook sink lock");
+    if deliveries.len() == KEPT_SENDS {
+        deliveries.pop_front();
+    }
+    deliveries.push_back(json!({
+        "headers": headers,
+        "body": String::from_utf8(body.to_vec()).map_or_else(
+            |invalid| json!({"base64": STANDARD.encode(invalid.as_bytes())}),
+            |text| json!(text),
+        ),
+    }));
+    StatusCode::NO_CONTENT
+}
+
+async fn list_hooks(State(deliveries): State<HookDeliveries>) -> Json<Value> {
+    Json(json!(*deliveries.lock().expect("hook sink lock")))
 }
 
 /// `GET /sent`: the latest sends the gateway took, oldest first.
@@ -207,6 +259,7 @@ async fn send(
     if !gateway.settings.providers.contains(&provider) {
         return refusal(StatusCode::NOT_FOUND, "unknown-provider");
     }
+    tokio::time::sleep(gateway.settings.response_latency).await;
     let key = headers
         .get("idempotency-key")
         .and_then(|value| value.to_str().ok())
@@ -354,6 +407,7 @@ mod tests {
             token: Zeroizing::new("gateway-token".to_owned()),
             callback_key: Zeroizing::new(b"callback-key".to_vec()),
             runtime_origin: origin.to_owned(),
+            response_latency: Duration::ZERO,
         })
         .unwrap()
     }
@@ -431,6 +485,43 @@ mod tests {
         assert_eq!(unknown, 404);
         let (_, sent) = call(|client| client.get(gateway.sent_url()));
         assert_eq!(sent["sent"], json!([]));
+    }
+
+    #[test]
+    fn hook_sink_refuses_oversized_deliveries() {
+        let sink = GatewayServer::start_hooks().unwrap();
+        let (status, _) = call(|client| {
+            client
+                .post(format!("{}/events", sink.origin))
+                .body(vec![b'a'; 65_537])
+        });
+        assert_eq!(status, 413);
+        let (_, received) = call(|client| client.get(format!("{}/received", sink.origin)));
+        assert_eq!(received, json!([]));
+    }
+
+    #[test]
+    fn hook_sink_keeps_the_last_thousand_deliveries() {
+        let sink = GatewayServer::start_hooks().unwrap();
+        for index in 0..=1000 {
+            let (status, _) = call(|client| {
+                client
+                    .post(format!("{}/events", sink.origin))
+                    .header("x-delivery-number", index.to_string())
+                    .body(format!("body {index}"))
+            });
+            assert_eq!(status, 204);
+        }
+        let (status, received) = call(|client| client.get(format!("{}/received", sink.origin)));
+        assert_eq!(status, 200);
+        let deliveries = received.as_array().unwrap();
+        assert_eq!(deliveries.len(), 1000);
+        assert_eq!(deliveries[0]["body"], "body 1");
+        assert_eq!(deliveries[999]["body"], "body 1000");
+        assert!(deliveries[999]["headers"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"name": "x-delivery-number", "value": "1000"})));
     }
 
     #[test]

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -173,7 +173,7 @@ A caller recovering an unknown admission must send the exact original start key,
 
 Create every secret as the user that runs `coordinator` and `coordinatorctl`.
 A `secret:file/NAME` reference reads the file `NAME` directly under the file provider's `root`.
-That file must be a regular file owned by that user, with mode `0400` or `0600` and exactly one link.
+That file must meet the [secret file rule](../../security/hardening-checklist/#secret-files), for example a regular file owned by that user, with mode `0400` or `0600` and exactly one link.
 A `secret:env/NAME` reference reads an environment variable when `secretProviders` declares `environment: {}`.
 
 Coordinator uses three kinds of key, each exactly 32 raw random bytes in its own file:
@@ -259,20 +259,50 @@ Secret values never appear in a diagnostic or a log.
 ### Create the database and roles
 
 Use PostgreSQL 17 or newer; `apply` and startup refuse an older server.
-As a PostgreSQL administrator, create the migration role, the runtime role, and the database, and let only those two roles connect:
+`provision` creates what the two database URLs in your runtime file name: the migration role, the runtime role, and the database, and it lets only those two roles connect.
+It takes the role names, the database name, and the passwords from `database.migrationUrlRef` and `database.runtimeUrlRef`, so you write each of them once, except that when the runtime file has a `deployment` block, the user of the runtime URL must be `deployment.runtimeRole`: `provision` refuses a different user before it connects, with `coordinator.runtime-config.runtime-role-mismatch`.
+Without a `deployment` block, `provision` creates the role the runtime URL names, and `apply` then refuses the missing block.
 
-```sql
-CREATE ROLE coordinator_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
-CREATE ROLE coordinator_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
-CREATE DATABASE coordinator;
-REVOKE ALL ON DATABASE coordinator FROM PUBLIC;
-GRANT CONNECT ON DATABASE coordinator TO coordinator_migration, coordinator_runtime;
-GRANT CREATE ON DATABASE coordinator TO coordinator_migration;
+Run it as a PostgreSQL administrator that can create roles and databases (`CREATEROLE` and `CREATEDB`).
+It needs no superuser.
+Put the administrator URL in a file or an environment variable, never on the command line.
+The connection always uses verified TLS: it trusts the certificate authority behind `database.caBundleRef` when the runtime file names one, and the system roots otherwise.
+The URL's `sslmode` must be `require`, `verify-ca`, or `verify-full`.
+The administrator URL must name the same host and port as the two product URLs, or `provision` refuses it as `platform.provision.target-mismatch`.
+It must also name a database other than the product database, such as `postgres`, or `provision` refuses it as `platform.provision.target-invalid`.
+Where the administrator may connect only to the product database, `provision` cannot run: add `--print-sql` and give the script to the person who administers the server.
+
+```sh
+coordinatorctl provision --runtime-config /etc/registry-coordinator/runtime.yaml \
+  --admin-url-file /run/registry-coordinator/secrets/admin-database-url
 ```
 
-These are the only grants you make.
+Use `--admin-url-env NAME` for a variable instead of a file.
+Run again at any time: it creates only what is missing, refuses a role or database that exists in another shape, and never changes a password or drops anything.
+Add `--format json` for a machine-readable report.
+The report and the errors never contain a password, a password verifier, or a URL.
+
+To review the statements first, or to run them yourself with `psql`, add `--print-sql`.
+It connects to nothing and prints a script with a `\password` line after each role instead of a password:
+
+```sql
+-- provision script, product coordinator. Nothing was run.
+-- For a server where these objects do not exist yet. Review, then run with psql as an
+-- administrator that has CREATEROLE and CREATEDB. It stops at the first error.
+\set ON_ERROR_STOP on
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "coordinator_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "coordinator_migration"
+CREATE ROLE "coordinator_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "coordinator_runtime"
+CREATE DATABASE "coordinator" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "coordinator" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "coordinator" TO "coordinator_migration", "coordinator_runtime";
+GRANT CREATE ON DATABASE "coordinator" TO "coordinator_migration";
+ALTER DATABASE "coordinator" ALLOW_CONNECTIONS true;
+```
+
+These are the only grants `provision` makes.
 The migration role needs `CREATE` on the database because `apply` creates the schema the runtime file's `namespace` names, and the migration role owns that schema and its tables.
 A namespace starts with `coordinator_` and is at most 60 characters.
 The runtime role needs only `CONNECT`.
@@ -306,7 +336,7 @@ Keep the project runtime's `secretProviders`, `database.runtimeUrlRef`, `namespa
 | --- | --- |
 | `namespace` | The deployment's SQL namespace, `coordinator_` followed by lowercase letters, digits, or `_`. |
 | `secretProviders` | Where references resolve: `secret:file/<name>` under `file.root`, and `secret:env/<NAME>` only when `environment: {}` is present. |
-| `eventSources` | Optional trusted producers whose signed events start runs, each with its `source` URI and an HMAC `signingKeyRef`. |
+| `eventSources` | Optional trusted producers whose signed events start runs, each with its `source` URI and distinct HMAC keys under `triggers.<workflow>.<trigger>`. |
 | `deployment.databaseId` | The deployment's durable identity; a mismatch refuses startup and apply. |
 | `deployment.runtimeRole` | The runtime role, matching the role in `database.runtimeUrlRef`. |
 | `deployment.packages` | One `root` and `expectedDigest` per workflow, up to sixteen. |
@@ -326,13 +356,14 @@ Its [connections](../../reference/coordinator-configuration/#connections) sectio
 
 The service listener uses the shared private listener and TLS policy.
 Use `operator-controlled-upstream` behind your controlled TLS terminator.
-The explicit `development-loopback` option binds only loopback and permits local plaintext PostgreSQL.
+Use `loopback-plaintext` to bind the listener on loopback. For plaintext PostgreSQL on the same host, set `database.transport: loopback-plaintext` separately.
 Downstream bindings use HTTPS, or explicit loopback HTTP for supervised local fixtures.
 Token signing-key rotation preserves the registered downstream client identity, endpoint, audience, resource, scopes, and approved task authority.
 
 {/* Evidence: products/coordinator/generated/runtime/runtime.schema.json namespace, SecretProvidersConfig,
     EventSourceConfig, PrivateListenerConfig, TlsTermination;
-    crates/registry-coordinator/src/deployment.rs DevelopmentLoopback, MAX_WORKFLOWS, tls;
+    crates/registry-coordinator/src/deployment.rs MAX_WORKFLOWS, tls;
+    crates/registry-platform-config/src/blocks.rs DevelopmentLoopback;
     crates/registry-coordinator/src/runtime.rs RuntimeConfig. */}
 
 ### Expose the metrics listener
@@ -387,9 +418,25 @@ A run belongs to its starting token's exact verified `iss` and `sub`, never to a
 The subject decides who owns the run, never which record the start input names.
 Coordinator does not check that a record, subject, or recipient identifier in the input belongs to anyone, so the calling backend must already have authorised every identifier it passes for the person it acts for.
 
-{/* Evidence: crates/registry-coordinator/src/access.rs ClientPolicy, subjects, authenticate, scope_claim, registry_scopes;
+{/* Evidence: crates/registry-coordinator/src/access.rs ClientPolicy, subjects, authenticate, scope_claim;
     crates/registry-coordinator/tests/deployment_surface.rs scope_claim;
     products/coordinator/generated/runtime/runtime.schema.json ClientPolicy. */}
+
+### Configure signed product events
+
+Under each `eventSources.<alias>`, set the producer URI in `source` and put the delivery key for each URL under `triggers.<workflow>.<trigger>.hmacSha256KeyRef`.
+Generate a separate key file for each trigger and give the same file to that trigger's sender.
+Signed deliveries have the same form in both postures, so use separate deployment keys and never give production trigger keys to development producers.
+
+{/* Evidence: crates/registry-coordinator/src/event_trigger.rs, verify_delivery. */}
+
+```sh
+(umask 077 && openssl rand -hex 32 | tr -d '\n' > key)
+```
+
+Coordinator reads these files at startup and refuses keys reused by any trigger or Casework completion connection.
+To rotate a trigger key, keep its current reference fixed, put the new bytes behind it, and supply the old bytes via `previousHmacSha256KeyRef`.
+Restart the receiver to load the new keys.
 
 ### Let Casework wake waiting runs
 
@@ -405,17 +452,17 @@ connections:
     # baseUrl, profile, authorization as for any Casework connection
     completion:
       recipientBinding: coordinator-v1
-      bearerTokenRef: secret:file/review-completion-token
+      hmacSha256KeyRef: secret:file/review-completion-key
     resultCheckSeconds: 900
 ```
 
 - **`producer`** is the producer's key under the Casework project's `trustedProducers`.
   That entry's `completion.destinationId` names a destination, and its `completion.recipientBinding` repeats the binding in the next block.
 - **`recipientBinding`** is 1 to 256 visible ASCII characters, without spaces, and must differ between Casework connections; `check` refuses a duplicate.
-- **`bearerTokenRef`** names a token you generate, of at most 4096 bytes, as visible ASCII such as 32 random bytes in hexadecimal:
+- **`hmacSha256KeyRef`** names 32 to 64 exact key bytes. Generate a dedicated key file for this completion and give the same file to its Casework sender.
 
   ```sh
-  (umask 077 && openssl rand -hex 32 | tr -d '\n' > /run/registry-coordinator/secrets/review-completion-token)
+  (umask 077 && openssl rand -hex 32 | tr -d '\n' > /run/registry-coordinator/secrets/review-completion-key)
   ```
 
 In the Casework project, the producer's `completion` block names a destination and the same recipient binding:
@@ -434,27 +481,26 @@ trustedProducers:
       recipientBinding: coordinator-v1
 ```
 
-In the Casework runtime file, `reviewCompletionDestinations.<destinationId>` binds that destination to the Coordinator's route and to Casework's own reference to the same token.
-Present it as a bearer token with `bearerTokenRef` or `auth: {secretRef}`, not `auth` with a custom header; Coordinator accepts no custom header.
+In the Casework runtime file, `reviewCompletionDestinations.<destinationId>` binds that destination to the Coordinator's route and to Casework's own reference to the same key file.
 
 ```yaml
 reviewCompletionDestinations:
   coordinator:
     url: https://coordinator.example.org/v1/review-completions
-    bearerTokenRef: secret:file/coordinator-completion-token
+    hmacSha256KeyRef: secret:file/review-completion-key
 ```
 
 [Completion destinations](../casework-retention/#completion-destinations) describes those keys, including the delivery bounds `attemptTimeoutMilliseconds`, `maximumAttempts`, and `retryDelaySeconds`.
 The [reviewed notice example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples) lists the full set of Casework prerequisites for one review producer.
 
 Coordinator accepts Casework's completion events at `POST /v1/review-completions` on the service listener.
-It finds the connection by the `Authorization: Bearer` token and the `registry-recipient-binding` header together, comparing the token in constant time.
-It refuses any other sender with HTTP 401 `authentication.refused` before reading the body, including a request that lacks either value or whose pair matches no connection.
-An authenticated event must:
+The `Registry-Recipient-Binding` header selects the connection. Its configured key verifies the Standard Webhooks signature over the webhook ID, Unix timestamp, and exact body.
+An unknown binding or a refused signature answers HTTP 401 `authentication.refused`. The signed timestamp must be within 300 seconds in either direction.
+The body limit is 2048 bytes. A larger body answers HTTP 413 `request.body-too-large`. An authenticated event must meet these requirements:
 
-- be `application/json` and at most 2048 bytes;
+- use exactly `application/json`;
 - name non-nil identifiers;
-- repeat its `eventId` as the `idempotency-key` header;
+- repeat its `eventId` as the `webhook-id` header;
 - carry a `completedAt` no older than 365 days and no more than 5 minutes ahead of the Coordinator's clock.
 
 Anything else answers HTTP 400 `request.invalid` or 415 `request.unsupported-media-type`.
@@ -463,7 +509,7 @@ An event only brings forward the next result read of a run that waits; it never 
 Without a `completion` block the route refuses every event, so lower `resultCheckSeconds` when events cannot reach Coordinator.
 
 A live run's binding includes `producer` but neither `completion` nor `resultCheckSeconds`.
-You can change either, or rotate the token, while runs wait: write the new token on both sides and restart each service.
+You can change either while runs wait. To rotate a completion key, keep the current reference fixed, write the new bytes behind it, and make the old bytes available using `previousHmacSha256KeyRef`. Restart both services to load the new keys.
 Changing `producer` is a binding change that startup refuses while runs use it.
 
 Check the file offline; it reads no credential and contacts no endpoint:
@@ -480,6 +526,14 @@ coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml check
     crates/registry-coordinator/src/http.rs review-completions. */}
 
 ## Apply and start
+
+Use the same declared posture for `plan`, `apply` and startup. The activation
+ledger records that posture, and existing activation rows read as production.
+Startup, `plan` and `apply` refuse a database activated under the other
+posture. To change postures, apply to a fresh database.
+`coordinatorctl deployment-status` reports a mismatch and returns the deployment status.
+
+{/* Evidence: crates/registry-coordinator/src/deployment.rs plan, check_status, apply, check_deployment. */}
 
 ```sh
 coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml plan
@@ -530,7 +584,7 @@ Startup refuses when a runtime file change alters a live run's endpoint, client 
 Restore the original binding, or investigate with `coordinator --runtime-config FILE --recovery-only`, which admits and dispatches nothing.
 Recovery-only still verifies the active package, database, schema, role, and custody, and its readiness remains false.
 
-The service requires protected state schema version 6.
+The service requires protected state schema version 7.
 An earlier layout is refused: `apply` reports `coordinator.command.schema-version`, and runtime state access, including `deployment-status`, fails closed as `coordinator.command.store-unavailable`.
 Apply does not adopt or rewrite an earlier layout, and there is no in-place state migration.
 Settle the retained work with its matching binary, then create a fresh namespace and database identity for this version, and keep the original keys, packages, and audit history until retention permits erasure.
@@ -625,18 +679,22 @@ curl -fsS http://127.0.0.1:8108/ready
 coordinatorctl doctor --url https://coordinator.example.org --token-file /run/operator-token
 ```
 
-`/health` answers `{"live":true}` while the process answers.
-`/ready` answers `{"ready":true}`, or HTTP 503 with `{"ready":false}` while the service cannot accept work.
+`/health` answers `{"live":true,"status":"ok"}` while the process answers.
+`/ready` answers with `ready: true`, `status: ready`, `posture` and `developmentSettings`, or HTTP 503 with `{"ready":false}` while the service cannot accept work. Development responses carry `Registry-Posture: development`.
 Every `/ready` probe checks mutable schema, activation, role, state-key custody, audit, and recovery holds; a held run does not make the service unready.
 The retained live-binding scan is coalesced and cached for 30 seconds, including failures.
 A cache miss still waits for that scan, so the cache bounds frequency rather than latency.
 Startup, explicit deployment status, admissions, and worker transactions keep their fresh authoritative checks.
 Keep health endpoints on the private service listener, and pass a token by file path, never by value.
+Before a typed remote mutation, the CLI sends an unauthenticated `GET /v1/doctor` to the `--url` origin to check the response's posture.
+Forward the probe to the same Coordinator backend as the mutation and preserve its status and `Registry-Posture` response header. The probe accepts the doctor's HTTP 401 credential challenge or HTTP 200 success response. Production answers omit `Registry-Posture`, and a production CLI refuses a development-marked answer. The probe uses the API route and needs no access to the health endpoints.
+If the mutation's response declares development and you ran the command in production posture, inspect the run before repeating the command.
 
 In the doctor report:
 
 - `activationReady` and `state.auditReady` are `true` on a serving deployment, and a held run leaves `activationReady` `true`.
 - `state.restoreHold` and `state.admissionsHold` are `false` until an operator or a restore places a hold.
+- `findings` holds at most one `platform.activation.posture-mismatch` entry, when the activation ledger records the other posture. `activationReady` is then `false`.
 - `state.states` counts runs by state.
 - `state.uncertain` counts steps whose effect waits for an operator.
 - `state.restoreReviewRequired` counts runs that need restore review.
@@ -648,15 +706,18 @@ In the doctor report:
 Doctor carries no personal labels or payload values.
 
 {/* Evidence: crates/registry-coordinator/src/http.rs /health, /ready, activationReady, auditReady,
-    proposalWaitsByTurn, heldRunCount;
+    proposalWaitsByTurn, heldRunCount, findings;
     crates/registry-coordinator/src/store/readiness.rs;
-    crates/registry-coordinator/tests/deployment_postgres.rs heldRuns. */}
+    crates/registry-coordinator/tests/deployment_postgres.rs heldRuns,
+    deployment_operators_act_on_every_flow_without_a_flow_list. */}
 
 ### Codes you see
 
 Each surface names a refusal in its own vocabulary.
 The service's standard error carries the raw code: `store-unavailable` while the database is unreachable, `deployment.refused` or `state-key-custody` when the service stops, and `live-binding-conflict` when startup finds a live run's binding changed.
-`coordinatorctl` prefixes its codes with `coordinator.`, as in `coordinator.deployment.refused`, `coordinator.deployment.workflow-unlisted`, `coordinator.deployment.workflow-live-runs`, `coordinator.command.state-key-custody`, and `coordinator.command.live-binding-conflict`.
+`coordinatorctl` prefixes its codes with `coordinator.`, as in `coordinator.deployment.refused`, `coordinator.deployment.workflow-unlisted`, `coordinator.deployment.workflow-live-runs`, `coordinator.command.state-key-custody`, `coordinator.command.live-binding-conflict`, and `coordinator.command.development-peer`, which a typed command raises when it runs as production and the service answers as development.
+Probe refusals point to `--url`. `coordinator.command.service-unavailable` means the probe failed to receive an answer or received an unexpected status. `coordinator.command.probe-posture-invalid` means the posture header was malformed or repeated.
+
 HTTP answers carry RFC 9457 problem documents; the ones an operator acts on are:
 
 | Code | Status | What to do |
@@ -725,6 +786,7 @@ The metrics are Prometheus text (`text/plain; version=0.0.4`, served with `Cache
 | `coordinator_runs_finished_total` | counter | `state`: `finished`, `failed`, `cancelled`, `cancelled-after-effect`, `expired` |
 | `coordinator_step_attempts_total` | counter | `outcome`: `accepted`, `transient`, `permanent`, `maybe-sent`, `unavailable` |
 | `coordinator_authentication_refusals_total` | counter | `reason`: `refused`, `policy`, `unavailable` |
+| `coordinator_request_refusals_total` | counter | `check`: the closed set of 45 failed checks, every value published at zero |
 | `coordinator_metrics_sample_failures_total` | counter | `sample`: `dispatch-queue`, `run-holds` |
 | `coordinator_dispatch_jobs` | gauge | `state`: `pending`, `leased`, `unknown` |
 | `coordinator_runs_attention` | gauge | `reason`: `definition-refused`, `other` |
@@ -742,10 +804,13 @@ They expose every label value from the first scrape.
   `maybe-sent` is an attempt whose effect is uncertain and that waits for an operator.
   `transient` also counts a `wait-for` read that failed and left its wait open.
   `unavailable` is an attempt that ended in an internal error, such as an unreadable store, before the step answered.
-- An authentication refusal is a bearer credential refused before a caller is resolved.
-  `refused` is a missing, malformed, or unverified token, or a completion event without a configured completion token and recipient binding.
+- An authentication refusal records a rejected caller credential or signed completion.
+  `refused` covers a missing, malformed, or unverified token and a completion with a refused signature or recipient binding.
   `policy` is a verified token no caller policy admits, and `unavailable` means the token verifier cannot answer.
-  A resolved caller refused an action is not counted here.
+  A resolved caller refused an action is not counted here, but `coordinator_request_refusals_total` counts it.
+- `coordinator_request_refusals_total` counts every refused request under the check that refused it, and no label carries caller text.
+  It covers a refused credential, a policy denial after authentication, an event delivery refused under the key configured for its trigger URL, a refused completion callback, a key source the service cannot reach or use (the token verifier's keys), and a run the caller cannot see.
+  Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute.
 
 `coordinator_dispatch_jobs` is read from the database on each scrape.
 `pending` steps wait for their next attempt, `leased` steps are being attempted, and `unknown` steps wait for an operator to settle an uncertain effect.
@@ -777,7 +842,8 @@ Bind the metrics listener where only your monitoring can reach it: the counts de
 
 {/* Evidence: crates/registry-coordinator/src/metrics.rs coordinator_runs_admitted_total,
     coordinator_runs_finished_total, coordinator_step_attempts_total,
-    coordinator_authentication_refusals_total, coordinator_metrics_sample_failures_total,
+    coordinator_authentication_refusals_total, coordinator_request_refusals_total,
+    coordinator_metrics_sample_failures_total,
     coordinator_dispatch_jobs,
     coordinator_runs_attention, coordinator_runs_restore_review_required,
     coordinator_hold_active, coordinator_oldest_due_age_seconds;
@@ -1305,7 +1371,7 @@ Keep the supporting evidence under institutional custody; false or omitted attes
 {/* Evidence: crates/registry-coordinator/src/cli.rs RestoreHold, CompleteExecutionRecovery,
     ReleaseRestoreHold, ReleaseAdmissionHold;
     crates/registry-coordinator/src/service.rs recovery_only (worker poll skipped,
-    check_event_ingress_keys);
+    event_ingress_keys);
     crates/registry-coordinator/src/http.rs recovery_only (admissions refused);
     crates/registry-coordinator/src/store/recovery.rs restore_hold, admissions_hold. */}
 

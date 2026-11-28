@@ -12,11 +12,12 @@
 //! the version is due. No grant expiry or revocation ever starts this clock.
 
 use registry_documents_core::{may_request_erasure, Caller, DocumentView, ProblemCode};
+use registry_platform_authcommon::FailedCheck;
 use serde_json::{json, Value};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
-use super::{timestamp, unavailable, DocumentService};
+use super::{timestamp, unavailable, DocumentService, ServiceError};
 use crate::audit::ERASURE_REQUEST_EVENT;
 use crate::hooks::GrantChange;
 
@@ -38,7 +39,7 @@ impl DocumentService {
         &self,
         caller: &Caller,
         document_id: Uuid,
-    ) -> Result<DocumentView, ProblemCode> {
+    ) -> Result<DocumentView, ServiceError> {
         let reference = self.actor_reference(caller)?;
         let audit = self
             .begin(
@@ -71,22 +72,22 @@ impl DocumentService {
         &self,
         caller: &Caller,
         document_id: Uuid,
-    ) -> Result<Requested, ProblemCode> {
+    ) -> Result<Requested, ServiceError> {
         let record = self
             .record(document_id)
             .await?
-            .ok_or(ProblemCode::ResourceNotFound)?;
+            .ok_or_else(|| ServiceError::concealed(FailedCheck::Visibility))?;
         let access = self.access(caller, &record).await?;
         if !access.sees() {
-            return Err(ProblemCode::ResourceNotFound);
+            return Err(ServiceError::concealed(FailedCheck::Visibility));
         }
         if !may_request_erasure(access.standing) {
-            return Err(ProblemCode::ProfileNotAuthorized);
+            return Err(ServiceError::not_authorized(FailedCheck::Ownership));
         }
         // A custodian sees the document only under a declared policy.
         let policy = self
             .policy(&record.policy_id)
-            .ok_or(ProblemCode::ResourceNotFound)?;
+            .ok_or_else(|| ServiceError::concealed(FailedCheck::Visibility))?;
         let grace = i32::try_from(policy.mandatory_restrictions.cleanup_grace_hours.get())
             .map_err(|error| unavailable("erasure grace", &error))?;
         let version_id = record.version_id;
@@ -193,7 +194,7 @@ impl DocumentService {
     pub(super) async fn refuse_erasing(
         transaction: &Transaction<'_>,
         version_id: Uuid,
-    ) -> Result<(), ProblemCode> {
+    ) -> Result<(), ServiceError> {
         let erasing: bool = transaction
             .query_one(
                 "SELECT erasure_state <> 'none' FROM documents_versions
@@ -204,7 +205,7 @@ impl DocumentService {
             .and_then(|row| row.try_get(0))
             .map_err(|error| unavailable("grant erasure check", &error))?;
         if erasing {
-            return Err(ProblemCode::DocumentVersionNotReleasable);
+            return Err(ProblemCode::DocumentVersionNotReleasable.into());
         }
         Ok(())
     }

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import runpy
 import re
 import tomllib
 from collections import defaultdict, deque
@@ -36,9 +37,13 @@ SHARDS = {
         "registry-platform-hooks",
         "registry-platform-httpsec",
         "registry-platform-httputil",
+        "registry-platform-loopback",
         "registry-platform-metrics",
         "registry-platform-objectstore",
         "registry-platform-oidc",
+        "registry-platform-postgres",
+        "registry-platform-posture",
+        "registry-platform-provision",
         "registry-platform-ratelimit",
         "registry-platform-resilience",
         "registry-platform-script",
@@ -162,10 +167,71 @@ STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 # The BReg harnesses and the Adapter GovStack journey start their services with
 # `rstack dev`, so a change to it runs them.
 RSTACK_DEV_HARNESS_PACKAGES = frozenset({"registry-rstack", "registry-rstack-dev"})
-# The product CLIs that link registry-rstack-dev and host `rstack dev`. The
-# registry-rstack dev_run tests drive the hosts built beside rstack, so a
-# change to either host runs them; the shard builds both before it tests.
-RSTACK_DEV_HOST_PACKAGES = frozenset({"registry-bregctl", "registry-caseworkctl"})
+# The shared dependency gate owns the list of development runner hosts.
+_dev_runner_gate = runpy.run_path(str(
+    Path(__file__).resolve().parents[2] / "products/platform/scripts/check_dev_runner_reach.py"
+))
+RSTACK_DEV_HOST_PACKAGES = frozenset(_dev_runner_gate["DEV_RUNNER_HOSTS"])
+
+# The acceptance journeys start every runtime and `*ctl` tool in their product
+# column (products/platform/journeys/products.yaml; test_ci_changes.py checks
+# this set against it), `rstack dev`, and the ThunderID tooling the product
+# tools link for their development issuer. The starters the journeys copy
+# live in product directories and product crates, whose paths already seed
+# these packages.
+JOURNEY_PACKAGES = frozenset(
+    {
+        "registry-adapter",
+        "registry-adapter-job",
+        "registry-adapterctl",
+        "registry-breg",
+        "registry-breg-mcp",
+        "registry-breg-review",
+        "registry-bregctl",
+        "registry-casework",
+        "registry-caseworkctl",
+        "registry-coordinator",
+        "registry-discovery",
+        "registry-discoveryctl",
+        "registry-documents",
+        "registry-documentsctl",
+        "registry-evidence",
+        "registry-evidence-oid4vci",
+        "registry-evidence-oid4vp",
+        "registry-evidencectl",
+        "registry-mcp",
+        "registry-messaging",
+        "registry-messagingctl",
+        "registry-render",
+        "registry-scheduling",
+        "registry-schedulingctl",
+        "registry-thunderid-tooling",
+    }
+) | RSTACK_DEV_HARNESS_PACKAGES
+# The journey scripts, their tables, the realm and the per-product inputs.
+JOURNEY_INPUTS = ("products/platform/journeys/**",)
+
+# The token fixture corpus, read by the corpus test in
+# registry-platform-testing and by the token characterisation test of every
+# runtime that verifies a token. The corpus is not a crate, so its path names
+# those crates directly instead of relying on the reverse-dependency closure.
+TOKEN_FIXTURE_CORPUS = "products/platform/conformance/tokens/"
+TOKEN_FIXTURE_PACKAGES = frozenset(
+    {
+        "registry-platform-testing",
+        "registry-adapter",
+        "registry-breg",
+        "registry-casework",
+        "registry-coordinator",
+        "registry-documents",
+        "registry-evidence",
+        "registry-evidence-oid4vci",
+        "registry-mcp-edge",
+        "registry-messaging",
+        "registry-render",
+        "registry-scheduling",
+    }
+)
 
 # The runtime configuration conformance gate reads the sources of the runtimes
 # it holds rows for, their generated runtime schemas, and the canonical shared
@@ -174,6 +240,9 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
     {
         "registry-platform-config",
         "registry-coordinator",
+        "registry-adapter",
+        "registry-adapter-engine",
+        "registry-adapterctl",
         "registry-breg",
         "registry-breg-mcp",
         "registry-breg-review",
@@ -269,6 +338,24 @@ DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS = (
     "crates/registry-evidencectl/src/build.rs",
     "crates/registry-evidencectl/src/fixtures.rs",
     "crates/registry-evidencectl/tests/production_build.rs",
+)
+# The TypeScript clients generate from these OpenAPI documents, verify the
+# shared Standard Webhooks vectors, and check the documents against what the
+# clients assume.
+TYPESCRIPT_CLIENT_INPUTS = (
+    "clients/typescript/**",
+    "products/platform/scripts/check-client-assumptions.py",
+    "products/platform/scripts/test_check_client_assumptions.py",
+    "products/casework/generated/registry-casework.openapi.json",
+    "products/coordinator/generated/openapi/coordinator.openapi.json",
+    "products/documents/generated/registry-documents.openapi.json",
+    "products/evidence/generated/registry-evidence.openapi.json",
+    "products/evidence/generated/registry-evidence-oid4vci.openapi.json",
+    "products/messaging/generated/registry-messaging.openapi.json",
+    "products/scheduling/generated/registry-scheduling.openapi.json",
+    "products/breg/generated/minimal/generated/openapi.json",
+    "products/breg/generated/facility/generated/openapi.json",
+    "crates/registry-platform-crypto/tests/fixtures/standard-webhooks.json",
 )
 DISCOVERY_PROVIDER_INPUTS = DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS + (
     "products/evidence/contracts/bundle.schema.yaml",
@@ -544,6 +631,49 @@ NATIVE_BINDING_PACKAGES = (
 # spread across parallel `postgres:i/N` shard lanes — the runner's owned
 # target lists cover every test exactly once across the shard set.
 BREG_POSTGRES_SHARDS = 3
+# The packages whose provisioning journey runs against the contracts-journeys
+# lane's TLS-only PostgreSQL service, and the inputs that select that lane.
+PROVISION_JOURNEY_PACKAGES = (
+    "registry-adapterctl",
+    "registry-bregctl",
+    "registry-caseworkctl",
+    "registry-coordinator",
+    "registry-documentsctl",
+    "registry-messagingctl",
+    "registry-schedulingctl",
+)
+PROVISION_JOURNEY_INPUTS = (
+    *(f"crates/{package}/src/provision.rs" for package in PROVISION_JOURNEY_PACKAGES),
+    # Each journey's test file. The database-free `provision_cli.rs` stays out.
+    *(
+        f"crates/{package}/tests/provision_postgres.rs"
+        for package in PROVISION_JOURNEY_PACKAGES
+        if package != "registry-caseworkctl"
+    ),
+    "crates/registry-caseworkctl/tests/provision.rs",
+    "crates/registry-casework/migrations/**",
+    "crates/registry-documents/migrations/**",
+    "crates/registry-messaging/migrations/**",
+    "crates/registry-scheduling/migrations/**",
+    # What `apply` grants and what the start check reads, per product.
+    # The Adapter migrates and grants when it serves, not in a separate apply.
+    "crates/registry-adapter/src/serve.rs",
+    "crates/registry-casework/src/activation.rs",
+    "crates/registry-documents/src/activation.rs",
+    "crates/registry-messaging/src/activation.rs",
+    "crates/registry-scheduling/src/store/activation.rs",
+    # The Coordinator keeps its DDL in code, and dispatches its tool from cli.rs.
+    "crates/registry-coordinator/src/deployment.rs",
+    "crates/registry-coordinator/src/store.rs",
+    "crates/registry-coordinator/src/cli.rs",
+    # The tool dispatch of every other product.
+    *(
+        f"crates/{package}/src/lib.rs"
+        for package in PROVISION_JOURNEY_PACKAGES
+        if package != "registry-coordinator"
+    ),
+)
+
 BREG_CONTRACTS_LANES = (
     "contracts",
     "contracts-journeys",
@@ -1237,6 +1367,8 @@ def classify(
                 seeds.update(MANIFEST_PACKAGES)
             elif path.startswith("products/platform/"):
                 seeds.update(PLATFORM_PACKAGES)
+                if path.startswith(TOKEN_FIXTURE_CORPUS):
+                    seeds.update(TOKEN_FIXTURE_PACKAGES)
             elif path.startswith("products/breg/"):
                 seeds.update(BREG_PACKAGES)
             elif path.startswith("products/casework/"):
@@ -1268,8 +1400,6 @@ def classify(
         if force_all
         else workspace.affected_packages(seeds)
     )
-    if affected & RSTACK_DEV_HOST_PACKAGES:
-        affected.add("registry-rstack")
     complete = run_all or force_all
 
     # The heavy integration tier: PostgreSQL suites, the WebAssembly build and
@@ -1565,9 +1695,18 @@ def classify(
         or bool(affected & BREG_EVIDENCE_COMPOSITION_PACKAGES)
     )
 
+    acceptance_journeys = integration and (
+        complete
+        or any(matches(path, *JOURNEY_INPUTS) for path in paths)
+        or bool(affected & JOURNEY_PACKAGES)
+    )
+
+    # Running dev_run for a host change does not make the harness itself
+    # an input change for tutorial and product contract jobs.
+    rust_packages = affected | ({"registry-rstack"} if affected & RSTACK_DEV_HOST_PACKAGES else set())
     matrix = []
     for shard_name, shard_packages in SHARDS.items():
-        selected = sorted(affected.intersection(shard_packages))
+        selected = sorted(rust_packages.intersection(shard_packages))
         if selected:
             matrix.append(
                 {
@@ -1595,6 +1734,17 @@ def classify(
             for path in paths
         )
     )
+    # The provisioning PostgreSQL suite runs in the contracts-journeys lane,
+    # after that lane's TLS proof makes its PostGIS 17 service TLS-only. It
+    # joins only the breg_contracts output: breg_integration and
+    # casework_postgres read the selection above, so the provisioning crate
+    # on its own does not select them.
+    # Each product's provisioning journey runs in the same lane after the
+    # suite, so a product's provision command, its journey, its migrations, its
+    # apply and start check or its tool's dispatch select the lane too.
+    provision_postgres = "registry-platform-provision" in affected or any(
+        matches(path, *PROVISION_JOURNEY_INPUTS) for path in paths
+    )
 
     outputs = {
         "full_sweep": full_sweep,
@@ -1606,7 +1756,7 @@ def classify(
         ),
         "rust": bool(affected),
         "rust_matrix": {"include": matrix},
-        "rust_packages": sorted(affected),
+        "rust_packages": sorted(rust_packages),
         "platform": platform,
         "platform_assurance": platform_assurance,
         "platform_coverage": platform_coverage,
@@ -1616,7 +1766,8 @@ def classify(
         or bool(affected & DISCOVERY_PACKAGES)
         or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
         or any(matches(path, *DISCOVERY_TUTORIAL_INPUTS) for path in paths),
-        "breg_contracts": breg_contracts,
+        "breg_contracts": breg_contracts or provision_postgres,
+        "evidence_doctor": bool(affected & {"registry-evidence", "registry-evidencectl"}),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "evidence_assurance": evidence_assurance,
         "evidence_postgres": bool(affected & EVIDENCE_POSTGRES_PACKAGES),
@@ -1650,6 +1801,8 @@ def classify(
         "docs": docs,
         "docs_archives": docs_archives,
         "client_bindings": client_bindings,
+        "typescript_clients": complete
+        or any(matches(path, *TYPESCRIPT_CLIENT_INPUTS) for path in paths),
         "release_linux_node_clients": release_linux_node_clients,
         "evidence_tutorial": evidence_tutorial,
         "breg_tutorial": breg_tutorial,
@@ -1659,6 +1812,7 @@ def classify(
         "render_tutorial": render_tutorial,
         "scheduling_tutorial": scheduling_tutorial,
         "breg_evidence_composition": breg_evidence_composition,
+        "acceptance_journeys": acceptance_journeys,
         "identifiers": identifiers,
     }
     return outputs

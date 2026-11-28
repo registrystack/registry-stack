@@ -218,7 +218,7 @@ pub(super) async fn start_from_runtime(
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            database_initialization_environment: "test",
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .unwrap();
@@ -281,7 +281,7 @@ identity:
   environment: test
   instanceId: native-task-grant
   databaseId: task-database
-  databaseInitializationEnvironment: test
+
 secretProviders:
   file: {{root: {secrets}}}
 database:
@@ -298,23 +298,25 @@ database:
 package: {{root: {package_root}}}
 authentication:
   oidc:
-    issuer: {issuer}
-    audience: {AUDIENCE}
-    allowedAlgorithm: RS256
-    accessTokenType: at+jwt
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [task-agent, other-agent, seed-client, other-seed-client]
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksSource: {{type: discovery}}
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {issuer}
+        audience: {AUDIENCE}
+        allowedAlgorithm: RS256
+        accessTokenType: at+jwt
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [task-agent, other-agent, seed-client, other-seed-client]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksSource: {{type: discovery}}
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims: {{principal: sub, purpose: registry_purpose}}
 taskGrantStatus:
   - sourceIssuer: https://casework.example
@@ -346,10 +348,16 @@ operationalTimeouts:
     )
     .unwrap();
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o600)).unwrap();
-    let prepared =
-        prepare_with_connection_config_for_test(&runtime_path, db.runtime_config.clone())
-            .await
-            .unwrap();
+    let prepared = prepare_with_connection_config_for_test(
+        &runtime_path,
+        db.runtime_config.clone(),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
+    .await
+    .unwrap();
     let app = prepared.app();
     Deployment {
         app,

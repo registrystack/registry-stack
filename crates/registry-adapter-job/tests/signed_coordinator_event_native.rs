@@ -46,6 +46,7 @@ use registry_adapter_job::signed_coordinator_event::{
     SignedCoordinatorEventDestination, SignedCoordinatorEventReceiver,
 };
 use registry_adapter_job::store::{self, ItemStatus};
+use registry_platform_crypto::delivery_signature::{DeliveryKey, DeliveryKeys};
 use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
 use registry_platform_httputil::destination::{DestinationProfile, EventDestinationPolicy};
 use registry_platform_testing::{fixtures, TestActorKind, TestAuthorizationServer, TestClient};
@@ -53,6 +54,12 @@ use serde_json::{json, Value};
 use tokio_postgres::{Config as PgConfig, NoTls};
 
 const KEY: &[u8] = &[0x5a; 32];
+const REVISED_KEY: &[u8] = &[0x6a; 32];
+
+fn delivery_keys(key: &[u8]) -> DeliveryKeys {
+    DeliveryKeys::new(DeliveryKey::new(key).unwrap(), None).unwrap()
+}
+
 const WORKFLOW: &str = "register-household";
 const PRIMARY_TRIGGER: &str = "submission-received";
 const REVISED_TRIGGER: &str = "submission-revised";
@@ -333,8 +340,7 @@ impl NativeCoordinator {
             .as_str()
             .expect("the package report digest");
 
-        let database = std::env::var("ADAPTER_TEST_DATABASE_URL")
-            .expect("the native runner supplies disposable PostgreSQL");
+        let database = crate::job_fixture::test_database_url();
         let (admin, connection) = tokio_postgres::connect(&database, NoTls)
             .await
             .expect("connect the Coordinator database");
@@ -364,11 +370,9 @@ impl NativeCoordinator {
             ("admission-key", &[0x48; 32]),
             ("audit-key", &[0x49; 32]),
             ("event-key", KEY),
+            ("revised-event-key", REVISED_KEY),
             ("client-key", fixtures::ED25519_PRIVATE_JWK.as_bytes()),
-            (
-                "review-completion-token",
-                casework.completion_token().as_bytes(),
-            ),
+            ("review-completion-key", casework.completion_key()),
         ] {
             private_file(&root.path().join(name), contents);
         }
@@ -378,7 +382,8 @@ impl NativeCoordinator {
             "kind": "CoordinatorRuntimeConfig",
             "secretProviders": {"file": {"root": root.path()}},
             "database": {"runtimeUrlRef": "secret:file/runtime-database",
-                "migrationUrlRef": "secret:file/migration-database"},
+                "migrationUrlRef": "secret:file/migration-database",
+                "transport": "loopback-plaintext"},
             "namespace": namespace,
             "connections": {
                 "households": {
@@ -405,18 +410,23 @@ impl NativeCoordinator {
                     },
                     "completion": {
                         "recipientBinding": casework_native_service::RECIPIENT_BINDING,
-                        "bearerTokenRef": "secret:file/review-completion-token"
+                        "hmacSha256KeyRef": "secret:file/review-completion-key"
                     },
                     "resultCheckSeconds": 900
                 }
             },
-            "eventSources": {"adapter": {"source": SOURCE, "signingKeyRef": "secret:file/event-key"}},
+            "eventSources": {"adapter": {"source": SOURCE, "triggers": {(WORKFLOW): {
+                (PRIMARY_TRIGGER): {"hmacSha256KeyRef": "secret:file/event-key"},
+                (REVISED_TRIGGER): {"hmacSha256KeyRef": "secret:file/revised-event-key"}
+            }}}},
             "deployment": {
                 "databaseId": format!("adapter-native-{suffix}"), "runtimeRole": role,
                 "packages": [{"root": package, "expectedDigest": package_digest}],
                 "listener": {"bind": address.to_string(), "tlsTermination": "development-loopback"},
-                "authentication": {"issuer": issuer.issuer(), "audience": "urn:adapter:coordinator-native",
+                "authentication": {"issuers": {"main": {
+                    "issuer": issuer.issuer(), "audience": "urn:adapter:coordinator-native",
                     "scopeClaim": "scope", "jwksSource": {"type": "uri", "uri": issuer.jwks_uri()},
+                    "allowedClients": "from-policies"}},
                     "policies": {"operator": {"subjects": ["adapter-job-native"], "requiredScopes": ["coordinator:operate"],
                         "workflows": [WORKFLOW], "actions": ["status", "inspect"], "operator": true}}},
                 "auditFile": root.path().join("audit.jsonl"), "auditKeyRef": "secret:file/audit-key",
@@ -746,23 +756,24 @@ async fn assert_revised_run_used_unresolved_review(
 
 fn maintained_destination(base_url: &str, policy_name: &str) -> SignedCoordinatorEventDestination {
     let policy = Arc::new(
-        EventDestinationPolicy::new(
-            policy_name,
-            base_url,
-            DestinationProfile::LoopbackDevelopmentHttp,
-            &[],
-        )
-        .expect("the maintained event policy freezes"),
+        EventDestinationPolicy::new(policy_name, base_url, DestinationProfile::LoopbackHttp, &[])
+            .expect("the maintained event policy freezes"),
     );
     let connector = Arc::new(
-        CoordinatorEventConnector::new(policy, SOURCE, KEY.to_vec(), Duration::from_secs(3))
+        CoordinatorEventConnector::new(policy, SOURCE, Duration::from_secs(3))
             .expect("the maintained event connector freezes"),
     );
     SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(
-            CoordinatorEventReceiver::new(WORKFLOW, PRIMARY_TRIGGER, EVENT_TYPE, DATA_SCHEMA)
-                .expect("the maintained primary receiver freezes"),
+            CoordinatorEventReceiver::new(
+                WORKFLOW,
+                PRIMARY_TRIGGER,
+                EVENT_TYPE,
+                DATA_SCHEMA,
+                delivery_keys(KEY),
+            )
+            .expect("the maintained primary receiver freezes"),
             [0x11; 32],
         ),
         Some(SignedCoordinatorEventReceiver::new(
@@ -771,6 +782,7 @@ fn maintained_destination(base_url: &str, policy_name: &str) -> SignedCoordinato
                 REVISED_TRIGGER,
                 REVISED_EVENT_TYPE,
                 REVISED_DATA_SCHEMA,
+                delivery_keys(REVISED_KEY),
             )
             .expect("the maintained revised receiver freezes"),
             [0x12; 32],
@@ -814,8 +826,7 @@ async fn assert_attention_list(
 }
 
 async fn isolated_store() -> Pool {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names disposable PostgreSQL");
+    let base = crate::job_fixture::test_database_url();
     let schema = format!("adapter_job_event_{}", uuid::Uuid::new_v4().simple());
     let (admin, connection) = tokio_postgres::connect(&base, NoTls)
         .await
@@ -885,13 +896,13 @@ async fn a_lost_native_event_answer_recovers_the_same_coordinator_run() {
         EventDestinationPolicy::new(
             "adapter-native-coordinator",
             &format!("http://127.0.0.1:{}/", address.port()),
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("the native event policy freezes"),
     );
     let connector = Arc::new(
-        CoordinatorEventConnector::new(policy, SOURCE, KEY.to_vec(), Duration::from_secs(3))
+        CoordinatorEventConnector::new(policy, SOURCE, Duration::from_secs(3))
             .expect("the native event connector freezes"),
     );
     let fixture = job_fixture::JobFixture::start(
@@ -908,9 +919,14 @@ async fn a_lost_native_event_answer_recovers_the_same_coordinator_run() {
     configure_maintained_job(&fixture.job);
     let program = compile_job(&fixture.pack, &fixture.job, &fixture.runtime)
         .expect("the native job compiles");
-    let receiver =
-        CoordinatorEventReceiver::new(WORKFLOW, PRIMARY_TRIGGER, EVENT_TYPE, DATA_SCHEMA)
-            .expect("the native primary receiver freezes");
+    let receiver = CoordinatorEventReceiver::new(
+        WORKFLOW,
+        PRIMARY_TRIGGER,
+        EVENT_TYPE,
+        DATA_SCHEMA,
+        delivery_keys(KEY),
+    )
+    .expect("the native primary receiver freezes");
     let destination = SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(receiver, [0x11; 32]),
@@ -920,6 +936,7 @@ async fn a_lost_native_event_answer_recovers_the_same_coordinator_run() {
                 REVISED_TRIGGER,
                 REVISED_EVENT_TYPE,
                 REVISED_DATA_SCHEMA,
+                delivery_keys(REVISED_KEY),
             )
             .expect("the revised receiver freezes"),
             [0x12; 32],
@@ -1193,13 +1210,13 @@ async fn postgres_source_reaches_native_coordinator_and_reviews_a_revised_row() 
         EventDestinationPolicy::new(
             "adapter-native-coordinator-postgres",
             &coordinator.origin,
-            DestinationProfile::LoopbackDevelopmentHttp,
+            DestinationProfile::LoopbackHttp,
             &[],
         )
         .expect("the native PostgreSQL event policy freezes"),
     );
     let connector = Arc::new(
-        CoordinatorEventConnector::new(policy, SOURCE, KEY.to_vec(), Duration::from_secs(3))
+        CoordinatorEventConnector::new(policy, SOURCE, Duration::from_secs(3))
             .expect("the native PostgreSQL event connector freezes"),
     );
     let fixture = job_fixture::JobFixture::start(
@@ -1219,9 +1236,14 @@ async fn postgres_source_reaches_native_coordinator_and_reviews_a_revised_row() 
         compile_job(&fixture.pack, &fixture.job, &fixture.runtime).expect("the SQL job compiles");
     activate_postgres_sources(&mut program, &source.resolver())
         .expect("the production PostgreSQL source host activates");
-    let receiver =
-        CoordinatorEventReceiver::new(WORKFLOW, PRIMARY_TRIGGER, EVENT_TYPE, DATA_SCHEMA)
-            .expect("the native primary receiver freezes");
+    let receiver = CoordinatorEventReceiver::new(
+        WORKFLOW,
+        PRIMARY_TRIGGER,
+        EVENT_TYPE,
+        DATA_SCHEMA,
+        delivery_keys(KEY),
+    )
+    .expect("the native primary receiver freezes");
     let destination = SignedCoordinatorEventDestination::new(
         connector,
         SignedCoordinatorEventReceiver::new(receiver, [0x11; 32]),
@@ -1231,6 +1253,7 @@ async fn postgres_source_reaches_native_coordinator_and_reviews_a_revised_row() 
                 REVISED_TRIGGER,
                 REVISED_EVENT_TYPE,
                 REVISED_DATA_SCHEMA,
+                delivery_keys(REVISED_KEY),
             )
             .expect("the native revised receiver freezes"),
             [0x12; 32],

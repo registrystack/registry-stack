@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-evidence
   - registry-stack
-last_reviewed: "2026-09-25"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -20,6 +20,14 @@ from a fixed variable name: a configuration field carries a reference that names
 and the operator chooses the name. Base Registry Engine and Registry Evidence work that way, and
 the reference grammar is closed rather than free-form. Each reads a secret from an operator-named
 variable only when its runtime file opts in to the environment provider, as its section records.
+
+## Deployment posture
+
+`REGISTRY_STACK_POSTURE` declares `development` or `production` for every product and its
+posture-aware tools. If you supply neither the variable nor `--posture`, the posture is
+`production`. If you use both, their values must match.
+
+{/* Evidence: crates/registry-platform-posture/src/lib.rs, declared_from. */}
 
 ## Configuration expansion
 
@@ -66,7 +74,8 @@ and names `--runtime-config` as the replacement, rather than silently ignoring i
 
 Registry Evidence resolves secrets through the providers `runtime.yaml` declares under
 `secretProviders`: `file: {root: <absolute directory>}` enables `secret:file/<name>` references,
-which resolve to an owner-only regular file under that directory, and `environment: {}` enables
+which resolve to a regular file under that directory that meets the
+[secret file rule](../../security/hardening-checklist/#secret-files), and `environment: {}` enables
 `secret:env/<NAME>` references, which resolve to the operator-named environment variable.
 
 | Grammar | Resolves to | Accepted name |

@@ -300,6 +300,7 @@ pub fn typed_local_description(
             attributes: client.claims,
             access_token_lifetime_seconds: 300,
             token_exchange: None,
+            unit: None,
         });
     }
     let description = IssuerDescription {
@@ -326,6 +327,7 @@ pub fn typed_local_description(
         synthetic_users: vec![],
         exchange_issuers: vec![],
         schema_attributes: attributes.into_iter().collect(),
+        units: vec![],
     };
     description.validate()?;
     Ok(description)

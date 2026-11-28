@@ -158,6 +158,7 @@ function configurationValue(options) {
   }
   const allowed = new Set([
     'baseUrl',
+    'refuseDevelopmentPeer',
     'attemptTimeoutMilliseconds',
     'connectTimeoutMilliseconds',
     'maximumResponseBytes',
@@ -175,6 +176,9 @@ function configurationValue(options) {
       if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 4 * 1024 * 1024) {
         throw inputError('configuration');
       }
+      copy[key] = value;
+    } else if (key === 'refuseDevelopmentPeer') {
+      if (typeof value !== 'boolean') throw inputError('configuration');
       copy[key] = value;
     } else if (key === 'baseUrl') {
       if (typeof value !== 'string') throw inputError('configuration');

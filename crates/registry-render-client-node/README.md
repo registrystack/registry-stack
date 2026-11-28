@@ -12,3 +12,5 @@ optional correlation key is sent as `Idempotency-Key` and checked when echoed;
 it is not a deduplication promise. Provider failures retain the
 provider's classification. Transport errors expose their shared kind and
 whether an exchange may have completed. No automatic retry is added.
+
+The client accepts development-marked responses by default. Set `refuseDevelopmentPeer: true` when constructing the client to reject them.

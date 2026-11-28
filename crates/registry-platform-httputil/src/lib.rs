@@ -8,6 +8,9 @@ use thiserror::Error;
 
 pub mod client;
 pub mod destination;
+pub mod probe;
+pub mod select;
+pub use registry_platform_loopback as loopback;
 
 pub use client::{
     exchange_authorization_from_json, valid_resource_uri, valid_scope_token,
@@ -30,40 +33,82 @@ pub const MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES: usize = 1024 * 1024;
 /// Maximum certificates accepted in one outbound client's pinned CA bundle.
 pub const MAXIMUM_TRUSTED_ROOT_CERTIFICATES: usize = 32;
 
-/// Value-free reason a response's headers exceeded the shared client bounds.
+/// Whether a runtime refuses a response whose peer declares the development posture.
+///
+/// There is no default: every client construction site chooses. A production runtime
+/// passes [`PeerPolicy::RefuseDevelopmentPeer`], a development runtime passes
+/// [`PeerPolicy::AcceptDevelopmentPeer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerPolicy {
+    /// Refuse a response that declares the development posture.
+    RefuseDevelopmentPeer,
+    /// Accept a response whatever posture it declares.
+    AcceptDevelopmentPeer,
+}
+
+/// Value-free reason a response's headers were refused by the shared client checks.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum ResponseHeaderBoundError {
+pub enum ResponseHeaderError {
     #[error("the response carries too many header fields")]
     TooManyFields,
     #[error("the response headers exceed the configured maximum")]
     HeadersTooLarge,
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
 }
 
-/// Enforce strict field-count and aggregate-byte bounds before inspecting response headers.
-pub fn validate_response_headers(headers: &HeaderMap) -> Result<(), ResponseHeaderBoundError> {
+/// Enforce strict field-count and aggregate-byte bounds before inspecting response headers,
+/// then refuse a development-marked peer when `peer` says to.
+///
+/// A peer declares development when any comma-separated posture value is
+/// `development` after trimming spaces and tabs.
+pub fn validate_response_headers(
+    headers: &HeaderMap,
+    peer: PeerPolicy,
+) -> Result<(), ResponseHeaderError> {
     let mut count = 0usize;
     let mut total = 0usize;
     for (name, value) in headers {
         count = count
             .checked_add(1)
-            .ok_or(ResponseHeaderBoundError::TooManyFields)?;
+            .ok_or(ResponseHeaderError::TooManyFields)?;
         if count > MAXIMUM_RESPONSE_HEADER_FIELDS {
-            return Err(ResponseHeaderBoundError::TooManyFields);
+            return Err(ResponseHeaderError::TooManyFields);
         }
         let field_bytes = name
             .as_str()
             .len()
             .checked_add(value.as_bytes().len())
-            .ok_or(ResponseHeaderBoundError::HeadersTooLarge)?;
+            .ok_or(ResponseHeaderError::HeadersTooLarge)?;
         total = total
             .checked_add(field_bytes)
-            .ok_or(ResponseHeaderBoundError::HeadersTooLarge)?;
+            .ok_or(ResponseHeaderError::HeadersTooLarge)?;
         if total > MAXIMUM_RESPONSE_HEADER_BYTES {
-            return Err(ResponseHeaderBoundError::HeadersTooLarge);
+            return Err(ResponseHeaderError::HeadersTooLarge);
         }
     }
+    if peer == PeerPolicy::RefuseDevelopmentPeer
+        && headers
+            .get_all(registry_platform_posture::POSTURE_HEADER)
+            .iter()
+            .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+            .any(|value| value.trim_ascii() == registry_platform_posture::DEVELOPMENT.as_bytes())
+    {
+        return Err(ResponseHeaderError::DevelopmentPeer);
+    }
     Ok(())
+}
+
+/// [`validate_response_headers`] with [`PeerPolicy::RefuseDevelopmentPeer`], for call
+/// sites that have not yet received their runtime's policy. Removed once every client
+/// takes a required [`PeerPolicy`].
+pub fn validate_response_headers_without_peer_policy(
+    headers: &HeaderMap,
+) -> Result<(), ResponseHeaderError> {
+    validate_response_headers(headers, PeerPolicy::RefuseDevelopmentPeer)
 }
 
 /// Parse exactly one RFC 9110 delta-seconds `Retry-After` field within a caller bound.
@@ -85,6 +130,9 @@ pub const DEFAULT_VALIDATED_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_OUTBOUND_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The one host name pinned to the loopback addresses in every built client.
+const LOCALHOST_NAME: &str = "localhost";
+
 /// Builder for outbound HTTP clients used by platform fetchers.
 #[derive(Clone)]
 pub struct OutboundClientBuilder {
@@ -93,6 +141,10 @@ pub struct OutboundClientBuilder {
     user_agent: Option<String>,
     trusted_root_certificates: Option<zeroize::Zeroizing<Vec<u8>>>,
     resolved_host: Option<(String, Vec<SocketAddr>)>,
+    destination: Option<(
+        select::SelectedDestination,
+        std::sync::Arc<dyn reqwest::dns::Resolve>,
+    )>,
 }
 
 impl std::fmt::Debug for OutboundClientBuilder {
@@ -107,6 +159,10 @@ impl std::fmt::Debug for OutboundClientBuilder {
                 &self.trusted_root_certificates.is_some(),
             )
             .field("has_pinned_resolution", &self.resolved_host.is_some())
+            .field(
+                "destination",
+                &self.destination.as_ref().map(|(selected, _)| selected),
+            )
             .finish()
     }
 }
@@ -128,6 +184,7 @@ impl OutboundClientBuilder {
             user_agent: None,
             trusted_root_certificates: None,
             resolved_host: None,
+            destination: None,
         }
     }
 
@@ -169,10 +226,63 @@ impl OutboundClientBuilder {
         self
     }
 
+    /// Confine the client's name resolution to one selected destination.
+    ///
+    /// The client resolves only the selected host name. Any other name is
+    /// refused before it is looked up. Every answer for the selected name
+    /// must be one the selection admits, or the request is refused before
+    /// anything is dialled: loopback for loopback plain text, and never a
+    /// cloud metadata or always-denied address for https. An address literal
+    /// in the selected URL is checked when the client is built. Over https an
+    /// explicit loopback literal is admitted there, while a name answering
+    /// loopback is refused. The `localhost` pin, redirects and proxies stay
+    /// as [`Self::try_build`] sets them.
+    ///
+    /// The built [`DestinationClient`] sends only to the selection's own
+    /// origin, checked with [`select::SelectedDestination::admits_url`]
+    /// before anything is resolved or dialled. That covers a request whose
+    /// host is an address literal or the pinned `localhost`, which no
+    /// resolver sees, so a credential the caller adds reaches no other host.
+    ///
+    /// A private plain-text selection never builds a client, since a client
+    /// carries whatever credential its caller adds. A client built for an
+    /// https selection is https-only: a plain-http request fails before it is
+    /// resolved or dialled, whatever its host. Over https the client admits a
+    /// private answer without a range, so the selection's
+    /// `allowed_private_cidrs` have no effect here.
+    #[must_use]
+    pub fn destination(self, selected: &select::SelectedDestination) -> DestinationClientBuilder {
+        self.destination_resolved_by(selected, std::sync::Arc::new(select::SystemLookup))
+    }
+
+    /// [`Self::destination`] with the addresses `lookup` answers. Tests pass
+    /// a fixed lookup; every other caller goes through [`Self::destination`].
+    fn destination_resolved_by(
+        mut self,
+        selected: &select::SelectedDestination,
+        lookup: std::sync::Arc<dyn reqwest::dns::Resolve>,
+    ) -> DestinationClientBuilder {
+        self.destination = Some((selected.clone(), lookup));
+        DestinationClientBuilder {
+            builder: self,
+            selected: selected.clone(),
+        }
+    }
+
     /// Fallibly build one hardened client with rustls, redirects and retries disabled,
     /// proxy environment variables ignored, and optional exact CA pinning.
     pub fn try_build(self) -> Result<reqwest::Client, OutboundClientBuildError> {
-        let mut builder = reqwest::Client::builder()
+        self.try_build_from(reqwest::Client::builder())
+    }
+
+    /// Apply every setting of [`Self::try_build`] to `builder`. Tests pass a
+    /// builder that carries their own resolver; every other caller goes
+    /// through [`Self::try_build`].
+    fn try_build_from(
+        self,
+        builder: reqwest::ClientBuilder,
+    ) -> Result<reqwest::Client, OutboundClientBuildError> {
+        let mut builder = builder
             .timeout(self.timeout)
             .connect_timeout(self.connect_timeout)
             .redirect(reqwest::redirect::Policy::none())
@@ -199,8 +309,37 @@ impl OutboundClientBuilder {
             }
             builder = builder.tls_built_in_root_certs(false);
         }
+        // The name `localhost` is pinned to the loopback addresses, so no resolver
+        // is asked for it and a cleartext credential sent to it cannot leave the
+        // host. The port 0 takes the port of each request URL.
+        builder = builder.resolve_to_addrs(
+            LOCALHOST_NAME,
+            &[
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0),
+            ],
+        );
         if let Some((host, addrs)) = self.resolved_host {
             builder = builder.resolve_to_addrs(&host, &addrs);
+        }
+        if let Some((selected, lookup)) = self.destination {
+            // A built client carries whatever headers its caller adds, so no
+            // request can be policed here: a client is never built for a
+            // destination a credential may not reach.
+            if !selected.admits_credentials() {
+                return Err(OutboundClientBuildError::CredentialRequiresProtectedTransport);
+            }
+            select::admit_literal_host(&selected)
+                .map_err(|_| OutboundClientBuildError::DestinationAddressDenied)?;
+            // An https selection never sends in clear: a plain-http URL the
+            // caller hands the client fails before anything is resolved or
+            // dialled, whatever its host.
+            if selected.profile() == destination::DestinationProfile::ProductionHttps {
+                builder = builder.https_only(true);
+            }
+            builder = builder.dns_resolver(std::sync::Arc::new(select::SelectedResolver::new(
+                selected, lookup,
+            )));
         }
         builder
             .build()
@@ -211,11 +350,122 @@ impl OutboundClientBuilder {
     ///
     /// The spec exposes an infallible return type. With the limited options
     /// above, construction failures indicate a programming error.
+    ///
+    /// # Panics
+    ///
+    /// Panics where [`Self::try_build`] fails. A destination set with
+    /// [`Self::destination`] comes from configuration and can be refused, so
+    /// it is built with the fallible [`DestinationClientBuilder::try_build`].
     #[must_use]
     pub fn build(self) -> reqwest::Client {
         self.try_build()
             .expect("registry platform outbound client options are valid")
     }
+}
+
+/// A client builder confined to one selected destination, from
+/// [`OutboundClientBuilder::destination`]. It builds only a
+/// [`DestinationClient`], never a raw client.
+#[derive(Clone, Debug)]
+pub struct DestinationClientBuilder {
+    builder: OutboundClientBuilder,
+    selected: select::SelectedDestination,
+}
+
+impl DestinationClientBuilder {
+    /// Trust exactly this PEM certificate-authority bundle instead of
+    /// platform roots, as [`OutboundClientBuilder::trusted_root_certificates`].
+    #[must_use]
+    pub fn trusted_root_certificates(mut self, pem_bundle: impl Into<Vec<u8>>) -> Self {
+        self.builder = self.builder.trusted_root_certificates(pem_bundle);
+        self
+    }
+
+    /// Build the client under every rule [`OutboundClientBuilder::destination`]
+    /// names.
+    ///
+    /// # Errors
+    ///
+    /// [`OutboundClientBuildError`] when the options or the selection refuse
+    /// a client, such as a private plain-text selection.
+    pub fn try_build(self) -> Result<DestinationClient, OutboundClientBuildError> {
+        Ok(DestinationClient {
+            client: self.builder.try_build()?,
+            selected: self.selected,
+        })
+    }
+}
+
+/// A hardened client confined to one selected destination. It sends a
+/// request only when the request's URL has the selection's own scheme, host
+/// and port and any `Host` header names that same host and port, and hands
+/// out no raw client, so a credential its caller adds reaches no other
+/// origin, neither another socket nor another virtual host behind the
+/// selected one.
+#[derive(Clone)]
+pub struct DestinationClient {
+    client: reqwest::Client,
+    selected: select::SelectedDestination,
+}
+
+impl DestinationClient {
+    /// Send `request` when its URL has the selection's own origin and any
+    /// `Host` header it carries names the selection's own authority.
+    ///
+    /// # Errors
+    ///
+    /// [`DestinationClientError::OriginNotSelected`] for any other origin and
+    /// [`DestinationClientError::HostNotSelected`] for a `Host` header that
+    /// names another authority, or for more than one `Host` header, both
+    /// before anything is resolved or dialled, and
+    /// [`DestinationClientError::Request`] when the request fails.
+    pub async fn execute(
+        &self,
+        request: reqwest::Request,
+    ) -> Result<reqwest::Response, DestinationClientError> {
+        if !self.selected.admits_url(request.url()) {
+            return Err(DestinationClientError::OriginNotSelected);
+        }
+        let mut hosts = request.headers().get_all(reqwest::header::HOST).iter();
+        if let Some(host) = hosts.next() {
+            let admitted = hosts.next().is_none()
+                && host
+                    .to_str()
+                    .is_ok_and(|host| self.selected.admits_authority(host));
+            if !admitted {
+                return Err(DestinationClientError::HostNotSelected);
+            }
+        }
+        self.client
+            .execute(request)
+            .await
+            .map_err(DestinationClientError::Request)
+    }
+}
+
+impl std::fmt::Debug for DestinationClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DestinationClient")
+            .field("selected", &self.selected)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Why a [`DestinationClient`] did not send a request.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum DestinationClientError {
+    /// The request's URL is not the selection's own origin.
+    #[error("the request is not addressed to the selected destination's origin")]
+    OriginNotSelected,
+    /// The request's `Host` header names an authority other than the
+    /// selection's own.
+    #[error("the request's Host header is not the selected destination's authority")]
+    HostNotSelected,
+    /// The request was sent and failed.
+    #[error("the request to the selected destination failed")]
+    Request(#[source] reqwest::Error),
 }
 
 /// Fixed, value-free failure building a hardened outbound client.
@@ -232,6 +482,12 @@ pub enum OutboundClientBuildError {
     TooManyCertificates,
     #[error("the outbound client options are not usable")]
     InvalidOptions,
+    #[error("the destination address is not admitted by its selected transport")]
+    DestinationAddressDenied,
+    #[error(
+        "a client carries credentials, and the destination is selected for private plain text"
+    )]
+    CredentialRequiresProtectedTransport,
 }
 
 impl OutboundClientBuildError {
@@ -251,6 +507,12 @@ impl OutboundClientBuildError {
                 "the pinned certificate authority bundle carries too many certificates"
             }
             Self::InvalidOptions => "the outbound client options are not usable",
+            Self::DestinationAddressDenied => {
+                "the destination address is not admitted by its selected transport"
+            }
+            Self::CredentialRequiresProtectedTransport => {
+                "a client carries credentials, and the destination is selected for private plain text"
+            }
         }
     }
 }
@@ -383,11 +645,10 @@ impl FetchUrlPolicy {
         }
     }
 
-    /// Development preset: HTTP and HTTPS are allowed, but plain HTTP only
-    /// for loopback hosts. Non-loopback private ranges and cloud metadata
-    /// endpoints stay denied.
+    /// HTTPS, or plain HTTP to a loopback host. Valid in every posture.
+    /// Non-loopback private ranges and cloud metadata endpoints stay denied.
     #[must_use]
-    pub fn dev() -> Self {
+    pub fn https_or_loopback() -> Self {
         Self {
             allowed_schemes: vec!["http".to_string(), "https".to_string()],
             allow_localhost: true,
@@ -711,6 +972,12 @@ pub enum FetchUrlError {
     /// Development policy permits HTTP only for loopback targets.
     #[error("http URLs are allowed only for loopback hosts")]
     HttpRequiresLoopback,
+    /// An address the destination's selection does not admit.
+    #[error("the destination address is not admitted by its selected transport: {0}")]
+    DestinationAddressDenied(#[source] destination::DestinationSendError),
+    /// A validated fetch was sent and failed.
+    #[error("the fetch request failed")]
+    Request(#[source] reqwest::Error),
 }
 
 fn resolve_host(url: &reqwest::Url) -> Result<Vec<SocketAddr>, FetchUrlError> {
@@ -735,37 +1002,28 @@ fn resolve_host(url: &reqwest::Url) -> Result<Vec<SocketAddr>, FetchUrlError> {
 
 fn host_is_allowed_localhost(host: ::url::Host<&str>, resolved: &[IpAddr]) -> bool {
     match host {
-        ::url::Host::Ipv4(ip) => ip.is_loopback(),
-        ::url::Host::Ipv6(ip) => ip == Ipv6Addr::LOCALHOST,
-        ::url::Host::Domain(host) if host.eq_ignore_ascii_case("localhost") => {
-            resolved.iter().all(|ip| is_loopback_ip(*ip))
+        ::url::Host::Ipv4(ip) => loopback::loopback_address(IpAddr::V4(ip)),
+        ::url::Host::Ipv6(ip) => loopback::loopback_address(IpAddr::V6(ip)),
+        ::url::Host::Domain(name) => {
+            loopback::loopback_host(name).is_some_and(|claim| claim.pinned_by(resolved))
         }
-        ::url::Host::Domain(_) => false,
     }
 }
 
 /// Canonical set of cloud instance-metadata addresses denied by SSRF policy.
 ///
-/// This is the single source of truth for the metadata blocklist; other crates
-/// that enforce their own outbound-fetch guards (e.g. the Notary source-adapter
-/// sidecar) call this rather than keeping a private copy that can drift. IPv4
-/// covers the AWS/GCP/Azure endpoint and the Alibaba Cloud endpoint; IPv6
-/// covers the AWS link-local metadata address. IPv4-mapped IPv6 forms are
+/// The list itself lives in `registry-platform-loopback`, the single source of
+/// truth for the metadata blocklist; crates that enforce their own
+/// outbound-fetch guards call this or that, never a private copy that can
+/// drift. IPv4 covers the AWS/GCP/Azure endpoint and the Alibaba Cloud
+/// endpoint; IPv6 covers the AWS link-local metadata address. IPv4-mapped IPv6 forms are
 /// normalized before comparison.
 pub fn is_cloud_metadata_ip(ip: IpAddr) -> bool {
-    match normalize_ipv4_mapped(ip) {
-        IpAddr::V4(ip) => {
-            ip == Ipv4Addr::new(169, 254, 169, 254) || ip == Ipv4Addr::new(100, 100, 100, 200)
-        }
-        IpAddr::V6(ip) => ip == Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254),
-    }
+    loopback::cloud_metadata_address(ip)
 }
 
 fn is_loopback_ip(ip: IpAddr) -> bool {
-    match normalize_ipv4_mapped(ip) {
-        IpAddr::V4(ip) => ip.is_loopback(),
-        IpAddr::V6(ip) => ip.is_loopback(),
-    }
+    loopback::loopback_address(ip)
 }
 
 fn is_private_or_link_local_ip(ip: IpAddr) -> bool {
@@ -963,7 +1221,7 @@ mod tests {
     async fn a_pinned_get_trusts_a_private_ca_only_when_it_is_named() {
         let (addr, authority, _) = serve_under_private_ca().await;
         let url = reqwest::Url::parse(&format!("https://{addr}/keys")).expect("target URL");
-        let validated = FetchUrlPolicy::dev()
+        let validated = FetchUrlPolicy::https_or_loopback()
             .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("loopback HTTPS target");
 
@@ -1013,7 +1271,7 @@ mod tests {
         std::env::set_var("SSL_CERT_FILE", &bundle);
 
         let url = reqwest::Url::parse(&format!("https://{addr}/keys")).expect("target URL");
-        let response = FetchUrlPolicy::dev()
+        let response = FetchUrlPolicy::https_or_loopback()
             .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("loopback HTTPS target")
             .immediate_get_with_timeout(Duration::from_secs(5))
@@ -1045,6 +1303,741 @@ mod tests {
             .await
             .expect("request succeeds");
         assert_eq!(response.status(), StatusCode::FOUND);
+    }
+
+    /// Serve one route on `address` and return its URL with the host name
+    /// `localhost` and the bound port.
+    async fn serve_on(address: &str) -> String {
+        let listener = TcpListener::bind(address).await.expect("bind test server");
+        let port = listener.local_addr().expect("read listener addr").port();
+        let router = Router::new().route("/", get(|| async { "ok" }));
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+        format!("http://localhost:{port}/")
+    }
+
+    async fn reaches(client: &reqwest::Client, url: &str) -> bool {
+        match client.get(url).send().await {
+            Ok(response) => response.status() == StatusCode::OK,
+            Err(_) => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_override_with_port_zero_follows_the_url_port_and_only_the_listed_addresses() {
+        let v4_only = serve_on("127.0.0.1:0").await;
+        let v6_only = serve_on("[::1]:0").await;
+        let pinned_v4 = OutboundClientBuilder::new()
+            .resolve_to_addrs(
+                "localhost".to_string(),
+                vec!["127.0.0.1:0".parse().unwrap()],
+            )
+            .try_build()
+            .expect("client");
+        assert!(
+            reaches(&pinned_v4, &v4_only).await,
+            "port 0 takes the URL port"
+        );
+        assert!(
+            !reaches(&pinned_v4, &v6_only).await,
+            "an address outside the override is never tried"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_service_client_reaches_localhost_on_either_loopback_family() {
+        let v4_only = serve_on("127.0.0.1:0").await;
+        let v6_only = serve_on("[::1]:0").await;
+        let client = OutboundClientBuilder::new().try_build().expect("client");
+        assert!(reaches(&client, &v4_only).await, "IPv4-only listener");
+        assert!(reaches(&client, &v6_only).await, "IPv6-only listener");
+    }
+
+    /// Answers every name, `localhost` included, with an address off this
+    /// machine, as a hosts-file override or a hostile resolver could.
+    struct OffHostResolver {
+        asked_for_localhost: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl reqwest::dns::Resolve for OffHostResolver {
+        fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            if name.as_str().eq_ignore_ascii_case(LOCALHOST_NAME) {
+                self.asked_for_localhost
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            let off_host: reqwest::dns::Addrs =
+                Box::new(std::iter::once(SocketAddr::from(([192, 0, 2, 1], 0))));
+            Box::pin(std::future::ready(Ok(off_host)))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_localhost_pin_holds_against_a_resolver_that_answers_off_host() {
+        let url = serve_on("127.0.0.1:0").await;
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let resolver = OffHostResolver {
+            asked_for_localhost: std::sync::Arc::clone(&asked),
+        };
+        let client = OutboundClientBuilder::new()
+            .connect_timeout(Duration::from_millis(500))
+            .try_build_from(reqwest::Client::builder().dns_resolver(std::sync::Arc::new(resolver)))
+            .expect("client");
+        assert!(
+            reaches(&client, &url).await,
+            "localhost reaches the loopback listener"
+        );
+        assert!(
+            !asked.load(std::sync::atomic::Ordering::SeqCst),
+            "the resolver is never asked for localhost"
+        );
+    }
+
+    /// Answers every name with the listed addresses.
+    struct FixedAnswers(Vec<IpAddr>);
+
+    impl reqwest::dns::Resolve for FixedAnswers {
+        fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            let answers: reqwest::dns::Addrs =
+                Box::new(self.0.clone().into_iter().map(|ip| SocketAddr::new(ip, 0)));
+            Box::pin(std::future::ready(Ok(answers)))
+        }
+    }
+
+    fn selection(
+        raw: &str,
+        declared: Option<select::TransportClass>,
+        ranges: &[&str],
+    ) -> select::SelectedDestination {
+        let ranges: Vec<loopback::PrivateRange> = ranges
+            .iter()
+            .map(|raw| raw.parse().expect("test range parses"))
+            .collect();
+        select::select_destination(
+            &reqwest::Url::parse(raw).expect("test URL parses"),
+            declared,
+            &ranges,
+        )
+        .expect("the destination selects")
+    }
+
+    fn selected_client(
+        selected: &select::SelectedDestination,
+        answers: &[&str],
+    ) -> reqwest::Client {
+        let answers = answers
+            .iter()
+            .map(|raw| raw.parse().expect("test address parses"))
+            .collect();
+        OutboundClientBuilder::new()
+            .connect_timeout(Duration::from_millis(500))
+            .destination_resolved_by(selected, std::sync::Arc::new(FixedAnswers(answers)))
+            .try_build()
+            .expect("client")
+            .client
+    }
+
+    /// The platform refusal a request failed on, found in its error chain.
+    fn refusal_in(error: &reqwest::Error) -> Option<destination::DestinationSendError> {
+        let mut source = std::error::Error::source(error);
+        while let Some(cause) = source {
+            if let Some(refusal) = cause.downcast_ref::<destination::DestinationSendError>() {
+                return Some(*refusal);
+            }
+            source = cause.source();
+        }
+        None
+    }
+
+    /// A selected client resolves only its selected name, and dials only
+    /// answers the selection admits. Nothing refused is dialled.
+    #[tokio::test]
+    async fn a_selected_client_dials_only_answers_its_selection_admits() {
+        use destination::DestinationSendError::{
+            AlwaysDeniedAddress, CloudMetadataDenied, DestinationNameMismatch,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&hits);
+        let address = serve_with_addr(Router::new().route(
+            "/",
+            get(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async { "ok" }
+            }),
+        ))
+        .await;
+        let port = address.port();
+        let target = format!("https://receiver.test:{port}/");
+        let tls = selection(&target, None, &[]);
+
+        for (answers, expected) in [
+            (&["169.254.169.254"][..], CloudMetadataDenied),
+            (&["127.0.0.1"][..], AlwaysDeniedAddress),
+            (&["192.0.2.1", "127.0.0.1"][..], AlwaysDeniedAddress),
+        ] {
+            let error = selected_client(&tls, answers)
+                .get(&target)
+                .send()
+                .await
+                .expect_err("a refused answer refuses the request");
+            assert!(error.is_connect(), "{error:?}");
+            assert_eq!(refusal_in(&error), Some(expected), "{answers:?}");
+        }
+
+        // Another name is refused before it is looked up, whatever its
+        // answers. A loopback selection resolves no name at all, so a name
+        // answering loopback no longer reaches the loopback server.
+        let loopback = selection(&format!("http://localhost:{port}/"), None, &[]);
+        for (selected, elsewhere, answer) in [
+            (&tls, format!("https://other.test:{port}/"), "192.0.2.1"),
+            (
+                &loopback,
+                format!("http://receiver.test:{port}/"),
+                "127.0.0.1",
+            ),
+        ] {
+            let error = selected_client(selected, &[answer])
+                .get(&elsewhere)
+                .send()
+                .await
+                .expect_err("another name is refused");
+            assert_eq!(
+                refusal_in(&error),
+                Some(DestinationNameMismatch),
+                "{selected:?}"
+            );
+        }
+
+        // The selected name, as the client presents it, passes: an admitted
+        // answer is dialled. Nothing listens at the documentation address,
+        // so the request fails with no platform refusal.
+        let error = selected_client(&tls, &["192.0.2.1"])
+            .get(&target)
+            .send()
+            .await
+            .expect_err("nothing listens at the documentation address");
+        assert_eq!(refusal_in(&error), None, "{error:?}");
+
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "nothing refused was dialled"
+        );
+    }
+
+    /// Answers every name with one private address, recording that it was
+    /// asked.
+    struct RecordingAnswers(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl reqwest::dns::Resolve for RecordingAnswers {
+        fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            let answers: reqwest::dns::Addrs =
+                Box::new(std::iter::once(SocketAddr::from(([10, 9, 9, 9], 0))));
+            Box::pin(std::future::ready(Ok(answers)))
+        }
+    }
+
+    /// D2 (b) for the client family: a client built for an https selection
+    /// is https-only. A plain-http URL the caller hands it, to the selected
+    /// name or to an address literal, fails before anything is resolved or
+    /// dialled, so a credential the caller adds never travels in clear.
+    #[tokio::test]
+    async fn an_https_selected_client_refuses_plain_http_before_any_connect() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&hits);
+        let address = serve_with_addr(Router::new().route(
+            "/",
+            get(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async { "ok" }
+            }),
+        ))
+        .await;
+        let port = address.port();
+        let asked = std::sync::Arc::new(AtomicBool::new(false));
+        let client = OutboundClientBuilder::new()
+            .connect_timeout(Duration::from_millis(500))
+            .destination_resolved_by(
+                &selection(&format!("https://receiver.test:{port}/"), None, &[]),
+                std::sync::Arc::new(RecordingAnswers(std::sync::Arc::clone(&asked))),
+            )
+            .try_build()
+            .expect("client")
+            .client;
+        for url in [
+            format!("http://receiver.test:{port}/"),
+            format!("http://127.0.0.1:{port}/"),
+        ] {
+            let error = client
+                .get(&url)
+                .bearer_auth("bearer-canary")
+                .send()
+                .await
+                .expect_err("plain http is refused");
+            assert!(error.is_builder(), "{url}: {error:?}");
+            assert_eq!(refusal_in(&error), None, "{url}");
+        }
+        assert!(!asked.load(Ordering::SeqCst), "nothing is resolved");
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "nothing is dialled");
+    }
+
+    /// A selected client sends only to its selection's own origin. Handed a
+    /// private address literal, which no resolver sees, a loopback
+    /// plain-text client refuses the request before anything is dialled, so
+    /// the bearer its caller added never leaves the host. The same holds for
+    /// any other host, port or scheme, and the selected origin is reached.
+    #[tokio::test]
+    async fn a_selected_client_sends_only_to_its_selected_origin() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&hits);
+        let address = serve_with_addr(Router::new().route(
+            "/target",
+            get(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async { "ok" }
+            }),
+        ))
+        .await;
+        let port = address.port();
+        let client = OutboundClientBuilder::new()
+            .connect_timeout(Duration::from_millis(500))
+            .destination(&selection(&format!("http://127.0.0.1:{port}/"), None, &[]))
+            .try_build()
+            .expect("a loopback selection builds a client");
+        let request = |url: &str| {
+            let mut request =
+                reqwest::Request::new(reqwest::Method::GET, url.parse().expect("test URL parses"));
+            request.headers_mut().insert(
+                header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_static("Bearer bearer-canary"),
+            );
+            request
+        };
+        for url in [
+            format!("http://10.0.0.7:{port}/target"),
+            format!("http://100.64.0.7:{port}/target"),
+            format!("http://[fd00::7]:{port}/target"),
+            format!("http://127.0.0.2:{port}/target"),
+            format!("http://localhost:{port}/target"),
+            format!("http://127.0.0.1:{}/target", port ^ 1),
+            format!("https://127.0.0.1:{port}/target"),
+        ] {
+            let error = client
+                .execute(request(&url))
+                .await
+                .expect_err("another origin is refused");
+            assert!(
+                matches!(error, DestinationClientError::OriginNotSelected),
+                "{url}: {error:?}"
+            );
+            assert!(!format!("{error} {error:?}").contains("canary"), "{url}");
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "nothing refused was dialled"
+        );
+
+        let response = client
+            .execute(request(&format!("http://127.0.0.1:{port}/target")))
+            .await
+            .expect("the selected origin is reached");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    /// The selected client confines the HTTP authority as well as the
+    /// socket: a `Host` header naming another authority is refused before
+    /// anything is dialled, and a matching one is sent.
+    #[tokio::test]
+    async fn a_selected_client_sends_only_its_selected_host_header() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&hits);
+        let address = serve_with_addr(Router::new().route(
+            "/target",
+            get(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async { "ok" }
+            }),
+        ))
+        .await;
+        let port = address.port();
+        let client = OutboundClientBuilder::new()
+            .connect_timeout(Duration::from_millis(500))
+            .destination(&selection(&format!("http://127.0.0.1:{port}/"), None, &[]))
+            .try_build()
+            .expect("a loopback selection builds a client");
+        let request = |hosts: &[&str]| {
+            let url = format!("http://127.0.0.1:{port}/target");
+            let mut request =
+                reqwest::Request::new(reqwest::Method::GET, url.parse().expect("test URL parses"));
+            for host in hosts {
+                request.headers_mut().append(
+                    header::HOST,
+                    reqwest::header::HeaderValue::from_str(host).expect("test host header"),
+                );
+            }
+            request
+        };
+        let other_port = format!("127.0.0.1:{}", port ^ 1);
+        let matching = format!("127.0.0.1:{port}");
+        for hosts in [
+            &["other.example"][..],
+            &["127.0.0.1"][..],
+            &[other_port.as_str()][..],
+            &[matching.as_str(), "other.example"][..],
+        ] {
+            let error = client
+                .execute(request(hosts))
+                .await
+                .expect_err("another authority is refused");
+            assert!(
+                matches!(error, DestinationClientError::HostNotSelected),
+                "{hosts:?}: {error:?}"
+            );
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "nothing refused was dialled"
+        );
+
+        for hosts in [&[matching.as_str()][..], &[]] {
+            let response = client
+                .execute(request(hosts))
+                .await
+                .unwrap_or_else(|error| panic!("{hosts:?}: {error:?}"));
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+
+    /// A `Host` value is read with a bounded grammar, never normalized as a
+    /// URL: a DNS name is compared as written (root dot included) without
+    /// case, an IPv4 address must be dotted decimal, an IPv6 address is
+    /// bracketed and compared as an address, and a port is compared as a
+    /// number with an elided port meaning the scheme's default. Any other
+    /// spelling is refused, even one a URL parser would normalize to a match.
+    #[test]
+    fn a_host_header_matches_the_selected_authority_as_an_authority() {
+        let named = selection("https://receiver.example/", None, &[]);
+        for admitted in [
+            "receiver.example",
+            "receiver.example:443",
+            "RECEIVER.example",
+        ] {
+            assert!(named.admits_authority(admitted), "{admitted}");
+        }
+        for refused in [
+            "other.example",
+            "receiver.example:8443",
+            "receiver.example.",
+            "user@receiver.example",
+            "receiver.example/path",
+            "receiver.example?query",
+            "receiver.example ",
+            "receiver.example\tother",
+            "",
+        ] {
+            assert!(!named.admits_authority(refused), "{refused}");
+        }
+
+        // Spellings a URL parser would normalize to the selected host are
+        // refused as written: an empty port, a percent-encoded byte, a port
+        // with no number, and an IPv4 address not in dotted decimal.
+        for refused in [
+            "receiver.example:",
+            "receiver%2Eexample",
+            "%72eceiver.example",
+            "receiver.example:+443",
+            "receiver.example:0443x",
+            "receiver.example:65980",
+        ] {
+            assert!(!named.admits_authority(refused), "{refused}");
+        }
+        // A port is compared as a number, however many leading zeros.
+        for admitted in ["receiver.example:0443", "receiver.example:000443"] {
+            assert!(named.admits_authority(admitted), "{admitted}");
+        }
+        for refused in [
+            "receiver.example:0",
+            "receiver.example:000000",
+            "receiver.example:65536",
+            "receiver.example:0065536",
+        ] {
+            assert!(!named.admits_authority(refused), "{refused}");
+        }
+
+        // A DNS name keeps its root dot, and a last label that is not a
+        // number keeps a name a name, so each matches its own spelling.
+        let rooted = selection("https://objects.example./", None, &[]);
+        for admitted in [
+            "objects.example.",
+            "OBJECTS.example.",
+            "objects.example.:443",
+        ] {
+            assert!(rooted.admits_authority(admitted), "{admitted}");
+        }
+        for refused in ["objects.example", "objects.example..", "objects.example.:"] {
+            assert!(!rooted.admits_authority(refused), "{refused}");
+        }
+        let relay = selection("https://objects.0xrelay/", None, &[]);
+        assert!(relay.admits_authority("objects.0xrelay"));
+        assert!(relay.admits_authority("objects.0xrelay:443"));
+        assert!(!relay.admits_authority("objects.0xrelay."));
+        // Only one root dot is read: a second terminal dot leaves an empty
+        // final label, which no Host may carry, even when the selection is
+        // spelled the same way.
+        let doubled = selection("https://objects.example../", None, &[]);
+        for refused in ["objects.example..", "objects.example..:443"] {
+            assert!(!doubled.admits_authority(refused), "{refused}");
+        }
+        let numeric_doubled = selection("https://127.0.0.1../", None, &[]);
+        assert!(!numeric_doubled.admits_authority("127.0.0.1.."));
+
+        let explicit = selection("https://receiver.example:443/", None, &[]);
+        assert!(explicit.admits_authority("receiver.example"));
+        assert!(explicit.admits_authority("receiver.example:443"));
+
+        let ipv4 = selection("http://127.0.0.1:8080/", None, &[]);
+        assert!(ipv4.admits_authority("127.0.0.1:8080"));
+        for refused in [
+            "0x7f.0.0.1:8080",
+            "0x7f.1:8080",
+            "2130706433:8080",
+            "127.1:8080",
+            "0177.0.0.1:8080",
+            "127.0.0.01:8080",
+            "127.0.0.1.:8080",
+            "127.0.0.1:",
+            "127.0.0.1",
+            "127%2E0.0.1:8080",
+        ] {
+            assert!(!ipv4.admits_authority(refused), "{refused}");
+        }
+
+        let ipv6 = selection("https://[::1]:9443/", None, &[]);
+        for admitted in ["[::1]:9443", "[0:0:0:0:0:0:0:1]:9443"] {
+            assert!(ipv6.admits_authority(admitted), "{admitted}");
+        }
+        for refused in [
+            "[::1]",
+            "::1:9443",
+            "[::2]:9443",
+            "127.0.0.1:9443",
+            "[::1]:",
+            "[::1%25lo]:9443",
+            "[::1]x:9443",
+        ] {
+            assert!(!ipv6.admits_authority(refused), "{refused}");
+        }
+    }
+
+    /// The S3 signer's `Host` for a path-style endpoint written with a root
+    /// dot is that name, root dot included. The selected client sends it:
+    /// the request fails only at resolution, not at the `Host` check.
+    #[tokio::test]
+    async fn a_root_dot_name_passes_its_own_signed_host_header() {
+        let client = OutboundClientBuilder::new()
+            .connect_timeout(Duration::from_millis(200))
+            .destination_resolved_by(
+                &selection("https://objects.example./", None, &[]),
+                std::sync::Arc::new(FixedAnswers(Vec::new())),
+            )
+            .try_build()
+            .expect("a named https selection builds a client");
+        let url: reqwest::Url = "https://objects.example./bucket/key"
+            .parse()
+            .expect("test URL parses");
+        let mut request = reqwest::Request::new(reqwest::Method::GET, url.clone());
+        request.headers_mut().insert(
+            header::HOST,
+            reqwest::header::HeaderValue::from_str(url.host_str().expect("a host"))
+                .expect("test host header"),
+        );
+        let error = client
+            .execute(request)
+            .await
+            .expect_err("no address answers the name");
+        assert!(
+            matches!(error, DestinationClientError::Request(_)),
+            "{error:?}"
+        );
+    }
+
+    /// D2 (b) for the client family: a built client carries any header the
+    /// caller adds, so a private plain-text selection never builds one.
+    #[test]
+    fn a_private_plain_text_selection_never_builds_a_client() {
+        for raw in [
+            "http://breg:8080/",
+            "http://10.1.2.3:8080/",
+            "http://[::ffff:10.1.2.3]:8080/",
+            "http://[fd00:ec2::254]:8080/",
+        ] {
+            let selected = selection(
+                raw,
+                Some(select::TransportClass::PrivateNetworkPlaintext),
+                &["10.0.0.0/8", "fd00::/8"],
+            );
+            assert_eq!(
+                OutboundClientBuilder::new()
+                    .destination(&selected)
+                    .try_build()
+                    .unwrap_err(),
+                OutboundClientBuildError::CredentialRequiresProtectedTransport,
+                "{raw}"
+            );
+        }
+        let error = OutboundClientBuildError::CredentialRequiresProtectedTransport;
+        assert_eq!(error.reason(), error.to_string());
+        assert!(error.reason().contains("private plain text"), "{error}");
+    }
+
+    /// A literal is checked when the client is built, in every spelling.
+    /// Over https an explicit loopback literal is admitted (D1), while a
+    /// name answering loopback stays refused at resolve.
+    #[test]
+    fn a_selected_client_checks_its_address_literal_when_built() {
+        for raw in [
+            "https://169.254.169.254/",
+            "https://[::ffff:169.254.169.254]/",
+            "https://[64:ff9b::a9fe:a9fe]/",
+            "https://[64:ff9b::7f00:1]/",
+            "https://0.0.0.0/",
+        ] {
+            assert_eq!(
+                OutboundClientBuilder::new()
+                    .destination(&selection(raw, None, &[]))
+                    .try_build()
+                    .unwrap_err(),
+                OutboundClientBuildError::DestinationAddressDenied,
+                "{raw}"
+            );
+        }
+        for raw in [
+            "http://127.0.0.1:8080/",
+            "https://127.0.0.1:8443/",
+            "https://[::1]/",
+            "https://registry.example.test/",
+        ] {
+            OutboundClientBuilder::new()
+                .destination(&selection(raw, None, &[]))
+                .try_build()
+                .unwrap_or_else(|error| panic!("{raw}: {error}"));
+        }
+        let builder = OutboundClientBuilder::new().destination(&selection(
+            "https://destination-canary.example.test/",
+            None,
+            &[],
+        ));
+        let rendered = format!("{builder:?}");
+        assert!(!rendered.contains("destination-canary"), "{rendered}");
+        assert!(rendered.contains("ProductionHttps"), "{rendered}");
+    }
+
+    /// D3 end to end: a credential-free fetch validated from a selection
+    /// sends one GET through its pinned addresses, with the caller's
+    /// `Accept` as its only caller header. It hands out no request builder,
+    /// so no credential can be added to it.
+    #[tokio::test]
+    async fn a_selected_fetch_sends_through_its_pinned_request() {
+        let base = serve(Router::new().route(
+            "/target",
+            get(|headers: axum::http::HeaderMap| async move {
+                headers
+                    .get(header::ACCEPT)
+                    .and_then(|accept| accept.to_str().ok())
+                    .unwrap_or("no accept")
+                    .to_owned()
+            }),
+        ))
+        .await;
+        let selected = selection(&format!("{base}/target"), None, &[]);
+        let fetch = select::validate_selected_fetch(&selected).expect("a loopback literal");
+        assert_eq!(fetch.url(), selected.url());
+        let response = fetch
+            .get(
+                &reqwest::header::HeaderValue::from_static("application/x-test"),
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("the pinned GET is sent");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.expect("body"), "application/x-test");
+    }
+
+    /// T21 for the client family: a selected client follows no redirect.
+    #[tokio::test]
+    async fn a_selected_client_does_not_follow_redirects() {
+        let base = serve(
+            Router::new()
+                .route(
+                    "/redirect",
+                    get(|| async { (StatusCode::FOUND, [(header::LOCATION, "/target")]) }),
+                )
+                .route("/target", get(|| async { "followed" })),
+        )
+        .await;
+        let client = OutboundClientBuilder::new()
+            .destination(&selection(&base, None, &[]))
+            .try_build()
+            .expect("client")
+            .client;
+        let response = client
+            .get(format!("{base}/redirect"))
+            .send()
+            .await
+            .expect("request succeeds");
+        assert_eq!(response.status(), StatusCode::FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_localhost_pin_holds_for_a_selected_client() {
+        let url = serve_on("127.0.0.1:0").await;
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let resolver = OffHostResolver {
+            asked_for_localhost: std::sync::Arc::clone(&asked),
+        };
+        let client = OutboundClientBuilder::new()
+            .connect_timeout(Duration::from_millis(500))
+            .destination_resolved_by(&selection(&url, None, &[]), std::sync::Arc::new(resolver))
+            .try_build()
+            .expect("client")
+            .client;
+        assert!(reaches(&client, &url).await, "localhost reaches loopback");
+        assert!(
+            !asked.load(std::sync::atomic::Ordering::SeqCst),
+            "the selected resolver is never asked for localhost"
+        );
+    }
+
+    #[test]
+    fn the_localhost_name_is_allowed_only_when_every_answer_is_loopback() {
+        let name = ::url::Host::Domain("localhost");
+        let other: IpAddr = "10.0.0.1".parse().unwrap();
+        let v4: IpAddr = "127.0.0.1".parse().unwrap();
+        assert!(host_is_allowed_localhost(name.clone(), &[v4]));
+        assert!(!host_is_allowed_localhost(name.clone(), &[v4, other]));
+        assert!(!host_is_allowed_localhost(name, &[]));
+        assert!(!host_is_allowed_localhost(
+            ::url::Host::Domain("a.localhost"),
+            &[v4]
+        ));
+    }
+
+    #[test]
+    fn an_ipv4_mapped_loopback_literal_is_loopback_for_a_dev_fetch_only() {
+        let url = reqwest::Url::parse("http://[::ffff:127.0.0.1]:8080/jwks").expect("url parses");
+        FetchUrlPolicy::https_or_loopback()
+            .validate(&url)
+            .expect("a mapped loopback literal is loopback");
+        assert!(FetchUrlPolicy::strict().validate(&url).is_err());
     }
 
     #[test]
@@ -1085,8 +2078,48 @@ mod tests {
             .expect("the hardened service client connects directly");
         assert_eq!(response.status(), StatusCode::OK);
 
+        let selected =
+            select::select_destination(&reqwest::Url::parse(&base).expect("base URL"), None, &[])
+                .expect("a loopback destination selects");
+        let response = OutboundClientBuilder::new()
+            .destination(&selected)
+            .try_build()
+            .expect("a selected client builds")
+            .client
+            .get(format!("{base}/target"))
+            .send()
+            .await
+            .expect("a selected client connects directly");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // T26 with the selected resolver in the path: a client that honoured
+        // the proxy variables would dial the proxy and never ask its
+        // resolver. This one asks, and the resolver refuses the metadata
+        // answer.
+        let named = select::select_destination(
+            &reqwest::Url::parse("https://receiver.test/").expect("named URL"),
+            None,
+            &[],
+        )
+        .expect("a named destination selects");
+        let metadata = "169.254.169.254".parse().expect("metadata address");
+        let error = OutboundClientBuilder::new()
+            .destination_resolved_by(&named, std::sync::Arc::new(FixedAnswers(vec![metadata])))
+            .try_build()
+            .expect("a selected client builds")
+            .client
+            .get("https://receiver.test/target")
+            .send()
+            .await
+            .expect_err("the metadata answer is refused");
+        assert_eq!(
+            refusal_in(&error),
+            Some(destination::DestinationSendError::CloudMetadataDenied),
+            "{error:?}"
+        );
+
         let url = reqwest::Url::parse(&format!("{base}/target")).expect("target URL");
-        let response = FetchUrlPolicy::dev()
+        let response = FetchUrlPolicy::https_or_loopback()
             .validate_dns_pinned_for_immediate_fetch(&url)
             .expect("development loopback target")
             .immediate_get()
@@ -1496,7 +2529,7 @@ mod tests {
             "https://[fd00:ec2::254]/latest/meta-data/",
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
-            let err = FetchUrlPolicy::dev()
+            let err = FetchUrlPolicy::https_or_loopback()
                 .validate(&url)
                 .expect_err("metadata target rejected");
             assert!(
@@ -1513,22 +2546,28 @@ mod tests {
             "http://127.42.0.1/jwks",
             "http://[::1]/jwks",
             "http://localhost/jwks",
+            "http://[::ffff:127.0.0.1]/jwks",
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
-            FetchUrlPolicy::dev()
+            FetchUrlPolicy::https_or_loopback()
                 .validate(&url)
-                .unwrap_or_else(|err| panic!("dev policy should accept {raw}: {err}"));
+                .unwrap_or_else(|err| {
+                    panic!("https-or-loopback policy should accept {raw}: {err}")
+                });
         }
 
         for raw in [
             "http://93.184.216.34/jwks",
             "http://10.0.0.1/jwks",
-            "http://[::ffff:127.0.0.1]/jwks",
+            "http://[::ffff:10.0.0.1]/jwks",
+            "http://[::ffff:93.184.216.34]/jwks",
+            "http://[::ffff:169.254.169.254]/jwks",
+            "http://[::ffff:0.0.0.0]/jwks",
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
             assert!(
-                FetchUrlPolicy::dev().validate(&url).is_err(),
-                "dev policy must reject {raw}"
+                FetchUrlPolicy::https_or_loopback().validate(&url).is_err(),
+                "https-or-loopback policy must reject {raw}"
             );
         }
     }
@@ -1542,8 +2581,8 @@ mod tests {
         ] {
             let url = reqwest::Url::parse(raw).expect("url parses");
             assert!(
-                FetchUrlPolicy::dev().validate(&url).is_err(),
-                "dev policy must reject {raw}"
+                FetchUrlPolicy::https_or_loopback().validate(&url).is_err(),
+                "https-or-loopback policy must reject {raw}"
             );
         }
     }
@@ -1585,8 +2624,8 @@ mod tests {
             too_many.append("x-test", HeaderValue::from_str(&index.to_string()).unwrap());
         }
         assert_eq!(
-            validate_response_headers(&too_many),
-            Err(ResponseHeaderBoundError::TooManyFields)
+            validate_response_headers(&too_many, PeerPolicy::AcceptDevelopmentPeer),
+            Err(ResponseHeaderError::TooManyFields)
         );
 
         let mut too_large = HeaderMap::new();
@@ -1594,9 +2633,105 @@ mod tests {
             "x-canary",
             HeaderValue::from_bytes(&vec![b'a'; MAXIMUM_RESPONSE_HEADER_BYTES]).unwrap(),
         );
-        let error = validate_response_headers(&too_large).unwrap_err();
-        assert_eq!(error, ResponseHeaderBoundError::HeadersTooLarge);
+        let error =
+            validate_response_headers(&too_large, PeerPolicy::AcceptDevelopmentPeer).unwrap_err();
+        assert_eq!(error, ResponseHeaderError::HeadersTooLarge);
         assert!(!error.to_string().contains("canary"));
+    }
+
+    #[test]
+    fn peer_policy_table_covers_four_field_states_under_both_policies() {
+        let header_with = |value: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(
+                    registry_platform_posture::POSTURE_HEADER,
+                    HeaderValue::from_str(value).unwrap(),
+                );
+            }
+            headers
+        };
+        let cases: [(Option<&str>, bool); 5] = [
+            (None, false),
+            (Some("production"), false),
+            (Some("development"), true),
+            (Some("Development"), false),
+            (Some("staging"), false),
+        ];
+        for (value, is_development) in cases {
+            let headers = header_with(value);
+            assert_eq!(
+                validate_response_headers(&headers, PeerPolicy::RefuseDevelopmentPeer),
+                if is_development {
+                    Err(ResponseHeaderError::DevelopmentPeer)
+                } else {
+                    Ok(())
+                },
+                "refuse, {value:?}"
+            );
+            assert_eq!(
+                validate_response_headers(&headers, PeerPolicy::AcceptDevelopmentPeer),
+                Ok(()),
+                "accept, {value:?}"
+            );
+            assert_eq!(
+                validate_response_headers_without_peer_policy(&headers),
+                validate_response_headers(&headers, PeerPolicy::RefuseDevelopmentPeer),
+                "transitional entry point behaves as production, {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn folded_development_posture_follows_peer_policy() {
+        for (posture, is_development) in [
+            (Some("development, development"), true),
+            (Some("production, development"), true),
+            (Some("production,\t development "), true),
+            (Some("production"), false),
+            (None, false),
+        ] {
+            let mut headers = HeaderMap::new();
+            if let Some(posture) = posture {
+                headers.insert(
+                    registry_platform_posture::POSTURE_HEADER,
+                    posture.parse().unwrap(),
+                );
+            }
+            assert_eq!(
+                validate_response_headers(&headers, PeerPolicy::RefuseDevelopmentPeer),
+                if is_development {
+                    Err(ResponseHeaderError::DevelopmentPeer)
+                } else {
+                    Ok(())
+                },
+            );
+            assert_eq!(
+                validate_response_headers(&headers, PeerPolicy::AcceptDevelopmentPeer),
+                Ok(()),
+            );
+        }
+    }
+
+    #[test]
+    fn bounds_are_checked_before_the_peer_posture_under_either_policy() {
+        let mut too_many = HeaderMap::new();
+        for index in 0..=MAXIMUM_RESPONSE_HEADER_FIELDS {
+            too_many.append("x-test", HeaderValue::from_str(&index.to_string()).unwrap());
+        }
+        too_many.insert(
+            registry_platform_posture::POSTURE_HEADER,
+            HeaderValue::from_static("development"),
+        );
+        for policy in [
+            PeerPolicy::RefuseDevelopmentPeer,
+            PeerPolicy::AcceptDevelopmentPeer,
+        ] {
+            assert_eq!(
+                validate_response_headers(&too_many, policy),
+                Err(ResponseHeaderError::TooManyFields)
+            );
+        }
     }
 
     proptest! {

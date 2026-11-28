@@ -37,8 +37,8 @@ impl Project {
         let secrets = write_secrets(&root, &key);
         let text = document(&Document {
             listen: "127.0.0.1:8110",
-            resource: "http://127.0.0.1:8110/mcp",
-            issuer: "http://127.0.0.1:8111",
+            resource: "https://127.0.0.1:8110/mcp",
+            issuer: "https://127.0.0.1:8111",
             jwks: "http://127.0.0.1:8111/jwks.json",
             registry: "http://127.0.0.1:8112/",
             token_endpoint: "http://127.0.0.1:8111/token",
@@ -286,8 +286,8 @@ fn an_inline_credential_is_refused_without_echoing_it() {
     assert!(!served.stderr.contains(CANARY), "{}", served.stderr);
 }
 
-/// The single startup failure `serve` logs, as one JSON line on standard
-/// output.
+/// The startup posture, explicit production setting, and refusal logged by
+/// `serve`.
 fn startup_failure(outcome: &Outcome) -> String {
     assert_eq!(outcome.code, Some(1), "{}", outcome.output());
     assert!(outcome.stderr.is_empty(), "{}", outcome.stderr);
@@ -296,9 +296,26 @@ fn startup_failure(outcome: &Outcome) -> String {
         .lines()
         .map(|line| serde_json::from_str(line).expect("each log line is JSON"))
         .collect();
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    assert_eq!(lines[0]["level"], "ERROR");
-    lines[0]["fields"]["message"]
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(lines[0]["level"], "INFO");
+    assert_eq!(lines[0]["fields"]["message"], "posture declared");
+    assert_eq!(lines[0]["fields"]["posture"], "production");
+    assert_eq!(lines[0]["fields"]["explicit_production_settings"], 1);
+    assert_eq!(lines[1]["level"], "INFO");
+    assert_eq!(
+        lines[1]["fields"]["message"],
+        "explicit production setting in use"
+    );
+    assert_eq!(
+        lines[1]["fields"]["setting_code"],
+        "platform.posture.issuer-loopback-plaintext"
+    );
+    assert_eq!(
+        lines[1]["fields"]["pointer"],
+        "/resourceServer/jwksSource/uri"
+    );
+    assert_eq!(lines[2]["level"], "ERROR");
+    lines[2]["fields"]["message"]
         .as_str()
         .expect("message")
         .to_owned()
@@ -315,7 +332,11 @@ fn serve_refuses_a_secret_file_others_can_read() {
     let outcome = project.serve_failing("warn");
     let message = startup_failure(&outcome);
     assert!(message.contains("could not be resolved"), "{message}");
-    assert!(!message.contains("secret:file/gateway-key"), "{message}");
+    assert!(
+        !outcome.output().contains("secret:file/gateway-key"),
+        "{}",
+        outcome.output()
+    );
     assert!(!outcome.output().contains(&project.key_secret));
     assert!(!project.directory.path().join("audit").exists());
 }
@@ -325,9 +346,14 @@ fn serve_names_the_member_but_not_the_reference_of_a_missing_secret() {
     let project = Project::new();
     std::fs::remove_file(project.directory.path().join("secrets").join("audit-key"))
         .expect("secret removes");
-    let message = startup_failure(&project.serve_failing("error"));
+    let outcome = project.serve_failing("error");
+    let message = startup_failure(&outcome);
     assert!(message.contains("could not be resolved"), "{message}");
-    assert!(!message.contains("secret:file/audit-key"), "{message}");
+    assert!(
+        !outcome.output().contains("secret:file/audit-key"),
+        "{}",
+        outcome.output()
+    );
 }
 
 /// `BREG_MCP_LOG` is a closed level, not a filter: `error`, `warn`, or
@@ -401,10 +427,11 @@ fn serve_answers_health_and_stops_on_terminate() {
     let project = Project::new();
     project.rewrite("bind: 127.0.0.1:8110", &format!("bind: 127.0.0.1:{port}"));
     project.rewrite(
-        "resource: http://127.0.0.1:8110/mcp",
+        "resource: https://127.0.0.1:8110/mcp",
         &format!("resource: http://127.0.0.1:{port}/mcp"),
     );
     let child = Command::new(env!("CARGO_BIN_EXE_breg-mcp"))
+        .args(["--posture", "development"])
         .args(["--runtime-config", path_text(&project.config), "serve"])
         .env_remove("BREG_MCP_LOG")
         .stdout(std::process::Stdio::piped())

@@ -120,28 +120,30 @@ if (metadata.statisticalDatasets !== null) {
 }
 
 const verifiedHook: VerifiedHookDelivery = verifyHookDelivery({
-  method: 'POST',
-  path: '/hooks/registry',
-  headers: { 'X-Registry-Signature': 'v1=opaque' },
+  headers: { 'webhook-signature': 'v1,opaque' },
   body: Buffer.from('{}'),
   key: Buffer.alloc(32),
+  previousKey: Buffer.alloc(32, 1),
 })
 verifiedHook.id.toUpperCase()
 verifiedHook.source.toUpperCase()
 verifiedHook.type.toUpperCase()
 verifiedHook.time.toUpperCase()
 verifiedHook.dataschema.toUpperCase()
-verifiedHook.generation.toUpperCase()
-verifiedHook.attempt.toUpperCase()
-verifiedHook.deliveryTime.toUpperCase()
-verifiedHook.idempotencyKey.toUpperCase()
+verifiedHook.timestamp.toUpperCase()
 verifiedHook.body.byteLength.toFixed()
 const webhookRefusal: HookVerificationRefusalCode = 'signature-mismatch'
 webhookRefusal.toUpperCase()
+const staleRefusal: HookVerificationRefusalCode = 'stale-delivery'
+staleRefusal.toUpperCase()
+verifyHookDelivery({ headers: {}, body: Buffer.from('{}'), key: Buffer.alloc(32), maxSkewSeconds: 60 })
+verifyHookDelivery({ headers: {}, body: Buffer.from('{}'), key: Buffer.alloc(32), callerEnforcedFreshness: true })
+// @ts-expect-error The window is a number of seconds.
+verifyHookDelivery({ headers: {}, body: Buffer.from('{}'), key: Buffer.alloc(32), maxSkewSeconds: '60' })
 // @ts-expect-error Hook bodies must remain exact bytes.
-verifyHookDelivery({ method: 'POST', path: '/', headers: {}, body: '{}', key: Buffer.alloc(32) })
+verifyHookDelivery({ headers: {}, body: '{}', key: Buffer.alloc(32) })
 // @ts-expect-error Header values must be exact strings.
-verifyHookDelivery({ method: 'POST', path: '/', headers: { 'ce-id': 1 }, body: Buffer.from('{}'), key: Buffer.alloc(32) })
+verifyHookDelivery({ headers: { 'webhook-id': 1 }, body: Buffer.from('{}'), key: Buffer.alloc(32) })
 
 const options: ListOptions = { top: 25, filter: 'status eq active', count: true, bbox: ['100.1', '13.1', '100.2', '13.2'] }
 client.listRecords('people', options)

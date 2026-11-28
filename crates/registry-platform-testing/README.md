@@ -138,6 +138,27 @@ response with:
 - `jwks_from_private_jwk(private)`: return `{"keys": [public]}` as a
   `serde_json::Value`; useful for mocking a JWKS endpoint.
 
+## Token Fixtures
+
+The `token-fixtures` feature (off by default) loads the corpus in
+`products/platform/conformance/tokens` and drives a product's authentication
+with it. The path comes from this crate's manifest directory.
+
+- `TokenCorpus::load()` reads and validates every fixture and `expected.yaml`.
+- `TokenSigner::new()` makes a fresh key per algorithm (RS256, ES256, EdDSA, HS256,
+  HS512) in memory only. `sign` signs a fixture's header and claims with its
+  declared algorithm, times as offsets from now. `public_key_set()` holds the
+  asymmetric public keys. `SignedToken` never prints its text in `Debug`.
+- `TokenCorpus::run_product` (and `run_product_async`) takes the product's
+  authenticator as a closure from `&FixtureCase` to `Outcome`, runs every
+  applicable row, and returns a `ProductReport` compared with the product's
+  column of `expected.yaml`. A row asserts `target` where `landed` is true and
+  `main` otherwise.
+
+```bash
+cargo test -p registry-platform-testing --features token-fixtures
+```
+
 ## Fixture Notes
 
 - Fixtures are deterministic and intended for tests only.

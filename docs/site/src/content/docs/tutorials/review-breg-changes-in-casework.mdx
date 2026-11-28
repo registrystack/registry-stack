@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-22"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - operator
@@ -120,6 +120,11 @@ caseworkctl provider add ./action-review \
   --pattern two-peer-approval --breg-package <deployment-package>
 ```
 
+The command generates a runtime example listing a placeholder OAuth client (`casework-client`). Replace it with the OAuth client IDs your deployment admits.
+
+{/* Evidence: crates/registry-caseworkctl/src/provider_add.rs, write_yaml;
+    crates/registry-caseworkctl/src/project.rs, init. */}
+
 When BReg needs changes, the command exits 1 with
 `casework.provider-add.breg-changes-needed`, prints the missing YAML, and creates no project.
 Review the proposed grants and any bypass warnings, apply the intended changes to BReg, rebuild
@@ -174,9 +179,10 @@ Three values in the registry's binding must agree with that entry:
 exact Proposal version and its `effectDigest`, and the registry accepts only a
 [ReviewResult](../../reference/glossary/#review-result) that matches them.
 
-By default the registry polls Casework for results. To be called instead, add
-`completionTokenRef` and `completionRecipient` to the binding together, and give the producer a
-completion destination, the registry URL Casework calls, that presents the same token.
+By default the registry polls Casework for results. For push delivery, configure the registry
+as a [completion receiver](../../configure/casework-completion-receivers/).
+Set the Casework destination's `hmacSha256KeyRef` to resolve to the same signing key bytes
+that the registry uses to verify that recipient's wakes.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs, RawReviewAuthorityConfig;
     crates/registry-breg/src/review_store.rs, MAXIMUM_REVIEW_RECOVERY_DAYS and enqueue_submission;

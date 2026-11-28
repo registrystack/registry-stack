@@ -22,8 +22,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_messaging::activation::ApplyRequest;
 use registry_messaging::audit::MessagingAudit;
-use registry_messaging::auth::MessagingAuthenticator;
-use registry_messaging::config::RuntimeConfig;
+use registry_messaging::auth::{IssuerSource, MessagingAuthenticator};
+use registry_messaging::config::{AdmittedClients, RuntimeConfig};
 use registry_messaging::dispatch::{dispatcher, Transports};
 use registry_messaging::http::{metrics_router, router, HttpState, Readiness};
 use registry_messaging::limits::{
@@ -37,7 +37,7 @@ use registry_messaging::runtime::apply_activation;
 use registry_messaging::store::PostgresStore;
 use registry_messaging_core::{AccessProfile, AccessProfiles, Package, IDEMPOTENCY_KEY_HEADER};
 use registry_platform_audit::{AuditProfile, AuditWriter};
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use registry_platform_oidc::{DeclaredKinds, JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use uuid::Uuid;
@@ -285,22 +285,32 @@ impl Harness {
         write_package_inputs(&package_root, &inputs, None).expect("the installed starter package");
         let runtime_path =
             write_runtime(root.path(), &package_root, &isolated.reference, providers);
-        let config = RuntimeConfig::load(&runtime_path).expect("the runtime configuration");
+        let config =
+            RuntimeConfig::load(&runtime_path, registry_messaging::config::DEFAULT_POSTURE)
+                .expect("the runtime configuration");
         apply_activation(&config, &ApplyRequest::default())
             .await
             .expect("apply the starter");
 
         let package = Arc::new(load_package(&package_root).expect("the starter").package);
         let secrets = config.secret_resolver().expect("the secret resolver");
-        let store = PostgresStore::connect_runtime(&config.database, &secrets).expect("the store");
+        let store = PostgresStore::connect_runtime(
+            &config.database,
+            &secrets,
+            config.development_witness(),
+        )
+        .expect("the store");
         let profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             AUDIT_SECRET.as_bytes().to_vec(),
         ))
         .expect("the audit profile");
         let audit = Arc::new(MessagingAudit::new(
-            AuditWriter::open(config.audit.destination().expect("audit destination"))
-                .await
-                .expect("the audit writer"),
+            AuditWriter::open(
+                config.audit.destination().expect("audit destination"),
+                registry_platform_config::Posture::Production,
+            )
+            .await
+            .expect("the audit writer"),
             profile.key_hasher(),
         ));
         let loaded = config.load_package().expect("the package");
@@ -329,13 +339,17 @@ impl Harness {
             loaded.receipt_providers(),
         ));
         let metrics = Arc::new(Metrics::default());
-        let authenticator = Arc::new(MessagingAuthenticator::new(
-            verifier(),
-            keys(),
+        let admitted = config
+            .admitted_clients(package.access_profiles())
+            .expect("the clients the runtime file admits");
+        let authenticator = Arc::new(authenticator(
+            &admitted["main"],
             package.access_profiles().clone(),
-            false,
         ));
         let app = router(HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_messaging::config::DEFAULT_POSTURE,
+            ),
             authenticator,
             readiness: Readiness::Store {
                 store: store.clone(),
@@ -368,6 +382,15 @@ impl Harness {
 
     pub fn runtime_path(&self) -> PathBuf {
         self.root.path().join("runtime.yaml")
+    }
+
+    /// The clients the runtime file admits, derived from the package.
+    fn admitted(&self) -> AdmittedClients {
+        self.config
+            .admitted_clients(self.package.access_profiles())
+            .expect("the clients the runtime file admits")
+            .remove("main")
+            .expect("the main issuer entry")
     }
 
     pub async fn publish(&self) {}
@@ -496,12 +519,10 @@ impl Harness {
             loaded.receipt_providers(),
         ));
         router(HttpState {
-            authenticator: Arc::new(MessagingAuthenticator::new(
-                verifier(),
-                keys(),
-                profiles,
-                false,
-            )),
+            posture: registry_platform_config::PostureReport::new(
+                registry_messaging::config::DEFAULT_POSTURE,
+            ),
+            authenticator: Arc::new(authenticator(&self.admitted(), profiles)),
             readiness: Readiness::Store {
                 store: self.store.clone(),
                 database_id: self.config.database_id().to_owned(),
@@ -538,11 +559,12 @@ impl Harness {
             loaded.receipt_providers(),
         ));
         router(HttpState {
-            authenticator: Arc::new(MessagingAuthenticator::new(
-                verifier(),
-                keys(),
+            posture: registry_platform_config::PostureReport::new(
+                registry_messaging::config::DEFAULT_POSTURE,
+            ),
+            authenticator: Arc::new(authenticator(
+                &self.admitted(),
                 self.package.access_profiles().clone(),
-                false,
             )),
             readiness: Readiness::Store {
                 store: self.store.clone(),
@@ -589,10 +611,14 @@ impl Harness {
             .uri("/metrics")
             .body(Body::empty())
             .unwrap();
-        let response = metrics_router(Arc::clone(&self.metrics), Some(self.store.clone()))
-            .oneshot(request)
-            .await
-            .unwrap();
+        let response = metrics_router(
+            Arc::clone(&self.metrics),
+            Some(self.store.clone()),
+            registry_platform_config::Posture::Production,
+        )
+        .oneshot(request)
+        .await
+        .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 256 * 1024).await.unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
@@ -689,12 +715,12 @@ fn write_runtime(root: &Path, package: &Path, database: &str, providers: Value) 
             "migrationUrlRef": database,
             "testOnlyPlaintext": true
         },
-        "authentication": {"oidc": {
+        "authentication": {"oidc": {"issuers": {"main": {
             "issuer": ISSUER,
             "audience": AUDIENCE,
             "jwksSource": {"type": "static", "documentRef": format!("secret:env/{jwks_name}")},
-            "allowedClients": ["case-system", "operations-console"]
-        }},
+            "allowedClients": "from-package"
+        }}}},
         "audit": {
             "path": root.join("audit").join("messaging.jsonl"),
             "hashKeyRef": format!("secret:env/{audit_name}")
@@ -711,7 +737,7 @@ fn write_runtime(root: &Path, package: &Path, database: &str, providers: Value) 
 
 /// The runtime's verifier profile, with the symmetric test algorithm in
 /// place of the production asymmetric pair.
-fn verifier() -> TokenVerifierConfig {
+fn verifier(admitted: &AdmittedClients) -> TokenVerifierConfig {
     TokenVerifierConfig::access_token_profile(
         ISSUER,
         vec![AUDIENCE.to_owned()],
@@ -719,10 +745,21 @@ fn verifier() -> TokenVerifierConfig {
         registry_platform_oidc::access_token_typ_set("at+jwt"),
     )
     .with_scope_claim("registry_scopes")
-    .with_allowed_clients(vec![
-        "case-system".to_owned(),
-        "operations-console".to_owned(),
-    ])
+    .with_allowed_clients(admitted.as_slice().to_vec())
+}
+
+/// The authenticator over the runtime's one issuer entry.
+fn authenticator(admitted: &AdmittedClients, profiles: AccessProfiles) -> MessagingAuthenticator {
+    MessagingAuthenticator::new(
+        vec![IssuerSource::new(
+            "main",
+            verifier(admitted),
+            keys(),
+            DeclaredKinds::None,
+        )],
+        profiles,
+    )
+    .expect("one issuer entry")
 }
 
 fn keys() -> Arc<JwksFetcher> {

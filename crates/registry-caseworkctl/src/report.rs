@@ -116,9 +116,21 @@ fn refused_argument(error: &clap::Error) -> Option<String> {
 
 /// Write one report, envelope members first, and its trailing newline.
 pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    write_with_posture(report, stdout, None)
+}
+
+pub(crate) fn write_with_posture(
+    report: &Value,
+    stdout: &mut dyn io::Write,
+    declared: Option<registry_platform_config::DeclaredPosture>,
+) -> io::Result<()> {
     let report =
         registry_cli_report::Report::new(report, registry_platform_buildinfo::DISPLAY_VERSION)
             .map_err(io::Error::other)?;
+    let report = match declared {
+        Some(declared) => report.with_posture(declared),
+        None => report,
+    };
     serde_json::to_writer_pretty(&mut *stdout, &report).map_err(io::Error::other)?;
     writeln!(stdout)
 }
@@ -252,7 +264,22 @@ payload!(InitData {
 });
 payload!(CheckData {project:PathBuf,policy_bindings:Vec<ReviewPolicyIdentity>,files_checked:usize,network_access:bool,database_access:bool,
     #[serde(default,skip_serializing_if="Option::is_none")]runtime_config:Option<PathBuf>,
+    #[serde(default,skip_serializing_if="Option::is_none")]explicit_production_settings:Option<Vec<ExplicitSettingData>>,
     #[serde(default,skip_serializing_if="Option::is_none")]breg_package:Option<ProducerAgreementData>});
+// One explicit production setting the runtime file states: a fact for a
+// reviewer, not a diagnostic. The summary is value-free.
+payload!(ExplicitSettingData {
+    code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pointer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+    summary: String
+});
 payload!(ProducerAgreementData {
     package: PathBuf,
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Digest"))]

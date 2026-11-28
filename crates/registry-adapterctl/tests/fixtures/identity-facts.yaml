@@ -1,0 +1,30 @@
+apiVersion: id.registrystack.org/formats/platform/identity-facts/v1
+kind: PlatformIdentityFacts
+product: adapter
+issuer: https://primary.example.test
+audience: urn:registry:adapter-api
+allowedClients:
+- coordinator-payments
+claims:
+  adapter_scopes: string-array
+accessProfiles:
+- id: licence-fees
+  scopes:
+  - payments:collect
+  requesterClients:
+  - coordinator-payments
+  selectedBy:
+    adapter_scopes:
+    - payments:collect
+- id: records-reader
+  scopes:
+  - records:read
+  selectedBy:
+    adapter_scopes:
+    - records:read
+- id: registry-clerk
+  scopes:
+  - records:read
+  selectedBy:
+    adapter_scopes:
+    - records:read

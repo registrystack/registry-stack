@@ -7,6 +7,7 @@ use super::g2p_model::{
 };
 use super::provider_mapping::ProviderAcceptance;
 use deadpool_postgres::{GenericClient, Pool, Transaction};
+use registry_platform_config::Posture;
 use uuid::Uuid;
 
 const SCHEMA: &str = r#"
@@ -55,6 +56,9 @@ pub async fn migrate_g2p(client: &mut tokio_postgres::Client) -> Result<(), G2pE
     tx.batch_execute(SCHEMA)
         .await
         .map_err(|_| G2pError::Unavailable)?;
+    tx.batch_execute(include_str!("migrations/g2p_declared_posture.sql"))
+        .await
+        .map_err(|_| G2pError::Unavailable)?;
     tx.commit().await.map_err(|_| G2pError::Unavailable)
 }
 
@@ -62,6 +66,7 @@ pub async fn migrate_g2p(client: &mut tokio_postgres::Client) -> Result<(), G2pE
 pub struct G2pStore {
     pool: Pool,
     deployment: String,
+    posture: Posture,
 }
 
 #[derive(Clone)]
@@ -74,9 +79,25 @@ pub enum DispatchAuthorization {
     Hold(G2pAttempt),
 }
 
+/// The table privileges a runtime role needs for the G2P tables when
+/// `payments.yaml` declares a disbursement connection. Startup checks them,
+/// and `adapter serve` grants those a split runtime role lacks.
+pub const RUNTIME_GRANTS: [(&str, &[&str]); 3] = [
+    ("adapter_g2p_attempts", &["SELECT", "INSERT", "UPDATE"]),
+    ("adapter_g2p_commands", &["SELECT", "INSERT"]),
+    ("adapter_g2p_events", &["SELECT", "INSERT"]),
+];
+/// The sequence the events table draws its identifiers from. A runtime role
+/// needs USAGE on it.
+pub const RUNTIME_SEQUENCE: &str = "adapter_g2p_events_sequence_seq";
+
 impl G2pStore {
-    pub fn new(pool: Pool, deployment: String) -> Self {
-        Self { pool, deployment }
+    pub fn new(pool: Pool, deployment: String, posture: Posture) -> Self {
+        Self {
+            pool,
+            deployment,
+            posture,
+        }
     }
 
     /// Resolve only the exact previously admitted workflow command. This read
@@ -105,11 +126,7 @@ impl G2pStore {
 
     pub async fn check_privileges(&self) -> Result<(), G2pError> {
         let client = self.pool.get().await.map_err(|_| G2pError::Unavailable)?;
-        for (table, privileges) in [
-            ("adapter_g2p_attempts", &["SELECT", "INSERT", "UPDATE"][..]),
-            ("adapter_g2p_commands", &["SELECT", "INSERT"][..]),
-            ("adapter_g2p_events", &["SELECT", "INSERT"][..]),
-        ] {
+        for (table, privileges) in RUNTIME_GRANTS {
             if !crate::journal::missing_table_privileges(&client, table, privileges)
                 .await
                 .map_err(|_| G2pError::Unavailable)?
@@ -121,7 +138,7 @@ impl G2pStore {
         let row = client
             .query_one(
                 "SELECT has_sequence_privilege(current_user, $1, 'USAGE')",
-                &[&"adapter_g2p_events_sequence_seq"],
+                &[&RUNTIME_SEQUENCE],
             )
             .await
             .map_err(|_| G2pError::Unavailable)?;
@@ -205,7 +222,14 @@ impl G2pStore {
         )
         .await?;
         if inserted == 1 {
-            event(&tx, &self.deployment, &saved, "g2p.attempt-reserved").await?;
+            event(
+                &tx,
+                &self.deployment,
+                &saved,
+                "g2p.attempt-reserved",
+                self.posture,
+            )
+            .await?;
         }
         tx.commit().await.map_err(|_| G2pError::Unavailable)?;
         Ok(saved)
@@ -374,7 +398,14 @@ impl G2pStore {
         }
         attempt.first_send_at_unix_seconds = Some(now_unix_seconds);
         attempt.state = G2pAttemptState::DispatchStarted;
-        persist(&tx, &self.deployment, &attempt, "g2p.dispatch-started").await?;
+        persist(
+            &tx,
+            &self.deployment,
+            &attempt,
+            "g2p.dispatch-started",
+            self.posture,
+        )
+        .await?;
         tx.commit().await.map_err(|_| G2pError::Unavailable)?;
         Ok(DispatchAuthorization::Send(attempt))
     }
@@ -538,7 +569,7 @@ impl G2pStore {
         attempt.validate_integrity()?;
         let after = serde_json::to_value(&attempt).map_err(|_| G2pError::Unavailable)?;
         if before != after {
-            persist(&tx, &self.deployment, &attempt, event_kind).await?;
+            persist(&tx, &self.deployment, &attempt, event_kind, self.posture).await?;
         }
         tx.commit().await.map_err(|_| G2pError::Unavailable)?;
         Ok(attempt)
@@ -568,6 +599,7 @@ async fn persist(
     deployment: &str,
     attempt: &G2pAttempt,
     event_kind: &str,
+    posture: Posture,
 ) -> Result<(), G2pError> {
     attempt.validate_integrity()?;
     let document = serde_json::to_value(attempt).map_err(|_| G2pError::Unavailable)?;
@@ -581,7 +613,7 @@ async fn persist(
     if count != 1 {
         return Err(G2pError::Unavailable);
     }
-    event(tx, deployment, attempt, event_kind).await
+    event(tx, deployment, attempt, event_kind, posture).await
 }
 
 async fn event(
@@ -589,11 +621,12 @@ async fn event(
     deployment: &str,
     attempt: &G2pAttempt,
     kind: &str,
+    posture: Posture,
 ) -> Result<(), G2pError> {
     client
         .execute(
-            "INSERT INTO adapter_g2p_events (deployment,attempt_id,principal,kind) VALUES ($1,$2,$3,$4)",
-            &[&deployment, &attempt.id, &attempt.principal, &kind],
+            "INSERT INTO adapter_g2p_events (deployment,attempt_id,principal,kind,posture) VALUES ($1,$2,$3,$4,$5)",
+            &[&deployment, &attempt.id, &attempt.principal, &kind, &posture.as_str()],
         )
         .await
         .map_err(|_| G2pError::Unavailable)?;

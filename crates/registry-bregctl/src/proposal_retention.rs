@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ProposalRetentionCliError {
+    RuntimeConfig(registry_breg::runtime_config::RuntimeConfigError),
     Operator,
     ActiveDetailPinned,
     RetainMode,
@@ -38,6 +39,8 @@ pub(crate) enum ProposalRetentionCliError {
 pub(crate) struct ProposalRetentionListOutcome {
     #[serde(flatten)]
     pub page: ProposalRetentionListPage,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<crate::ToolDiagnostic>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -45,6 +48,8 @@ pub(crate) struct ProposalRetentionListOutcome {
 pub(crate) struct ProposalRetentionDryRunOutcome {
     #[serde(flatten)]
     pub dry_run: ProposalRetentionDryRun,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<crate::ToolDiagnostic>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -52,9 +57,12 @@ pub(crate) struct ProposalRetentionDryRunOutcome {
 pub(crate) struct ProposalRetentionEraseOutcome {
     #[serde(flatten)]
     pub erase: ProposalRetentionErase,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<crate::ToolDiagnostic>,
 }
 
 pub(crate) fn list(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     action_id: Option<&str>,
     after_cursor: Option<&str>,
@@ -69,19 +77,19 @@ pub(crate) fn list(
         return Err(ProposalRetentionCliError::Operator);
     }
     let runtime = operator_runtime()?;
-    let page = runtime.block_on(async {
-        let service = ProposalRetentionOperatorService::from_runtime_config(runtime_config)
-            .await
-            .map_err(map_error)?;
-        service
+    let (page, diagnostics) = runtime.block_on(async {
+        let (service, diagnostics) = load_service(runtime_config, posture).await?;
+        let outcome = service
             .list(action_id, after_cursor, limit)
             .await
-            .map_err(map_error)
+            .map_err(map_error)?;
+        Ok((outcome, diagnostics))
     })?;
-    Ok(ProposalRetentionListOutcome { page })
+    Ok(ProposalRetentionListOutcome { page, diagnostics })
 }
 
 pub(crate) fn dry_run(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     action_id: &str,
     proposal_id: &str,
@@ -92,16 +100,19 @@ pub(crate) fn dry_run(
     }
     let scope = scope(action_id, proposal_id, submission_version)?;
     let runtime = operator_runtime()?;
-    let dry_run = runtime.block_on(async {
-        let service = ProposalRetentionOperatorService::from_runtime_config(runtime_config)
-            .await
-            .map_err(map_error)?;
-        service.dry_run(scope).await.map_err(map_error)
+    let (dry_run, diagnostics) = runtime.block_on(async {
+        let (service, diagnostics) = load_service(runtime_config, posture).await?;
+        let outcome = service.dry_run(scope).await.map_err(map_error)?;
+        Ok((outcome, diagnostics))
     })?;
-    Ok(ProposalRetentionDryRunOutcome { dry_run })
+    Ok(ProposalRetentionDryRunOutcome {
+        dry_run,
+        diagnostics,
+    })
 }
 
 pub(crate) fn erase(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     action_id: &str,
     proposal_id: &str,
@@ -112,29 +123,46 @@ pub(crate) fn erase(
     }
     let scope = scope(action_id, proposal_id, submission_version)?;
     let runtime = operator_runtime()?;
-    let erase = runtime.block_on(async {
-        let service = ProposalRetentionOperatorService::from_runtime_config(runtime_config)
-            .await
-            .map_err(map_error)?;
-        service.erase(scope).await.map_err(map_error)
+    let (erase, diagnostics) = runtime.block_on(async {
+        let (service, diagnostics) = load_service(runtime_config, posture).await?;
+        let outcome = service.erase(scope).await.map_err(map_error)?;
+        Ok((outcome, diagnostics))
     })?;
-    Ok(ProposalRetentionEraseOutcome { erase })
+    Ok(ProposalRetentionEraseOutcome { erase, diagnostics })
 }
 
 pub(crate) fn cleanup_attachments(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
-) -> Result<AttachmentCleanup, ProposalRetentionCliError> {
+) -> Result<(AttachmentCleanup, Vec<crate::ToolDiagnostic>), ProposalRetentionCliError> {
     if !runtime_config.is_absolute() {
         return Err(ProposalRetentionCliError::Operator);
     }
     operator_runtime()?.block_on(async {
-        ProposalRetentionOperatorService::from_runtime_config(runtime_config)
-            .await
-            .map_err(map_error)?
-            .cleanup_attachments()
-            .await
-            .map_err(map_error)
+        let (service, diagnostics) = load_service(runtime_config, posture).await?;
+        let outcome = service.cleanup_attachments().await.map_err(map_error)?;
+        Ok((outcome, diagnostics))
     })
+}
+
+async fn load_service(
+    path: &Path,
+    posture: registry_platform_config::DeclaredPosture,
+) -> Result<(ProposalRetentionOperatorService, Vec<crate::ToolDiagnostic>), ProposalRetentionCliError>
+{
+    let config =
+        registry_breg::runtime_config::load_runtime_config(path, posture).map_err(|error| {
+            if crate::is_posture_refusal(&error) {
+                ProposalRetentionCliError::RuntimeConfig(error)
+            } else {
+                ProposalRetentionCliError::Operator
+            }
+        })?;
+    let diagnostics = crate::runtime_posture_findings(config.posture_report().diagnostics(path));
+    let service = ProposalRetentionOperatorService::from_loaded_config(config)
+        .await
+        .map_err(map_error)?;
+    Ok((service, diagnostics))
 }
 
 fn scope<'a>(
@@ -167,6 +195,7 @@ fn map_error(error: ProposalRetentionError) -> ProposalRetentionCliError {
             ProposalRetentionCliError::PackagePinMismatch(mismatch)
         }
         ProposalRetentionError::ActiveProposalRecoveryUnavailable
+        | ProposalRetentionError::PostureMismatch { .. }
         | ProposalRetentionError::Unavailable => ProposalRetentionCliError::Operator,
     }
 }

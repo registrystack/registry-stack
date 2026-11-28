@@ -251,7 +251,14 @@ sourceConnections:
     .expect("runtime configuration is written");
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
         .expect("runtime configuration is sealed");
-    DeploymentInputs::load(&runtime_path).expect("package and authority ceilings both load");
+    DeploymentInputs::load(
+        &runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("package and authority ceilings both load");
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&runtime_path, authenticator())
             .await
@@ -1560,7 +1567,10 @@ async fn only_the_check_route_is_readable_cross_origin() {
     for (name, value) in [
         ("access-control-allow-origin", "*"),
         ("access-control-allow-methods", "POST"),
-        ("access-control-allow-headers", "content-type"),
+        (
+            "access-control-allow-headers",
+            "content-type,registry-client",
+        ),
         ("access-control-max-age", "600"),
         ("cross-origin-resource-policy", "cross-origin"),
         ("cache-control", "no-store"),
@@ -1605,6 +1615,99 @@ async fn only_the_check_route_is_readable_cross_origin() {
     assert_eq!(
         header(&health, "cross-origin-resource-policy"),
         Some("same-origin")
+    );
+}
+
+/// The client library sends `Registry-Client` from a page, so the preflight
+/// for the check route allows it beside `Content-Type`, and no other
+/// request header. A preflight to any other route carries no CORS header.
+#[tokio::test]
+async fn the_check_preflight_allows_the_client_header_and_no_other() {
+    let fixture = public_check_runtime(Authority::RelyingAndCheck).await;
+    let server = fixture.http();
+    let preflight = |path: &'static str, headers: &'static str| {
+        server
+            .method(Method::OPTIONS, path)
+            .add_header("origin", BROWSER_ORIGIN)
+            .add_header("access-control-request-method", "POST")
+            .add_header("access-control-request-headers", headers)
+    };
+
+    let allowed = preflight(PUBLIC_CHECK_ROUTE, "content-type, registry-client").await;
+    assert_eq!(allowed.status_code(), StatusCode::OK);
+    assert_eq!(header(&allowed, "access-control-allow-origin"), Some("*"));
+    assert_eq!(
+        header(&allowed, "access-control-allow-headers"),
+        Some("content-type,registry-client")
+    );
+    assert_eq!(header(&allowed, "access-control-allow-credentials"), None);
+
+    let refused = preflight(PUBLIC_CHECK_ROUTE, "content-type, authorization").await;
+    let permitted = header(&refused, "access-control-allow-headers")
+        .expect("the preflight names the headers it allows");
+    assert!(
+        !permitted.to_ascii_lowercase().contains("authorization"),
+        "a browser sends no request that asks for authorization: {permitted}"
+    );
+
+    for path in ["/health", "/v1/evidence", "/openapi.json"] {
+        let other = preflight(path, "content-type, registry-client").await;
+        for name in [
+            "access-control-allow-origin",
+            "access-control-allow-headers",
+            "access-control-allow-methods",
+        ] {
+            assert_eq!(header(&other, name), None, "{path} {name}");
+        }
+    }
+}
+
+/// A credentialed cross-origin request is answered as the same request
+/// without credentials, and neither it nor its preflight is ever told that
+/// credentials are allowed.
+#[tokio::test]
+async fn a_credentialed_cross_origin_request_is_answered_without_credentials_allowed() {
+    let fixture = public_check_runtime(Authority::RelyingAndCheck).await;
+    fixture.mount_record(NUMBER, record("valid")).await;
+    let server = fixture.http();
+
+    for code in [CODE, "AAAAAAAAAAAAAAAAAAAAAAAA"] {
+        let plain = check(&server, NUMBER, code).await;
+        let credentialed = server
+            .post(PUBLIC_CHECK_ROUTE)
+            .add_header("origin", BROWSER_ORIGIN)
+            .add_header("cookie", "session=canary-cookie-value")
+            .add_header("authorization", "Bearer canary-authorization-value")
+            .json(&check_body(NUMBER, code))
+            .await;
+        assert_eq!(credentialed.status_code(), plain.status_code(), "{code}");
+        let (_, _, plain_body) = comparable(&plain);
+        let (_, _, credentialed_body) = comparable(&credentialed);
+        assert_eq!(credentialed_body, plain_body, "{code}");
+        assert_eq!(
+            header(&credentialed, "access-control-allow-credentials"),
+            None
+        );
+        assert_eq!(
+            header(&credentialed, "access-control-allow-origin"),
+            Some("*")
+        );
+    }
+
+    let preflight = server
+        .method(Method::OPTIONS, PUBLIC_CHECK_ROUTE)
+        .add_header("origin", BROWSER_ORIGIN)
+        .add_header("access-control-request-method", "POST")
+        .add_header(
+            "access-control-request-headers",
+            "content-type, authorization",
+        )
+        .add_header("cookie", "session=canary-cookie-value")
+        .await;
+    assert_eq!(header(&preflight, "access-control-allow-credentials"), None);
+    assert_eq!(
+        header(&preflight, "access-control-allow-headers"),
+        Some("content-type,registry-client")
     );
 }
 

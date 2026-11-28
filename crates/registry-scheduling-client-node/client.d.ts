@@ -10,6 +10,7 @@ export type JsonValue = JsonScalar | ReadonlyArray<JsonValue> | { readonly [key:
 
 export interface SchedulingClientConfig {
   baseUrl: string
+  refuseDevelopmentPeer?: boolean
   attemptTimeoutMilliseconds?: SafeInteger
   connectTimeoutMilliseconds?: SafeInteger
   maximumResponseBytes?: SafeInteger
@@ -316,6 +317,7 @@ export type SchedulingProblemCode =
   | 'cursor.expired'
   | 'cursor.invalid'
   | 'eligibility.unavailable'
+  | 'grant.lifetime-too-long'
   | 'hold.expired'
   | 'hold.released'
   | 'hook.unavailable'
@@ -325,6 +327,7 @@ export type SchedulingProblemCode =
   | 'location.closed'
   | 'operation.not-authorized'
   | 'party.capacity-inadequate'
+  | 'platform.task-grant.development-assertion'
   | 'policy.changed'
   | 'precondition.failed'
   | 'precondition.required'

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- The Node and Python Discovery clients accept development-marked catalog responses by default. Pass `refuseDevelopmentPeer: true` in Node or `refuse_development_peer=True` in Python to reject them.
+
+- `discoveryctl serve` passes the resolved posture explicitly to the runtime.
+
+- BREAKING: Rust client configurations take a peer policy in `DiscoveryClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
+- Offline check and startup report a package root lookup failure as `discovery.runtime.package-refused` at `/package/root`.
+
+- Start a local development run from the starter with `rstack dev start`.
+- `discoveryctl check --runtime-config` reports a package-root lookup error as an operational failure at `/package/root`.
+
+- BREAKING: An undeclared posture is production. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `check` without a declared posture reports development settings as errors. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: `discoveryctl --allow-loopback` is removed and the runtime refuses loopback URLs in production. Migration: Use --posture development for local catalogs, and publish https URLs for production.
+- BREAKING: `/ready` gains `posture` and `developmentSettings`. Migration: No change for probes that read the status code.
+- BREAKING: Development responses carry `Registry-Posture: development` and production refuses development peers. Migration: Point production runtimes at production peers.
+- `discoveryctl package` names a development-marked provider as the cause when it refuses one in production.
+- `discoveryctl check --runtime-config` exits 3 when it cannot read the package file it verifies.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: in `origins.yaml` (`DiscoveryOrigins`), `origins` is a mapping

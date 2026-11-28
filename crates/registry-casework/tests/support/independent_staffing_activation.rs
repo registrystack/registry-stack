@@ -25,7 +25,7 @@ async fn caseload_target_membership_must_match_the_pinned_deciding_profiles() {
                 movement("supervisor", CaseworkActsAs::Supervisor),
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     assert_eq!(before, f.holders().await);
 
@@ -43,7 +43,7 @@ async fn caseload_target_membership_must_match_the_pinned_deciding_profiles() {
                 movement("supervisor", CaseworkActsAs::Supervisor),
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
 
     // Explicit supervisor eligibility is supported for newly admitted work.
@@ -92,7 +92,7 @@ async fn caseload_refuses_active_absence_and_rechecks_scheduled_absence_at_apply
         f.service
             .preview_review_caseload(&supervisor, None, "", movement("b", CaseworkActsAs::Staff))
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     assert_eq!(before, f.holders().await);
 
@@ -123,7 +123,7 @@ async fn caseload_refuses_active_absence_and_rechecks_scheduled_absence_at_apply
                 }
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     assert_eq!(before, f.holders().await);
 }
@@ -160,6 +160,7 @@ async fn activation_plan(
     let providers = [provider];
     f.store
         .plan_activation(&ActivationCandidate {
+            posture: registry_platform_config::Posture::Production,
             database_id: "independent-review-tests",
             package_digest: &format!("sha256:{}", "a".repeat(64)),
             project: &project,
@@ -177,6 +178,7 @@ async fn assert_activation_refused(
     let project = decode(value);
     let providers = [provider];
     let candidate = ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         database_id: "independent-review-tests",
         package_digest: &format!("sha256:{}", "a".repeat(64)),
         project: &project,

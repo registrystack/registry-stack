@@ -82,6 +82,8 @@ use registry_evidence_verifier::model::{
 mod discovery_channel_tests;
 #[path = "evidence_source_tests.rs"]
 mod evidence_source_tests;
+#[path = "refusal_recording_tests.rs"]
+mod refusal_recording_tests;
 #[path = "wallet_channel_tests.rs"]
 mod wallet_channel_tests;
 
@@ -655,7 +657,18 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
     assert_eq!(health.json::<Value>(), json!({"status": "ok"}));
     let ready = http.get("/ready").await;
     ready.assert_status_ok();
-    assert_eq!(ready.json::<Value>(), json!({"status": "ready"}));
+    let ready_body = ready.json::<Value>();
+    assert_eq!(ready_body["status"], "ready");
+    assert_eq!(ready_body["posture"], "development");
+    assert!(ready_body["developmentSettings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|setting| {
+            setting["code"] == "evidence.posture.local-assurance"
+                && setting["pointer"] == "/assuranceProfile"
+        }));
+    assert_eq!(ready.header("Registry-Posture"), "development");
     assert!(fixture
         .server
         .received_requests()
@@ -1406,9 +1419,12 @@ fn a_renamed_source_member_warns_once_per_interval_and_counts_every_drifted_resp
             .json(&parent_request())
             .await;
 
-        let scraped = TestServer::new(metrics_app(Arc::clone(&metrics)))
-            .get("/metrics")
-            .await;
+        let scraped = TestServer::new(metrics_app(
+            Arc::clone(&metrics),
+            registry_platform_config::Posture::Development,
+        ))
+        .get("/metrics")
+        .await;
         scraped.assert_status_ok();
         *rendered.lock().expect("exposition lock") = scraped.text();
     });
@@ -1533,7 +1549,10 @@ async fn metrics_report_bounded_series_without_disclosing_request_content() {
     assert_eq!(denied.status_code(), axum::http::StatusCode::UNAUTHORIZED);
     http.get("/absent-path-canary").await;
 
-    let exposition = TestServer::new(metrics_app(Arc::clone(&metrics)));
+    let exposition = TestServer::new(metrics_app(
+        Arc::clone(&metrics),
+        registry_platform_config::Posture::Development,
+    ));
     let rendered = exposition.get("/metrics").await;
     rendered.assert_status_ok();
     assert_eq!(rendered.header("content-type"), "text/plain; version=0.0.4");
@@ -1700,6 +1719,14 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    capture_logs(body, |target| target.starts_with("registry_evidence"))
+}
+
+fn capture_logs<F, Fut>(body: F, captured_target: impl Fn(&str) -> bool) -> Vec<Value>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
         tracing::subscriber::set_global_default(
@@ -1729,11 +1756,7 @@ where
         .expect("operational records are UTF-8")
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|record| {
-            record["target"]
-                .as_str()
-                .is_some_and(|target| target.starts_with("registry_evidence"))
-        })
+        .filter(|record| record["target"].as_str().is_some_and(&captured_target))
         .collect()
 }
 
@@ -2388,8 +2411,14 @@ async fn local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_secur
     // response or audit record can exist. Preparation deliberately has no
     // bearer and must not fetch the configured authentication JWKS.
     let request = adult_request();
-    let deployment = DeploymentInputs::load(&prepared.runtime_path)
-        .expect("the immutable local deployment reloads");
+    let deployment = DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("the immutable local deployment reloads");
     let input = LocalRelyingProcedureInput {
         schema: LOCAL_RELYING_PROCEDURE_INPUT_SCHEMA_V1.to_owned(),
         response_format: LocalResponseFormat::SignedJws,
@@ -2431,9 +2460,15 @@ async fn local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_secur
             .expect("a different request-origin subject creates a different binding");
 
     let runtime = Arc::new(
-        EvidenceRuntime::initialize(&prepared.runtime_path)
-            .await
-            .expect("local runtime initializes without an authenticator override"),
+        EvidenceRuntime::initialize(
+            &prepared.runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .await
+        .expect("local runtime initializes without an authenticator override"),
     );
     assert_eq!(
         runtime.bundle().config.assurance_profile,
@@ -3094,6 +3129,63 @@ async fn authorization_refusal_is_minimally_audited() {
 }
 
 #[tokio::test]
+async fn production_rejects_development_task_assertions_before_context() {
+    let fixture = acceptance_runtime_with_posture_authenticator(
+        registry_platform_config::Posture::Production,
+    )
+    .await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    for expired in [false, true] {
+        let mut claims = parent_grant_claims();
+        claims["registry_posture"] = json!("development");
+        if expired {
+            claims["registry_grant_exp"] = json!(Utc::now().timestamp() - 1);
+        }
+        let authorization = format!("Bearer {}", access_token(Some(claims)));
+        let discovery = http
+            .get("/v1/evidence-definitions")
+            .add_header("authorization", authorization.clone())
+            .await;
+        let assertion = http
+            .post("/v1/evidence")
+            .add_header("authorization", authorization)
+            .json(&parent_request())
+            .await;
+        for response in [discovery, assertion] {
+            response.assert_status_unauthorized();
+            assert_eq!(
+                response.json::<Value>()["code"],
+                "platform.task-grant.development-assertion"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn development_accepts_a_verified_marked_task_assertion() {
+    let fixture = acceptance_runtime_with_posture_authenticator(
+        registry_platform_config::Posture::Development,
+    )
+    .await;
+    mount_parent_source(
+        &fixture.server,
+        parent_source_response(vec![PARENT_REFERENCE]),
+    )
+    .await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let mut claims = parent_grant_claims();
+    claims["registry_posture"] = json!("development");
+    http.post("/v1/evidence")
+        .add_header(
+            "authorization",
+            format!("Bearer {}", access_token(Some(claims))),
+        )
+        .json(&parent_request())
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
 async fn invalid_grant_refusal_keeps_only_a_valid_identifier_pseudonym() {
     let fixture = acceptance_runtime().await;
     let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
@@ -3562,7 +3654,7 @@ async fn admission_gates_refuse_unadmitted_clients_and_missing_scopes() {
             .await
             .expect_err(&format!("{label} was accepted"));
         assert!(
-            matches!(error, AuthenticationError::Verification),
+            matches!(error, AuthenticationError::Verification(_)),
             "{label}: {error:?}"
         );
     }
@@ -3584,7 +3676,7 @@ async fn admission_gates_refuse_unadmitted_clients_and_missing_scopes() {
             .await
             .expect_err(&format!("{label} was accepted"));
         assert!(
-            matches!(error, AuthenticationError::Verification),
+            matches!(error, AuthenticationError::Verification(_)),
             "{label}: {error:?}"
         );
     }
@@ -3818,10 +3910,19 @@ async fn release_admission_needs_both_the_acquisition_deadline_and_the_grant_ahe
         release_admission(ahead, Some(deadline(wall_seconds - 1))).expect_err("grant expired");
     assert_eq!(expired_grant.problem(), ProblemCode::NotAuthorized);
     assert_eq!(expired_grant.category(), "grant-expired");
+    assert_eq!(
+        expired_grant.check(),
+        Some(registry_platform_authcommon::FailedCheck::TaskGrantExpired)
+    );
     let expired_budget =
         release_admission(behind, Some(deadline(expiry_ahead))).expect_err("budget spent");
     assert_eq!(expired_budget.problem(), ProblemCode::DependencyUnavailable);
     assert_eq!(expired_budget.category(), "acquisition-budget");
+    assert_eq!(
+        expired_budget.check(),
+        None,
+        "a spent budget is not a refusal"
+    );
 }
 
 #[test]
@@ -3964,11 +4065,14 @@ async fn admitted_release_append_completes_and_returns_bytes_after_deadline() {
     let captured = Arc::new(Mutex::new(Vec::new()));
     let release_started = Arc::new(Mutex::new(None));
     let audit = EvidenceAuditLog::with_writer(
-        AuditWriter::from_line_sink(Box::new(SlowDisclosureSink {
-            bytes: Arc::clone(&captured),
-            release_started: Arc::clone(&release_started),
-            delay: Duration::from_millis(1_500),
-        })),
+        AuditWriter::from_line_sink(
+            Box::new(SlowDisclosureSink {
+                bytes: Arc::clone(&captured),
+                release_started: Arc::clone(&release_started),
+                delay: Duration::from_millis(1_500),
+            }),
+            registry_platform_config::Posture::Development,
+        ),
         b"deadline-test-audit-secret-at-least-32-bytes".to_vec(),
         1,
     )
@@ -4253,7 +4357,14 @@ async fn activated_authority_fixture() -> (PreparedAcceptance, Arc<EvidenceRunti
     )
     .expect("runtime authority binding writes");
     make_file_read_only(&prepared.runtime_path);
-    DeploymentInputs::load(&prepared.runtime_path).expect("normalized deployment inputs load");
+    DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("normalized deployment inputs load");
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
             .await
@@ -8651,6 +8762,10 @@ async fn failed_selector_budget_is_enforced_by_the_runtime_and_scoped_to_authori
         .await
         .expect_err("the next request is rejected before selector resolution");
     assert_eq!(exhausted.problem(), ProblemCode::RateLimited);
+    assert_eq!(
+        exhausted.check(),
+        Some(registry_platform_authcommon::FailedCheck::RateLimit)
+    );
     retained_failures.push_str(&format!("{exhausted:?} {exhausted}\n"));
 
     let now = Utc::now().timestamp();
@@ -8911,6 +9026,59 @@ async fn one_runtime_proves_all_definitions_and_collapses_unresolved_relationshi
             "public failures and audit must not retain protected selector, grant, source, or secret material"
         );
     }
+}
+
+#[test]
+fn local_credential_free_source_is_reported_by_check_ready_and_startup() {
+    const CODE: &str = "evidence.posture.credential-free-source";
+    const POINTER: &str = "/sourceConnections/source-b/endpoints/source-b";
+    let logs = capture_logs(
+        || async {
+            let server = MockServer::start().await;
+            let prepared = prepare_fixture_with_pack_variant(
+                "subject-binding-secret-canary-32-bytes-minimum",
+                &server.uri(),
+                &FixtureCeilings::deployment_defaults(),
+                AcceptancePackVariant::ExactRegistry,
+                |_| {},
+            );
+            let declared = registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            };
+            let check = crate::check::check_runtime_file(&prepared.runtime_path, false, declared);
+            assert!(!check.has_errors(), "{}", check.report().render_human());
+            assert!(check
+                .report()
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| { diagnostic.code == CODE && diagnostic.path == POINTER }));
+            let deployment = DeploymentInputs::load(&prepared.runtime_path, declared).unwrap();
+            let posture = &deployment.runtime().posture;
+            assert!(posture.settings().iter().any(|found| {
+                found.setting.code == CODE
+                    && found.origin == registry_platform_config::SettingOrigin::Combination
+                    && found.pointer.as_deref() == Some(POINTER)
+            }));
+            posture.log_startup();
+            let runtime = Arc::new(
+                EvidenceRuntime::initialize_from_with_authenticator(deployment, authenticator())
+                    .await
+                    .unwrap(),
+            );
+            let app = TestServer::new(build_app(runtime));
+            let ready = app.get("/ready").await;
+            ready.assert_status_ok();
+            assert!(ready.json::<Value>()["developmentSettings"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"code": CODE, "pointer": POINTER})));
+        },
+        |target| target == "registry_platform_config::posture",
+    );
+    assert!(logs.iter().any(|event| {
+        event["fields"]["error_code"] == CODE && event["fields"]["pointer"] == POINTER
+    }));
 }
 
 /// Threat: a source-owned policy-hidden or ambiguous lookup must not be
@@ -9247,8 +9415,14 @@ async fn selector_aware_extraction_receives_only_the_authorized_source_subset() 
         .expect(3)
         .mount(&server)
         .await;
-    let deployment = DeploymentInputs::load(&prepared.runtime_path)
-        .expect("selector subset deployment is valid");
+    let deployment = DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("selector subset deployment is valid");
     crate::kernel::OfflineKernel::compile(Arc::new(deployment.into_parts().0))
         .expect("selector-aware source compiles");
     let runtime =
@@ -9812,9 +9986,45 @@ fn acceptance_case_time(
 }
 
 async fn acceptance_runtime() -> AcceptanceRuntime {
+    acceptance_runtime_with(authenticator()).await
+}
+
+async fn acceptance_runtime_with(authenticator: Authenticator) -> AcceptanceRuntime {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    initialize_acceptance(prepared, authenticator).await
+}
+
+async fn acceptance_runtime_with_posture_authenticator(
+    posture: registry_platform_config::Posture,
+) -> AcceptanceRuntime {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    let private = PrivateJwk::parse(AUTH_PRIVATE_JWK).expect("auth test key parses");
+    Mock::given(method("GET"))
+        .and(path("/.well-known/jwks.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"keys": [private.public()]})))
+        .mount(&prepared.server)
+        .await;
+    let mut authentication = crate::bundle::Bundle::load(&prepared.bundle_root)
+        .expect("the packaged fixture loads")
+        .config
+        .authentication;
+    authentication.oidc.provider.jwks_source = registry_platform_config::JwksSource::Uri {
+        uri: registry_platform_yaml::Url::new(format!(
+            "{}/.well-known/jwks.json",
+            prepared.server.uri()
+        ))
+        .unwrap(),
+    };
+    let authenticator = crate::runtime::runtime_authenticator(&authentication, Vec::new(), posture);
+    initialize_acceptance(prepared, authenticator).await
+}
+
+async fn initialize_acceptance(
+    prepared: PreparedAcceptance,
+    authenticator: Authenticator,
+) -> AcceptanceRuntime {
     let runtime = Arc::new(
-        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator)
             .await
             .expect("one immutable acceptance runtime initializes"),
     );
@@ -9993,8 +10203,14 @@ async fn request_batch_sequential_fallback_executes_sqlite_items_in_request_orde
     );
     let extract_path = extract_path.expect("SQLite extract path is captured");
     bind_sqlite_extract(&prepared.runtime_path, &extract_path);
-    DeploymentInputs::load(&prepared.runtime_path)
-        .unwrap_or_else(|error| panic!("SQLite deployment inputs load: {error:?}"));
+    DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .unwrap_or_else(|error| panic!("SQLite deployment inputs load: {error:?}"));
     let runtime =
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
             .await
@@ -11111,11 +11327,17 @@ async fn search_then_fetch_release_still_omits_source_arrays() {
 #[tokio::test]
 async fn an_expected_package_digest_admits_only_the_bundle_it_names() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
-    let digest = DeploymentInputs::load(&prepared.runtime_path)
-        .expect("the immutable deployment loads")
-        .bundle()
-        .package_digest()
-        .to_owned();
+    let digest = DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("the immutable deployment loads")
+    .bundle()
+    .package_digest()
+    .to_owned();
     let original =
         fs::read_to_string(&prepared.runtime_path).expect("runtime configuration is readable");
     let root_line = format!("  root: {}\n", prepared.bundle_root.display());
@@ -11134,13 +11356,26 @@ async fn an_expected_package_digest_admits_only_the_bundle_it_names() {
     };
 
     pin(&digest);
-    DeploymentInputs::load(&prepared.runtime_path).expect("the pinned package loads");
+    DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("the pinned package loads");
 
     let other = format!("sha256:{}", "0".repeat(64));
     assert_ne!(other, digest);
     pin(&other);
-    let refused = DeploymentInputs::load(&prepared.runtime_path)
-        .expect_err("a different package digest is refused");
+    let refused = DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect_err("a different package digest is refused");
     assert!(
         refused.to_string().contains(&format!(
             "package.expectedDigest is {other} but the package at package.root is {digest}"
@@ -11152,8 +11387,14 @@ async fn an_expected_package_digest_admits_only_the_bundle_it_names() {
 #[tokio::test]
 async fn initialize_from_opens_the_deployment_it_was_handed_not_the_runtime_pathname() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
-    let deployment =
-        DeploymentInputs::load(&prepared.runtime_path).expect("the immutable deployment loads");
+    let deployment = DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("the immutable deployment loads");
 
     // Between the capture and the initialization the runtime file comes to
     // name a different audit destination. A proof made about the captured
@@ -11190,9 +11431,15 @@ async fn initialize_from_opens_the_deployment_it_was_handed_not_the_runtime_path
 
     // The pathname route reads the file as it is now, which is the difference
     // the captured route exists to remove.
-    let reread = EvidenceRuntime::initialize(&prepared.runtime_path)
-        .await
-        .expect("the rewritten runtime file initializes from its pathname");
+    let reread = EvidenceRuntime::initialize(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .await
+    .expect("the rewritten runtime file initializes from its pathname");
     assert_eq!(
         reread.runtime_config().audit.path,
         Some(redirected_audit.display().to_string())
@@ -11211,8 +11458,14 @@ async fn initialize_from_opens_the_deployment_it_was_handed_not_the_runtime_path
 #[tokio::test]
 async fn initialize_from_serves_the_captured_package_and_runtime_config() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
-    let deployment =
-        DeploymentInputs::load(&prepared.runtime_path).expect("the immutable deployment loads");
+    let deployment = DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("the immutable deployment loads");
     let captured_package = deployment.bundle().package_digest().to_owned();
     let captured_runtime = deployment.runtime().config.clone();
 
@@ -12613,7 +12866,7 @@ fn fetching_authenticator(jwks_uri: &str) -> Authenticator {
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri.to_owned(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         )),
     ));
     Authenticator::new(
@@ -13880,6 +14133,7 @@ impl LoadFixture {
             AuditDestination::File(destination),
             b"audit-hash-secret-canary-32-bytes-minimum".to_vec(),
             1,
+            registry_platform_config::Posture::Production,
         )
         .await
         .expect("the audit throughput probe initializes");
@@ -14652,7 +14906,10 @@ async fn metrics_include_build_source_and_signer_observations() {
         )
         .await
         .expect("the source and signer succeed");
-    let exposition = TestServer::new(metrics_app(metrics));
+    let exposition = TestServer::new(metrics_app(
+        metrics,
+        registry_platform_config::Posture::Development,
+    ));
     let body = exposition.get("/metrics").await.text();
     assert!(body.contains("evidence_build_info{"));
     assert!(body.contains(&format!(
@@ -14892,10 +15149,13 @@ async fn metrics_count_source_failures_without_signing_or_sensitive_labels() {
         .await
         .unwrap_err();
     assert_eq!(error.problem(), ProblemCode::DependencyUnavailable);
-    let text = TestServer::new(metrics_app(metrics))
-        .get("/metrics")
-        .await
-        .text();
+    let text = TestServer::new(metrics_app(
+        metrics,
+        registry_platform_config::Posture::Development,
+    ))
+    .get("/metrics")
+    .await
+    .text();
     assert!(text.contains(
         "evidence_source_requests_total{source=\"source-a\",outcome=\"server-error\"} 1"
     ));

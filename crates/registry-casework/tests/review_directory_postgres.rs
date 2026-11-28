@@ -2,6 +2,7 @@
 use chrono::{TimeDelta, Utc};
 use registry_casework::{CaseworkService, DatabaseConfig, PostgresStore, ServiceError, StoreError};
 use registry_casework_core::*;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
 use std::{collections::BTreeSet, env};
@@ -106,12 +107,13 @@ async fn fixture() -> Fixture {
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
-    let migration = PostgresStore::connect_migration(&config, &secrets)
+    let migration = PostgresStore::connect_migration(&config, &secrets, None)
         .expect("migration store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     migration.migrate().await.expect("assignment migrations");
-    let store = PostgresStore::connect_runtime(&config, &secrets)
+    let store = PostgresStore::connect_runtime(&config, &secrets, None)
         .expect("runtime store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     let administrator = actor(
@@ -527,7 +529,9 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
                 None,
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(
+            FailedCheck::Operation
+        )))
     ));
 
     let bulk_a = (0..100)
@@ -553,7 +557,9 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
                 None,
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(
+            FailedCheck::Operation
+        )))
     ));
     let staff_absence_people = fixture
         .service
@@ -583,7 +589,9 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
                 None,
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(
+            FailedCheck::Operation
+        )))
     ));
     let revision = fixture
         .service
@@ -743,7 +751,9 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
                 None,
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(
+            FailedCheck::Operation
+        )))
     ));
     let unrelated_supervisor = actor("unrelated", CaseworkActsAs::Supervisor, "supervisor");
     let empty = fixture
@@ -1006,7 +1016,9 @@ async fn supervisor_cannot_record_cover_from_an_unsupervised_shared_team() {
                 "unsupervised-shared-cover",
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(
+            FailedCheck::Operation
+        )))
     ));
 }
 
@@ -1166,7 +1178,9 @@ async fn absence_update_preserves_owner_and_delete_replay_rechecks_current_autho
                 "delete-own-absence",
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(
+            FailedCheck::Operation
+        )))
     ));
 }
 

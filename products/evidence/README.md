@@ -46,6 +46,23 @@ The maintained runtime contracts include the [operator contract](OPERATOR-CONTRA
 [trusted derivation Function ABI](https://docs.registrystack.org/reference/evidence-request-adapter-api/). Generated
 contracts and authoring schemas are reproduced by their documented generators.
 
+## Start a development run
+
+Set `STARTER` to the absolute path of the reviewed
+[standalone Evidence starter](examples/standalone/). Its assertion scenario reads a
+synthetic HTTP source. Run the following commands in the same shell.
+
+```sh
+evidencectl init ./evidence --profile local --starter "$STARTER"
+python3 ./evidence/serve-source.py --port 8081 &
+SOURCE_PID=$!
+trap 'kill "$SOURCE_PID" 2>/dev/null' EXIT
+curl --fail --silent --show-error --retry 10 --retry-connrefused http://127.0.0.1:8081/healthz
+rstack dev start ./evidence
+```
+
+Keep the shell open while the run needs the source. Stop the run before closing the shell.
+
 ## Adopter tooling
 
 Start with the runnable [standalone HTTP project](examples/standalone/README.md)

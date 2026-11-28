@@ -50,6 +50,8 @@ pub enum ContractError {
     MissingOperation(String),
     #[error("the effective operation schema could not be derived: {0}")]
     Schema(String),
+    #[error("oidc.issuers does not declare an audience")]
+    MissingAudience,
     #[error("the effective contract could not be serialized")]
     Serialize,
     #[error("the effective contract could not be canonicalized")]
@@ -255,7 +257,18 @@ impl EffectiveContract {
             artifact_deployment_digest: loaded.deployment.clone(),
             authentication: AuthenticationRequirement {
                 scheme: "bearer",
-                audience: loaded.runtime.oidc.audience.clone(),
+                audience: loaded
+                    .runtime
+                    .oidc
+                    .set
+                    .iter()
+                    .next()
+                    .ok_or(ContractError::MissingAudience)?
+                    .1
+                    .core
+                    .provider
+                    .audience
+                    .clone(),
                 client_admission: "allowlist",
             },
             authority: AuthorityBoundary {
@@ -316,8 +329,9 @@ fn effective_operation(
         .operations
         .get(&served.operation)
         .ok_or_else(|| ContractError::MissingOperation(served.operation.clone()))?;
-    let concrete_path = served.method_path.replace(
-        &format!("{{{}}}", served.record_type_parameter),
+    let concrete_path = registry_adapter_core::concrete_facade_path(
+        &served.method_path,
+        &served.record_type_parameter,
         &served.record_type,
     );
     let target = served.target_contract.as_ref();
@@ -432,7 +446,7 @@ fn public_unserved_reason(code: &str) -> &'static str {
         }
         "adapter.operation.route-missing" => "the binding has no loaded route",
         "adapter.operation.reserved-facade-path" => {
-            "the facade path is reserved for the Adapter effective-contract route"
+            "the facade path is reserved for the Adapter effective-contract, health and ready routes"
         }
         "adapter.operation.cursor-key-missing" => {
             "the paginated operation has no configured cursor key"

@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 
 use registry_breg::audit::RegistryAudit;
-use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
     apply_verified_package, bind_active_package, operator_reference_is_well_formed,
     plan_verified_package, read_activation_status, read_recorded_registry_state,
@@ -13,8 +12,7 @@ use registry_breg::migration::{
     ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError, RecordedRegistryState,
 };
 use registry_breg::package::{
-    load_package, MigrationInspectionSummary, PackageError, VerifiedPackage,
-    VerifiedPredecessorPackage,
+    MigrationInspectionSummary, PackageError, VerifiedPackage, VerifiedPredecessorPackage,
 };
 use registry_breg::postgres::{ConnectionConfig, ExpectedRegistryIdentity};
 use registry_breg::proposal_retention::ProposalActivationCompatibilityInventory;
@@ -34,9 +32,8 @@ pub(crate) enum ApplyLifecycleError {
         found: String,
     },
     Uninitialized,
-    EventDestinations,
+    EventDestinations(String),
     FieldEncryptionConfiguration,
-    FieldEncryptionCustody,
     DatabaseConfiguration,
     TimeoutConfiguration,
     BackupArgument,
@@ -72,6 +69,7 @@ pub(crate) enum ApplyLifecycleActivation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ApplyLifecycleOutcome {
+    pub diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     pub package_digest: String,
     pub schema_fingerprint: String,
     pub activation_id: String,
@@ -82,6 +80,7 @@ pub(crate) struct ApplyLifecycleOutcome {
 /// after the checks it runs passed and were rolled back.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlanLifecycleOutcome {
+    pub diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     pub package_digest: String,
     pub registry_revision: String,
     pub active_package_digest: Option<String>,
@@ -97,9 +96,10 @@ pub(crate) struct PlanLifecycleRequest<'a> {
 }
 
 pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     request: ApplyLifecycleRequest<'_>,
 ) -> Result<ApplyLifecycleOutcome, ApplyLifecycleError> {
-    match execute(request, LifecycleMode::Apply)? {
+    match execute(posture, request, LifecycleMode::Apply)? {
         Executed::Applied(outcome) => Ok(outcome),
         Executed::Planned(_) => Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed)),
     }
@@ -110,9 +110,11 @@ pub(crate) fn run(
 /// back, and writes nothing: no ledger entry, no maintenance state, and no
 /// audit entry. It holds the apply lock while it checks, as an apply would.
 pub(crate) fn plan(
+    posture: registry_platform_config::DeclaredPosture,
     request: PlanLifecycleRequest<'_>,
 ) -> Result<PlanLifecycleOutcome, ApplyLifecycleError> {
     match execute(
+        posture,
         ApplyLifecycleRequest {
             runtime_config: request.runtime_config,
             package: request.package,
@@ -131,12 +133,14 @@ pub(crate) fn plan(
 /// Reads what the database records about its activations, as the migration
 /// role, without the apply lock. `None` means it was never activated.
 pub(crate) fn status(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
 ) -> Result<Option<ActivationStatus>, ApplyLifecycleError> {
     if !runtime_config.is_absolute() {
         return Err(ApplyLifecycleError::RuntimeConfigPath);
     }
-    let config = load_runtime_config(runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
+    let config =
+        load_runtime_config(runtime_config, posture).map_err(ApplyLifecycleError::RuntimeConfig)?;
     let access = DatabaseAccess::resolve(&config)?;
     access
         .runtime
@@ -195,6 +199,7 @@ fn plans_initial_activation(
 }
 
 fn execute(
+    posture: registry_platform_config::DeclaredPosture,
     request: ApplyLifecycleRequest<'_>,
     mode: LifecycleMode,
 ) -> Result<Executed, ApplyLifecycleError> {
@@ -213,11 +218,21 @@ fn execute(
             MigrationError::OperatorReference,
         ));
     }
-    let config =
-        load_runtime_config(request.runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
-
-    let target = load_package(request.package, &config.package_load_context())
-        .map_err(ApplyLifecycleError::TargetPackage)?;
+    let (config, target) = registry_breg::startup::StartupInputs::load_for_activation(
+        request.runtime_config,
+        posture,
+        request.package,
+    )
+    .map_err(|error| match error {
+        registry_breg::startup::StartupError::RuntimeConfig(error) => {
+            ApplyLifecycleError::RuntimeConfig(error)
+        }
+        registry_breg::startup::StartupError::PackageRefused(error) => {
+            ApplyLifecycleError::TargetPackage(error)
+        }
+        _ => unreachable!("activation inputs verify only configuration and the selected package"),
+    })?
+    .into_parts();
     // The operator's reviewed digest binds the command to one package before
     // any database authority is resolved, so a mismatch changes nothing.
     if let Some(expected) = request.expected_digest {
@@ -234,10 +249,18 @@ fn execute(
         identity.instance_id(),
         identity.database_id(),
     );
-    // A plan learns from the database whether the package would be the first,
-    // so it resolves database authority first; an apply is told by --initial
-    // and checks everything the package and the runtime file decide before
-    // any database authority is resolved.
+    // A plan can verify delivery bindings before opening database authority.
+    let planned_destinations = if mode == LifecycleMode::Plan {
+        Some(
+            config
+                .activate_event_destinations(target.registry())
+                .map_err(|error| ApplyLifecycleError::EventDestinations(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    // The plan reads the activation ledger to learn whether this is the
+    // first package. Apply receives that decision through --initial.
     let mut access = None;
     let initial = match mode {
         LifecycleMode::Apply => request.initial,
@@ -279,10 +302,6 @@ fn execute(
             .field_encryption()
             .provider()
             .ok_or(ApplyLifecycleError::FieldEncryptionConfiguration)?;
-        validate_field_encryption_custody(
-            provider,
-            config.identity().database_initialization_environment(),
-        )?;
         Some(provider)
     } else {
         None
@@ -291,9 +310,21 @@ fn execute(
         .map(|_| config.secret_resolver())
         .transpose()
         .map_err(|_| ApplyLifecycleError::FieldEncryptionConfiguration)?;
-    let activated_event_destinations = config
-        .activate_event_destinations(target.registry())
-        .map_err(|_| ApplyLifecycleError::EventDestinations)?;
+    let (review_authorities, activated_event_destinations) = match planned_destinations {
+        Some(destinations) => (None, destinations),
+        None => {
+            let authorities = config
+                .activate_review_authorities(target.registry())
+                .map_err(ApplyLifecycleError::RuntimeConfig)?;
+            let destinations = config
+                .activate_event_destinations_with_review_authorities(
+                    target.registry(),
+                    authorities.as_deref(),
+                )
+                .map_err(|error| ApplyLifecycleError::EventDestinations(error.to_string()))?;
+            (authorities, destinations)
+        }
+    };
     let event_destination_compatibility = activated_event_destinations.compatibility_inventory();
 
     let DatabaseAccess {
@@ -330,6 +361,31 @@ fn execute(
         }
     };
 
+    // Check before opening the apply audit destination or contacting review
+    // authorities. The activation transaction checks again under its lock.
+    if mode == LifecycleMode::Apply {
+        let status = runtime
+            .block_on(read_activation_status(
+                &connection,
+                config.database().roles().migration(),
+                timeouts,
+            ))
+            .map_err(ApplyLifecycleError::Apply)?;
+        if let Some(recorded) = status
+            .as_ref()
+            .and_then(ActivationStatus::active_entry)
+            .map(|entry| entry.posture)
+            .filter(|recorded| *recorded != posture.posture)
+        {
+            return Err(ApplyLifecycleError::Apply(
+                MigrationError::PostureMismatch {
+                    recorded,
+                    declared: posture.posture,
+                },
+            ));
+        }
+    }
+
     // A plan appends no audit entry, so it never opens the audit destination.
     let audit = match mode {
         LifecycleMode::Apply => Some(
@@ -342,9 +398,14 @@ fn execute(
     // Planning never activates service bindings or performs Review HTTP. The
     // Apply proof uses only already accepted immutable Request/Result reads.
     let proposal_compatibility = match (mode, current_identity.as_ref()) {
-        (LifecycleMode::Apply, Some(current)) => runtime.block_on(
-            prepare_proposal_compatibility(&config, &connection, current, &target),
-        )?,
+        (LifecycleMode::Apply, Some(current)) => {
+            runtime.block_on(prepare_proposal_compatibility(
+                &connection,
+                current,
+                &target,
+                review_authorities.as_deref(),
+            ))?
+        }
         _ => None,
     };
     let backup_evidence = backup_arguments
@@ -408,6 +469,7 @@ fn execute(
             provider, secrets,
         ));
     }
+    let diagnostics = config.posture_report().diagnostics(request.runtime_config);
     if mode == LifecycleMode::Plan {
         let plan = runtime
             .block_on(plan_verified_package(apply))
@@ -416,6 +478,7 @@ fn execute(
             .migration_summary()
             .map_err(ApplyLifecycleError::TargetPackage)?;
         return Ok(Executed::Planned(PlanLifecycleOutcome {
+            diagnostics,
             package_digest: target.package_digest().to_owned(),
             registry_revision: target.registry().revision().to_owned(),
             active_package_digest: current_identity.map(|current| current.package_digest),
@@ -427,6 +490,7 @@ fn execute(
         .block_on(apply_verified_package(apply))
         .map_err(ApplyLifecycleError::Apply)?;
     Ok(Executed::Applied(ApplyLifecycleOutcome {
+        diagnostics,
         package_digest: activated.package_digest,
         schema_fingerprint: activated.schema_fingerprint,
         activation_id: activated.activation_id,
@@ -441,15 +505,12 @@ fn execute(
 }
 
 async fn prepare_proposal_compatibility(
-    config: &RuntimeConfig,
     connection: &ConnectionConfig,
     current: &ExpectedRegistryIdentity,
     target: &VerifiedPackage,
+    authorities: Option<&registry_breg::review_store::ReviewAuthorityRegistry>,
 ) -> Result<Option<ProposalActivationCompatibilityInventory>, ApplyLifecycleError> {
-    let Some(authorities) = config
-        .activate_review_authorities(target.registry())
-        .map_err(ApplyLifecycleError::RuntimeConfig)?
-    else {
+    let Some(authorities) = authorities else {
         if target.registry().actions().actions.iter().any(|action| matches!(
             &action.execution,
             registry_breg::model::CompiledActionExecution::Proposal { proposal }
@@ -466,7 +527,7 @@ async fn prepare_proposal_compatibility(
         &pool,
         current,
         target,
-        &authorities,
+        authorities,
         std::time::Duration::from_secs(30),
     )
     .await
@@ -481,26 +542,6 @@ async fn prepare_proposal_compatibility(
         }
         Err(_) => Err(ApplyLifecycleError::ProposalCompatibility),
     }
-}
-
-fn validate_field_encryption_custody(
-    provider: &FieldEncryptionProvider,
-    database_initialization_environment: &str,
-) -> Result<(), ApplyLifecycleError> {
-    validate_field_encryption_custody_kind(
-        matches!(provider, FieldEncryptionProvider::LocalFile { .. }),
-        database_initialization_environment,
-    )
-}
-
-fn validate_field_encryption_custody_kind(
-    local_file: bool,
-    database_initialization_environment: &str,
-) -> Result<(), ApplyLifecycleError> {
-    if local_file && database_initialization_environment != "local" {
-        return Err(ApplyLifecycleError::FieldEncryptionCustody);
-    }
-    Ok(())
 }
 
 struct BackupArgument {
@@ -557,6 +598,7 @@ mod tests {
     fn a_plan_is_initial_until_the_ledger_records_an_applied_activation() {
         let recorded = |activation_applied| {
             Ok(Some(RecordedRegistryState {
+                posture: registry_platform_config::Posture::Production,
                 identity: registry_breg::postgres::ExpectedRegistryIdentity {
                     package_id: "registry".to_owned(),
                     database_id: "database".to_owned(),
@@ -581,15 +623,5 @@ mod tests {
             plans_initial_activation(Err(MigrationError::ApplyFailed)),
             Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed))
         ));
-    }
-
-    #[test]
-    fn plaintext_field_key_custody_is_local_only_during_apply() {
-        assert!(validate_field_encryption_custody_kind(true, "local").is_ok());
-        assert!(matches!(
-            validate_field_encryption_custody_kind(true, "production"),
-            Err(ApplyLifecycleError::FieldEncryptionCustody)
-        ));
-        assert!(validate_field_encryption_custody_kind(false, "production").is_ok());
     }
 }

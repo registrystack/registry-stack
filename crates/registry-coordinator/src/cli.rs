@@ -5,6 +5,8 @@ use crate::{
     runtime::RuntimeConfig, scenarios, CoordinatorError, Result,
 };
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_platform_config::{declared_with_production_alias, DeclaredPosture};
+use registry_platform_httputil::{validate_response_headers, PeerPolicy, ResponseHeaderError};
 use serde_json::{json, Value};
 use std::{
     fs::File,
@@ -31,6 +33,13 @@ struct Cli {
     #[arg(long, global = true, value_name = "FILE")]
     /// Runtime configuration file.
     runtime_config: Option<PathBuf>,
+    #[arg(
+        long,
+        global = true,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -100,8 +109,25 @@ enum ExplainTopic {
     /// List the helpers a pure Function may call, with the interpreter ABI and limits.
     Functions,
 }
+mod identity_facts;
+
+#[derive(Subcommand)]
+enum GenerateTopic {
+    /// Describe the clients and policies of one configured issuer.
+    IdentityFacts {
+        /// Output file to create.
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+        /// Issuer entry to describe. Required when several entries are configured.
+        #[arg(long, value_name = "ID")]
+        issuer: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 enum Command {
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Send one raw HTTP request using a saved Coordinator connection.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage named Coordinator API connections.
@@ -115,7 +141,7 @@ enum Command {
         #[arg(long, hide = true, env = "COORDINATOR_BIN", value_name = "BINARY")]
         coordinator_bin: Option<PathBuf>,
     },
-    /// Create a reviewed four-file starter and its .gitignore in a new or empty directory.
+    /// Create a reviewed starter with a development plan in a new or empty directory.
     Init {
         #[arg(long)]
         /// New or empty project directory; a directory with content is refused.
@@ -123,6 +149,11 @@ enum Command {
         #[arg(long)]
         /// Project id written into workflow.yaml; defaults to the directory name.
         id: Option<String>,
+    },
+    /// Generate an artifact from the runtime configuration.
+    Generate {
+        #[command(subcommand)]
+        topic: GenerateTopic,
     },
     /// Validate the workflow, functions and root YAML companions offline.
     Check {
@@ -134,10 +165,14 @@ enum Command {
         explain: bool,
         #[arg(long)]
         /// Refuse warnings, including checks deferred until environment values are supplied.
+        /// Development posture listings do not count.
         deny_warnings: bool,
         #[arg(long)]
         /// Substitute runtime environment expressions; secret values are never resolved.
         environment: bool,
+        #[arg(long)]
+        /// Check under the production posture.
+        production: bool,
     },
     /// Explain a checked graph, mappings and execution bounds offline, or the helpers Functions may call.
     #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -192,6 +227,9 @@ enum Command {
         /// Active workflow to retire because its package is no longer listed; repeat for each workflow.
         remove_workflow: Vec<String>,
     },
+    /// Create the database, the migration and runtime roles, and the grants `apply` expects, as a PostgreSQL administrator.
+    #[command(mut_arg("runtime_config", |argument| argument.required(false)))]
+    Provision(registry_platform_provision::cli::ProvisionArgs),
     /// Apply every listed workflow's package and least-privileged runtime grants using migration credentials.
     Apply {
         #[arg(long = "remove-workflow", value_name = "WORKFLOW")]
@@ -371,15 +409,18 @@ impl Command {
         match self {
             Self::Api(_) => "api",
             Self::Connection { .. } => "connection",
+            Self::RstackDev(_) => "rstack-dev",
             Self::Serve { .. } => "serve",
             Self::Init { .. } => "init",
             Self::Check { .. } => "check",
+            Self::Generate { .. } => "generate identity-facts",
             Self::Explain { .. } => "explain",
             Self::Types { .. } => "types",
             Self::Workflow { .. } => "workflow",
             Self::Test { .. } => "test",
             Self::Package { .. } => "package",
             Self::Plan { .. } => "plan",
+            Self::Provision(_) => "provision",
             Self::Apply { .. } => "apply",
             Self::DeploymentStatus => "deployment-status",
             Self::Openapi => "openapi",
@@ -407,6 +448,8 @@ fn check(
     explain: bool,
     deny_warnings: bool,
     environment: bool,
+    declared: DeclaredPosture,
+    explicit_settings: &mut Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 ) -> Result<Value> {
     use registry_platform_yaml::{Report, Severity};
     if project.is_none() && runtime.is_none() {
@@ -431,11 +474,13 @@ fn check(
         }
     });
     if let Some(path) = runtime {
-        let (findings, runtime_exit) = crate::project_check::check_runtime(
+        let (findings, runtime_exit, settings) = crate::project_check::check_runtime(
             path,
             loaded.as_ref().map(|(definition, _)| definition),
             environment,
+            declared,
         );
+        *explicit_settings = settings;
         report.extend(findings);
         exit_code = exit_code.max(runtime_exit);
     }
@@ -447,12 +492,15 @@ fn check(
                 .map(|(definition, workflow)| (definition, workflow)),
             runtime,
             environment,
+            declared,
         );
         report.extend(findings);
         exit_code = exit_code.max(project_exit);
         registry_platform_config::apply_check_acceptances(path, &mut report);
     }
-    if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    if report.has_errors()
+        || (deny_warnings && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         return Err(CoordinatorError::from_report(report).with_exit(exit_code));
     }
     let mut result = match loaded.map(|(definition, _)| definition) {
@@ -581,18 +629,24 @@ fn token_text_file(path: &Path, maximum: usize) -> Result<String> {
                 .suggest("Write the --token-file file as UTF-8 text.")
         })
 }
-fn runtime(cli: &Cli) -> Result<RuntimeConfig> {
-    RuntimeConfig::load(&runtime_config(cli)?.ok_or_else(|| {
-        CoordinatorError::new("runtime-config-required", "supply --runtime-config FILE")
-            .suggest("Add --runtime-config with the deployment's runtime.yaml.")
-    })?)
+fn runtime(cli: &Cli, declared: DeclaredPosture) -> Result<RuntimeConfig> {
+    RuntimeConfig::load_with_posture(
+        &runtime_config(cli)?.ok_or_else(|| {
+            CoordinatorError::new("runtime-config-required", "supply --runtime-config FILE")
+                .suggest("Add --runtime-config with the deployment's runtime.yaml.")
+        })?,
+        declared,
+    )
 }
-/// `--runtime-config` made absolute against the working directory, with `.`
-/// and `..` resolved by name, as the runtime loader requires.
 fn runtime_config(cli: &Cli) -> Result<Option<PathBuf>> {
-    let Some(path) = cli.runtime_config.as_deref() else {
-        return Ok(None);
-    };
+    cli.runtime_config
+        .as_deref()
+        .map(absolute_runtime_path)
+        .transpose()
+}
+/// A `--runtime-config` path made absolute against the working directory, with
+/// `.` and `..` resolved by name, as the runtime loader requires.
+pub(crate) fn absolute_runtime_path(path: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(path).map_err(|_| {
         CoordinatorError::new(
             "runtime-config-unresolved",
@@ -610,14 +664,50 @@ fn runtime_config(cli: &Cli) -> Result<Option<PathBuf>> {
             other => normal.push(other),
         }
     }
-    Ok(Some(normal))
+    Ok(normal)
 }
+fn validate_coordinator_peer(
+    response: &reqwest::Response,
+    peer_policy: PeerPolicy,
+    mutation_sent: bool,
+) -> Result<()> {
+    validate_response_headers(response.headers(), peer_policy).map_err(|error| {
+        let mut refusal = match error {
+        ResponseHeaderError::DevelopmentPeer if mutation_sent => CoordinatorError::new(
+            "development-peer",
+            "The development Coordinator may already have applied the request.",
+        )
+        .suggest("Inspect the run before repeating the command."),
+        ResponseHeaderError::DevelopmentPeer => CoordinatorError::new(
+            "development-peer",
+            "The Coordinator declared development and this command runs as production.",
+        )
+        .suggest("Use a production Coordinator, or declare development with --posture development or REGISTRY_STACK_POSTURE=development."),
+        _ => CoordinatorError::new(
+            "service-unavailable",
+            "the service response headers exceeded their bounds",
+        )
+        .suggest("Check that --url names the Coordinator service origin."),
+        };
+        refusal.field = Some("/--url".into());
+        refusal
+    })
+}
+
+fn probe_refusal(code: &'static str, message: &'static str) -> CoordinatorError {
+    let mut refusal = CoordinatorError::new(code, message)
+        .suggest("Check that --url reaches the Coordinator API and the proxy preserves the response from /v1/doctor.");
+    refusal.field = Some("/--url".into());
+    refusal
+}
+
 async fn remote(
     service: &Service,
     method: reqwest::Method,
     path: &str,
     body: Option<Value>,
     key: Option<&str>,
+    peer_policy: PeerPolicy,
 ) -> Result<Value> {
     let mut url = service.url.clone().ok_or_else(|| {
         CoordinatorError::new(
@@ -627,8 +717,12 @@ async fn remote(
         .suggest("Add --url with the Coordinator service origin, such as --url https://coordinator.example.org.")
     })?;
     let loopback = match url.host() {
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv4(ip)) => {
+            registry_platform_httputil::loopback::loopback_address(ip.into())
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            registry_platform_httputil::loopback::loopback_address(ip.into())
+        }
         _ => false,
     };
     if !(url.scheme() == "https" || url.scheme() == "http" && loopback)
@@ -659,8 +753,6 @@ async fn remote(
         )
         .suggest("Write one current compact access token, three dot-separated parts, into the --token-file file.")
     })?;
-    url.set_path(path.split('?').next().unwrap_or(path));
-    url.set_query(path.split_once('?').map(|(_, q)| q));
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
@@ -669,6 +761,41 @@ async fn remote(
         .map_err(|_| {
             CoordinatorError::new("service-unavailable", "cannot initialize the HTTP client")
         })?;
+    let is_mutation = method != reqwest::Method::GET;
+    if is_mutation {
+        let mut probe = url.clone();
+        probe.set_path("/v1/doctor");
+        let response = client.get(probe).send().await.map_err(|_| {
+            probe_refusal(
+                "service-unavailable",
+                "the Coordinator API posture probe could not answer",
+            )
+        })?;
+        let mut marks = response.headers().get_all("registry-posture").iter();
+        if marks
+            .next()
+            .is_some_and(|mark| mark != "production" && mark != "development")
+            || marks.next().is_some()
+        {
+            return Err(probe_refusal(
+                "probe-posture-invalid",
+                "the Coordinator API posture probe returned a malformed or repeated Registry-Posture header",
+            ));
+        }
+        validate_coordinator_peer(&response, peer_policy, false)?;
+        // The doctor handler answers 200 on success and 401 without a bearer token.
+        if !matches!(
+            response.status(),
+            reqwest::StatusCode::OK | reqwest::StatusCode::UNAUTHORIZED
+        ) {
+            return Err(probe_refusal(
+                "service-unavailable",
+                "the Coordinator API posture probe returned an unexpected status",
+            ));
+        }
+    }
+    url.set_path(path.split('?').next().unwrap_or(path));
+    url.set_query(path.split_once('?').map(|(_, q)| q));
     let mut request = client.request(method, url).bearer_auth(token.as_str());
     if let Some(body) = body {
         request = request.json(&body);
@@ -683,6 +810,7 @@ async fn remote(
         )
         .suggest("Check that --url reaches the running Coordinator service, then inspect the original run before repeating the command.")
     })?;
+    validate_coordinator_peer(&response, peer_policy, is_mutation)?;
     let status = response.status();
     let bytes = registry_platform_httputil::read_bounded(response, 1_048_576)
         .await
@@ -781,9 +909,8 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
         ProblemCode::RunDefinitionIncompatible => "This service's Coordinator version cannot interpret the run's pinned definition, so it holds the run and refuses to retry, reconcile or cancel it; only a Coordinator release that accepts that definition can.",
         ProblemCode::ReceiptExpired => "Consult the receiving product's own records for the original command rather than inferring it was not sent, and cancel the run when no further execution is appropriate.",
         ProblemCode::EventInvalid => "Correct the producer event contract or the reviewed trigger's event schema and input mapping before retrying delivery.",
-        ProblemCode::EventSourceUnavailable => "Restore the event source signing key and its enabled secret provider in runtime.yaml before retrying delivery.",
         ProblemCode::EventTooLarge => "Project fewer or smaller fields into the producer's event so it fits the 131072-byte event value profile, then redeliver it.",
-        ProblemCode::EventUnauthenticated => "Use the exact configured event source, accepted event type and data schema, and a fresh signature covering the received method, target, headers and canonical body.",
+        ProblemCode::EventUnauthenticated => "Sign the webhook ID, timestamp and exact body with the key configured for this trigger URL, within 300 seconds.",
         ProblemCode::EvaluationUncertain => "Inspect the run and cancel it when no further execution is appropriate; retry-same never reevaluates an evaluation that may have completed.",
         ProblemCode::MutationUncertain => "Inspect the run and cancel it when no further execution is appropriate; retry-same never repeats an unkeyed mutation that may have completed.",
         ProblemCode::RunPayloadErased => "Retention erased this run's payloads; inspect it, but it can no longer be retried or reconciled.",
@@ -810,28 +937,47 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
         | ProblemCode::RuntimeFailure => return None,
     })
 }
-async fn execute(cli: &Cli) -> Result<Value> {
+async fn execute(
+    cli: &Cli,
+    declared: DeclaredPosture,
+    explicit_settings: &mut Option<Vec<registry_cli_report::ExplicitSettingLine>>,
+) -> Result<Value> {
+    // Every typed command reads the service through the declared posture.
+    let peer = crate::adapters::peer_policy(declared.posture);
     match &cli.command {
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
         }
         Command::Serve { .. } => {
             unreachable!("serve replaces the ctl process before report dispatch")
         }
+        Command::Provision(_) => {
+            unreachable!("provision writes its own report before report dispatch")
+        }
         Command::Init { directory, id } => {
             let created = project::init(directory, id.as_deref())?;
             Ok(json!({"status":"initialized","project":directory,"created":created}))
         }
-        Command::Check { project, explain, deny_warnings, environment } => check(project.as_deref(), runtime_config(cli)?.as_deref(), *explain, *deny_warnings, *environment),
+        Command::Generate { topic: GenerateTopic::IdentityFacts { output, issuer } } => {
+            let path = cli.runtime_config.as_ref().filter(|path| path.is_absolute())
+                .ok_or_else(|| CoordinatorError::new(
+                    "coordinator.command.usage", "an absolute --runtime-config path is required",
+                ).suggest("Supply --runtime-config ABS.").with_exit(2))?;
+            let runtime = RuntimeConfig::load_with_posture(path, declared)?;
+            identity_facts::write(&deployment::config(&runtime)?.authentication, issuer.as_deref(), path, output)?;
+            Ok(json!({"status":"generated","output":output}))
+        }
+        Command::Check { project, explain, deny_warnings, environment, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), *explain, *deny_warnings, *environment, declared, explicit_settings),
         Command::Explain { topic: Some(ExplainTopic::Functions), .. } => Ok(crate::functions::explain()),
-        Command::Explain { project, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), true, false, false),
+        Command::Explain { project, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), true, false, false, declared, explicit_settings),
         Command::Test { project, scenarios } => test(project, scenarios.as_deref()),
         Command::Package { project, output } => {
             Ok(json!({"packageDigest":deployment::package(project,output)?,"root":output}))
         }
         Command::Plan { remove_workflow } | Command::Apply { remove_workflow } => {
             let apply = matches!(cli.command, Command::Apply { .. });
-            let r = runtime(cli)?;
+            let r = runtime(cli, declared)?;
             let workflows = deployment::load_workflows(deployment::config(&r)?)?;
             let store = deployment::open_ctl(&r, apply).await?;
             if apply {
@@ -842,13 +988,13 @@ async fn execute(cli: &Cli) -> Result<Value> {
             }
         }
         Command::DeploymentStatus => {
-            let r = runtime(cli)?;
+            let r = runtime(cli, declared)?;
             let workflows = deployment::load_workflows(deployment::config(&r)?)?;
             workflows.validate(&r)?;
             let store = deployment::open_ctl(&r, false).await?;
-            let (active, held_runs) = deployment::check_status(&store, &r, workflows.digest()).await?;
+            let (active, held_runs, findings) = deployment::check_status(&store, &r, workflows.digest()).await?;
             let d = deployment::config(&r)?;
-            Ok(json!({"status":"checked","databaseId":d.database_id,"workflowsDigest":workflows.digest(),"workflows":workflows.package_digests(),"schemaVersion":crate::store::SCHEMA_VERSION,"runtimeRole":d.runtime_role,"active":active,"heldRuns":held_runs}))
+            Ok(json!({"status":"checked","databaseId":d.database_id,"workflowsDigest":workflows.digest(),"workflows":workflows.package_digests(),"schemaVersion":crate::store::SCHEMA_VERSION,"runtimeRole":d.runtime_role,"active":active,"heldRuns":held_runs,"diagnostics":findings}))
         }
         Command::Openapi => Ok(http::openapi()),
         Command::Types { project, language, output } => {
@@ -860,7 +1006,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
         }
         Command::Workflow { workflow, service } => {
             if !crate::definition::valid_name(workflow) { return Err(CoordinatorError::new("input-invalid", "supply a bounded workflow identifier")); }
-            remote(service, reqwest::Method::GET, &format!("/v1/workflows/{workflow}"), None, None).await
+            remote(service, reqwest::Method::GET, &format!("/v1/workflows/{workflow}"), None, None, peer).await
         }
         Command::Start {
             workflow,
@@ -878,6 +1024,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 "/v1/runs",
                 Some(json!({"workflow":workflow,"workflowRevision":workflow_revision,"input":input})),
                 Some(&key),
+                peer,
             )
             .await
         }
@@ -888,6 +1035,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 &format!("/v1/runs/{run}"),
                 None,
                 None,
+                peer,
             )
             .await
         }
@@ -931,6 +1079,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 &query,
                 None,
                 None,
+                peer,
             )
             .await
         }
@@ -941,6 +1090,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 &format!("/v1/runs/{run}/inspect"),
                 None,
                 None,
+                peer,
             )
             .await
         }
@@ -958,6 +1108,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 &format!("/v1/runs/{run}/{action}"),
                 Some(json!({"reason":reason})),
                 None,
+                peer,
             )
             .await
         }
@@ -968,10 +1119,13 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 &format!("/v1/runs/{run}/check"),
                 Some(json!({"step":step})),
                 None,
+                peer,
             )
             .await
         }
-        Command::Doctor { service } => remote(service, reqwest::Method::GET, "/v1/doctor", None, None).await,
+        Command::Doctor { service } => {
+            remote(service, reqwest::Method::GET, "/v1/doctor", None, None, peer).await
+        }
         Command::RestoreHold { reason, service } | Command::ReleaseRestoreHold { reason, service } => {
             remote(
                 service,
@@ -983,11 +1137,12 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 },
                 Some(json!({"reason":reason})),
                 None,
+                peer,
             )
             .await
         }
-        Command::ReleaseAdmissionHold { recovery_reference, admission_history_complete, prior_deployment_fenced, service } => remote(service,reqwest::Method::POST,"/v1/release-admission-hold",Some(json!({"recoveryReference":recovery_reference,"admissionHistoryComplete":admission_history_complete,"priorDeploymentFenced":prior_deployment_fenced})),None).await,
-        Command::CompleteExecutionRecovery { recovery_reference, execution_history_complete, prior_deployment_fenced, service } => remote(service,reqwest::Method::POST,"/v1/complete-execution-recovery",Some(json!({"recoveryReference":recovery_reference,"executionHistoryComplete":execution_history_complete,"priorDeploymentFenced":prior_deployment_fenced})),None).await,
+        Command::ReleaseAdmissionHold { recovery_reference, admission_history_complete, prior_deployment_fenced, service } => remote(service,reqwest::Method::POST,"/v1/release-admission-hold",Some(json!({"recoveryReference":recovery_reference,"admissionHistoryComplete":admission_history_complete,"priorDeploymentFenced":prior_deployment_fenced})),None,peer).await,
+        Command::CompleteExecutionRecovery { recovery_reference, execution_history_complete, prior_deployment_fenced, service } => remote(service,reqwest::Method::POST,"/v1/complete-execution-recovery",Some(json!({"recoveryReference":recovery_reference,"executionHistoryComplete":execution_history_complete,"priorDeploymentFenced":prior_deployment_fenced})),None,peer).await,
         Command::Retain { before, limit, service } => {
             remote(
                 service,
@@ -995,6 +1150,7 @@ async fn execute(cli: &Cli) -> Result<Value> {
                 "/v1/retention",
                 Some(json!({"before":before,"limit":limit})),
                 None,
+                peer,
             )
             .await
         }
@@ -1065,6 +1221,13 @@ fn usage(error: &clap::Error, arguments: &[String]) -> CoordinatorError {
         (ErrorKind::MissingRequiredArgument, Some(_)) => (
             format!("missing required argument {all}"),
             format!("Add {all}; {help} describes it."),
+        ),
+        // A required argument the command's own definition relaxes, so that a
+        // global flag given before the command satisfies it, is checked when
+        // its value is read and names no argument.
+        (ErrorKind::MissingRequiredArgument, None) => (
+            "missing required argument".to_owned(),
+            format!("Add the missing argument; {help} describes it."),
         ),
         (ErrorKind::InvalidValue | ErrorKind::ValueValidation, Some(name)) => (
             format!("invalid value for {name}"),
@@ -1158,15 +1321,96 @@ pub async fn run() -> std::process::ExitCode {
                 .any(|pair| pair == ["--format", "json"])
                 || arguments.iter().any(|argument| argument == "--format=json");
             if json {
-                write_report(false, "usage", failure_value(&error, 2));
-            } else {
-                eprint!("{}", error.report().render_human());
+                return report_exit(write_report(false, "usage", failure_value(&error, 2)), 2);
             }
+            eprint!("{}", error.report().render_human());
             return std::process::ExitCode::from(2);
         }
     };
+    if let Command::RstackDev(args) = cli.command {
+        return tokio::task::spawn_blocking(move || {
+            registry_rstack_dev::run(args, &mut std::io::stdout(), &mut std::io::stderr())
+        })
+        .await
+        .unwrap_or(std::process::ExitCode::FAILURE);
+    }
+    let posture_flag = match &cli.command {
+        Command::Provision(args) => args.posture.as_deref().or(cli.posture.as_deref()),
+        _ => cli.posture.as_deref(),
+    };
+    let production = matches!(
+        cli.command,
+        Command::Check {
+            production: true,
+            ..
+        }
+    );
+    let posture_error = |code, message, action| {
+        let error = CoordinatorError::new(code, message)
+            .suggest(action)
+            .with_exit(2);
+        match cli.format {
+            Format::Human => eprint!("{}", error.report().render_human()),
+            Format::Json => {
+                return report_exit(
+                    write_report(false, cli.command.name(), failure_value(&error, 2)),
+                    2,
+                )
+            }
+        }
+        std::process::ExitCode::from(2)
+    };
+    // The root and provision flags share a Clap argument ID. The parsed value
+    // can lose the earlier occurrence, so check the accepted spellings here.
+    if matches!(cli.command, Command::Provision(_)) {
+        let postures = os_arguments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, argument)| {
+                let argument = argument.to_str()?;
+                if argument == "--posture" {
+                    os_arguments.get(index + 1)?.to_str()
+                } else {
+                    argument.strip_prefix("--posture=")
+                }
+            });
+        for posture in postures.clone() {
+            if let Err(error) = registry_platform_config::declared_from(Some(posture), None) {
+                return posture_error(error.code(), error.message(), error.suggested_action());
+            }
+        }
+        if let Some(first) = postures.clone().next() {
+            if postures.skip(1).any(|other| other != first) {
+                return posture_error(
+                    "platform.posture.conflict",
+                    "the global and provision --posture flags declare different postures",
+                    "Declare the posture once, or give both flags the same value.",
+                );
+            }
+        }
+    }
+    if production && posture_flag == Some("development") {
+        return posture_error(
+            "platform.posture.conflict",
+            "--production and --posture development contradict each other",
+            "Use one of them.",
+        );
+    }
+    let declared = match declared_with_production_alias(posture_flag, production) {
+        Ok(declared) => declared,
+        Err(error) => {
+            return posture_error(error.code(), error.message(), error.suggested_action())
+        }
+    };
     if let Command::Serve { coordinator_bin } = &cli.command {
-        return serve(&cli, coordinator_bin.as_deref(), format_requested);
+        return serve(&cli, coordinator_bin.as_deref(), format_requested, declared);
+    }
+    if let Command::Provision(args) = &cli.command {
+        let format = match cli.format {
+            Format::Human => registry_platform_provision::cli::OutputFormat::Human,
+            Format::Json => registry_platform_provision::cli::OutputFormat::Json,
+        };
+        return crate::provision::run(args.clone(), format, declared).await;
     }
     let cli = match cli {
         Cli {
@@ -1215,13 +1459,23 @@ pub async fn run() -> std::process::ExitCode {
         }
         cli => cli,
     };
-    match execute(&cli).await {
+    let mut explicit_settings = None;
+    match execute(&cli, declared, &mut explicit_settings).await {
         Ok(value) => {
             let tested = matches!(cli.command, Command::Test { .. });
             let ok = !(tested && value["status"] == "failed");
-            match cli.format {
-                Format::Json if matches!(cli.command, Command::Openapi) => println!("{value}"),
-                Format::Json => write_report(ok, cli.command.name(), value),
+            let written = match cli.format {
+                Format::Json if matches!(cli.command, Command::Openapi) => {
+                    use std::io::Write as _;
+                    writeln!(std::io::stdout().lock(), "{value}")
+                }
+                Format::Json => write_report_with_settings(
+                    ok,
+                    cli.command.name(),
+                    value,
+                    declared,
+                    explicit_settings,
+                ),
                 Format::Human => {
                     if let Some(diagnostics) = value["diagnostics"].as_array() {
                         if !diagnostics.is_empty() {
@@ -1236,24 +1490,38 @@ pub async fn run() -> std::process::ExitCode {
                         }
                     }
                     print!("{}", render_human(&cli, &value));
+                    print_explicit_settings(explicit_settings.as_deref().unwrap_or_default());
+                    Ok(())
                 }
-            }
-            if ok {
-                std::process::ExitCode::SUCCESS
-            } else {
-                std::process::ExitCode::from(1)
-            }
+            };
+            report_exit(written, u8::from(!ok))
         }
         Err(e) => {
-            match cli.format {
-                Format::Human => eprint!("{}", e.report().render_human()),
-                Format::Json => {
-                    write_report(false, cli.command.name(), failure_value(&e, e.exit_code))
+            let written = match cli.format {
+                Format::Human => {
+                    eprint!("{}", e.report().render_human());
+                    print_explicit_settings(explicit_settings.as_deref().unwrap_or_default());
+                    Ok(())
                 }
-            }
-            std::process::ExitCode::from(e.exit_code)
+                Format::Json => write_report_with_settings(
+                    false,
+                    cli.command.name(),
+                    failure_value(&e, e.exit_code),
+                    declared,
+                    explicit_settings,
+                ),
+            };
+            report_exit(written, e.exit_code)
         }
     }
+}
+
+fn report_exit(written: std::io::Result<()>, exit: u8) -> std::process::ExitCode {
+    if written.is_err() {
+        eprintln!("error: the CLI report could not be written");
+        return std::process::ExitCode::from(3);
+    }
+    std::process::ExitCode::from(exit)
 }
 
 fn api_result(
@@ -1268,7 +1536,12 @@ fn api_result(
     }
 }
 
-fn serve(cli: &Cli, explicit: Option<&Path>, format_requested: bool) -> std::process::ExitCode {
+fn serve(
+    cli: &Cli,
+    explicit: Option<&Path>,
+    format_requested: bool,
+    declared: DeclaredPosture,
+) -> std::process::ExitCode {
     if format_requested {
         let error = CoordinatorError::new(
             "coordinator.cli.usage",
@@ -1276,7 +1549,9 @@ fn serve(cli: &Cli, explicit: Option<&Path>, format_requested: bool) -> std::pro
         )
         .suggest("Remove --format and retry.");
         match cli.format {
-            Format::Json => write_report(false, "usage", failure_value(&error, 2)),
+            Format::Json => {
+                return report_exit(write_report(false, "usage", failure_value(&error, 2)), 2)
+            }
             Format::Human => eprint!("{}", error.report().render_human()),
         }
         return std::process::ExitCode::from(2);
@@ -1300,6 +1575,7 @@ fn serve(cli: &Cli, explicit: Option<&Path>, format_requested: bool) -> std::pro
     };
     let mut command = std::process::Command::new(binary);
     command.arg("--runtime-config").arg(runtime_config);
+    command.arg("--posture").arg(declared.posture.as_str());
     replace_with_service(command, "coordinator")
 }
 
@@ -1586,11 +1862,67 @@ fn failure_value(error: &CoordinatorError, exit: u8) -> Value {
     json!({"status": match exit { 2 => "usage-error", 3 => "operational-failure", _ => "domain-refusal" }, "diagnostics":error.report().to_json_value()})
 }
 
+fn with_posture(mut value: Value, declared: DeclaredPosture) -> Value {
+    if !value.is_object() {
+        value = json!({"result": value});
+    }
+    value["posture"] = json!({
+        "value": declared.posture.as_str(),
+        "source": declared.source.as_str(),
+    });
+    value
+}
+
+fn print_explicit_settings(settings: &[registry_cli_report::ExplicitSettingLine]) {
+    for setting in settings {
+        println!(
+            "Explicit production setting {} at {}. {}.",
+            setting.code,
+            setting.pointer.as_deref().unwrap_or_default(),
+            setting.summary
+        );
+    }
+}
+
+fn write_report_with_settings(
+    ok: bool,
+    command: &str,
+    mut value: Value,
+    declared: DeclaredPosture,
+    settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
+) -> std::io::Result<()> {
+    let Some(settings) = settings else {
+        return write_report(ok, command, with_posture(value, declared));
+    };
+    report_envelope(ok, command, &mut value);
+    let report = registry_cli_report::Report::new(&value, env!("CARGO_PKG_VERSION"))
+        .map_err(std::io::Error::other)?
+        .with_posture(declared)
+        .explicit_settings(settings);
+    let explicit = serde_json::to_value(report)?;
+    value["explicitProductionSettings"] = explicit["explicitProductionSettings"].clone();
+    write_report(ok, command, with_posture(value, declared))
+}
+
 /// One report envelope for local commands and authenticated operation results.
-pub fn write_report(ok: bool, command: &str, mut value: Value) {
+pub fn write_report(ok: bool, command: &str, mut value: Value) -> std::io::Result<()> {
+    use std::io::Write as _;
+
     if !value.is_object() {
         value = json!({"result":value});
     }
+    report_envelope(ok, command, &mut value);
+    let mut stdout = std::io::stdout().lock();
+    if let (Some(posture), Some(value)) = (value.get("posture"), value.as_object()) {
+        serde_json::to_writer(&mut stdout, &PostureReport { value, posture })?;
+    } else {
+        serde_json::to_writer(&mut stdout, &value)?;
+    }
+    writeln!(stdout)?;
+    stdout.flush()
+}
+
+fn report_envelope(ok: bool, command: &str, value: &mut Value) {
     if value.get("diagnostics").is_none() {
         value["diagnostics"] = json!([]);
     }
@@ -1601,7 +1933,47 @@ pub fn write_report(ok: bool, command: &str, mut value: Value) {
     if value.get("status").is_none() {
         value["status"] = json!("completed");
     }
-    println!("{value}");
+}
+
+struct PostureReport<'a> {
+    value: &'a serde_json::Map<String, Value>,
+    posture: &'a Value,
+}
+
+impl serde::Serialize for PostureReport<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        #[derive(serde::Serialize)]
+        struct PostureMember<'a> {
+            value: &'a Value,
+            source: &'a Value,
+        }
+        let mut map = serializer.serialize_map(Some(self.value.len()))?;
+        for (key, value) in self.value {
+            if !matches!(
+                key.as_str(),
+                "posture" | "explicitProductionSettings" | "outcome" | "diagnostics"
+            ) {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.serialize_entry(
+            "posture",
+            &PostureMember {
+                value: &self.posture["value"],
+                source: &self.posture["source"],
+            },
+        )?;
+        for key in ["explicitProductionSettings", "outcome", "diagnostics"] {
+            if let Some(value) = self.value.get(key) {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.end()
+    }
 }
 
 /// Public command tree used by the supported CLI reference generator.

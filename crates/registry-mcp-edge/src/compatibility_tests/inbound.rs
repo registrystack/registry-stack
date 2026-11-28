@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{
-    io::{self, Write},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     body::Body,
@@ -14,12 +10,14 @@ use axum::{
     Router,
 };
 use registry_platform_audit::AuditProfile;
+use registry_platform_authcommon::FailedCheck;
+use registry_platform_config::Posture;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     access_token_typ_set, is_access_token_typ_pair, Claims, JwksFetcher, JwksFetcherConfig,
     OidcError, VerifiedToken,
 };
-use registry_platform_testing::{TestAuthorizationServer, TestClient};
+use registry_platform_testing::{CapturedDiagnosticLogs, TestAuthorizationServer, TestClient};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use url::Url;
@@ -27,45 +25,14 @@ use zeroize::Zeroizing;
 
 use crate::{
     inbound::{metadata_url, require_caller, retry_after_seconds, Refusal},
-    token_verifier, AccessTokenAlgorithm, RateLimitOptions, ResourceServer, ResourceServerOptions,
-    TokenBucketOptions, VerifiedCaller,
+    token_verifier, AccessTokenAlgorithm, RateLimitOptions, ResourceServer, ResourceServerError,
+    ResourceServerOptions, TokenBucketOptions, VerifiedCaller,
 };
 
 const RESOURCE: &str = "https://gateway.example.test/mcp";
 const CHAT_HOST: &str = "chat-host";
 const SCOPE: &str = "address-correction:self";
 const METADATA: &str = "https://gateway.example.test/.well-known/oauth-protected-resource/mcp";
-
-#[derive(Clone, Default)]
-struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
-
-impl Write for CapturedLogs {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0
-            .lock()
-            .expect("log buffer lock")
-            .extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedLogs {
-    type Writer = Self;
-
-    fn make_writer(&'writer self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-impl CapturedLogs {
-    fn text(&self) -> String {
-        String::from_utf8(self.0.lock().expect("log buffer lock").clone()).expect("UTF-8 logs")
-    }
-}
 
 fn now() -> i64 {
     i64::try_from(
@@ -116,10 +83,10 @@ fn resource_server_for(
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         authorization.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     Arc::new(
-        ResourceServer::new(
+        ResourceServer::new_with_posture(
             &options,
             token_verifier(&options, fetcher),
             hasher(),
@@ -133,6 +100,7 @@ fn resource_server_for(
                     burst: client,
                 },
             },
+            Posture::Development,
         )
         .expect("resource server"),
     )
@@ -189,7 +157,7 @@ async fn the_authored_resource_is_the_exact_audience_and_metadata_identifier() {
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         auth.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let verifier = token_verifier(&options, fetcher);
 
@@ -211,7 +179,7 @@ async fn the_authored_resource_is_the_exact_audience_and_metadata_identifier() {
     );
     assert!(verifier.verify(&canonical).await.is_err());
 
-    let resource_server = ResourceServer::new(
+    let resource_server = ResourceServer::new_with_posture(
         &options,
         verifier,
         hasher(),
@@ -225,6 +193,7 @@ async fn the_authored_resource_is_the_exact_audience_and_metadata_identifier() {
                 burst: 10,
             },
         },
+        Posture::Development,
     )
     .expect("resource server");
     assert_eq!(
@@ -433,9 +402,15 @@ async fn every_refusal_is_a_problem_document() {
     let auth = authorization_server().await;
     let server = resource_server_for(&auth, 10, 10);
     let cases = [
-        (Refusal::Missing, 401, "Unauthorized", "unauthorized", true),
         (
-            Refusal::InvalidToken,
+            Refusal::Missing(FailedCheck::CredentialMissing),
+            401,
+            "Unauthorized",
+            "unauthorized",
+            true,
+        ),
+        (
+            Refusal::InvalidToken(FailedCheck::TokenAudience),
             401,
             "Unauthorized",
             "invalid-token",
@@ -473,7 +448,7 @@ async fn every_refusal_is_a_problem_document() {
         ),
     ];
     for (refusal, status, title, code, challenged) in cases {
-        let response = server.refusal_response(refusal);
+        let response = server.refuse(refusal);
         assert_eq!(response.status().as_u16(), status, "{code}");
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE),
@@ -506,14 +481,9 @@ async fn every_refusal_is_a_problem_document() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn an_unreachable_key_set_is_the_operators_failure() {
-    let logs = CapturedLogs::default();
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .without_time()
-        .with_max_level(tracing::Level::TRACE)
-        .with_writer(logs.clone())
-        .finish();
-    let _capture = tracing::subscriber::set_default(subscriber);
+    let logs = CapturedDiagnosticLogs::default();
+    let _capture =
+        tracing::dispatcher::set_default(&logs.subscriber_with_max_level(tracing::Level::TRACE));
     let auth = authorization_server().await;
     let token = auth.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -526,14 +496,14 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
     drop(listener);
     let options = options(&auth);
     let server = Arc::new(
-        ResourceServer::new(
+        ResourceServer::new_with_posture(
             &options,
             token_verifier(
                 &options,
                 Arc::new(JwksFetcher::new_with_fetch_url_policy(
                     closed,
                     JwksFetcherConfig::defaults(),
-                    FetchUrlPolicy::dev(),
+                    FetchUrlPolicy::https_or_loopback(),
                 )),
             ),
             hasher(),
@@ -547,19 +517,38 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
                     burst: 10,
                 },
             },
+            Posture::Development,
         )
         .expect("server"),
     );
     let router = Router::new()
         .route("/mcp", post(|| async { "ok" }))
         .layer(axum::middleware::from_fn_with_state(server, require_caller));
+    // Another test thread, with no subscriber of its own, may reach the
+    // refusal line first. A capture that is the only registered dispatcher
+    // then never sees that line, so this test reaches it first on purpose
+    // and relies on the shared capture to keep it enabled here.
+    let elsewhere = resource_server_for(&auth, 10, 10);
+    std::thread::spawn(move || {
+        assert_eq!(
+            elsewhere.refuse(Refusal::KeySource).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    })
+    .join()
+    .expect("a thread without a subscriber refuses");
     assert_eq!(
         call(&router, Some(&token)).await.status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
     let logs = logs.text();
+    let refusals: Vec<&str> = logs
+        .lines()
+        .filter(|line| line.contains("request refused"))
+        .collect();
+    assert_eq!(refusals.len(), 1, "{logs}");
     assert!(
-        logs.contains("the access-token key set is unavailable"),
+        refusals[0].contains("\"failed_check\":\"key-source-unavailable\""),
         "{logs}"
     );
     assert!(!logs.contains("citizen-a"), "{logs}");
@@ -567,7 +556,8 @@ async fn an_unreachable_key_set_is_the_operators_failure() {
 }
 
 #[tokio::test]
-async fn a_production_key_set_on_a_loopback_address_is_refused_before_any_fetch() {
+async fn strict_fetch_policy_refuses_a_loopback_key_set_before_any_fetch() {
+    // This test selects the strict fetch policy explicitly.
     let auth = authorization_server().await;
     let token = auth.issue_access_token(CHAT_HOST, "citizen-a", RESOURCE, SCOPE, now() + 300);
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
@@ -593,12 +583,62 @@ fn retry_after_rounds_up_to_whole_seconds() {
 }
 
 #[tokio::test]
+async fn development_admits_loopback_http_and_production_refuses_all_http_resources() {
+    let auth = authorization_server().await;
+    for host in [
+        "127.0.0.1",
+        "127.0.0.2",
+        "[::1]",
+        "LOCALHOST",
+        "[::ffff:127.0.0.1]",
+    ] {
+        let mut options = options(&auth);
+        options.resource = format!("http://{host}:8095/mcp");
+        options.issuer = format!("http://{host}:8096");
+        assert_eq!(
+            options.validate_with_posture(Posture::Development),
+            Ok(()),
+            "{host}"
+        );
+        // Production refuses a plain http resource on every host.
+        assert_eq!(
+            options.validate(),
+            Err(ResourceServerError::Resource),
+            "{host}"
+        );
+    }
+    for host in [
+        "localhost.",
+        "app.localhost",
+        "10.0.0.1",
+        "[::ffff:10.0.0.1]",
+    ] {
+        let mut options = options(&auth);
+        options.resource = format!("http://{host}:8095/mcp");
+        assert_eq!(
+            options.validate(),
+            Err(ResourceServerError::Resource),
+            "{host}"
+        );
+        // Beyond loopback a plain http issuer also needs allowInsecureHttp,
+        // even in development.
+        options.issuer = format!("http://{host}:8096");
+        assert_eq!(
+            options.validate_with_posture(Posture::Development),
+            Err(ResourceServerError::Issuer),
+            "{host}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn localhost_is_a_development_loopback_resource_and_issuer() {
     let auth = authorization_server().await;
     let mut options = options(&auth);
     options.resource = "http://localhost:8095/mcp".to_owned();
     options.issuer = "http://localhost:8096".to_owned();
-    assert_eq!(options.validate(), Ok(()));
+    assert_eq!(options.validate_with_posture(Posture::Development), Ok(()));
+    assert_eq!(options.validate(), Err(ResourceServerError::Resource));
 }
 
 #[tokio::test]
@@ -608,9 +648,9 @@ async fn a_token_that_already_names_an_actor_is_refused() {
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         auth.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
-    let server = ResourceServer::new(
+    let server = ResourceServer::new_with_posture(
         &options,
         token_verifier(&options, fetcher),
         hasher(),
@@ -624,6 +664,7 @@ async fn a_token_that_already_names_an_actor_is_refused() {
                 burst: 10,
             },
         },
+        Posture::Development,
     )
     .expect("server");
     let mut claims: Claims = serde_json::from_value(json!({
@@ -636,15 +677,53 @@ async fn a_token_that_already_names_an_actor_is_refused() {
         matched_client: Some(format!("client_id:{CHAT_HOST}")),
         scopes: vec![SCOPE.to_owned()],
     };
-    assert!(server.caller_for_test(&delegated, "token").is_err());
+    assert_eq!(
+        server.caller_for_test(&delegated, "token").err(),
+        Some(Refusal::InvalidToken(FailedCheck::Delegation))
+    );
+    claims
+        .extra
+        .insert("may_act".to_owned(), json!({"sub": "x"}));
     claims.extra.remove("act");
-    claims.sub = None;
-    let anonymous = VerifiedToken {
-        claims,
+    let may_act = VerifiedToken {
+        claims: claims.clone(),
         matched_client: Some(format!("client_id:{CHAT_HOST}")),
         scopes: vec![SCOPE.to_owned()],
     };
-    assert!(server.caller_for_test(&anonymous, "token").is_err());
+    assert_eq!(
+        server.caller_for_test(&may_act, "token").err(),
+        Some(Refusal::InvalidToken(FailedCheck::Delegation))
+    );
+    claims.extra.remove("may_act");
+    let verified = |claims: Claims, matched_client: Option<String>| VerifiedToken {
+        claims,
+        matched_client,
+        scopes: vec![SCOPE.to_owned()],
+    };
+    let matched = || Some(format!("client_id:{CHAT_HOST}"));
+
+    let mut anonymous = claims.clone();
+    anonymous.sub = None;
+    assert_eq!(
+        server
+            .caller_for_test(&verified(anonymous, matched()), "token")
+            .err(),
+        Some(Refusal::InvalidToken(FailedCheck::TokenClaims))
+    );
+    assert_eq!(
+        server
+            .caller_for_test(&verified(claims.clone(), None), "token")
+            .err(),
+        Some(Refusal::InvalidToken(FailedCheck::TokenClient))
+    );
+    let mut unbounded = claims;
+    unbounded.exp = None;
+    assert_eq!(
+        server
+            .caller_for_test(&verified(unbounded, matched()), "token")
+            .err(),
+        Some(Refusal::InvalidToken(FailedCheck::TokenClaims))
+    );
 }
 
 #[test]

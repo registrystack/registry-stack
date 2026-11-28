@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-03"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -32,6 +32,13 @@ standalone one from your first assertion, prove it over synthetic extracts, and 
 Use v0.45.0 or later of the Evidence component, installed as in [your first Evidence
 assertion](../first-evidence-assertion/). It is the first release that reads Adapter packs, and the
 0.44.0 tools cannot read this project form.
+
+For the local commands in this tutorial, declare development in your shell.
+`rstack dev` sets this value for the processes it starts.
+
+```sh
+export REGISTRY_STACK_POSTURE=development
+```
 
 ## Create the SQLite starter
 
@@ -140,7 +147,10 @@ rstack evidence test . --target local-target.yaml --deny-warnings
 Evidence project check: complete
 Project: .
 Target: local-target.yaml
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml:1:1 /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 PASS: check
 PASS: fixtures/record-status.yaml (13 cases)
 2 passed, 0 failed (13 cases evaluated)
@@ -191,7 +201,10 @@ rstack evidence check . --target local-target.yaml --deny-warnings
 Evidence project check: complete
 Project: .
 Target: local-target.yaml
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml:1:1 /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 ```
 
 This check matches the key `record-status` to the pack endpoint's `sqliteExtract.extractProfile`: a profile with no

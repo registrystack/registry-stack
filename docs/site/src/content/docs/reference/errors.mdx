@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-evidence
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -110,15 +110,20 @@ These products differ:
 
 - BReg answers 503 with a problem body (`runtime.not_ready`).
 - OID4VCI answers 503 with `{"status":"not_ready"}`.
-- Coordinator answers `{"ready":true}`.
-- Scheduling serves `/readyz` under its deployment health contract.
-- Casework, Messaging, and Documents answer without a body.
+- Casework and Scheduling answer readiness with HTTP 200 and JSON containing `status: ready`, `posture` and `developmentSettings`. Their `/health` answers `{"status":"ok"}`.
+- Coordinator answers 200 with `{"ready":true,"status":"ready"}` and 503 with `{"ready":false}`.
+- Scheduling also serves `/readyz`, a bodyless probe on the same readiness test, under its deployment health contract.
+- Messaging and Documents answer 200 without a body, and 503 with a `service.unavailable` problem body and a `Retry-After` header.
 
 {/* Evidence: crates/registry-breg/src/problem.rs RuntimeNotReady;
     crates/registry-evidence-oid4vci/src/service.rs not_ready;
+    crates/registry-platform-httputil/src/probe.rs READY_BODY;
+    crates/registry-casework/src/http.rs ready;
     crates/registry-coordinator/src/http.rs ready;
-    crates/registry-scheduling/src/http.rs readyz. */}
-{/* TODO[evidence]: the generic `{"status":"ready"}` / `{"status":"not-ready"}` body and the bodyless Casework, Messaging, and Documents readiness answers have no single code anchor. */}
+    crates/registry-scheduling/src/http.rs ready, readyz;
+    crates/registry-messaging/src/http.rs ready;
+    crates/registry-documents/src/http.rs ready. */}
+{/* TODO[evidence]: the generic `{"status":"not-ready"}` body has no single code anchor. */}
 
 ## Idempotency and retries
 
@@ -183,6 +188,28 @@ A session that failed because the wallet reported an error carries one `failureC
 closed set; a refusal for a spent budget or a full presentation store is `503` or `429` with
 `Retry-After`.
 
+## Secret file codes
+
+A secret file the runtime refuses carries one of these `platform.secret-file.*` codes. The text
+names the failed check and never a path, a reference, or a value. A product's own refusal keeps its
+product code and repeats the check's text and fix. A process that declares the development posture
+loads a file for `world-readable`, `group-access`, and `mode-bits`, and logs the code in the
+`error_code` field of one warning per check. The [secret file rule](../../security/hardening-checklist/#secret-files)
+states what each check accepts.
+
+| Code | Meaning | Fix |
+| --- | --- | --- |
+| `platform.secret-file.link-leaves-root` | The secret file is reached through a link that leaves `secretProviders.file.root`. | Put the file under `secretProviders.file.root`, or use a relative link without `..` that stays below it. |
+| `platform.secret-file.too-many-links` | The secret file is reached through more than 8 links. | Point the name at the file, or at a chain of at most 8 links below `secretProviders.file.root`. |
+| `platform.secret-file.cannot-open` | The runtime user cannot open the secret file. | Make the file readable by the runtime user: mode `0400` or `0600` owned by that user, or `0440` owned by root with the runtime user's group. On Kubernetes, set the secret volume's `defaultMode` to `0440` and the pod's `securityContext.fsGroup` to the runtime user's group. |
+| `platform.secret-file.not-regular` | The secret file is not a regular file. | Point the name at a regular file, not a directory, device, socket or pipe. |
+| `platform.secret-file.hard-linked` | The secret file has more than one hard link. | Replace it with a copy that has one link. |
+| `platform.secret-file.owner` | The secret file is owned by neither the runtime user nor root. | Give it to the runtime user with mode `0400` or `0600`, or to root with mode `0440` and the runtime user's group. |
+| `platform.secret-file.world-writable` | Users outside the file's owner and group can write the secret file. | Remove all access for others (`chmod o-rwx`). |
+| `platform.secret-file.world-readable` | Users outside the file's owner and group can read the secret file. | Remove access for others: mode `0400` or `0600` for a file the runtime user owns, `0440` for a root-owned file. On Kubernetes, set the secret volume's `defaultMode` to `0440` and the pod's `securityContext.fsGroup` to the runtime user's group. |
+| `platform.secret-file.group-access` | The secret file's group has access the rule does not allow. | Use mode `0400` or `0600` for a file the runtime user owns. Group read is accepted only on a root-owned file (`0440` or `0640`) read by a non-root runtime. |
+| `platform.secret-file.mode-bits` | The secret file has an execute, setuid, setgid or sticky bit, or its owner cannot read it. | Set mode `0400` or `0600`. |
+
 ## Retired Relay codes
 
 Registry Relay and its problem-code catalogue were retired in Registry Stack 0.39.0. Existing
@@ -192,5 +219,5 @@ integrations can use the immutable 0.38.0 documentation while planning a replace
 ## Next
 
 - [Request an access token from your own code](../../configure/request-an-access-token/)
-- [Signed hook deliveries](../delivery-signing/)
+- [Receive signed deliveries](../delivery-signing/)
 - [Registry Evidence errors and problems reference](../evidence-problems/)

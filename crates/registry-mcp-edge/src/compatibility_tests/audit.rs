@@ -26,7 +26,10 @@ impl Write for Buffer {
 
 fn fixture() -> (ToolAuditLog, AuditWriter, Buffer, AuditOptions) {
     let buffer = Buffer::default();
-    let writer = AuditWriter::from_line_sink(Box::new(buffer.clone()));
+    let writer = AuditWriter::from_line_sink(
+        Box::new(buffer.clone()),
+        registry_platform_config::Posture::Development,
+    );
     (
         ToolAuditLog::new(writer.clone()),
         writer,
@@ -63,6 +66,9 @@ async fn request_and_response_are_minimized_and_share_correlation() {
 
     let entries = entries(&buffer);
     assert_eq!(entries.len(), 2);
+    assert!(entries
+        .iter()
+        .all(|entry| entry["posture"] == "development"));
     assert_eq!(entries[0]["schema"], "registry-breg-mcp.tool-call/v1");
     assert_eq!(entries[0]["phase"], "request");
     assert_eq!(entries[1]["phase"], "response");

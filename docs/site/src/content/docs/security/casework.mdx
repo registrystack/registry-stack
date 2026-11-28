@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-28"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -27,9 +27,8 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
 ## Scope and trust boundaries
 
 - Token verification and the issuer: every authenticated request carries an RFC 9068 access token
-  verified for the configured issuer, audience, `at+jwt` type, allowed clients and signature from
-  the configured key source.
-  The deployment trusts one issuer.
+  verified against the matching entry in `authentication.oidc.issuers.<id>`. That entry supplies
+  the issuer, audience, token type, allowed clients and signing-key source.
   Declared issuer and key addresses are trusted on the operator's word (`CASEWORK-RES-08`).
   A key listed in `revokedKeyIds` is refused locally and revoked nowhere else (`CASEWORK-RES-09`).
   {/* Evidence: crates/registry-casework/src/config.rs, allow_insecure_http, revoked_key_ids,
@@ -152,7 +151,9 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   mode is observable to an authenticated staff caller.
   This is accepted: the caller is authenticated staff, ids are random UUIDs, and the response
   reveals the context mode only.
-  Only the source bearer is forwarded, never the Casework or unattended status credential.
+  On this separate-credential path, only the source bearer is forwarded, never the Casework or
+  unattended status credential.
+  Without the pair, Casework forwards the human's Casework bearer to BReg for the current display read.
   Credentials are redacted, zeroised and dropped with the request, with no cross-call cache or
   durable recovery capture.
   This is two independently authorised credentials for one existing human, not delegation,
@@ -162,6 +163,36 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
       separate_human_source_credentials_bind_before_empty_inbox_and_guard_mutations;
       crates/registry-casework/src/http/source_credentials.rs,
       verified_provider_handles_do_not_forward_casework_or_mix_invocations. */}
+- Casework counts every refused request by the check that refused it, in
+  `casework_request_refusals_total{check}` on the private metrics listener
+  ([metrics](../../operate/casework/#scrape-metrics-and-the-running-version)).
+  The `check` label is a closed set of 45 names, every one published at zero, and no caller value
+  becomes a label.
+  Refusals the caller cannot tell apart are told apart there.
+  A review or administration request refused for its role, its profile's stage eligibility, an
+  earlier decision by the same person (separation of duties), moving or reading a task the caller
+  does not hold, a task grant that is expired, invalidated or bound to another client, or a source
+  that says the subject is not reviewable, counts once under its own check.
+  A source that declines to disclose a subject counts under `visibility`.
+  Deciding, drafting or releasing a task the caller does not hold answers 409
+  `review.task-not-held` and is not counted.
+  A target concealed as not found counts under `visibility`, or under the check that hid it.
+  An absence that conceals nothing, such as the task grant key set route when task grants are not
+  configured, an unknown holiday revision, or an unknown absence id, is not counted.
+  Each refusal also writes one `request refused` log line with `failed_check` and the request's
+  trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
+  a window held back.
+  A refusal on the `scope` check also names the claim that carries scopes, the scope the operation
+  needs and the access profile, each as the configuration or package declares it.
+  Neither the counter nor the line holds a token, claim, client, subject, scope or identifier from
+  the request, and recording a refusal changes nothing the caller receives: the answer is the same
+  `operation.not-authorized`, `request.not-found`, `review.distinct-approver-required` or
+  `review.initiator-excluded` body as before.
+  {/* Evidence: crates/registry-casework/src/http.rs, the ReviewRuntimeError conversion into HttpError;
+      crates/registry-casework/src/review.rs,
+      a_reviewer_who_already_acted_is_refused_for_separation_of_duties,
+      only_staff_and_supervisors_pass_the_human_reviewer_check;
+      crates/registry-casework/tests/refusal_golden.rs. */}
 
 ## Operator obligations
 
@@ -192,25 +223,34 @@ The residuals refer to these obligations by number.
    Keep deferred lifetimes no longer than the work needs.
    {/* Evidence: crates/registry-casework/src/task_grants/http_tests.rs,
        deferred_review_grants_ignore_drafts_but_never_revive_after_responsibility_changes. */}
-6. Make completion receivers idempotent on the `Idempotency-Key` header (the `eventId`), and fall
-   back to `GET /v1/review-results` when a wake-up is missed.
+6. Give each completion destination distinct signing keys.
+   Select the verification keys by the unsigned `registry-recipient-binding` and authenticate the
+   exact body, event ID and timestamp with Standard Webhooks HMAC-SHA256.
+   Require a timestamp within 300 seconds of the receiver's clock in either direction.
+   Persist the verified `webhook-id` and payload before acknowledging, and deduplicate by that ID.
+   Fall back to `GET /v1/review-results` when a wake-up is missed.
    See [Receive Casework completion wakes](../../configure/casework-completion-receivers/).
-   {/* Evidence: crates/registry-casework/src/runtime/completion.rs;
+   {/* Evidence: crates/registry-casework/src/runtime.rs, review_completion_targets, review_completion_signs_the_exact_bytes_it_sends;
+       crates/registry-casework/tests/review_postgres.rs, at_least_once_completion_durably_deduplicates_after_lost_ack_and_exhausts_bounded_retries;
        crates/registry-casework/src/http.rs, review_result_feed. */}
 7. Treat reviewer-written public reasons as released text (`CASEWORK-RES-06`).
    {/* Evidence: crates/registry-review-protocol/src/lib.rs, check_public_reason. */}
-8. Use an HTTPS issuer and leave `authentication.oidc.allowInsecureHttp` unset.
+8. Use an HTTPS issuer and list the admitted OAuth clients. Production refuses `allowInsecureHttp: true` and `allowedClients: unrestricted` in any issuer entry.
    Declare only issuer and JWKS addresses you intend Casework to reach (`CASEWORK-RES-08`).
    {/* Evidence: crates/registry-casework/src/config.rs, allow_insecure_http,
-       insecure_http_startup_diagnostic. */}
+       unrestricted_clients_settings;
+       crates/registry-platform-config/src/posture.rs, log_startup;
+       crates/registry-casework/tests/startup_refusal.rs,
+       development_startup_logs_the_settings_before_opening_dependencies. */}
 9. When a signing key is compromised or retiring, list its `kid` in
-   `authentication.oidc.revokedKeyIds`, and list the `kid` of any republished copy of that key too.
+   `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds`, and list the `kid` of any republished copy of that key too.
    Restart every instance, because the list is read at startup.
    Revoke the key at the issuer and at every other relying party (`CASEWORK-RES-09`).
    {/* Evidence: crates/registry-casework/src/config.rs, revoked_key_ids,
        a_token_signed_by_a_revoked_key_id_is_refused_like_any_other_verification_failure. */}
 10. Issue every person's tokens with the same principal claim.
-    Casework trusts one issuer and refuses a `casework.yaml` whose reviewer, initiator and requester
+    Casework applies the same principal claim rule across the trusted issuer set. It refuses a
+    `casework.yaml` whose reviewer, initiator and requester
     access profiles name different `principalClaim` values, because one person would then appear as
     two principals and separation-of-duties and one-seat checks would compare the wrong identities
     (`CASEWORK-SEC-16`).
@@ -314,7 +354,7 @@ identifiers.
 
 ### `CASEWORK-RES-07`: completion delivery is at-least-once
 
-- Condition: a send whose response is lost is retried under the same `Idempotency-Key`; an attempt
+- Condition: a send whose response is lost is retried under the same `webhook-id` with a fresh signature timestamp. An attempt
   interrupted by a crash or restart counts as a failed attempt, so an interrupted final attempt ends
   `dead-lettered` and is not retried.
   One worker serves each runtime process with a one-second idle poll.
@@ -335,8 +375,8 @@ identifiers.
 
 ### `CASEWORK-RES-08`: declared issuer and key endpoints are trusted
 
-- Condition: the runtime file names an issuer or a JWKS URI, or sets
-  `authentication.oidc.allowInsecureHttp: true`.
+- Condition: the runtime file names an issuer or a JWKS URI, or an issuer entry sets
+  `allowInsecureHttp: true` in development.
 - Consequence: Casework trusts a declared issuer or JWKS URI on the operator's word.
   Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
   keys and mint tokens Casework accepts.
@@ -348,14 +388,17 @@ identifiers.
 - Related: `CASEWORK-SEC-01`.
 
 {/* Evidence: crates/registry-casework/src/config.rs, allow_insecure_http,
-    insecure_http_startup_diagnostic;
+    unrestricted_clients_settings;
+    crates/registry-platform-config/src/posture.rs, log_startup;
+    crates/registry-casework/tests/startup_refusal.rs,
+    development_startup_logs_the_settings_before_opening_dependencies;
     crates/registry-casework/tests/human_identity_auth.rs,
     same_role_profiles_on_one_principal_claim_are_selected_by_their_own_scope and
     same_role_profiles_require_distinct_scopes. */}
 
 ### `CASEWORK-RES-09`: key refusal is by `kid`, locally, at startup
 
-- Condition: `authentication.oidc.revokedKeyIds` lists a compromised or retiring key, or
+- Condition: `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds` lists a compromised or retiring key, or
   `maximumTokenLifetimeSeconds` is set.
 - Consequence: refusal matches the `kid` the issuer assigns, so a compromised key republished under
   another `kid` is accepted until that `kid` is listed too.
@@ -392,6 +435,20 @@ identifiers.
     a_statically_source_only_inbox_requires_a_source_profile;
     crates/registry-casework/tests/review_acceptance_postgres.rs,
     reference_selection_conceals_before_sort_and_rejects_stale_continuation. */}
+
+## Development posture
+
+Development Casework marks HTTP responses with `Registry-Posture: development`,
+audit lines with `posture`, and signed task assertions with `registry_posture`.
+Production peers refuse development responses or assertions when they check
+the corresponding mark. Run the stack in one posture. A stack that signs
+Evidence or Render output with a local key file runs in development.
+Production signing uses Transit.
+
+{/* Evidence: crates/registry-casework/src/http.rs security_headers;
+    crates/registry-casework/src/runtime.rs open_audit;
+    crates/registry-casework/src/task_grants.rs POSTURE_CLAIM;
+    crates/registry-platform-httputil/src/lib.rs RefuseDevelopmentPeer */}
 
 ## Report a vulnerability
 

@@ -21,10 +21,11 @@ inboundAuthConfig:
           - evidence_audience
           - evidence_tags
           - registry_actor_kind
+          - ouHandle
           validityPeriod: 300
     tokenEndpointAuthMethod: private_key_jwt
   type: oauth2
 name: Client field-agent
-ouHandle: registry
+ouHandle: registry/south
 resource_type: agent
 type: default

@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use registry_documents::content::StorageError;
-use registry_documents::runtime::{prepare, Prepared, RuntimeError};
+use registry_documents::runtime::{prepare_with_posture, Prepared, RuntimeError};
 use registry_documents_core::ProblemCode;
 use registry_platform_objectstore::ObjectStoreError;
 use serde_json::json;
@@ -193,7 +193,7 @@ impl Fixture {
     }
 
     async fn start(&self) -> (Prepared, Api) {
-        let prepared = prepare(&self.deployment.runtime)
+        let prepared = prepare_with_posture(&self.deployment.runtime, support::TEST_POSTURE)
             .await
             .expect("the runtime prepares over S3");
         let api = Api::new(&prepared);
@@ -434,7 +434,7 @@ async fn switching_storage_after_the_first_s3_write_is_refused_at_startup() {
     }
     let verifier = "contentVerification:\n  type: disabled\n";
     fixture.deployment.reconfigure(DATABASE_STORAGE, verifier);
-    let error = prepare(&fixture.deployment.runtime)
+    let error = prepare_with_posture(&fixture.deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("startup is refused");
     assert!(
@@ -478,7 +478,7 @@ async fn a_first_s3_write_that_never_finalizes_still_pins_the_storage() {
     }
     let verifier = "contentVerification:\n  type: disabled\n";
     fixture.deployment.reconfigure(DATABASE_STORAGE, verifier);
-    let error = prepare(&fixture.deployment.runtime)
+    let error = prepare_with_posture(&fixture.deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("startup is refused");
     assert!(
@@ -510,7 +510,7 @@ async fn s3_storage_is_activated_once_at_startup() {
 async fn a_versioned_bucket_is_refused_at_startup() {
     let fixture = Fixture::new().await;
     fixture.state.mode.store(VERSIONED, Ordering::SeqCst);
-    let error = prepare(&fixture.deployment.runtime)
+    let error = prepare_with_posture(&fixture.deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("startup is refused");
     assert!(
@@ -590,7 +590,9 @@ async fn a_stale_erasure_worker_neither_deletes_objects_nor_records_a_leased_era
     assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
     erasure_due(&fixture).await;
     assert_eq!(prepared.cleanup_pass().await.unwrap().armed_erasures, 1);
-    let config = RuntimeConfig::load(&fixture.deployment.runtime).unwrap();
+    let config =
+        RuntimeConfig::load_with_posture(&fixture.deployment.runtime, support::TEST_POSTURE)
+            .unwrap();
     let store = registry_documents::runtime::activated_store_for_test(&config)
         .await
         .unwrap();
@@ -605,6 +607,7 @@ async fn a_stale_erasure_worker_neither_deletes_objects_nor_records_a_leased_era
         &config.storage,
         "registry-documents-test",
         Arc::new(config.secret_resolver().unwrap()),
+        config.peer_policy(),
     )
     .await
     .unwrap();

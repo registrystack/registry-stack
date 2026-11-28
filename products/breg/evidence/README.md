@@ -4,7 +4,7 @@ These synthetic inputs connect independently governed products through public
 CLIs and the existing HTTP lookup contract. BReg owns stored records, exact
 selectors and source access. Evidence owns assertion meaning, caller grants,
 minimum disclosure and signing. An export creates no authority in either product.
-See [the export contract](https://docs.registrystack.org/configure/breg-evidence/) and [BReg development](https://docs.registrystack.org/reference/bregctl-dev/).
+See [the export contract](https://docs.registrystack.org/configure/breg-evidence/) and [BReg development](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/).
 
 | Input | Responsibility |
 | --- | --- |

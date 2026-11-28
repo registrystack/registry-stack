@@ -1075,6 +1075,21 @@
         ],
         "type": "object"
       },
+      "HealthStatus": {
+        "additionalProperties": true,
+        "properties": {
+          "status": {
+            "enum": [
+              "ok"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
       "HoldDocument": {
         "additionalProperties": true,
         "properties": {
@@ -1575,6 +1590,7 @@
               "cursor.expired",
               "cursor.invalid",
               "eligibility.unavailable",
+              "grant.lifetime-too-long",
               "hold.expired",
               "hold.released",
               "hook.unavailable",
@@ -1584,6 +1600,7 @@
               "location.closed",
               "operation.not-authorized",
               "party.capacity-inadequate",
+              "platform.task-grant.development-assertion",
               "policy.changed",
               "precondition.failed",
               "precondition.required",
@@ -1846,6 +1863,33 @@
           }
         ]
       },
+      "ProblemGrantLifetimeTooLong": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "grant.lifetime-too-long"
+              },
+              "detail": {
+                "const": "The task grant has more than 900 seconds left before it expires. Present a task grant that expires within 900 seconds."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Task grant lifetime too long"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/grant/lifetime-too-long"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
       "ProblemHoldExpired": {
         "allOf": [
           {
@@ -2083,6 +2127,33 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-scheduling/party/capacity-inadequate"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemPlatformTaskGrantDevelopmentAssertion": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "platform.task-grant.development-assertion"
+              },
+              "detail": {
+                "const": "A production registry refuses task assertions issued in development."
+              },
+              "status": {
+                "const": 401
+              },
+              "title": {
+                "const": "Development task assertion"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/platform/task-grant/development-assertion"
               }
             },
             "type": "object"
@@ -2521,6 +2592,49 @@
           }
         ]
       },
+      "ReadyStatus": {
+        "additionalProperties": true,
+        "properties": {
+          "developmentSettings": {
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "pointer"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "posture": {
+            "enum": [
+              "development",
+              "production"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ready"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "posture",
+          "developmentSettings"
+        ],
+        "type": "object"
+      },
       "RecordAttendanceRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2758,9 +2872,85 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/healthz": {
+    "/health": {
       "get": {
         "description": "Process is live. No authentication, no storage, no policy.",
+        "operationId": "getHealth",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Liveness",
+        "x-scheduling-authority": "unauthenticated"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "description": "Process is live. No authentication, no storage, no policy. Answers an empty 200 and stays beside /health for deployments that already probe it.",
         "operationId": "getLiveness",
         "parameters": [
           {
@@ -2823,14 +3013,14 @@
           }
         },
         "security": [],
-        "summary": "Liveness",
+        "summary": "Liveness, older spelling",
         "x-scheduling-authority": "unauthenticated"
       }
     },
-    "/readyz": {
+    "/ready": {
       "get": {
         "description": "Asks the Scheduling store to answer. A store that cannot answer is service.unavailable, with Retry-After.",
-        "operationId": "getReadiness",
+        "operationId": "getReady",
         "parameters": [
           {
             "description": "Optional W3C trace context continued in the response.",
@@ -2844,6 +3034,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyStatus"
+                }
+              }
+            },
             "description": "Success",
             "headers": {
               "cache-control": {
@@ -2918,6 +3115,107 @@
         },
         "security": [],
         "summary": "Readiness",
+        "x-scheduling-authority": "unauthenticated"
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "Asks the Scheduling store to answer. A store that cannot answer is service.unavailable, with Retry-After.",
+        "operationId": "getReadiness",
+        "parameters": [
+          {
+            "description": "Optional W3C trace context continued in the response.",
+            "in": "header",
+            "name": "traceparent",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyStatus"
+                }
+              }
+            },
+            "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "405": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                }
+              }
+            },
+            "description": "Problem response: request.method-not-allowed",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestBodyTooLarge"
+                }
+              }
+            },
+            "description": "Problem response: request.body-too-large",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Readiness, older spelling",
         "x-scheduling-authority": "unauthenticated"
       }
     },
@@ -3033,11 +3331,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -3160,7 +3465,7 @@
         "x-scheduling-authority": "reads-scope"
       },
       "post": {
-        "description": "Carries exactly one of hold or admission. Confirming transfers the hold's own reservation: the hold must still be active and unexpired, its policy revision still current, and its owner or source-manager binding must match. Exact-time confirmation also checks current physical supply: the selected resource still exists, carries the required capabilities, is available over the entire occupied interval, and satisfies the offering's current opening coverage. It does not re-run new-request start-grid, lead-time or horizon rules for an already admitted hold. A direct create is evaluated against the live ledger like a hold, and commits instead of reserving. Both branches demand a complete task grant naming the offering's service, location, and appointment.create. Source-managed creation or confirmation instead requires appointment.create-for, the same verified manager binding and fresh online grant status.",
+        "description": "Carries exactly one of hold or admission. Confirming transfers the hold's own reservation: the hold must still be active and unexpired, its policy revision still current, and its owner or source-manager binding must match. Exact-time confirmation also checks current physical supply: the selected resource still exists, carries the required capabilities, is available over the entire occupied interval, and satisfies the offering's current opening coverage. It does not re-run new-request start-grid, lead-time or horizon rules for an already admitted hold. A direct create is evaluated against the live ledger like a hold, and commits instead of reserving. Both branches demand a complete task grant naming the offering's service, location, and appointment.create. Source-managed creation or confirmation instead requires appointment.create-for, the same verified manager binding and fresh online grant status. Only a direct create answers `grant.lifetime-too-long`. Confirming a hold answers `operation.not-authorized` for the same grant.",
         "operationId": "createAppointment",
         "parameters": [
           {
@@ -3236,11 +3541,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -3266,12 +3578,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -3606,11 +3921,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -3836,11 +4158,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -4040,11 +4369,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -4335,11 +4671,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -4647,11 +4990,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -4869,11 +5219,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -5272,11 +5629,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -5514,11 +5878,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -5707,11 +6078,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -5949,11 +6327,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -5979,12 +6364,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -6290,11 +6678,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -6527,11 +6922,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -6739,11 +7141,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -7069,11 +7478,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -7281,11 +7697,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -7446,11 +7869,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -7640,11 +8070,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -7842,11 +8279,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",
@@ -8106,11 +8550,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemAuthenticationRefused"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemPlatformTaskGrantDevelopmentAssertion"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: authentication.refused",
+            "description": "Problem response: authentication.refused, platform.task-grant.development-assertion",
             "headers": {
               "WWW-Authenticate": {
                 "description": "Bearer authentication challenge.",

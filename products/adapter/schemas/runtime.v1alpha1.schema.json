@@ -1,5 +1,127 @@
 {
   "$defs": {
+    "AccessTokenType": {
+      "description": "The access-token type an issuer entry admits.",
+      "oneOf": [
+        {
+          "const": "at+jwt",
+          "description": "RFC 9068 access tokens, typed `at+jwt` or `application/at+jwt`.",
+          "type": "string"
+        },
+        {
+          "const": "JWT",
+          "description": "Access tokens typed `JWT`, from a provider that does not type them\n`at+jwt`. An ID token stays refused.",
+          "type": "string"
+        }
+      ]
+    },
+    "AdapterCallerIssuer": {
+      "additionalProperties": false,
+      "description": "The trust and caller rules of one issuer.",
+      "properties": {
+        "accessTokenType": {
+          "$ref": "#/$defs/AccessTokenType",
+          "default": "at+jwt",
+          "description": "The access-token type the entry admits. Absent reads `at+jwt`.",
+          "x-registry-explicit-production": [
+            "platform.posture.jwt-access-token"
+          ]
+        },
+        "actorKind": {
+          "$ref": "#/$defs/IssuerActorKind",
+          "description": "The kind every token from this issuer is treated as. Absent declares\nnone.",
+          "x-registry-explicit-production": [
+            "platform.posture.issuer-actor-kind"
+          ]
+        },
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
+        },
+        "allowedClients": {
+          "description": "The clients whose tokens the entry admits.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "clientActorKinds": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DeclaredActorKind"
+          },
+          "description": "The kind tokens from each named client are treated as. Absent declares\nnone. Not combined with `actorKind`.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-explicit-production": [
+            "platform.posture.client-actor-kinds"
+          ]
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "type": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
+        },
+        "scopeClaim": {
+          "$ref": "#/$defs/ScopeClaimName",
+          "default": "scope",
+          "description": "The claim that carries scopes. Absent reads `scope`.",
+          "x-registry-explicit-production": [
+            "platform.posture.scope-claim"
+          ]
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "allowedClients"
+      ],
+      "type": "object"
+    },
+    "AdapterOidc": {
+      "additionalProperties": false,
+      "description": "The issuer set that authenticates Adapter callers.",
+      "properties": {
+        "issuers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AdapterCallerIssuer"
+          },
+          "description": "The issuers a token may come from, by issuer id.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "issuers"
+      ],
+      "type": "object"
+    },
     "AnonymousHttpsAcknowledgement": {
       "description": "The one named acknowledgement that admits a credential-free HTTPS\nsource. This is a security-sensitive operator decision, not a boolean\nwhose meaning can be lost in a rendered configuration.",
       "oneOf": [
@@ -67,6 +189,13 @@
           "default": false,
           "description": "Allow a plaintext connection. Refused outside test builds.",
           "type": "boolean"
+        },
+        "transport": {
+          "$ref": "#/$defs/DatabaseTransport",
+          "description": "How the connection is protected. Absent means `verified-tls`. A\nplaintext transport must match the database hosts, and cannot be\nwritten beside `testOnlyPlaintext`.",
+          "x-registry-development-only": [
+            "platform.posture.database-private-plaintext"
+          ]
         }
       },
       "required": [
@@ -74,6 +203,35 @@
         "migrationUrlRef"
       ],
       "type": "object"
+    },
+    "DatabaseTransport": {
+      "description": "How a PostgreSQL connection is protected.",
+      "oneOf": [
+        {
+          "const": "verified-tls",
+          "description": "TLS with verification. `caBundleRef` is optional.",
+          "type": "string"
+        },
+        {
+          "const": "loopback-plaintext",
+          "description": "No TLS. Every host must be a Unix socket, a numeric loopback address\nor `localhost`.",
+          "type": "string"
+        },
+        {
+          "const": "private-network-plaintext",
+          "description": "No TLS, in development only. Every host must also be loopback, a\nsocket, a private IPv4 address (RFC 1918), an IPv6 unique local\naddress (`fc00::/7`), or a name that resolves only to such addresses.",
+          "type": "string"
+        }
+      ]
+    },
+    "DeclaredActorKind": {
+      "description": "An actor kind an operator declares for a caller.",
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
     },
     "EndpointBinding": {
       "additionalProperties": false,
@@ -149,7 +307,7 @@
       "description": "The file secret provider.",
       "properties": {
         "root": {
-          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "description": "Absolute directory holding one file per secret. A name may be a\nrelative link that stays below this directory, through at most 8 links.\nThe file it reaches must be a regular file with one hard link, owned by\nthe runtime user with mode 0400 or 0600, or owned by root with no\naccess beyond group read (0440 or 0640) when the runtime is not root.\nA process that declared development loads a file with looser read or\nmode bits and logs a warning.",
           "pattern": "^/",
           "type": "string"
         }
@@ -175,6 +333,10 @@
         "responseRetentionSeconds"
       ],
       "type": "object"
+    },
+    "IssuerActorKind": {
+      "$ref": "#/$defs/DeclaredActorKind",
+      "description": "The kind every token from one issuer is treated as."
     },
     "JwksSource": {
       "description": "Where a runtime obtains the OIDC issuer's signing keys.",
@@ -220,6 +382,24 @@
             },
             "type": {
               "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, as `static` does, for a test issuer a\ndevelopment run supervises. Development only: production refuses it.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "test-issuer",
               "type": "string"
             }
           },
@@ -296,39 +476,6 @@
       "required": [
         "certificateRef",
         "keyRef"
-      ],
-      "type": "object"
-    },
-    "OidcIssuerConfig": {
-      "additionalProperties": false,
-      "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
-      "properties": {
-        "allowInsecureHttp": {
-          "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
-          "type": "boolean"
-        },
-        "audience": {
-          "description": "The audience every accepted access token must carry in `aud`.",
-          "maxLength": 512,
-          "minLength": 1,
-          "type": "string"
-        },
-        "issuer": {
-          "$ref": "#/$defs/Url",
-          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
-        },
-        "jwksSource": {
-          "$ref": "#/$defs/JwksSource",
-          "default": {
-            "type": "discovery"
-          },
-          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
-        }
-      },
-      "required": [
-        "issuer",
-        "audience"
       ],
       "type": "object"
     },
@@ -548,6 +695,10 @@
         }
       ]
     },
+    "ScopeClaimName": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The name of the claim that carries scopes."
+    },
     "SecretProvidersConfig": {
       "additionalProperties": false,
       "anyOf": [
@@ -617,15 +768,6 @@
   "additionalProperties": false,
   "description": "The operator runtime configuration artifact (`AdapterRuntimeConfig`).",
   "properties": {
-    "allowedClients": {
-      "description": "The OAuth clients whose access tokens the facade admits, matched\nagainst the token's client claim. At least one: a list that admits\nevery client the issuer verifies is an omission, not a policy.",
-      "items": {
-        "$ref": "#/$defs/ExternalId"
-      },
-      "minItems": 1,
-      "type": "array",
-      "uniqueItems": true
-    },
     "allowedPrivateCidrs": {
       "description": "The private ranges egress may reach, at least one and at most the\nplatform bound (CFG-EMPTY-2).",
       "items": {
@@ -686,8 +828,8 @@
       "description": "The operator-private socket `/metrics` is served on. Absent, no\nmetrics are served. The address is loopback or private, on a non-zero\nport, and never the facade listener's own socket. `networkExposure:\ncontainer-private` also permits the wildcard address."
     },
     "oidc": {
-      "$ref": "#/$defs/OidcIssuerConfig",
-      "description": "The OIDC issuer that authenticates facade callers, from the\nplatform shared block."
+      "$ref": "#/$defs/AdapterOidc",
+      "description": "The OIDC issuer set that authenticates facade and payment callers.\nAll entries name the audience the effective contract publishes."
     },
     "outboundTls": {
       "$ref": "#/$defs/OutboundTls",
@@ -703,7 +845,6 @@
     }
   },
   "required": [
-    "allowedClients",
     "allowedPrivateCidrs",
     "apiVersion",
     "audit",

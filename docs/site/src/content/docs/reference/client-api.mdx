@@ -1,24 +1,28 @@
 ---
 title: Registry Stack client API reference
-description: Construction, operations, outcomes, and errors for each product namespace of the unified Registry Stack client.
+description: Choose a Registry Stack client and look up the native bindings' operations, outcomes, and errors.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-23"
+last_reviewed: "2026-11-28"
 doc_type: reference
 locale: en
 standards_referenced:
   - openapi
 ---
 
-One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
-`registry-stack-client` on PyPI. It holds one namespace per product: `discovery` for Registry
-Discovery, `evidence` for Registry Evidence, `breg` for Base Registry
-Engine (BReg), `casework` for Registry
-Casework<DocsetProduct product="registry-messaging">, `messaging` for Registry Messaging</DocsetProduct>, and `scheduling` for
-Registry Scheduling<DocsetProduct product="registry-coordinator">, with `coordinator` for Registry Coordinator from the v0.44.0 client roster</DocsetProduct>. Each namespace keeps its own routes,
-authentication, errors, and verification rules, because those contracts differ.
+Use the Fetch-based [TypeScript client](../typescript-clients/) in browsers and edge runtimes.
+Install `@registrystack/client` by default for pages and functions. Its generator creates typed
+clients for the registers and products in your service.
+
+Use `@registrystack/client-node` for Node.js services and tools that need the Rust core.
+Python applications can use `registry-stack-client`. The rest of this reference covers the
+native clients. Each product namespace has its own routes, authentication, errors, and
+verification rules.
+
+{/* Evidence: clients/typescript/package.json; clients/typescript/README.md;
+    crates/registry-stack-client-node/package.json; release/scripts/client_registry.py, client_definition(). */}
 
 Rust is the canonical implementation. The Python and Node packages are thin bindings over it: they
 convert native values, construct the Rust client, run one method, and map the validated result or
@@ -30,8 +34,11 @@ cache, or pagination policy.
 Registry Stack releases are pre-1.0 (`v0.x`). Keep a client on the same Registry Stack release as the
 deployment it calls unless a release note states a wider compatibility range.
 
-The unified packages are published beginning with Registry Stack v0.26.1. Releases through v0.26.0
-carry no Base Registry Engine client package and no unified package; they distribute one standalone
+The native packages are published beginning with Registry Stack v0.26.1. For versions v0.26.1
+through v0.48.x, the Node package used the name `@registrystack/client`. Starting with v0.49.0,
+the native Node package is `@registrystack/client-node` and `@registrystack/client` is the
+browser and edge package. Releases through v0.26.0
+carry no Base Registry Engine (BReg) client package and no unified package; they distribute one standalone
 package per product instead. The `casework` namespace is present in those same unified packages
 beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">; the `messaging` namespace is present
 beginning with Registry Stack v0.38.0</DocsetProduct>; the `scheduling` namespace is present
@@ -48,7 +55,7 @@ the exact wheel and npm tarballs for an offline install.
 The Rust crates have `publish = false`, stay source-only in the Registry Stack workspace, and are
 not published to crates.io.
 
-## Install a client
+## Install a native client
 
 Read the version from the deployment's binary rather than typing it, then install that exact
 version:
@@ -58,13 +65,13 @@ python -m pip install "registry-stack-client==<version>"
 ```
 
 ```sh
-npm install "@registrystack/client@<version>"
+npm install "@registrystack/client-node@<version>"
 ```
 
 The distribution installs as `registry-stack-client` and imports as `registry_client`. The two
 spellings differ, so `import registry_stack_client` raises `ModuleNotFoundError`.
 
-A TypeScript consumer also needs the Node type definitions, and must name them. The published
+A TypeScript consumer of the native Node package also needs the Node type definitions, and must name them. The published
 declarations use `Buffer`, a Node.js global, and TypeScript 6 does not load installed `@types`
 packages on its own, so a project compiling against the declarations reports `TS2591` on every use
 of `Buffer` until it has both installed the package and listed it in `compilerOptions.types`:
@@ -109,7 +116,7 @@ from registry_client import breg, casework, coordinator, discovery, evidence, me
 ```
 
 ```js
-const { breg, casework, coordinator, discovery, evidence, messaging, scheduling } = require('@registrystack/client');
+const { breg, casework, coordinator, discovery, evidence, messaging, scheduling } = require('@registrystack/client-node');
 ```
 
 ```rust
@@ -125,7 +132,7 @@ from registry_client import breg, casework, discovery, evidence, scheduling
 ```
 
 ```js
-const { breg, casework, discovery, evidence, scheduling } = require('@registrystack/client');
+const { breg, casework, discovery, evidence, scheduling } = require('@registrystack/client-node');
 ```
 
 ```rust
@@ -137,7 +144,7 @@ use registry_stack_client::{breg, casework, discovery, evidence, scheduling};
 <DocsetProduct product="registry-coordinator">
 
 The v0.44.0 source exports `registry_stack_client::coordinator`,
-`registry_client.coordinator`, and `@registrystack/client/coordinator` (also
+`registry_client.coordinator`, and `@registrystack/client-node/coordinator` (also
 available as the Node root's `coordinator` export). Construct
 `coordinator.CoordinatorClient(base_url)` in Python or
 `new coordinator.CoordinatorClient({ baseUrl })` in Node. Each operation takes
@@ -220,6 +227,21 @@ skips all of it.
 
 Base URLs may carry a deployment prefix. HTTPS is required except for loopback HTTP, and the URL
 cannot contain credentials, a query, a fragment, or ambiguous empty path segments.
+
+### Deployment peer policy
+
+Every binding accepts development peers by default. For a production runtime, pass
+`PeerPolicy::RefuseDevelopmentPeer` in Rust, `refuseDevelopmentPeer: true` in Node and TypeScript,
+or `refuse_development_peer=True` in Python. A response carrying `Registry-Posture: development`
+then raises a development-peer error. Only TypeScript exposes the mark on a successful answer as
+`answer.developmentPeer`. Node and Python omit the mark from successful answers.
+
+{/* Evidence: crates/registry-breg-client/src/config.rs, BaseRegistryClientConfig;
+    crates/registry-breg-client/src/transport.rs, DevelopmentPeer;
+    crates/registry-breg-client/src/error.rs, development-peer;
+    crates/registry-breg-client-node/src/lib.rs, refuseDevelopmentPeer;
+    crates/registry-breg-client-py/src/lib.rs, refuse_development_peer;
+    clients/typescript/core.ts, developmentPeer and refuseDevelopmentPeer. */}
 
 ### Unknown outcomes and the same-key retry
 
@@ -339,10 +361,13 @@ Endpoint trust and the call that follows stay with the relying application.
 ### Construct a Discovery client
 
 ```rust
-use registry_discovery_client::{DiscoveryClient, DiscoveryClientConfig};
+use registry_discovery_client::{DiscoveryClient, DiscoveryClientConfig, PeerPolicy};
 use url::Url;
 
-let config = DiscoveryClientConfig::new(Url::parse("https://discovery.example.invalid/")?);
+let config = DiscoveryClientConfig::new(
+    Url::parse("https://discovery.example.invalid/")?,
+    PeerPolicy::AcceptDevelopmentPeer,
+);
 let client = DiscoveryClient::new(config)?;
 ```
 
@@ -358,7 +383,7 @@ client = discovery.DiscoveryClient(
 ```
 
 ```js
-const { discovery } = require('@registrystack/client');
+const { discovery } = require('@registrystack/client-node');
 
 const client = new discovery.DiscoveryClient({
   baseUrl: 'https://discovery.example.invalid/',
@@ -450,7 +475,7 @@ revoked-key list the verifier could never use is refused at construction.
 
 ```rust
 use std::sync::Arc;
-use registry_evidence_client::{EvidenceClient, EvidenceClientConfig, StaticToken};
+use registry_evidence_client::{EvidenceClient, EvidenceClientConfig, StaticToken, PeerPolicy};
 use url::Url;
 
 let config = EvidenceClientConfig::new(
@@ -458,6 +483,7 @@ let config = EvidenceClientConfig::new(
     Arc::new(StaticToken::new(token)?),
     trusted_jwks,
     Vec::new(),
+    PeerPolicy::AcceptDevelopmentPeer,
 );
 let client = EvidenceClient::new(config)?;
 ```
@@ -476,7 +502,7 @@ client = evidence.EvidenceClient(
 ```
 
 ```js
-const { evidence } = require('@registrystack/client');
+const { evidence } = require('@registrystack/client-node');
 
 const client = new evidence.EvidenceClient({
   baseUrl: 'https://evidence.example.invalid/',
@@ -550,9 +576,17 @@ client = evidence.EvidenceClient.from_profile("evidence-client.json")
 const client = evidence.EvidenceClient.fromProfile('evidence-client.json');
 ```
 
-Rust names the same entry points `EvidenceClient::from_profile`,
-`EvidenceClient::from_profile_with_key`, `EvidenceClient::from_profile_path`, and
-`EvidenceClient::from_profile_path_with_key`.
+The Rust entry points for a decoded profile are `EvidenceClient::from_profile`,
+`EvidenceClient::from_profile_with_key`, and `EvidenceClient::from_profile_with_authorization`.
+Their file-based counterparts are `EvidenceClient::from_profile_path`,
+`EvidenceClient::from_profile_path_with_key`, and
+`EvidenceClient::from_profile_path_with_authorization`. Each takes the peer policy you
+choose. The transitional `_without_peer_policy` variants use `RefuseDevelopmentPeer`.
+The Node and Python profile factories use `AcceptDevelopmentPeer`.
+
+{/* Evidence: crates/registry-evidence-client/src/client.rs, from_profile_without_peer_policy;
+    crates/registry-evidence-client-node/src/lib.rs, AcceptDevelopmentPeer;
+    crates/registry-evidence-client-py/src/lib.rs, AcceptDevelopmentPeer */}
 
 ### Prepare, send, and verify
 
@@ -637,9 +671,8 @@ operation identity, and it is not a substitute for the deployment's audit record
 
 ### Evidence error contract
 
-Python raises one of ten subclasses of `evidence.EvidenceClientError`, so an application can catch
-the category it handles and let the rest propagate. Node throws `evidence.EvidenceClientError` with
-`kind` carrying the same ten values.
+Python raises `evidence.EvidenceClientError` or a subclass, so an application can catch the
+category it handles. Node throws `evidence.EvidenceClientError` with the same `kind` values.
 
 | Kind | Python class | Meaning |
 | --- | --- | --- |
@@ -681,11 +714,12 @@ Proposals, recovery after a restart, and the full error tables.
 ### Construct a BReg client
 
 ```rust
-use registry_stack_client::breg::{BaseRegistryClient, BaseRegistryClientConfig};
+use registry_stack_client::breg::{BaseRegistryClient, BaseRegistryClientConfig, PeerPolicy};
 use url::Url;
 
 let config = BaseRegistryClientConfig::new(
     Url::parse("https://breg.example.invalid/institution-a")?,
+    PeerPolicy::AcceptDevelopmentPeer,
 );
 let client = BaseRegistryClient::new(config)?;
 ```
@@ -703,7 +737,7 @@ client = breg.BaseRegistryClient(
 ```
 
 ```js
-const { breg } = require('@registrystack/client');
+const { breg } = require('@registrystack/client-node');
 
 const client = new breg.BaseRegistryClient({
   baseUrl: 'https://breg.example.invalid/institution-a',
@@ -735,21 +769,30 @@ identifiers using an undocumented spelling.
 
 ### Verify a hook delivery
 
-`verifyHookDelivery` in Node and `verify_hook_delivery` in Python authenticate one exact BReg
-Version 1 hook request with the shared Rust verifier. Pass the received method, request target,
-headers, body bytes, and key without normalising them. The result carries the authenticated
-CloudEvents attributes, delivery metadata, and body. It does not decide whether the delivery is
-fresh, expected by this receiver, or already applied; the receiver checks those, in this order.
+`verifyHookDelivery` in Node and `verify_hook_delivery` in Python authenticate one BReg
+Standard Webhooks delivery. Pass the received headers, exact body bytes, and current key.
+During rotation, pass the optional `previousKey` in Node or `previous_key` in Python.
+Each key is 32 to 64 exact bytes.
+
+The result contains `id`, `timestamp`, `source`, `type`, `time`, `dataschema`, and the
+exact `body`. The authenticated `id` matches both `webhook-id` and the envelope id.
+`timestamp` is the signed Unix seconds, returned as a decimal string in Node and an integer
+in Python. `time` is the event time as written in the envelope.
+
+The verifier refuses a timestamp more than 300 seconds from the receiver clock in either
+direction with code `stale-delivery`. Set `maxSkewSeconds` in Node or `max_skew_seconds` in
+Python to choose a window from 1 to 3600 seconds. Use
+`callerEnforcedFreshness: true` in Node or `caller_enforced_freshness=True` in Python to
+enforce the window yourself. Choose one freshness option.
 
 In both examples, `event_store.apply_once()` (`eventStore.applyOnce()` in Node) is an
 application-owned transaction that claims the event identity and commits the effect once, and
 `apply_registry_event()` applies the payload the receiver expects.
 
 ```js
-const { breg } = require('@registrystack/client');
+const { breg } = require('@registrystack/client-node');
 
 const MAX_BODY_BYTES = 1_048_576;
-const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 const EXPECTED_SOURCE = 'urn:registrystack:registry:example:instance:primary';
 const EXPECTED_TYPE = 'case-created-v1';
 const EXPECTED_DATASCHEMA =
@@ -780,20 +823,15 @@ async function exactBody(request) {
   return Buffer.concat(chunks, length);
 }
 
-async function receiveWebhook(request, response, key, eventStore) {
+async function receiveWebhook(request, response, key, eventStore, previousKey) {
   const body = await exactBody(request);
   const delivery = breg.verifyHookDelivery({
-    method: request.method,
-    path: request.url,
     headers: exactHeaders(request.rawHeaders),
     body,
     key,
+    previousKey,
   });
 
-  const skew = Math.abs(Date.now() - Date.parse(delivery.deliveryTime));
-  if (!Number.isFinite(skew) || skew > MAX_CLOCK_SKEW_MS) {
-    throw new Error('hook delivery is outside the accepted clock skew');
-  }
   if (delivery.source !== EXPECTED_SOURCE
       || delivery.type !== EXPECTED_TYPE
       || delivery.dataschema !== EXPECTED_DATASCHEMA) {
@@ -810,11 +848,9 @@ async function receiveWebhook(request, response, key, eventStore) {
 
 ```python
 import json
-from datetime import datetime, timezone
 
 from registry_client import breg
 
-MAX_CLOCK_SKEW_SECONDS = 5 * 60
 EXPECTED_SOURCE = "urn:registrystack:registry:example:instance:primary"
 EXPECTED_TYPE = "case-created-v1"
 EXPECTED_DATASCHEMA = (
@@ -822,15 +858,11 @@ EXPECTED_DATASCHEMA = (
 )
 
 
-def receive_webhook(method, path, headers, body, key, event_store):
+def receive_webhook(headers, body, key, event_store, previous_key=None):
     delivery = breg.verify_hook_delivery(
-        method=method, path=path, headers=headers, body=body, key=key,
+        headers=headers, body=body, key=key, previous_key=previous_key,
     )
 
-    sent = datetime.fromisoformat(delivery["delivery_time"])
-    skew = abs((datetime.now(timezone.utc) - sent).total_seconds())
-    if skew > MAX_CLOCK_SKEW_SECONDS:
-        raise ValueError("hook delivery is outside the accepted clock skew")
     if (delivery["source"], delivery["type"], delivery["dataschema"]) != (
         EXPECTED_SOURCE, EXPECTED_TYPE, EXPECTED_DATASCHEMA,
     ):
@@ -842,18 +874,16 @@ def receive_webhook(method, path, headers, body, key, event_store):
     )
 ```
 
-Python takes `headers` as an ordered sequence of name and value pairs. Pass the raw request pairs so
-the verifier retains header case and duplicates, and build a normalised map only after verification.
-Bound the body size before reading it. Node refuses body and key buffers backed by shared memory and
-copies the rest before verifying.
+Python takes `headers` as ordered name and value pairs. Forward every occurrence so the
+verifier can refuse repeated headers. In Node, check the raw pairs for duplicates before
+building the map. Bound the body size before reading it. Node copies the body and key buffers
+before verification and refuses buffers backed by shared memory.
 
-Keep the key in server-side secret storage and never log the input or a failed delivery. A failure
-raises `BaseRegistryClientError` with kind `hook-verification`; its `code` and message name the
-input to check without rendering its value. Generation and attempt are decimal strings, so a 64-bit
-generation never rounds in JavaScript. A delivery outside the skew bound can still carry a valid
-signature, so reject it before deduplication. The idempotency key identifies one delivery generation
-and survives automatic retries, but an operator replay creates a new generation and key. Deduplicate
-an effect that must happen once on `source` plus `id`, or on a business key.
+Keep keys in server-side secret storage. A refusal raises `BaseRegistryClientError` with kind
+`hook-verification`. Its code and message tell you what to check without exposing input values.
+After verification, confirm the source, type, and schema you expect. Deduplicate on `source`
+plus `id` before acting. Every retry and operator replay carries the same event id. Retain seen
+ids for at least the sender's retry span.
 [Webhooks](../../operate/breg-webhooks/) covers provisioning the key and building a receiver.
 
 {/* Evidence: crates/registry-breg-client/src/hook.rs, verify_hook_delivery;
@@ -861,8 +891,9 @@ an effect that must happen once on `source` plus `id`, or on a business key.
     crates/registry-breg-client-node/client.js, verifyHookDelivery, isSharedArrayBuffer;
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, verify_hook_delivery,
     VerifiedHookDelivery;
-    crates/registry-breg-client-py/tests/python/test_webhook_verification.py;
-    crates/registry-platform-crypto/src/delivery_signature.rs, verify_v1 */}
+    crates/registry-platform-hooks/src/receiver.rs, verify_hook_delivery;
+    crates/registry-platform-crypto/src/delivery_signature.rs, verify;
+    crates/registry-platform-crypto/tests/fixtures/standard-webhooks.json */}
 
 ### Read records
 
@@ -1002,10 +1033,11 @@ authorise any later business mutation in the producer's system.
 ### Construct a Casework client
 
 ```rust
-use registry_stack_client::casework::{CaseworkClient, CaseworkClientConfig};
+use registry_stack_client::casework::{CaseworkClient, CaseworkClientConfig, PeerPolicy};
 
 let client = CaseworkClient::new(CaseworkClientConfig::new(
     "https://casework.example.invalid/".parse()?,
+    PeerPolicy::AcceptDevelopmentPeer,
 ))?;
 ```
 
@@ -1016,7 +1048,7 @@ client = casework.CaseworkClient("https://casework.example.invalid/")
 ```
 
 ```js
-const { casework } = require('@registrystack/client');
+const { casework } = require('@registrystack/client-node');
 
 const client = new casework.CaseworkClient({
   baseUrl: 'https://casework.example.invalid/',
@@ -1065,7 +1097,7 @@ and retained idempotency key. They use the shared Rust canonicaliser, including 
 validation and Unicode key ordering.
 
 ```ts
-import { casework } from '@registrystack/client';
+import { casework } from '@registrystack/client-node';
 
 const client = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' });
 
@@ -1227,11 +1259,12 @@ uses.
 ### Construct a Messaging client
 
 ```rust
-use registry_messaging_client::{MessagingClient, MessagingClientConfig};
+use registry_messaging_client::{MessagingClient, MessagingClientConfig, PeerPolicy};
 use url::Url;
 
 let client = MessagingClient::new(MessagingClientConfig::new(
     Url::parse("https://messaging.example.invalid/")?,
+    PeerPolicy::AcceptDevelopmentPeer,
 ))?;
 ```
 
@@ -1242,7 +1275,7 @@ client = messaging.MessagingClient("https://messaging.example.invalid/")
 ```
 
 ```js
-const { messaging } = require('@registrystack/client');
+const { messaging } = require('@registrystack/client-node');
 
 const client = new messaging.MessagingClient({
   baseUrl: 'https://messaging.example.invalid/',
@@ -1414,11 +1447,12 @@ generates. The
 and problem codes each operation assumes.
 
 ```rust
-use registry_scheduling_client::{SchedulingClient, SchedulingClientConfig};
+use registry_scheduling_client::{SchedulingClient, SchedulingClientConfig, PeerPolicy};
 use url::Url;
 
 let client = SchedulingClient::new(SchedulingClientConfig::new(
     Url::parse("https://scheduling.example.invalid/")?,
+    PeerPolicy::AcceptDevelopmentPeer,
 ))?;
 ```
 
@@ -1429,7 +1463,7 @@ client = scheduling.SchedulingClient("https://scheduling.example.invalid/")
 ```
 
 ```js
-const { scheduling } = require('@registrystack/client');
+const { scheduling } = require('@registrystack/client-node');
 
 const client = new scheduling.SchedulingClient({
   baseUrl: 'https://scheduling.example.invalid/',

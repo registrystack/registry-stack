@@ -10,9 +10,7 @@
 //! operational vocabulary, the activated destinations, the local programs the
 //! running package holds, and proposal application with its completion
 //! barrier. The signed bytes on the wire are produced by the shared URL
-//! destination from the same field values and key material, and the
-//! idempotency domain and delivery source identity are passed through
-//! unchanged.
+//! destination from the event identity, timestamp, exact body and key material.
 
 use std::path::Path;
 #[cfg(feature = "postgres-test")]
@@ -55,7 +53,6 @@ pub use registry_platform_hooks::delivery::{
     MAX_DELIVERY_STATUS_RESULTS as MAX_HOOK_STATUS_RESULTS,
 };
 
-const IDEMPOTENCY_DOMAIN: &[u8] = b"breg-webhook-idempotency-v1";
 /// The schema Base Registry Engine installs the platform delivery tables
 /// into, and the one the worker and the capture INSERT read and write.
 pub(crate) const DELIVERY_SCHEMA: &str = "registry_internal";
@@ -152,11 +149,18 @@ const _: () = assert!(
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum HookOperatorError {
+    #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
+    PostureMismatch {
+        recorded: registry_platform_config::Posture,
+        declared: registry_platform_config::Posture,
+    },
     /// The package at `package.root` is not the one the runtime file's
     /// `package.expectedDigest` pins. Both digests are package identities,
     /// not secrets, so the refusal names them.
     #[error("{0}")]
     PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
+    #[error("{0}")]
+    EventDestinations(crate::event_destination::EventDestinationActivationError),
     #[error("hook operator request is unavailable")]
     Unavailable,
 }
@@ -173,8 +177,11 @@ pub struct HookOperatorService {
 }
 
 impl HookOperatorService {
-    pub async fn from_runtime_config(path: &Path) -> Result<Self, HookOperatorError> {
-        Self::from_runtime_config_with_execution(path, false).await
+    pub async fn from_runtime_config(
+        path: &Path,
+        posture: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self, HookOperatorError> {
+        Self::from_runtime_config_with_execution(path, false, posture).await
     }
 
     /// Drain only due local work using the active runtime's execution bindings.
@@ -182,9 +189,20 @@ impl HookOperatorService {
         path: &Path,
         max_attempts: u16,
         timeout: Duration,
+        posture: registry_platform_config::DeclaredPosture,
+    ) -> Result<HookDrainReport, HookOperatorError> {
+        let config =
+            load_runtime_config(path, posture).map_err(|_| HookOperatorError::Unavailable)?;
+        Self::drain_loaded_config(config, max_attempts, timeout).await
+    }
+
+    pub async fn drain_loaded_config(
+        config: crate::runtime_config::RuntimeConfig,
+        max_attempts: u16,
+        timeout: Duration,
     ) -> Result<HookDrainReport, HookOperatorError> {
         validate_drain_budget(max_attempts, timeout).map_err(|_| HookOperatorError::Unavailable)?;
-        let service = Self::from_runtime_config_with_execution(path, true).await?;
+        let service = Self::from_loaded_config(config, true).await?;
         service
             .delivery
             .drain_local(max_attempts, timeout)
@@ -195,14 +213,28 @@ impl HookOperatorService {
     async fn from_runtime_config_with_execution(
         path: &Path,
         execute_local_hooks: bool,
+        posture: registry_platform_config::DeclaredPosture,
     ) -> Result<Self, HookOperatorError> {
-        let config = load_runtime_config(path).map_err(|_| HookOperatorError::Unavailable)?;
+        let config =
+            load_runtime_config(path, posture).map_err(|_| HookOperatorError::Unavailable)?;
+        Self::from_loaded_config(config, execute_local_hooks).await
+    }
+
+    pub async fn from_loaded_config(
+        config: crate::runtime_config::RuntimeConfig,
+        execute_local_hooks: bool,
+    ) -> Result<Self, HookOperatorError> {
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => {
                 HookOperatorError::PackagePinMismatch(mismatch)
             }
             _ => HookOperatorError::Unavailable,
         })?;
+        let destinations = Arc::new(
+            config
+                .activate_event_destinations(package.registry())
+                .map_err(HookOperatorError::EventDestinations)?,
+        );
         let connection = config
             .runtime_database_connection_config()
             .map_err(|_| HookOperatorError::Unavailable)?;
@@ -221,13 +253,13 @@ impl HookOperatorService {
             config.database().roles().runtime(),
         )
         .await
-        .map_err(|_| HookOperatorError::Unavailable)?;
+        .map_err(|error| match error {
+            crate::startup::StartupError::PostureMismatch { recorded, declared } => {
+                HookOperatorError::PostureMismatch { recorded, declared }
+            }
+            _ => HookOperatorError::Unavailable,
+        })?;
         drop(client);
-        let destinations = Arc::new(
-            config
-                .activate_event_destinations(startup.package().registry())
-                .map_err(|_| HookOperatorError::Unavailable)?,
-        );
         let audit = RegistryAudit::open_companion(&config)
             .await
             .map_err(|_| HookOperatorError::Unavailable)?;
@@ -250,13 +282,6 @@ impl HookOperatorService {
                 .field_encryption()
                 .provider()
                 .ok_or(HookOperatorError::Unavailable)?;
-            if matches!(
-                provider,
-                crate::field_encryption::FieldEncryptionProvider::LocalFile { .. }
-            ) && config.identity().database_initialization_environment() != "local"
-            {
-                return Err(HookOperatorError::Unavailable);
-            }
             let secrets = config
                 .secret_resolver()
                 .map_err(|_| HookOperatorError::Unavailable)?;
@@ -397,8 +422,9 @@ impl BregDeliverySeams {
         let state = transaction
             .query_opt(
                 "SELECT package_id, database_id, active_package_digest,
-                        active_activation_id::text, schema_fingerprint, maintenance_status
-                 FROM registry_internal.registry_state
+                        active_activation_id::text, schema_fingerprint, maintenance_status,
+                        coalesce(to_jsonb(state) ->> 'posture', 'production')
+                 FROM registry_internal.registry_state state
                  WHERE singleton",
                 &[],
             )
@@ -409,7 +435,8 @@ impl BregDeliverySeams {
             && state.try_get::<_, String>(0).ok().as_deref()
                 == Some(self.expected.package_id.as_str())
             && state.try_get::<_, String>(1).ok().as_deref()
-                == Some(self.expected.database_id.as_str());
+                == Some(self.expected.database_id.as_str())
+            && state.try_get::<_, &str>(6).ok() == Some(self.lock_key.posture().as_str());
         let active_package_matches = state.try_get::<_, String>(2).ok().as_deref()
             == Some(self.expected.package_digest.as_str())
             && state.try_get::<_, String>(3).ok().as_deref()
@@ -1011,7 +1038,6 @@ impl HookDeliveryService {
     ) -> Self {
         let config = DeliveryConfig {
             schema: DELIVERY_SCHEMA.to_owned(),
-            idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
             delivery_source: delivery_source(&expected.package_id, instance_id),
         };
         let last_success = Arc::<crate::metrics::LastSuccess>::default();

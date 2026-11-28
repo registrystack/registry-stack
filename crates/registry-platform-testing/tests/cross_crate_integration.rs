@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{to_bytes, Body};
-use axum::http::{header, HeaderValue, Method, Request, StatusCode};
+use axum::http::{HeaderValue, Method, Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
@@ -10,8 +10,8 @@ use registry_platform_audit::{
     AuditDestination, AuditEntry, AuditPhase, AuditWriter, FileDestination,
 };
 use registry_platform_httpsec::{
-    body_limit_problem_response, corp_conditional, request_body_limit, security_headers,
-    CorsPolicy, CspBuilder, Problem,
+    body_limit_problem_response, corp_conditional, request_body_limit,
+    security_headers_without_posture, CspBuilder, Problem,
 };
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
@@ -37,16 +37,6 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
         .fallback(|| async {
             Problem::new("about:blank", "Not Found", StatusCode::NOT_FOUND).into_response()
         })
-        .layer(
-            CorsPolicy {
-                allowed_origins: vec!["https://app.example.test".to_string()],
-                allowed_methods: vec![Method::GET, Method::POST, Method::OPTIONS],
-                allowed_headers: Vec::new(),
-                allow_credentials: false,
-            }
-            .try_layer()
-            .expect("valid CORS policy"),
-        )
         .layer(corp_conditional())
         .layer(request_body_limit(4));
 
@@ -56,7 +46,6 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
             Request::builder()
                 .method(Method::GET)
                 .uri("/ok")
-                .header(header::ORIGIN, "https://app.example.test")
                 .body(Body::empty())
                 .expect("request builds"),
         )
@@ -65,19 +54,19 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers().get("cross-origin-resource-policy"),
-        Some(&HeaderValue::from_static("cross-origin"))
+        Some(&HeaderValue::from_static("same-origin"))
     );
 
-    let security_service = security_headers(CspBuilder::restrictive()).layer(service_fn(
-        |_request: Request<Body>| async {
+    let security_service = security_headers_without_posture(CspBuilder::restrictive()).layer(
+        service_fn(|_request: Request<Body>| async {
             Ok::<_, std::convert::Infallible>(
                 axum::response::Response::builder()
                     .status(StatusCode::OK)
                     .body(Body::empty())
                     .expect("response builds"),
             )
-        },
-    ));
+        }),
+    );
     let secured = security_service
         .oneshot(Request::new(Body::empty()))
         .await
@@ -127,7 +116,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 16 * 1024,
         },
-        &FetchUrlPolicy::dev(),
+        &FetchUrlPolicy::https_or_loopback(),
     )
     .await
     .expect("discovery fetch succeeds");
@@ -141,7 +130,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
             request_timeout: Duration::from_secs(5),
             outage_tolerance: Duration::from_secs(900),
         },
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let mut verifier_config = oidc_verifier_config(idp.issuer(), vec!["registry-api".to_string()]);
     verifier_config.allowed_clients = vec!["client-a".to_string()];
@@ -162,7 +151,7 @@ async fn sample_axum_app_wires_middleware_oidc_and_audit_writer() {
     let destination =
         FileDestination::new(dir.path().join("audit").join("audit.jsonl")).expect("absolute path");
     let path = destination.path().to_path_buf();
-    let writer = AuditWriter::open(AuditDestination::File(destination))
+    let writer = AuditWriter::open_without_posture(AuditDestination::File(destination))
         .await
         .expect("file destination opens");
     let correlation = "request-1";

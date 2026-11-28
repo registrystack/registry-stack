@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use registry_breg_review::check::{self, CheckRequest, OutputFormat};
-use registry_breg_review::{command, router, serve, LogLevel, RuntimeConfig};
+use registry_breg_review::{command, router_with_posture, serve, LogLevel, RuntimeConfig};
 use tracing::Level;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
@@ -43,6 +43,59 @@ async fn main() -> ExitCode {
     let path = matches
         .get_one::<PathBuf>("runtime-config")
         .expect("clap requires --runtime-config");
+    let flag = matches.get_one::<String>("posture").map(String::as_str);
+    let production = matches
+        .subcommand_matches("check")
+        .is_some_and(|args| args.get_flag("production"));
+    let usage_error = |code: &str, message: &str, action: &str| {
+        if matches
+            .subcommand_matches("check")
+            .and_then(|args| args.get_one::<OutputFormat>("format"))
+            == Some(&OutputFormat::Json)
+        {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "apiVersion": "id.registrystack.org/formats/breg/review-ctl-report/v1alpha1",
+                    "kind": "BRegReviewCtlReport",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "command": "check",
+                    "status": "usage-error",
+                    "ok": false,
+                    "filesChecked": 0,
+                    "errors": 1,
+                    "warnings": 0,
+                    "diagnostics": [{"severity": "error", "code": code, "path": "", "message": message, "suggestedAction": action}],
+                })
+            );
+        } else {
+            eprintln!("{code}: {message}. {action}");
+        }
+        ExitCode::from(2)
+    };
+    if registry_platform_config::has_repeated_posture_flag() {
+        return usage_error(
+            "platform.posture.conflict",
+            "--posture was declared more than once",
+            "Declare --posture only once.",
+        );
+    }
+    if production && flag == Some("development") {
+        return usage_error(
+            "platform.posture.conflict",
+            "--production and --posture development contradict each other",
+            "Use one of them.",
+        );
+    }
+    let flag = if production {
+        flag.or(Some("production"))
+    } else {
+        flag
+    };
+    let declared = match registry_platform_config::declared(flag) {
+        Ok(declared) => declared,
+        Err(error) => return usage_error(error.code(), error.message(), error.suggested_action()),
+    };
 
     // The offline check writes its own report and reads no log setting.
     if let Some(("check", arguments)) = matches.subcommand() {
@@ -52,6 +105,7 @@ async fn main() -> ExitCode {
             format: *arguments
                 .get_one::<OutputFormat>("format")
                 .expect("clap defaults --format"),
+            posture: declared,
             deny_warnings: arguments.get_flag("deny-warnings"),
         };
         return ExitCode::from(check::run(
@@ -74,7 +128,7 @@ async fn main() -> ExitCode {
 
     // A refused runtime file is reported in the shared human shape on
     // standard error (CFG-DIAG-2), naming members and never their values.
-    let config = match RuntimeConfig::load(path) {
+    let loaded = match RuntimeConfig::load_with_posture(path, declared) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("breg-review: {error}");
@@ -82,7 +136,7 @@ async fn main() -> ExitCode {
         }
     };
     let level = environment_level.unwrap_or_else(|| {
-        operational_log_level(Err(std::env::VarError::NotPresent), config.log_level)
+        operational_log_level(Err(std::env::VarError::NotPresent), loaded.config.log_level)
             .expect("the runtime log level was validated")
     });
     tracing_subscriber::registry()
@@ -96,13 +150,15 @@ async fn main() -> ExitCode {
         .with(
             Targets::new()
                 .with_target("breg_review", level)
-                .with_target("registry_breg_review", level),
+                .with_target("registry_breg_review", level)
+                .with_target("registry_platform_config::posture", Level::INFO),
         )
         .init();
 
     // Startup refusals go to standard error, apart from the JSON operational
     // log on standard output, and name the failing field without its value.
-    match run_serve(config).await {
+    loaded.posture.log_startup();
+    match run_serve(loaded).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("breg-review: {error}");
@@ -111,9 +167,13 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_serve(config: RuntimeConfig) -> Result<(), String> {
-    let bind = config.listener.bind.socket_addr();
-    let router = router(config).await.map_err(|error| error.to_string())?;
+async fn run_serve(
+    loaded: registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
+) -> Result<(), String> {
+    let bind = loaded.config.listener.bind.socket_addr();
+    let router = router_with_posture(loaded)
+        .await
+        .map_err(|error| error.to_string())?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|error| format!("could not listen on {bind}: {error}"))?;

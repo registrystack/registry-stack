@@ -95,12 +95,12 @@ Configuration validates a fixed HTTPS endpoint, or an explicit loopback HTTP
 endpoint for local development. Deployment prefixes are preserved. Shared
 transport disables redirects and ambient proxies; body and header limits apply
 to successes and failures. Every refusal is an RFC 9457
-`application/problem+json` document with exactly `type`, `title`, `status`,
-`detail`, `code` and `traceId`. The client accepts it only when its status
+`application/problem+json` document with required `type`, `title`, `status`,
+`detail`, `code` and `traceId` members and an optional `pointer`. The client accepts it only when its status
 equals the answer's, its `traceId` equals the answer's `traceparent` trace,
 and its `type` is its `family.reason` code under
 `https://id.registrystack.org/problems/registry-coordinator/`; anything else is
-a protocol failure. It discards the title and detail, and reports closed error
+a protocol failure. It discards the title, detail and pointer and reports closed error
 categories with the answered status and the product's code. The code
 vocabulary is listed in the runtime's generated OpenAPI document.
 

@@ -11,23 +11,79 @@
 mod support;
 
 use std::sync::Arc;
+use std::time::SystemTime;
 
-use registry_documents::runtime::{prepare_with_verifier, Prepared, RuntimeError};
+use registry_documents::runtime::{
+    prepare_with_posture, prepare_with_verifier, Prepared, RuntimeError,
+};
 use registry_documents_core::{
     DOCUMENT_GRANT_CHANGED_EVENT_SCHEMA_ID, DOCUMENT_VERSION_READY_EVENT_SCHEMA_ID,
     DOCUMENT_VERSION_REJECTED_EVENT_SCHEMA_ID,
 };
-use registry_platform_hooks::delivery::DeliveryOutcome;
+use registry_platform_crypto::delivery_signature::{
+    verify, DeliveryKey, DeliveryKeys, SignedContent, DELIVERY_TOLERANCE,
+};
+use registry_platform_hooks::delivery::{DeliveryError, DeliveryOutcome};
 use serde_json::{json, Value};
 use support::{
     pdf, reservation, Api, Deployment, FakeVerifier, APP, APPROVE, CITIZEN, DATABASE_STORAGE,
-    DISABLED_VERIFIER, READER, REJECT, STARTER_PROJECT, UNREACHABLE_HOOKS_URL,
+    DISABLED_VERIFIER, HOOK_KEY, READER, REJECT, STARTER_PROJECT, UNREACHABLE_HOOKS_URL,
 };
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const PDF: &str = "application/pdf";
 const SOURCE: &str = "urn:registrystack:documents:civil-registry-documents";
+
+fn assert_signed_delivery(request: &wiremock::Request, stored: &[u8], key_bytes: &[&[u8]]) {
+    assert_eq!(request.body, stored, "the stored canonical bytes are sent");
+    let envelope: Value = serde_json::from_slice(stored).unwrap();
+    let header = |name: &str| {
+        request.headers[name]
+            .to_str()
+            .unwrap_or_else(|_| panic!("invalid {name} header"))
+    };
+    let mut headers = request
+        .headers
+        .keys()
+        .map(|name| name.as_str())
+        .filter(|name| !matches!(*name, "host" | "content-length" | "connection"))
+        .collect::<Vec<_>>();
+    headers.sort_unstable();
+    assert_eq!(
+        headers,
+        [
+            "accept",
+            "content-type",
+            "webhook-id",
+            "webhook-signature",
+            "webhook-timestamp",
+        ]
+    );
+    assert_eq!(header("accept"), "application/json");
+    assert_eq!(header("content-type"), "application/json");
+    assert_eq!(header("webhook-id"), envelope["id"].as_str().unwrap());
+
+    let signature = header("webhook-signature");
+    let entries = signature.split(' ').collect::<Vec<_>>();
+    assert_eq!(entries.len(), key_bytes.len());
+    for (entry, bytes) in entries.into_iter().zip(key_bytes) {
+        assert!(entry.starts_with("v1,"), "invalid signature entry version");
+        let keys = DeliveryKeys::new(DeliveryKey::new(bytes).unwrap(), None).unwrap();
+        verify(
+            &keys,
+            SignedContent {
+                id: header("webhook-id"),
+                timestamp: header("webhook-timestamp"),
+                signature: entry,
+                body: &request.body,
+            },
+            SystemTime::now(),
+            DELIVERY_TOLERANCE,
+        )
+        .expect("the signature authenticates the exact received bytes");
+    }
+}
 
 /// A second observer on `document-version.ready`, so one verdict must
 /// capture one delivery for each.
@@ -58,9 +114,10 @@ async fn deployment(project: &str) -> Deployment {
 }
 
 async fn start(deployment: &Deployment, verifier: &Arc<FakeVerifier>) -> (Prepared, Api) {
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares");
+    let prepared =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares");
     let api = Api::new(&prepared);
     (prepared, api)
 }
@@ -108,6 +165,60 @@ async fn captured(deployment: &Deployment) -> Vec<(String, i64, Value)> {
         .collect()
 }
 
+#[tokio::test]
+async fn both_postures_capture_the_original_envelope_bytes() {
+    for declared in ["production", "development"] {
+        assert_canonical_capture(declared).await;
+    }
+}
+
+async fn assert_canonical_capture(declared: &str) {
+    const HTTP_VERIFIER: &str = "contentVerification:\n  type: http\n  url: http://127.0.0.1:9/verify\n  authorizationRef: secret:file/verifier-token\n  policyId: documents-default\n";
+    let mut deployment = Deployment::new(DATABASE_STORAGE, HTTP_VERIFIER).await;
+    deployment.secret("verifier-token", "synthetic-verifier-token");
+    let posture = registry_platform_config::declared_from(Some(declared), None).unwrap();
+    let config =
+        registry_documents::config::RuntimeConfig::load_with_posture(&deployment.runtime, posture)
+            .unwrap();
+    registry_documents::runtime::apply_activation(&config, &Default::default())
+        .await
+        .unwrap();
+    let prepared = prepare_with_verifier(
+        &deployment.runtime,
+        FakeVerifier::new("binding-a", APPROVE),
+        posture,
+    )
+    .await
+    .unwrap();
+    let (document, version) = upload(&Api::new(&prepared), 3).await;
+    assert_eq!(prepared.verify_due().await, 1);
+    let stored: Vec<u8> = deployment
+        .scalar("SELECT payload FROM registry_outbox")
+        .await;
+    let envelope: Value = serde_json::from_slice(&stored).unwrap();
+    let digest: String = deployment
+        .scalar("SELECT verified_digest FROM documents_versions")
+        .await;
+    // Original (pre-posture) canonical wire form, with this run's generated
+    // event identity, timestamp, revisions and digests substituted.
+    let recorded = format!(
+        concat!(
+            r#"{{"causation":{{"hop":0,"root":{event}}},"data":{{"documentId":"{document}","policyId":"citizen-delivery","policyVersion":{policy},"versionDigest":"{digest}","versionId":"{version}"}},"#,
+            r#""dataschema":"{schema}","id":{event},"source":"{source}","subject":{{"recordReference":"/v1/documents/{document}/versions/{version}","recordRevision":3}},"#,
+            r#""time":{time},"type":"document-version-ready"}}"#,
+        ),
+        event = envelope["id"],
+        policy = envelope["data"]["policyVersion"],
+        schema = DOCUMENT_VERSION_READY_EVENT_SCHEMA_ID,
+        source = SOURCE,
+        time = envelope["time"],
+        document = document,
+        version = version,
+        digest = digest,
+    );
+    assert_eq!(stored, recorded.as_bytes(), "{declared}");
+}
+
 async fn delivery_count(deployment: &Deployment) -> i64 {
     deployment
         .scalar("SELECT count(*) FROM registry_webhook_deliveries")
@@ -146,6 +257,7 @@ async fn a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_p
     assert_eq!(*deliveries, 1);
     assert_eq!(ready["type"], "document-version-ready");
     assert_eq!(ready["source"], SOURCE);
+    assert!(ready.get("posture").is_none());
     assert_eq!(ready["dataschema"], DOCUMENT_VERSION_READY_EVENT_SCHEMA_ID);
     assert_eq!(
         ready["subject"],
@@ -668,6 +780,71 @@ async fn a_capture_that_cannot_commit_rolls_its_transition_back() {
 }
 
 #[tokio::test]
+async fn delivery_refuses_a_posture_mismatch_without_sending() {
+    let receiver = MockServer::start().await;
+    let mut deployment = deployment(STARTER_PROJECT).await;
+    deployment.bind_hooks(&format!("{}/document-events", receiver.uri()));
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    upload(&api, 7).await;
+    assert_eq!(prepared.verify_due().await, 1);
+    deployment
+        .execute("UPDATE documents_activations SET posture = 'production'")
+        .await;
+    assert!(matches!(
+        prepared.deliver_hooks_once().await,
+        Err(DeliveryError::Unavailable)
+    ));
+    assert!(receiver.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn production_restart_delivers_a_development_capture_unchanged() {
+    const HTTP_VERIFIER: &str = "contentVerification:\n  type: http\n  url: http://127.0.0.1:9/verify\n  authorizationRef: secret:file/verifier-token\n  policyId: documents-default\n";
+    let receiver = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/document-events"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&receiver)
+        .await;
+    let mut deployment = Deployment::new(DATABASE_STORAGE, HTTP_VERIFIER).await;
+    deployment.secret("verifier-token", "synthetic-verifier-token");
+    deployment.bind_hooks(&format!("{}/document-events", receiver.uri()));
+    deployment.migrate().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    upload(&api, 7).await;
+    assert_eq!(prepared.verify_due().await, 1);
+    let events = captured(&deployment).await;
+    assert!(events[0].2.get("posture").is_none());
+    let stored: Vec<u8> = deployment
+        .scalar("SELECT payload FROM registry_outbox")
+        .await;
+    drop(api);
+    drop(prepared);
+    // Move the test activation to production while retaining the captured row.
+    deployment
+        .execute("UPDATE documents_activations SET posture = 'production'")
+        .await;
+    let production = registry_platform_config::declared_from(Some("production"), None).unwrap();
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier, production)
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.deliver_hooks_once().await.unwrap(),
+        DeliveryOutcome::Delivered
+    );
+    assert_eq!(
+        prepared.deliver_hooks_once().await.unwrap(),
+        DeliveryOutcome::Idle
+    );
+    let requests = receiver.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_signed_delivery(&requests[0], &stored, &[HOOK_KEY.as_bytes()]);
+}
+
+#[tokio::test]
 async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
     let receiver = MockServer::start().await;
     Mock::given(method("POST"))
@@ -679,8 +856,16 @@ async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
         .expect(1)
         .mount(&receiver)
         .await;
+    const PREVIOUS_KEY: &str = "documents-test-previous-key-not-a-secret\n";
     let mut deployment = deployment(STARTER_PROJECT).await;
     deployment.bind_hooks(&format!("{}/document-events", receiver.uri()));
+    deployment.secret("previous-hook-key", PREVIOUS_KEY);
+    let runtime = std::fs::read_to_string(&deployment.runtime).unwrap();
+    let runtime = runtime.replace(
+        "hmacSha256KeyRef: secret:file/hook-key",
+        "hmacSha256KeyRef: secret:file/hook-key\n      previousHmacSha256KeyRef: secret:file/previous-hook-key",
+    );
+    std::fs::write(&deployment.runtime, runtime).unwrap();
     let verifier = FakeVerifier::new("binding-a", APPROVE);
     let (prepared, api) = start(&deployment, &verifier).await;
     let (document, _) = upload(&api, 7).await;
@@ -688,6 +873,10 @@ async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
     let stored: Vec<u8> = deployment
         .scalar("SELECT payload FROM registry_outbox")
         .await;
+
+    drop(api);
+    drop(prepared);
+    let (prepared, api) = start(&deployment, &verifier).await;
 
     let outcome = prepared
         .deliver_hooks_once()
@@ -701,24 +890,11 @@ async fn delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal() {
 
     let requests = receiver.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
-    let request = &requests[0];
-    assert_eq!(request.body, stored, "the stored canonical bytes are sent");
-    let header = |name: &str| {
-        request
-            .headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_else(|| panic!("missing valid {name} header"))
-            .to_owned()
-    };
-    assert_eq!(header("ce-type"), "document-version-ready");
-    assert_eq!(header("ce-source"), SOURCE);
-    assert_eq!(
-        header("ce-dataschema"),
-        DOCUMENT_VERSION_READY_EVENT_SCHEMA_ID
+    assert_signed_delivery(
+        &requests[0],
+        &stored,
+        &[HOOK_KEY.as_bytes(), PREVIOUS_KEY.as_bytes()],
     );
-    assert!(header("x-registry-signature").starts_with("v1="));
-    assert!(header("idempotency-key").starts_with("sha256:"));
 
     let state = deployment
         .admin
@@ -761,7 +937,7 @@ async fn a_failing_destination_is_retried_then_dead_lettered_without_touching_th
     Mock::given(method("POST"))
         .and(path("/document-events"))
         .respond_with(ResponseTemplate::new(503))
-        .expect(2)
+        .expect(3)
         .mount(&receiver)
         .await;
     let mut deployment = deployment(STARTER_PROJECT).await;
@@ -770,6 +946,13 @@ async fn a_failing_destination_is_retried_then_dead_lettered_without_touching_th
     let (prepared, api) = start(&deployment, &verifier).await;
     let (document, _) = upload(&api, 8).await;
     assert_eq!(prepared.verify_due().await, 1);
+    let stored: Vec<u8> = deployment
+        .scalar("SELECT payload FROM registry_outbox")
+        .await;
+    // Opt the fixture into shared operator replay so the dead letter retains its payload.
+    deployment
+        .execute("UPDATE registry_webhook_deliveries SET operator_replay = true")
+        .await;
 
     assert_eq!(
         prepared.deliver_hooks_once().await.unwrap(),
@@ -809,6 +992,37 @@ async fn a_failing_destination_is_retried_then_dead_lettered_without_touching_th
         .await;
     assert_eq!(state, "dead-lettered");
 
+    let row = deployment
+        .admin
+        .query_one(
+            &format!(
+                "SELECT event_id, compiled_delivery_id, generation
+                   FROM {}.registry_webhook_delivery_state",
+                deployment.schema
+            ),
+            &[],
+        )
+        .await
+        .unwrap();
+    let compiled_delivery_id: String = row.get(1);
+    let generation: i64 = row.get(2);
+    assert_eq!(
+        prepared
+            .replay_hook_for_test(row.get(0), &compiled_delivery_id, generation)
+            .await
+            .expect("the shared operator replay reopens the dead letter"),
+        generation + 1
+    );
+    assert_eq!(
+        prepared.deliver_hooks_once().await.unwrap(),
+        DeliveryOutcome::RetryScheduled
+    );
+    let requests = receiver.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3);
+    for request in &requests {
+        assert_signed_delivery(request, &stored, &[HOOK_KEY.as_bytes()]);
+    }
+
     // The version the event reports stays ready throughout.
     let read = api.read(CITIZEN, &document).await;
     assert_eq!(read.json()["version"]["status"], "ready");
@@ -834,6 +1048,55 @@ async fn an_unreachable_destination_never_blocks_a_transition() {
 }
 
 #[tokio::test]
+async fn startup_reports_invalid_hook_key_bytes_after_the_offline_reference_check() {
+    let mut deployment = deployment(STARTER_PROJECT).await;
+    let key = format!("{}\n", "x".repeat(64));
+    deployment.secret("hook-key", &key);
+
+    let offline = registry_documents::config::check_runtime_file_with_posture(
+        &deployment.runtime,
+        false,
+        None,
+        support::TEST_POSTURE,
+    );
+    assert!(
+        !offline.report.has_errors(),
+        "the offline check accepts the reference"
+    );
+
+    let message = hook_key_startup_refusal(&deployment).await;
+    for detail in [
+        "destinations.hooks.owning-system-events.hmacSha256KeyRef",
+        "65 bytes",
+        "trailing newline: true",
+        "Supply 32 to 64 exact key bytes.",
+    ] {
+        assert!(message.contains(detail), "{message}");
+    }
+    assert!(!message.contains(&key[..64]));
+}
+
+#[tokio::test]
+async fn startup_reports_an_empty_hook_key_file() {
+    let mut deployment = deployment(STARTER_PROJECT).await;
+    deployment.secret("hook-key", "");
+
+    let message = hook_key_startup_refusal(&deployment).await;
+    assert_eq!(
+        message,
+        "destinations.hooks.owning-system-events.hmacSha256KeyRef: the referenced secret value is invalid. Store a non-empty value of at most 64 KiB, without NUL bytes unless the secret is a binary key."
+    );
+}
+
+async fn hook_key_startup_refusal(deployment: &Deployment) -> String {
+    match prepare_with_posture(&deployment.runtime, support::TEST_POSTURE).await {
+        Err(RuntimeError::HookActivation(error)) => error.to_string(),
+        Err(error) => panic!("expected a hook signing key refusal, got {error}"),
+        Ok(_) => panic!("startup accepted invalid hook key bytes"),
+    }
+}
+
+#[tokio::test]
 async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
     let project = STARTER_PROJECT.replace(
         "destinationId: owning-system-events",
@@ -841,7 +1104,7 @@ async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
     );
     let deployment = deployment(&project).await;
     let verifier = FakeVerifier::new("binding-a", APPROVE);
-    let error = prepare_with_verifier(&deployment.runtime, verifier)
+    let error = prepare_with_verifier(&deployment.runtime, verifier, support::TEST_POSTURE)
         .await
         .expect_err("an unbound hook destination refuses startup");
     let message = error.to_string();
@@ -855,19 +1118,18 @@ async fn startup_refuses_a_project_hook_whose_destination_is_not_bound() {
     let RuntimeError::ConfigurationRefused(report) = &error else {
         panic!("a positioned configuration refusal, not {message}");
     };
-    let found: Vec<(&str, &str)> = report
+    let findings: Vec<_> = report
         .diagnostics()
         .iter()
-        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .filter(|diagnostic| diagnostic.severity == registry_platform_yaml::Severity::Error)
         .collect();
+    assert_eq!(findings.len(), 1);
     assert_eq!(
-        found,
-        [(
-            "documents.runtime.unbound-hook-destination",
-            "/destinations/hooks"
-        )]
+        findings[0].code,
+        "documents.runtime.unbound-hook-destination"
     );
-    let source = report.diagnostics()[0]
+    assert_eq!(findings[0].path, "/destinations/hooks");
+    let source = findings[0]
         .source
         .as_ref()
         .expect("the diagnostic names its file");
@@ -887,7 +1149,7 @@ async fn a_destination_changed_under_a_pending_delivery_refuses_startup_until_it
 
     // Changing the URL in place while the delivery is pending is refused.
     deployment.bind_hooks("https://moved.example.test/document-events");
-    let error = prepare_with_verifier(&deployment.runtime, verifier.clone())
+    let error = prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
         .await
         .expect_err("a pending delivery pins its destination binding");
     assert!(
@@ -913,7 +1175,7 @@ async fn a_destination_changed_under_a_pending_delivery_refuses_startup_until_it
 
     // Once it has drained, the same change starts.
     deployment.bind_hooks("https://moved.example.test/document-events");
-    prepare_with_verifier(&deployment.runtime, verifier)
+    prepare_with_verifier(&deployment.runtime, verifier, support::TEST_POSTURE)
         .await
         .expect("no retained delivery needs the old binding");
 }
@@ -956,8 +1218,11 @@ async fn a_split_runtime_role_captures_and_delivers_under_its_own_grants() {
         )
     };
     deployment.secret("migration-database-url", &scoped);
-    let config = registry_documents::config::RuntimeConfig::load(&deployment.runtime)
-        .expect("the test runtime document loads");
+    let config = registry_documents::config::RuntimeConfig::load_with_posture(
+        &deployment.runtime,
+        support::TEST_POSTURE,
+    )
+    .expect("the test runtime document loads");
     let applied = registry_documents::runtime::apply_activation(
         &config,
         &registry_documents::activation::ApplyRequest::default(),

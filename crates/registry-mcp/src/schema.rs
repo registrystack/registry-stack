@@ -194,7 +194,13 @@ mod tests {
             .unwrap()
             .join("runtime.yaml");
         std::fs::write(&path, text).unwrap();
-        !crate::config::RuntimeConfig::check(&path, false).has_errors()
+        let declared = registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        };
+        !crate::config::RuntimeConfig::check_status_with_posture(&path, false, declared)
+            .0
+            .has_errors()
     }
 
     #[test]
@@ -355,6 +361,7 @@ mod tests {
         std::fs::write(&contract_file, serde_json::to_vec(&document).unwrap()).unwrap();
 
         let mut runtime = as_json(example().as_bytes());
+        runtime["resourceServer"]["resource"] = json!("https://gateway.example.test/mcp");
         runtime["bindings"][0]["tools"] = json!([PUBLIC_TOOL]);
         runtime["bindings"][0]["provider"] = json!({
             "type":"adapter",
@@ -446,6 +453,7 @@ mod tests {
     #[test]
     fn casework_shape_requires_the_explicit_delegated_read_contract() {
         let mut runtime = as_json(example().as_bytes());
+        runtime["resourceServer"]["resource"] = json!("https://gateway.example.test/mcp");
         runtime["bindings"][0]["tools"] = json!(["list_my_review_tasks"]);
         runtime["bindings"][0]["provider"] = json!({
             "type":"casework","authority":"delegated-staff-read","baseUrl":"http://127.0.0.1:8120/",

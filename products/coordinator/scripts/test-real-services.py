@@ -35,13 +35,13 @@ REPO = Path(__file__).resolve().parents[3]
 SOURCE_FILES = ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml",
                 "scripts/cargo_runtime_library_path.py")
 SOURCE_PREFIXES = ("crates/", "products/", ".cargo/")
-NATIVE_BINARIES = ("breg", "bregctl", "casework", "caseworkctl", "messaging", "messagingctl",
+NATIVE_BINARIES = ("rstack", "breg", "bregctl", "casework", "caseworkctl", "messaging", "messagingctl",
                    "scheduling", "schedulingctl", "coordinator", "coordinatorctl")
-NATIVE_PACKAGES = ("registry-breg", "registry-bregctl", "registry-casework", "registry-caseworkctl",
+NATIVE_PACKAGES = ("registry-rstack", "registry-thunderid-tooling", "registry-breg", "registry-bregctl", "registry-casework", "registry-caseworkctl",
                    "registry-messaging", "registry-messagingctl", "registry-scheduling",
                    "registry-schedulingctl", "registry-coordinator")
 NATIVE_FEATURES = ",".join((
-    "registry-breg/runtime", "registry-breg/postgres-test", "registry-breg/tooling", "registry-breg/schema",
+    "registry-thunderid-tooling/session", "registry-breg/runtime", "registry-breg/postgres-test", "registry-breg/tooling", "registry-breg/schema",
     "registry-bregctl/schema", "registry-casework/schema", "registry-casework/postgres-test",
     "registry-caseworkctl/schema", "registry-caseworkctl/postgres-test", "registry-messaging/schema",
     "registry-messaging/postgres-test", "registry-messagingctl/postgres-test", "registry-scheduling/schema",
@@ -161,7 +161,7 @@ def http(method, url, token=None, body=None, headers=None, expected=(200,)):
         fields["Authorization"] = "Bearer " + token
     data = None
     if body is not None:
-        data = json.dumps(body).encode()
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
         fields["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=fields, method=method)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -204,10 +204,14 @@ def bind_review_policy(project, binding):
     private(path, source)
 
 
-def subject(token):
+def fixture_claims(token):
     # Display data from our own dev fixture. Products still verify signatures.
     payload = token.split(".")[1]
-    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["sub"]
+    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+
+def subject(token):
+    return fixture_claims(token)["sub"]
 
 
 def database_environment(database, base):
@@ -416,13 +420,13 @@ def prepare_native(destination, environment=None):
     command += ["--features", NATIVE_FEATURES]
     for binary in NATIVE_BINARIES:
         command += ["--bin", binary]
-    command += ["--example", "reviewed-notice-input", "--message-format", "json-render-diagnostics"]
+    command += ["--example", "journey-issuer", "--example", "reviewed-notice-input", "--message-format", "json-render-diagnostics"]
     messages = cargo_build(command, destination / "build.jsonl", environment)
     artifacts = {message["target"]["name"]: Path(message["executable"]) for message in messages
         if message.get("reason") == "compiler-artifact" and message.get("executable")}
     binaries = destination / "bin"
     binaries.mkdir(mode=0o700)
-    for name in (*NATIVE_BINARIES, "reviewed-notice-input"):
+    for name in (*NATIVE_BINARIES, "reviewed-notice-input", "journey-issuer"):
         if name not in artifacts:
             raise SystemExit("Cargo did not report the required executable: " + name)
         shutil.copy2(artifacts[name], binaries / name)
@@ -446,7 +450,8 @@ def prepare_native(destination, environment=None):
             "RUSTC_WRAPPER", "CARGO_TARGET_DIR", "CARGO_INCREMENTAL", "CARGO_PROFILE_DEV_DEBUG",
             "CARGO_PROFILE_TEST_DEBUG", "CARGO_BUILD_JOBS", "CARGO_NET_OFFLINE") if key in environment},
         "binarySha256": {name: file_digest(binaries / name) for name in NATIVE_BINARIES},
-        "helperSha256": {"reviewed-notice-input": file_digest(binaries / "reviewed-notice-input")},
+        "helperSha256": {name: file_digest(binaries / name)
+                         for name in ("reviewed-notice-input", "journey-issuer")},
         "runtimeLibraries": libraries,
         "fipsBuildScripts": [message for message in messages
             if message.get("reason") == "build-script-executed" and "aws-lc-fips-sys@" in message.get("package_id", "")]}
@@ -468,7 +473,13 @@ class Journey:
         self.proxies = []
         self.log_index = 0
         self.children = []
-        self.sessions = []
+        self.rstack_runs = []
+        self.issuer_root = root / "thunderid"
+        self.issuer_clients = None
+        self.issuer_resource = "urn:example:coordinator:breg"
+        self.issuer_fixture = binaries / "journey-issuer"
+        if not self.issuer_fixture.is_file():
+            self.issuer_fixture = binaries / "examples/journey-issuer"
         self.containers = []
         self.mailpit_url = None
         self.env = os.environ.copy()
@@ -521,6 +532,18 @@ class Journey:
             env = f"export DYLD_FALLBACK_LIBRARY_PATH={shlex.quote(':'.join(dylibs))}\n" if sys.platform == "darwin" and dylibs else ""
             private(wrapper, "#!/bin/sh\n" + env + f"exec {shlex.quote(str(frozen))} \"$@\"\n")
             wrapper.chmod(0o700)
+        assert self.issuer_fixture.is_file(), "build the journey-issuer example with the session feature"
+        fixture_digest = file_digest(self.issuer_fixture)
+        frozen = frozen_binaries / "journey-issuer"
+        shutil.copy2(self.issuer_fixture, frozen)
+        frozen.chmod(0o500)
+        assert file_digest(frozen) == fixture_digest
+        if self.build_provenance:
+            assert self.build_provenance["helperSha256"]["journey-issuer"] == fixture_digest
+        self.issuer_fixture = self.bin / "journey-issuer"
+        environment = f"export DYLD_FALLBACK_LIBRARY_PATH={shlex.quote(':'.join(dylibs))}\n" if sys.platform == "darwin" and dylibs else ""
+        private(self.issuer_fixture, "#!/bin/sh\n" + environment + f"exec {shlex.quote(str(frozen))} \"$@\"\n")
+        self.issuer_fixture.chmod(0o700)
         self.reviewed_notice_starter_digest = None
         if require_reviewed_notice_starter:
             starter = binaries / "reviewed-notice-input"
@@ -540,6 +563,14 @@ class Journey:
                 assert self.build_provenance["helperSha256"]["reviewed-notice-input"] == self.reviewed_notice_starter_digest, "reviewed-notice-input differs from build evidence"
         self.env["PATH"] = str(self.bin) + os.pathsep + self.env.get("PATH", "")
         self.env["REGISTRY_THUNDERID_TOOLING_DIAGNOSTICS"] = "1"
+        # All services in this journey run in development. Coordinator's
+        # breg_action::tests::a_development_peer_is_refused_as_an_invalid_response
+        # and review::tests::a_development_peer_read_is_refused_as_an_invalid_response
+        # cover refusals of development responses through production clients.
+        self.env["REGISTRY_STACK_POSTURE"] = "development"
+        self.env["RSTACK_DEV_STATE_DIR"] = str(root / "rstack-runs")
+        self.env["RSTACK_BREGCTL_BIN"] = str(self.bin / "bregctl")
+        self.env["RSTACK_BREG_BIN"] = str(self.bin / "breg")
         listeners = [socket.socket() for _ in range(6)]
         for listener in listeners:
             listener.bind(("127.0.0.1", 0))
@@ -548,12 +579,16 @@ class Journey:
             listener.close()
         self.urls = {key: f"http://127.0.0.1:{port}" for key, port in self.ports.items()}
 
-    def ctl(self, binary, *args, success=True):
+    def ctl(self, binary, *args, success=True, track_run=False):
         self.log_index += 1
         result = subprocess.run([str(self.bin / binary), "--format", "json", *map(str, args)],
                                 env=self.env, capture_output=True, timeout=240)
         log = self.root / "logs" / f"command-{self.log_index:03d}.txt"
         private(log, result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace"))
+        if track_run:
+            report = json.loads(result.stdout)
+            if run := report.get("run_id"):
+                self.rstack_runs.append(run)
         if success:
             assert result.returncode == 0, f"{binary} {args[0]} failed; inspect private {log}"
             report = json.loads(result.stdout)
@@ -562,10 +597,109 @@ class Journey:
             return report
         return result.returncode
 
-    def token(self, binary, project, client):
-        report = self.ctl(binary, "dev", "token", client, project)
-        lines = Path(report["headerFile"]).read_text().splitlines()
+    def issuer_command(self, *args):
+        self.log_index += 1
+        result = subprocess.run([str(self.issuer_fixture), *map(str, args)], env=self.env,
+                                capture_output=True, timeout=240)
+        log = self.root / "logs" / f"issuer-{self.log_index:03d}.txt"
+        private(log, result.stderr)
+        assert result.returncode == 0, f"issuer fixture failed; inspect private {log}"
+        return result.stdout.decode().strip()
+
+    def token_file(self, client):
+        header = self.root / "headers" / f"{client}-{uuid.uuid4().hex}"
+        header.parent.mkdir(exist_ok=True, mode=0o700)
+        self.issuer_command("token", self.issuer_root, self.issuer_clients, client, header)
+        return {"headerFile": str(header)}
+
+    def token(self, client):
+        lines = Path(self.token_file(client)["headerFile"]).read_text().splitlines()
         return next(line.removeprefix("Authorization: Bearer ") for line in lines if line.startswith("Authorization: Bearer "))
+
+    def start_breg(self, project, resource=None):
+        registration = project / "dev-clients.yaml"
+        authored = json.loads(registration.read_text())
+        if self.issuer_clients is None:
+            self.issuer_clients = registration
+            self.issuer_command("start", self.issuer_root, registration, uuid.uuid4(),
+                                self.ports["issuer"], self.issuer_resource)
+        issuer = self.urls["issuer"]
+        resource = resource or self.issuer_resource
+        external = {"schemaTestHeaders": {}}
+        people = {}
+        journeys = project / "tests/journeys.yaml"
+        rehearsal = json.loads(journeys.read_text())
+        rehearsal_clients = {
+            step["claims"].get("requesterClient")
+            for scenario in rehearsal["journeys"] for step in scenario["steps"]
+        }
+        for client in authored["clients"]:
+            for profile in client["accessProfiles"]:
+                alias = client["id"] if len(client["accessProfiles"]) == 1 else f'{client["id"]}-{profile}'
+                # The schema rehearsal needs the real token's exact principal.
+                bearer = self.token(client["id"])
+                people[alias] = {"subject": subject(bearer), "client": client["id"], "grants": {
+                    "breg": {"profile": profile, "scopes": client["scopes"], "claims": client["claims"]},
+                }}
+                if client["id"] in rehearsal_clients:
+                    header = project / "fixture" / f"{alias}.header"
+                    private(header, f"Authorization: Bearer {bearer}\n")
+                    external["schemaTestHeaders"][alias] = "secret:file/" + header.name
+        for scenario in rehearsal["journeys"]:
+            for step in scenario["steps"]:
+                if step["claims"].get("principal") == "$localClientSubject":
+                    caller = step["claims"]["requesterClient"]
+                    profile = step["accessProfile"]
+                    person = people.get(caller) or people[f"{caller}-{profile}"]
+                    step["claims"]["principal"] = person["subject"]
+        private(journeys, rehearsal)
+
+        def fixture_key(client, purpose):
+            key = project / "fixture" / purpose
+            private(key, (self.issuer_root / "keys" / client).read_bytes())
+            return "secret:file/" + key.name
+
+        for authority_id, authority in authored.get("reviewAuthorities", {}).items():
+            client = authority["client"]
+            client_spec = next(item for item in authored["clients"] if item["id"] == client)
+            external["reviewAuthority"] = {
+                "id": authority_id, "endpoint": authority["endpoint"], "profile": authority["profile"],
+                "producerId": authority["producerId"], "recoveryDays": authority["recoveryDays"],
+                "clientId": client, "tokenEndpoint": issuer + "/oauth2/token",
+                "assertionKeyRef": fixture_key(client, "review.key"),
+                "resource": self.issuer_resource, "scopes": client_spec["scopes"],
+            }
+        for status in authored.get("taskGrantStatus", {}).values():
+            external["taskGrant"] = {
+                "sourceIssuer": status["sourceIssuer"], "assertionClient": "task-agent",
+                "statusUrl": status["baseUrl"], "tokenEndpoint": issuer + "/oauth2/token",
+                "statusClient": status["client"], "statusKeyRef": fixture_key(status["client"], "status.key"),
+                "statusResource": self.issuer_resource,
+            }
+        for name, hook in authored.get("destinations", {}).get("hooks", {}).items():
+            key_root = Path(authored["secretProviders"]["file"]["root"])
+            key = project / "fixture" / f"{name}.key"
+            private(key, (key_root / hook["hmacSha256KeyRef"].removeprefix("secret:file/")).read_bytes())
+            external.setdefault("hooks", {})[name] = {
+                "origin": hook["origin"], "path": hook["path"], "keyRef": "secret:file/" + key.name,
+            }
+        private(project / "dev.yaml", {
+            "apiVersion": "id.registrystack.org/formats/rstack/dev/v1alpha1", "kind": "RStackDev",
+            "issuer": issuer, "externalJwksUri": issuer + "/oauth2/jwks",
+            "products": [{"product": "breg", "project": ".", "audience": resource}],
+            "people": people, "scenarioFile": "dev/scenarios.yaml", "externalBreg": external,
+        })
+        private(project / "dev/scenarios.yaml", {
+            "apiVersion": "id.registrystack.org/formats/rstack/scenarios/v1alpha1", "kind": "RStackScenarios",
+            "scenarios": [],
+        })
+        report = self.ctl("rstack", "dev", "start", project, track_run=True)
+        self.urls["breg"] = report["products"]["breg"]
+        runtime = json.loads(Path(report["runtimeConfigs"]["breg"]).read_text())
+        served = runtime["authentication"]["oidc"]["issuers"]["main"]
+        return {"resource": served["audience"], "issuer": served["issuer"],
+                "runtimeConfig": report["runtimeConfigs"]["breg"],
+                "package": runtime["package"]["root"], "instanceId": runtime["identity"]["instanceId"]}
 
     def casework_start(self, project, owner, resource):
         """Serve the paired Casework project against the shared issuer and the BReg source."""
@@ -594,11 +728,10 @@ class Journey:
             "secretProviders": {"file": {"root": str(keys)}},
             "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database",
                          "caBundleRef": "secret:file/database-root.pem"},
-            "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": resource,
+            "authentication": {"oidc": {"issuers": {"main": {"issuer": self.urls["issuer"], "audience": resource,
                 "allowedClients": ["staff", "supervisor", "administrator", "producer", "task-agent",
                                    "status-client", "scheduling-status"],
-                "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
-                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}}},
+                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}}}}},
             "audit": {"path": str(self.root / "audit/casework.ndjson"), "hashKeyRef": "secret:file/audit-key"},
             "contextProviders": {"applications": {
                 "baseUrl": self.urls["breg"], "statusProfile": "reader",
@@ -614,7 +747,7 @@ class Journey:
         self.ctl("caseworkctl", "apply", "--runtime-config", runtime)
         child = self.spawn("casework", runtime, "casework")
         self.ready(child, self.urls["casework"])
-        administrator = self.token("bregctl", owner, "administrator")
+        administrator = self.token("administrator")
         headers = {"Registry-Casework-Profile": "administrator"}
         directory = http("GET", self.urls["casework"] + "/v1/directory", administrator, headers=headers)
         principal = lambda name: {"issuer": self.urls["issuer"], "subject": CASEWORK_PRINCIPALS[name]}
@@ -626,9 +759,14 @@ class Journey:
 
     def export(self, owner, client, destination):
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
-        return self.ctl("bregctl", "dev", "export-client", owner, "--client", client,
-                        "--client-id-file", destination / (client + "-id"),
-                        "--assertion-key-file", destination / (client + "-key"))
+        registration = json.loads(self.issuer_clients.read_text())
+        resource = registration.get("issuer", {}).get("clientResources", {}).get(client, self.issuer_resource)
+        client_id = destination / (client + "-id")
+        key = destination / (client + "-key")
+        private(client_id, client)
+        private(key, (self.issuer_root / "keys" / client).read_bytes())
+        return {"issuer": self.urls["issuer"], "tokenEndpoint": self.urls["issuer"] + "/oauth2/token",
+                "clientAssertionAudience": self.urls["issuer"], "resource": resource, "clientIdFile": str(client_id), "assertionKeyFile": str(key)}
 
     def spawn(self, binary, runtime, label):
         args = [str(self.bin / binary), "--runtime-config", str(runtime)]
@@ -655,11 +793,11 @@ class Journey:
         raise AssertionError("fixture service failed readiness")
 
     def producer_request(self, owner, method, url, body=None, headers=None):
-        return http(method, url, self.token("bregctl", owner, "coordinator-producer"), body, headers)
+        return http(method, url, self.token("coordinator-producer"), body, headers)
 
     def reviewed_notice_input(self, owner, application):
         """Use the maintained Rust client and protocol digest for one current application."""
-        report = self.ctl("bregctl", "dev", "token", "application-reader", owner)
+        report = self.token_file("application-reader")
         output = self.root / "reviewed-notice-inputs" / f"{application}.json"
         output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         result = subprocess.run([
@@ -669,13 +807,16 @@ class Journey:
             "--token-file", report["headerFile"],
             "--output", output,
         ], env=self.env, capture_output=True, timeout=30)
-        assert result.returncode == 0, "reviewed-notice input preparation failed"
+        if result.returncode != 0:
+            log = self.root / "logs" / "reviewed-notice-input.log"
+            private(log, result.stderr)
+            raise AssertionError(f"reviewed-notice input preparation failed; inspect private {log}")
         prepared = json.loads(output.read_text())
         assert set(prepared) == {"applicationId", "applicationRevision", "applicationDigest"}
         return prepared
 
     def start_proposal(self, owner, action_id, inputs):
-        token = self.token("bregctl", owner, "seed-client")
+        token = self.token("seed-client")
         metadata = http("GET", self.urls["breg"] + "/v1/registry?accessProfile=seeder", token)
         action = next(action for action in metadata["actions"] if action["id"] == action_id)
         assert action["execution"]["mode"] == "proposal"
@@ -694,7 +835,7 @@ class Journey:
         assert link["method"] == "POST" and link["operation"] == operation
         assert link["availability"]["available"]
         url = urllib.parse.urljoin(self.urls["breg"], link["path"]) + "?" + urllib.parse.urlencode({"accessProfile": link["accessProfile"]})
-        return http("POST", url, self.token("bregctl", owner, "seed-client"),
+        return http("POST", url, self.token("seed-client"),
                     {} if body is None else body,
                     {"Idempotency-Key": str(uuid.uuid4()), "If-Match": link["ifMatch"]}, (200, 201))
 
@@ -702,7 +843,7 @@ class Journey:
         link = proposal["links"]["self"]
         assert link["method"] == "GET" and link["operation"] == "get"
         url = urllib.parse.urljoin(self.urls["breg"], link["path"]) + "?" + urllib.parse.urlencode({"accessProfile": link["accessProfile"]})
-        return http("GET", url, self.token("bregctl", owner, "seed-client"))
+        return http("GET", url, self.token("seed-client"))
 
     def patch_application(self, owner, application, field, value):
         """Submit one genuine no-review Proposal and observe its exact application."""
@@ -727,7 +868,7 @@ class Journey:
             time.sleep(0.1)
         return http("GET", self.urls["breg"] +
                     f"/v1/records/applications/{application}?accessProfile=seeder",
-                    self.token("bregctl", owner, "seed-client"))
+                    self.token("seed-client"))
 
     def start(self, owner, url, label, data, flow="deferred-appointment"):
         contract = self.producer_request(owner, "GET", url + "/v1/workflows/" + urllib.parse.quote(flow, safe=""))
@@ -770,16 +911,16 @@ class Journey:
                     child.kill()
                     child.wait(timeout=5)
             stream.close()
-        for binary, project in reversed(self.sessions):
-            state = project / ".breg/dev/state.json"
-            if not state.is_file():
-                continue
-            args = ["dev", "stop", project]
-            if success:
-                args.append("--remove")
-            code = self.ctl(binary, *args, success=False)
-            if code != 0:
-                failures.append(binary)
+        for run in reversed(self.rstack_runs):
+            if self.ctl("rstack", "dev", "stop", run, "--clean", success=False) != 0:
+                if (self.ctl("rstack", "dev", "stop", run, "--recover", success=False) != 0
+                        or self.ctl("rstack", "dev", "stop", run, "--clean", success=False) != 0):
+                    failures.append("rstack " + run)
+        if (self.issuer_root / "fixture.json").exists():
+            try:
+                self.issuer_command("stop", self.issuer_root)
+            except AssertionError:
+                failures.append("ThunderID fixture")
         # The journey's own database holds nothing a diagnosis needs, so it is
         # removed whether or not the journey passed.
         for container in reversed(self.containers):
@@ -798,20 +939,16 @@ class Journey:
         # exact client subjects and audience are part of that policy binding.
         bootstrap = write_breg(self.root / "breg-schema-bootstrap", self.urls)
         self.ctl("bregctl", "check", bootstrap)
-        bootstrap_breg, bootstrap_database = free_ports(2)
-        self.sessions.append(("bregctl", bootstrap))
-        bootstrap_report = self.ctl("bregctl", "dev", "start", bootstrap,
-            "--breg-port", bootstrap_breg, "--issuer-port", self.ports["issuer"],
-            "--database-port", bootstrap_database, "--breg-bin", self.bin / "breg")
+        bootstrap_report = self.start_breg(bootstrap)
         resource = bootstrap_report["resource"]
-        agent = subject(self.token("bregctl", bootstrap, "task-agent"))
+        agent = subject(self.token("task-agent"))
         exported = self.root / "breg-schema-export"
         self.ctl("bregctl", "generate", "schemas", bootstrap, "--output", exported)
         context = exported_context_schema(exported, "correct-email")
         policy_project = write_casework(self.root / "casework-policy-bootstrap", self.urls,
             resource, agent, context)
         self.ctl("caseworkctl", "provider", "pair", policy_project, "--provider-id", "applications",
-            "--breg-package", Path(bootstrap_report["stateFile"]).parent / "build/package",
+            "--breg-package", bootstrap_report["package"],
             "--action-id", "correct-email", "--bregctl-bin", self.bin / "bregctl", "--apply")
         checked = self.ctl("caseworkctl", "check", policy_project)
         binding = next(item for item in checked["policyBindings"] if item["id"] == "external-review")
@@ -819,21 +956,25 @@ class Journey:
         # actual compiled consumer policy. The producer schema stays acyclic.
         owner = write_breg(self.root / "breg", self.urls, binding, borrower=True)
         self.ctl("bregctl", "check", owner)
-        self.sessions.append(("bregctl", owner))
-        report = self.ctl("bregctl", "dev", "start", owner, "--breg-port", self.ports["breg"],
-                          "--database-port", self.ports["bregdb"], "--issuer-project", bootstrap,
-                          "--breg-bin", self.bin / "breg")
-        assert report["resource"] == resource and report["issuer"] == bootstrap_report["issuer"]
+        report = self.start_breg(owner)
+        fixture = fixture_claims(self.token("seed-client"))
+        audiences = fixture["aud"]
+        if isinstance(audiences, str):
+            audiences = [audiences]
+        assert all(
+            started["issuer"] == fixture["iss"] and [started["resource"]] == audiences
+            for started in (bootstrap_report, report)
+        ), "BReg runtime issuer and audience must match the shared fixture token"
         print("BReg and stock issuer ready through native dev tooling.", flush=True)
         casework = self.root / "casework"
         shutil.copytree(policy_project, casework)
         self.ctl("caseworkctl", "provider", "pair", casework, "--provider-id", "applications",
-                 "--breg-package", Path(report["stateFile"]).parent / "build/package", "--action-id", "correct-email",
+                 "--breg-package", report["package"], "--action-id", "correct-email",
                  "--bregctl-bin", self.bin / "bregctl", "--apply")
         checked = self.ctl("caseworkctl", "check", casework)
         assert next(item for item in checked["policyBindings"] if item["id"] == "external-review") == binding, "pairing cannot silently change the frozen review policy"
         self.casework_start(casework, bootstrap, resource)
-        seed = self.token("bregctl", owner, "seed-client")
+        seed = self.token("seed-client")
         def create(collection, data):
             value = http("POST", self.urls["breg"] + f"/v1/records/{collection}?accessProfile=seeder", seed,
                          {"data":data}, {"Idempotency-Key":str(uuid.uuid4())}, (201,))
@@ -850,7 +991,7 @@ class Journey:
         assert submitted["state"] == "submitted" and submitted["effectDigest"]
         # BReg owns review submission. Casework only observes the exact source
         # binding through its paired, read-only context provider.
-        human = self.token("bregctl", bootstrap, "staff")
+        human = self.token("staff")
         human_headers = {"Registry-Casework-Profile":"staff","Registry-Source-Profile":"reviewer"}
         deadline = time.monotonic() + 90
         while True:
@@ -920,10 +1061,11 @@ class Journey:
             "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback"},
             "secretProviders": {"file": {"root": str(secrets)}},
             "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database", "testOnlyPlaintext": True},
-            "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": SCHEDULING_RESOURCE,
-                "scopeClaim": "scope", "readsScope": "scheduling:read", "allowedClients": ["task-agent", "scheduling-reader"],
+            "authentication": {"oidc": {"readsScope": "scheduling:read", "issuers": {"main": {
+                "issuer": self.urls["issuer"], "audience": SCHEDULING_RESOURCE,
+                "scopeClaim": "scope", "allowedClients": ["task-agent", "scheduling-reader"],
                 "assertionIssuers": {"task-agent": [AUTHORITY]},
-                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}}},
+                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}}}}},
             "taskGrantStatus": [{"sourceIssuer": AUTHORITY, "baseUrl": self.urls["casework"],
                 "tokenEndpoint": status["tokenEndpoint"], "clientAssertionAudience": status["clientAssertionAudience"],
                 "clientId": Path(status["clientIdFile"]).read_text().strip(),
@@ -992,17 +1134,19 @@ class Journey:
             value = b"\0" + os.urandom(31) if key_name == "state-key" else os.urandom(32)
             private(keys / key_name, value)
         config = self.runtime(keys, connections)
-        config["database"] = {"runtimeUrlRef": "secret:file/runtime-database", "migrationUrlRef": "secret:file/migration-database"}
+        config["database"] = {"runtimeUrlRef": "secret:file/runtime-database", "migrationUrlRef": "secret:file/migration-database", "transport": "loopback-plaintext"}
         config["deployment"] = {
             "databaseId": "coordinator-native-" + uuid.uuid4().hex,
             "runtimeRole": role,
             "packages": packages,
-            "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback"},
-            "authentication": {"issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE,
-                "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
+            "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "loopback-plaintext"},
+            "authentication": {"issuers": {"main": {
+                "issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE, "scopeClaim": "scope",
+                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
+                "allowedClients": "from-policies"}},
                 # Admission accepts only the producer client's own service subject.
                 "policies": {"coordinator-producer": {
-                    "subjects": [subject(self.token("bregctl", owner, "coordinator-producer"))],
+                    "subjects": [subject(self.token("coordinator-producer"))],
                     "requiredScopes": ["coordinator:start", "coordinator:operate"],
                     "workflows": [flow_id for flow_id, _ in projects],
                     "actions": ["start", "status", "inspect", "reconcile", "retry-same", "cancel"], "operator": True}}},
@@ -1036,7 +1180,7 @@ class Journey:
         if self.authority_preflight:
             # This real authority preflight diagnoses the fixture without allowing
             # Coordinator to consume an assertion or bearer supplied by its caller.
-            bootstrap = self.token("bregctl", owner, "task-agent")
+            bootstrap = self.token("task-agent")
             assertion = http("POST", self.urls["casework"] + f'/v1/task-grants/{grant["id"]}/assertion', bootstrap)
             encoded = assertion["assertion"].split(".")[1]
             claims = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
@@ -1106,9 +1250,8 @@ class Journey:
                 "resource": SCHEDULING_RESOURCE, "scopes": ["scheduling:read", "scheduling:commit"]}}})
         # Native grant tooling acquires a fresh exact grant for authoritative
         # caller-owned listing, independently of Coordinator's local outcome.
-        token_report = self.ctl("bregctl", "dev", "grant", "task-agent", "--grant", grant["id"],
-            "--connection", connection, owner)
-        token_lines = Path(token_report["headerFile"]).read_text().splitlines()
+        header = self.issuer_command("grant", self.issuer_root, connection, "task-agent", grant["id"])
+        token_lines = Path(header).read_text().splitlines()
         token = next(line.removeprefix("Authorization: Bearer ") for line in token_lines if line.startswith("Authorization: Bearer "))
         appointments = http("GET", scheduling_url + "/v1/appointments?" + urllib.parse.urlencode({
             "externalReferenceProduct": "breg", "externalReferenceRecordType": "applications",
@@ -1284,7 +1427,7 @@ class Journey:
         with urllib.request.urlopen(self.mailpit_url + "/api/v1/messages", timeout=10) as response:
             return json.load(response)["messages"]
 
-    def review_casework(self, owner, resource, port, completion_url, completion_token):
+    def review_casework(self, owner, resource, port, completion_url, keys):
         """Serve a Casework whose review producer's completions reach the Coordinator."""
         project = write_review_casework(self.root / "review-casework", self.urls)
         checked = self.ctl("caseworkctl", "check", project)
@@ -1292,12 +1435,10 @@ class Journey:
         package = self.root / "review-casework-package"
         self.ctl("caseworkctl", "package", project, "--output", package)
         database, root_certificate = self.tls_database("review-casework-database")
-        keys = self.root / "review-casework-secrets"
-        private(keys / "database", database)
-        private(keys / "database-root.pem", root_certificate)
-        private(keys / "audit-key", secrets.token_hex(32))
-        private(keys / "jwks", http("GET", self.urls["issuer"] + "/oauth2/jwks"))
-        private(keys / "completion-token", completion_token)
+        private(keys / "casework-database", database)
+        private(keys / "casework-database-root.pem", root_certificate)
+        private(keys / "casework-audit-key", secrets.token_hex(32))
+        private(keys / "casework-jwks", http("GET", self.urls["issuer"] + "/oauth2/jwks"))
         url = f"http://127.0.0.1:{port}"
         runtime = self.root / "review-casework-runtime.yaml"
         private(runtime, {
@@ -1306,22 +1447,21 @@ class Journey:
             "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback",
                          "networkExposure": "private-address"},
             "secretProviders": {"file": {"root": str(keys)}},
-            "database": {"runtimeUrlRef": "secret:file/database", "migrationUrlRef": "secret:file/database",
-                         "caBundleRef": "secret:file/database-root.pem"},
-            "authentication": {"oidc": {"issuer": self.urls["issuer"], "audience": resource,
-                "allowedClients": ["review-producer", "staff", "administrator"], "scopeClaim": "scope",
-                "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
-                "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}}},
-            "audit": {"path": str(self.root / "audit/review-casework.ndjson"), "hashKeyRef": "secret:file/audit-key"},
+            "database": {"runtimeUrlRef": "secret:file/casework-database", "migrationUrlRef": "secret:file/casework-database",
+                         "caBundleRef": "secret:file/casework-database-root.pem"},
+            "authentication": {"oidc": {"issuers": {"main": {"issuer": self.urls["issuer"], "audience": resource,
+                "allowedClients": ["review-producer", "staff", "administrator"],
+                "jwksSource": {"type": "static", "documentRef": "secret:file/casework-jwks"}}}}},
+            "audit": {"path": str(self.root / "audit/review-casework.ndjson"), "hashKeyRef": "secret:file/casework-audit-key"},
             "contextProviders": {},
             "reviewCompletionDestinations": {"coordinator": {
-                "url": completion_url, "bearerTokenRef": "secret:file/completion-token",
+                "url": completion_url, "hmacSha256KeyRef": "secret:file/reviewed-notice-completion-key",
                 "attemptTimeoutMilliseconds": 5000, "maximumAttempts": 10, "retryDelaySeconds": 1}},
         })
         self.ctl("caseworkctl", "apply", "--runtime-config", runtime)
         child = self.spawn("casework", runtime, "review-casework")
         self.ready(child, url)
-        administrator = self.token("bregctl", owner, "administrator")
+        administrator = self.token("administrator")
         headers = {"Registry-Casework-Profile": "administrator"}
         directory = http("GET", url + "/v1/directory", administrator, headers=headers)
         http("POST", url + "/v1/directory/bootstrap", administrator,
@@ -1337,15 +1477,15 @@ class Journey:
         within the fixture deadline was woken by Casework's completion event.
         """
         coordinator_port, casework_port = free_ports(2)
-        completion_token = secrets.token_urlsafe(32)
-        receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
-        casework_url = self.review_casework(owner, resource, casework_port, receiver, completion_token)
         keys = self.root / "coordinator-review-secrets"
+        completion_key = secrets.token_hex(32).encode("ascii")
+        private(keys / "reviewed-notice-completion-key", completion_key)
+        receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
+        casework_url = self.review_casework(owner, resource, casework_port, receiver, keys)
         reviewer = self.export(owner, "review-producer", keys)
         assert reviewer["resource"] == resource, "the review producer must request the Casework audience"
         reader = self.export(owner, "application-reader", keys)
         sender = self.export(owner, "case-system", keys)
-        private(keys / "review-completion-token", completion_token)
         production_project = REPO / "products/coordinator/examples/reviewed-notice"
         short_timeout_project = self.root / "reviewed-notice-short-timeout"
         shutil.copytree(production_project, short_timeout_project)
@@ -1367,7 +1507,7 @@ class Journey:
                 "authorization": self.authorization(reader, resource, ["records:get"])},
             "review": {"type": "casework-review-producer", "baseUrl": casework_url, "profile": "coordinator-producer",
                 "producer": "coordinator", "authorization": self.authorization(reviewer, resource, ["casework:review"]),
-                "completion": {"recipientBinding": "coordinator-v1", "bearerTokenRef": "secret:file/review-completion-token"},
+                "completion": {"recipientBinding": "coordinator-v1", "hmacSha256KeyRef": "secret:file/reviewed-notice-completion-key"},
                 "resultCheckSeconds": 900},
             "notices": {"type": "messaging", "baseUrl": messaging_url,
                 "authorization": self.authorization(sender, sender["resource"], ["messaging:send"])},
@@ -1376,7 +1516,7 @@ class Journey:
         sent_before = {item["id"] for item in self.ctl("messagingctl", "messages", "list", "--runtime-config", messaging_runtime)["messages"]}
         mailbox_before = {item["ID"] for item in self.mailpit_messages()}
 
-        seed = self.token("bregctl", owner, "seed-client")
+        seed = self.token("seed-client")
         def create_application(label):
             response = http("POST", self.urls["breg"] + "/v1/records/applications?accessProfile=seeder", seed, {
                 "data": {"tenant": "tenant-a", "applicantName": f"{label.title()} Applicant",
@@ -1438,7 +1578,7 @@ class Journey:
         worker = self.spawn("coordinator", runtime, "coordinator-reviewed-notice-restarted")
         self.ready(worker, url)
 
-        staff = self.token("bregctl", owner, "staff")
+        staff = self.token("staff")
         headers = {"Registry-Casework-Profile": "staff"}
         page = http("GET", casework_url + "/v1/review-tasks?queue=applications&limit=25", staff, headers=headers)
         tasks = [item for item in page["items"] if item["state"] == "open"]
@@ -1501,12 +1641,22 @@ class Journey:
         event = {"type": "review.completed", "eventId": str(uuid.uuid4()), "requestId": str(uuid.uuid4()),
                  "resultId": str(uuid.uuid4()), "completedAt": stamp()}
         refusals = {}
-        for label, token, binding, expected in (
-                ("wrongToken", "synthetic-wrong-completion-token", "coordinator-v1", 401),
-                ("wrongRecipientBinding", completion_token, "synthetic-other-recipient", 401),
-                ("unknownRequest", completion_token, "coordinator-v1", 204)):
-            http("POST", receiver, token, event, {"registry-recipient-binding": binding,
-                 "idempotency-key": event["eventId"]}, (expected,))
+        signer_spec = importlib.util.spec_from_file_location(
+            "breg_webhook_signer", REPO / "products/breg/examples/webhook-receiver/sign_delivery.py")
+        signer = importlib.util.module_from_spec(signer_spec)
+        signer_spec.loader.exec_module(signer)
+        body = json.dumps(event).encode()
+        timestamp = int(time.time())
+        for label, key, binding, expected in (
+                ("wrongSignature", bytes(32), "coordinator-v1", 401),
+                ("wrongRecipientBinding", completion_key, "synthetic-other-recipient", 401),
+                ("unknownRequest", completion_key, "coordinator-v1", 204)):
+            http("POST", receiver, body=body, headers={
+                "registry-recipient-binding": binding,
+                "webhook-id": event["eventId"],
+                "webhook-timestamp": str(timestamp),
+                "webhook-signature": signer.webhook_signature([key], event["eventId"], timestamp, body),
+            }, expected=(expected,))
             refusals[label] = expected
         private(self.root / "native-reviewed-notice-proof.json", {
             "proofBoundary": "native_breg_casework_breg_and_messaging",
@@ -1575,10 +1725,10 @@ class Journey:
             "listener":{"bind":f"127.0.0.1:{port}","tlsTermination":"development-loopback"},
             "secretProviders":{"file":{"root":str(secret)}},
             "database": database_config,
-            "authentication":{"oidc":{"issuer":self.urls["issuer"],"audience":"urn:example:messaging",
-                "scopeClaim":"scope","allowedClients":["case-system"],"jwksSource":{"type":"static","documentRef":"secret:file/jwks"}}},
+            "authentication":{"oidc":{"issuers":{"main":{"issuer":self.urls["issuer"],"audience":"urn:example:messaging",
+                "scopeClaim":"scope","allowedClients":["case-system"],"jwksSource":{"type":"static","documentRef":"secret:file/jwks"}}}}},
             "providers":{"mail-relay":{"type":"smtp","host":"127.0.0.1","port":smtp_port,
-                "tls":"development-loopback"}},
+                "tls":"loopback-plaintext"}},
             "audit":{"destination":"file","path":str(self.root / "audit/messaging.ndjson"),"hashKeyRef":"secret:file/audit-key"}})
         self.ctl("messagingctl", "apply", "--runtime-config", runtime)
         with open(self.root / "logs/messaging.log", "wb") as log:
@@ -1599,7 +1749,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     preparation = parser.add_mutually_exclusive_group()
     preparation.add_argument("--prepare", type=Path, metavar="NEW_DIRECTORY",
-        help="Build and freeze all ten native binaries, reviewed-notice-input and a build manifest, then exit; honors CARGO_TARGET_DIR")
+        help="Build and freeze the native services, rstack, the journey helpers and a build manifest, then exit")
     preparation.add_argument("--bin-dir", type=Path,
         help="Use existing native binaries without rebuilding; defaults to Cargo's target_directory/debug")
     parser.add_argument("--authority-preflight", action="store_true", help="Diagnostic real assertion check before the workflow; omitted for first-call proof")

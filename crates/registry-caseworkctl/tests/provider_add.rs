@@ -201,6 +201,8 @@ fn real_bregctl_facility_generates_and_reruns_every_approval_pattern() {
             "provider",
             "add",
             project.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             facility.to_str().unwrap(),
             "--action",
@@ -275,6 +277,8 @@ fn real_bregctl_facility_generates_and_reruns_every_approval_pattern() {
             "provider",
             "add",
             project.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             facility.to_str().unwrap(),
             "--action",
@@ -339,6 +343,8 @@ fn unbound_reviewer_requires_a_human_client_binding() {
             "provider",
             "add",
             project.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             source.to_str().unwrap(),
             "--action",
@@ -663,6 +669,8 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
             "provider",
             "add",
             casework.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             incomplete.to_str().unwrap(),
             "--action",
@@ -793,6 +801,8 @@ fn check_printed_authoring_fragments(bregctl: &Path, variant: &str) {
         "provider",
         "add",
         casework.to_str().unwrap(),
+        "--posture",
+        "development",
         "--breg-project",
         incomplete.to_str().unwrap(),
         "--action",
@@ -839,6 +849,8 @@ fn real_bregctl_preserves_broad_source_namespace_behind_local_bindings() {
         "provider",
         "add",
         project.to_str().unwrap(),
+        "--posture",
+        "development",
         "--breg-project",
         source.to_str().unwrap(),
         "--action",
@@ -905,6 +917,8 @@ fn exact_policy_selection_matches_the_generated_and_existing_policy() {
             "provider",
             "add",
             project.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             source.to_str().unwrap(),
             "--action",
@@ -1010,6 +1024,8 @@ fn reruns_revalidate_required_runtime_scopes_without_rewriting_operator_bindings
             "provider",
             "add",
             project.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             source.to_str().unwrap(),
             "--action",
@@ -1108,6 +1124,8 @@ fn external_policy_ids_receive_an_actionable_local_compatibility_refusal() {
             "provider",
             "add",
             project.to_str().unwrap(),
+            "--posture",
+            "development",
             "--breg-project",
             source.to_str().unwrap(),
             "--action",
@@ -1136,5 +1154,47 @@ fn external_policy_ids_receive_an_actionable_local_compatibility_refusal() {
                 .is_some());
         }
         assert_eq!(files(&source), source_before);
+    }
+}
+
+#[test]
+fn init_resolves_declared_posture_before_writing() {
+    let root = tempfile::tempdir().unwrap();
+    for (name, flag, environment, posture) in [
+        ("flag", Some("development"), None, Some("development")),
+        (
+            "environment",
+            None,
+            Some("development"),
+            Some("development"),
+        ),
+        ("default", None, None, Some("production")),
+        ("invalid-environment", None, Some("bogus"), None),
+        ("invalid-flag", Some("bogus"), None, None),
+    ] {
+        let project = root.path().join(name);
+        let mut command =
+            cli::caseworkctl_command(&["--format", "json", "init", project.to_str().unwrap()]);
+        command.env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(flag) = flag {
+            command.args(["--posture", flag]);
+        }
+        if let Some(environment) = environment {
+            command.env("REGISTRY_STACK_POSTURE", environment);
+        }
+        let output = command.output().unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        if let Some(posture) = posture {
+            assert!(output.status.success(), "{name}: {report}");
+            assert_eq!(report["posture"]["value"], posture);
+            assert!(project.join("casework.yaml").is_file());
+        } else {
+            assert_eq!(output.status.code(), Some(2), "{name}: {report}");
+            assert_eq!(
+                report["diagnostics"][0]["code"],
+                "platform.posture.invalid-value"
+            );
+            assert!(!project.exists());
+        }
     }
 }

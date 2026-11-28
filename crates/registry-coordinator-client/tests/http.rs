@@ -105,7 +105,10 @@ impl Server {
         Self { url, fixture, task }
     }
     fn client(&self) -> CoordinatorClient {
-        CoordinatorClient::new(CoordinatorClientConfig::new(self.url.clone())).unwrap()
+        CoordinatorClient::new(CoordinatorClientConfig::new_without_peer_policy(
+            self.url.clone(),
+        ))
+        .unwrap()
     }
     fn answer(&self, code: u16, media: &str, bytes: &str) {
         *self.fixture.reply.lock().unwrap() = (code, media.into(), bytes.into());
@@ -125,7 +128,8 @@ impl Server {
     }
     fn client_with_retries(&self, retries: u8) -> CoordinatorClient {
         CoordinatorClient::new(
-            CoordinatorClientConfig::new(self.url.clone()).with_maximum_mutation_retries(retries),
+            CoordinatorClientConfig::new_without_peer_policy(self.url.clone())
+                .with_maximum_mutation_retries(retries),
         )
         .unwrap()
     }
@@ -1358,7 +1362,7 @@ async fn listing_retry_and_cancellation_are_never_resent() {
 async fn a_lost_cancellation_reply_is_sent_once_and_left_unknown() {
     let server = Server::with_wait(status(), Duration::from_millis(250)).await;
     let client = CoordinatorClient::new(
-        CoordinatorClientConfig::new(server.url.clone())
+        CoordinatorClientConfig::new_without_peer_policy(server.url.clone())
             .with_attempt_timeout(Duration::from_millis(70))
             .with_maximum_mutation_retries(2),
     )
@@ -1662,6 +1666,26 @@ async fn reads_and_reconciliation_are_never_resent() {
 }
 
 #[tokio::test]
+async fn a_problem_with_a_pointer_preserves_the_code_and_discards_the_pointer() {
+    let server = Server::new(status()).await;
+    let mut document = problem_document(400, "event.invalid");
+    document["pointer"] = json!("/sensitive-canary");
+    server.answer(400, PROBLEM_MEDIA, &document.to_string());
+
+    let error = server
+        .client()
+        .status(&token(), Uuid::parse_str(RUN).unwrap())
+        .await
+        .err()
+        .expect("the event problem is a refusal");
+    assert!(matches!(
+        &error,
+        CoordinatorClientError::Problem { status: 400, code } if code == "event.invalid"
+    ));
+    assert!(!format!("{error:?}").contains("sensitive-canary"));
+}
+
+#[tokio::test]
 async fn malformed_ambiguous_redirected_or_wrong_run_answers_are_refused() {
     let server = Server::new(status()).await;
     let mut other = status();
@@ -1680,6 +1704,8 @@ async fn malformed_ambiguous_redirected_or_wrong_run_answers_are_refused() {
     let mut duplicate_problem = problem(404, "run.not-visible");
     duplicate_problem.insert_str(1, "\"code\":\"run.not-visible\",");
     let cases = [
+        (404, PROBLEM_MEDIA, altered("pointer", json!(null))),
+        (404, PROBLEM_MEDIA, altered("pointer", json!(17))),
         (200, "application/json", duplicate),
         (200, "text/html", status().to_string()),
         (302, "application/json", status().to_string()),
@@ -1718,7 +1744,8 @@ async fn malformed_ambiguous_redirected_or_wrong_run_answers_are_refused() {
     assert_eq!(server.count(), sent, "a redirect was never followed");
     server.answer(200, "application/json", &status().to_string());
     let bounded = CoordinatorClient::new(
-        CoordinatorClientConfig::new(server.url.clone()).with_maximum_response_bytes(64),
+        CoordinatorClientConfig::new_without_peer_policy(server.url.clone())
+            .with_maximum_response_bytes(64),
     )
     .unwrap();
     assert!(matches!(
@@ -1751,7 +1778,7 @@ async fn a_problem_member_a_later_deployment_added_is_ignored_and_not_retained()
 async fn a_lost_admission_reply_is_unknown_and_resent_under_the_original_key() {
     let server = Server::with_wait(status(), Duration::from_millis(250)).await;
     let client = CoordinatorClient::new(
-        CoordinatorClientConfig::new(server.url.clone())
+        CoordinatorClientConfig::new_without_peer_policy(server.url.clone())
             .with_attempt_timeout(Duration::from_millis(70))
             .with_maximum_mutation_retries(1),
     )
@@ -1772,7 +1799,7 @@ async fn a_lost_admission_reply_is_unknown_and_resent_under_the_original_key() {
 
 #[test]
 fn config_bounds_and_debug_do_not_expose_configured_values() {
-    let config = CoordinatorClientConfig::new(
+    let config = CoordinatorClientConfig::new_without_peer_policy(
         Url::parse("https://private-canary.example/secret-canary").unwrap(),
     )
     .with_user_agent("agent-canary")
@@ -1785,27 +1812,34 @@ fn config_bounds_and_debug_do_not_expose_configured_values() {
         "https://example.test#secret",
     ] {
         assert!(
-            CoordinatorClient::new(CoordinatorClientConfig::new(Url::parse(url).unwrap())).is_err()
+            CoordinatorClient::new(CoordinatorClientConfig::new_without_peer_policy(
+                Url::parse(url).unwrap()
+            ))
+            .is_err()
         );
     }
     let url = Url::parse("https://example.test").unwrap();
     assert!(CoordinatorClient::new(
-        CoordinatorClientConfig::new(url.clone()).with_attempt_timeout(Duration::ZERO)
+        CoordinatorClientConfig::new_without_peer_policy(url.clone())
+            .with_attempt_timeout(Duration::ZERO)
     )
     .is_err());
     assert!(CoordinatorClient::new(
-        CoordinatorClientConfig::new(url.clone()).with_maximum_response_bytes(0)
+        CoordinatorClientConfig::new_without_peer_policy(url.clone())
+            .with_maximum_response_bytes(0)
     )
     .is_err());
     assert!(matches!(
         CoordinatorClient::new(
-            CoordinatorClientConfig::new(url.clone()).with_maximum_mutation_retries(3)
+            CoordinatorClientConfig::new_without_peer_policy(url.clone())
+                .with_maximum_mutation_retries(3)
         ),
         Err(CoordinatorClientError::Configuration { .. })
     ));
     for retries in 0..=2 {
         assert!(CoordinatorClient::new(
-            CoordinatorClientConfig::new(url.clone()).with_maximum_mutation_retries(retries)
+            CoordinatorClientConfig::new_without_peer_policy(url.clone())
+                .with_maximum_mutation_retries(retries)
         )
         .is_ok());
     }
@@ -1882,6 +1916,8 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
         names.sort();
         names
     };
+    let mut event_problem = problem_document(400, "event.invalid");
+    event_problem["pointer"] = json!("/subject");
     for (schema, value) in [
         (&schemas["RunStatus"], status()),
         (&schemas["RunInspection"], inspection()),
@@ -1899,10 +1935,7 @@ fn dto_contract_tracks_the_runtime_generated_schema() {
             json!({"runs":[status()],"nextCursor":"opaque-next"}),
         ),
         (&schemas["RetryScheduled"], retry_scheduled()),
-        (
-            &schemas["Problem"],
-            problem_document(404, "workflow.not-served"),
-        ),
+        (&schemas["Problem"], event_problem),
     ] {
         assert_eq!(properties(schema), fields(&value));
     }
@@ -2194,7 +2227,8 @@ async fn admission_revision_is_required_before_io_and_bound_to_the_answer() {
     other["workflowRevision"] = json!(format!("sha256:{}", "1".repeat(64)));
     server.answer(200, "application/json", &other.to_string());
     let client = CoordinatorClient::new(
-        CoordinatorClientConfig::new(server.url.clone()).with_maximum_mutation_retries(0),
+        CoordinatorClientConfig::new_without_peer_policy(server.url.clone())
+            .with_maximum_mutation_retries(0),
     )
     .unwrap();
     assert!(matches!(

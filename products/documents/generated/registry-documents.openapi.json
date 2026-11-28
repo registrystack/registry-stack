@@ -16,7 +16,7 @@
       },
       "CustodianRef": {
         "additionalProperties": false,
-        "description": "The custodian a reservation names: a subject at the configured token\nissuer.",
+        "description": "The custodian a reservation names: a subject at the caller's issuer.",
         "properties": {
           "subject": {
             "$ref": "#/components/schemas/ExternalId"
@@ -325,7 +325,7 @@
       },
       "GranteeRef": {
         "additionalProperties": false,
-        "description": "The recipient a grant names: a subject at the configured token issuer,\nand the actor kind a caller must resolve to for the grant to release\nanything to it.",
+        "description": "The recipient a grant names: a subject at the caller's issuer, and the\nactor kind a caller must resolve to for the grant to release\nanything to it.",
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/ActorKind"
@@ -475,6 +475,43 @@
         ],
         "type": "object"
       },
+      "Readiness": {
+        "properties": {
+          "developmentSettings": {
+            "items": {
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "pointer"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "posture": {
+            "enum": [
+              "production",
+              "development"
+            ]
+          },
+          "status": {
+            "const": "ready"
+          }
+        },
+        "required": [
+          "status",
+          "posture",
+          "developmentSettings"
+        ],
+        "type": "object"
+      },
       "ReservationView": {
         "additionalProperties": false,
         "description": "The answer to a reservation: the document, its version, and where to\nsend the content.",
@@ -504,7 +541,7 @@
         "properties": {
           "custodian": {
             "$ref": "#/components/schemas/CustodianRef",
-            "description": "Who holds the document in custody."
+            "description": "Who holds the document in custody. A person may omit it and holds the\ndocument itself; a service must name the subject it places the\ndocument for."
           },
           "expectedDigest": {
             "$ref": "#/components/schemas/Digest",
@@ -535,7 +572,6 @@
         },
         "required": [
           "policyId",
-          "custodian",
           "expectedDigest",
           "length",
           "mediaType"
@@ -603,7 +639,14 @@
         "operationId": "ready",
         "responses": {
           "200": {
-            "description": "The operation succeeded. The body is empty."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "The operation succeeded."
           },
           "405": {
             "content": {

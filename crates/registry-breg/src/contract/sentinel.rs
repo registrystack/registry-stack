@@ -15,7 +15,7 @@
 use std::convert::Infallible;
 use std::marker::PhantomData;
 
-use registry_platform_yaml::{shape_union, Invalid};
+use registry_platform_yaml::{shape_union, Invalid, LocalId};
 use serde::{de::IgnoredAny, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
@@ -167,8 +167,20 @@ pub(super) enum RequiredScopes {
 
 shape_union!(RequiredScopes { scalar => Unrestricted, list => Listed });
 
-/// The rows a permission reaches: the keyword `unrestricted`, or a list of at
-/// least one row boundary.
+/// A reference to a named list of row boundaries the file declares under
+/// `rowBoundarySets`. The reader expands a reference into the set's boundaries
+/// before the typed model is decoded, so the compiler never holds one.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct RowBoundarySetReference {
+    /// The identifier of a set declared under `rowBoundarySets` in the same file.
+    #[allow(dead_code)]
+    row_boundary_set: LocalId,
+}
+
+/// The rows a permission reaches: the keyword `unrestricted`, a list of at
+/// least one row boundary, or a reference to a named list of them.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(untagged))]
 pub(super) enum RowBoundaries {
@@ -176,46 +188,19 @@ pub(super) enum RowBoundaries {
     Unrestricted(Unrestricted<Rows>),
     /// Reach the rows every listed boundary binds to the caller's claims.
     Listed(Listed<Vec<RowBoundarySource>, Rows>),
+    /// Reach the rows every boundary of a named set binds to the caller's claims.
+    // The reader expands the reference before decoding, so the typed model
+    // only refuses it and never reads the identifier.
+    Reference(#[allow(dead_code)] RowBoundarySetReference),
 }
 
-shape_union!(RowBoundaries { scalar => Unrestricted, list => Listed });
+shape_union!(RowBoundaries { scalar => Unrestricted, list => Listed, mapping => Reference });
 
-/// The OAuth clients a runtime accepts tokens from.
-#[cfg(feature = "runtime")]
-pub(crate) enum Clients {}
-
-#[cfg(feature = "runtime")]
-impl Member for Clients {
-    const EXPECTED: &'static str = "unrestricted, or a list of at least one OAuth client";
-    const ACTION: &'static str = "List the OAuth clients whose tokens this registry accepts, or write unrestricted to accept every client.";
-}
-
-/// The OAuth clients whose tokens a runtime accepts: the keyword
-/// `unrestricted`, or a list of at least one client.
-#[cfg(feature = "runtime")]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(untagged))]
-pub(crate) enum AllowedClients {
-    /// Accept a token from every client.
-    Unrestricted(Unrestricted<Clients>),
-    /// Accept a token only from a listed client.
-    Listed(Listed<Vec<String>, Clients>),
-}
-
-#[cfg(feature = "runtime")]
-shape_union!(AllowedClients { scalar => Unrestricted, list => Listed });
-
-/// Reads the runtime's accepted clients into the list the token verifier
-/// holds, where empty means every client.
-#[cfg(feature = "runtime")]
-pub(crate) fn allowed_clients<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<String>, D::Error> {
-    Ok(match AllowedClients::deserialize(deserializer)? {
-        AllowedClients::Unrestricted(_) => Vec::new(),
-        AllowedClients::Listed(Listed(clients, _)) => clients,
-    })
-}
+/// What an unexpanded reference means to the typed model: nothing it may
+/// read. An empty list means every row, so a reference that reaches typed
+/// decoding is refused and never read as one.
+const UNRESOLVED_REFERENCE: &str = "a row boundary set reference that the reader expanded";
+const UNRESOLVED_REFERENCE_ACTION: &str = "Declare the set under rowBoundarySets in the same file and read the file through the project reader.";
 
 pub(super) fn required_scopes<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -238,11 +223,16 @@ pub(super) fn serialize_required_scopes<S: Serializer>(
 }
 
 impl RowBoundaries {
-    /// The boundaries the compiler holds, where `unrestricted` is none.
-    fn into_boundaries(self) -> Vec<RowBoundarySource> {
+    /// The boundaries the compiler holds, where `unrestricted` is none. An
+    /// unexpanded reference is refused rather than read as none.
+    fn into_boundaries(self) -> Result<Vec<RowBoundarySource>, Invalid> {
         match self {
-            Self::Unrestricted(_) => Vec::new(),
-            Self::Listed(Listed(boundaries, _)) => boundaries,
+            Self::Unrestricted(_) => Ok(Vec::new()),
+            Self::Listed(Listed(boundaries, _)) => Ok(boundaries),
+            Self::Reference(_) => Err(Invalid::expected(
+                UNRESOLVED_REFERENCE,
+                UNRESOLVED_REFERENCE_ACTION,
+            )),
         }
     }
 }
@@ -250,7 +240,9 @@ impl RowBoundaries {
 pub(super) fn row_boundaries<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<RowBoundarySource>, D::Error> {
-    RowBoundaries::deserialize(deserializer).map(RowBoundaries::into_boundaries)
+    RowBoundaries::deserialize(deserializer)?
+        .into_boundaries()
+        .map_err(Invalid::into_error)
 }
 
 pub(super) fn serialize_row_boundaries<S: Serializer>(
@@ -347,6 +339,37 @@ narrowing_member!(
     "Omit rowBoundaries when the entity demands no row boundary of its profiles; an access requirement only narrows what a profile may grant."
 );
 
+narrowing_member!(
+    RowBoundarySetRows,
+    RowBoundarySetRowsShapes,
+    row_boundary_set_rows,
+    Vec<RowBoundarySource>,
+    "a list of at least one row boundary",
+    "List the row boundaries the set holds. A set is a reusable list, so it is never empty and never unrestricted: write unrestricted on the grant that reaches every row."
+);
+
+/// The schema of a record type's required row boundaries: a list of at least
+/// one boundary, or a reference to a named set of them.
+#[cfg(feature = "schema")]
+struct RequirementRowBoundaries;
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for RequirementRowBoundaries {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RequirementRowBoundaries".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let listed = generator.subschema_for::<Listed<Vec<RowBoundarySource>, RequirementRows>>();
+        let reference = generator.subschema_for::<RowBoundarySetReference>();
+        schemars::json_schema!({"anyOf": [listed, reference]})
+    }
+}
+
 // The authored form of `AccessRequirementsSource`.
 /// Compile-time requirements, not grants. Profiles must explicitly satisfy them.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -382,10 +405,7 @@ pub(super) struct AuthoredAccessRequirements {
         deserialize_with = "requirement_rows",
         skip_serializing_if = "Vec::is_empty"
     )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(with = "Listed<Vec<RowBoundarySource>, RequirementRows>")
-    )]
+    #[cfg_attr(feature = "schema", schemars(with = "RequirementRowBoundaries"))]
     row_boundaries: Vec<RowBoundarySource>,
 }
 
@@ -750,7 +770,7 @@ impl TryFrom<AuthoredEntityPermission> for EntityPermissionSource {
             required_filters: authored.required_filters,
             sortable_fields: authored.sortable_fields,
             spatial_queries: authored.spatial_queries,
-            row_boundaries: row_boundaries.into_boundaries(),
+            row_boundaries: row_boundaries.into_boundaries()?,
             membership_boundaries: authored.membership_boundaries,
             require_consent: authored.require_consent,
             lookups: authored.lookups,

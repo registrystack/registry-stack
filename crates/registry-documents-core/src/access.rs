@@ -63,11 +63,9 @@ impl AccessProfiles {
         if first_missing_scope(profile, token).is_some() {
             return Err(AccessRefusal::Profile);
         }
-        // A malformed actor-kind claim is a malformed credential whatever the
-        // profile demands. Every profile names a kind, so an absent claim, or
-        // a kind no profile admits, is a profile refusal.
+        // Every profile names a kind, so an absent claim, or a kind no
+        // profile admits, is a profile refusal.
         let kind = match token.actor_kind {
-            ActorKindClaim::Malformed => return Err(AccessRefusal::Claims),
             ActorKindClaim::Absent | ActorKindClaim::Unadmitted => {
                 return Err(AccessRefusal::Profile)
             }
@@ -142,7 +140,6 @@ fn first_missing_scope<'a>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActorKindClaim {
     Absent,
-    Malformed,
     /// A well-formed kind no Document Store profile admits.
     Unadmitted,
     Present(ActorKind),
@@ -193,7 +190,7 @@ impl AccessRefusal {
     }
 }
 
-/// Whom a document is held for: a principal at the token issuer, with its
+/// Whom a document is held for: a principal at the caller's issuer, with its
 /// actor kind, and the represented principal when custody is held on a
 /// person's behalf.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -207,8 +204,9 @@ pub struct Custody {
 /// What a reservation asks about custody.
 #[derive(Clone, Copy, Debug)]
 pub struct CustodyAsk<'a> {
-    /// The custodian subject the body names.
-    pub subject: &'a str,
+    /// The custodian subject the body names, if any. A person may leave it
+    /// out; a service may not.
+    pub subject: Option<&'a str>,
     /// The issuing institution the body names, if any. It may only repeat
     /// the caller's profile institution.
     pub issuing_institution: Option<&'a str>,
@@ -217,7 +215,8 @@ pub struct CustodyAsk<'a> {
 /// Decide the custody a reservation places a document in.
 ///
 /// The caller's profile must be one of the policy's custody profiles. A
-/// human may place a document only in its own custody; a service may name
+/// human may place a document only in its own custody, which a body that
+/// names no custodian gives it; a service must name a subject, and may name
 /// any subject at its own issuer, and a subject other than its own is the
 /// person the document is held for. Under [`CustodianRule::Institution`]
 /// custody stays with the service and that person is recorded only as the
@@ -238,7 +237,12 @@ pub fn place_custody(
             return Err(ProblemCode::CustodyNotPermitted);
         }
     }
-    let own = ask.subject == caller.subject;
+    let subject = match (ask.subject, caller.kind) {
+        (Some(named), _) => named,
+        (None, ActorKind::Human) => caller.subject.as_str(),
+        (None, ActorKind::Service) => return Err(ProblemCode::RequestUnprocessable),
+    };
+    let own = subject == caller.subject;
     let represented = (caller.role == ActsAs::RepresentedPrincipal).then(|| caller.subject.clone());
     match (caller.kind, own) {
         (ActorKind::Human, false) => Err(ProblemCode::CustodyNotPermitted),
@@ -253,13 +257,13 @@ pub fn place_custody(
                 issuer: caller.issuer.clone(),
                 subject: caller.subject.clone(),
                 kind: caller.kind,
-                represented_principal: Some(ask.subject.to_owned()),
+                represented_principal: Some(subject.to_owned()),
             },
             CustodianRule::RepresentedPrincipal => Custody {
                 issuer: caller.issuer.clone(),
-                subject: ask.subject.to_owned(),
+                subject: subject.to_owned(),
                 kind: ActorKind::Human,
-                represented_principal: Some(ask.subject.to_owned()),
+                represented_principal: Some(subject.to_owned()),
             },
         }),
     }
@@ -496,7 +500,14 @@ mod tests {
 
     fn ask(subject: &str) -> CustodyAsk<'_> {
         CustodyAsk {
-            subject,
+            subject: Some(subject),
+            issuing_institution: None,
+        }
+    }
+
+    fn unnamed() -> CustodyAsk<'static> {
+        CustodyAsk {
+            subject: None,
             issuing_institution: None,
         }
     }
@@ -557,19 +568,11 @@ mod tests {
     }
 
     #[test]
-    fn malformed_identity_claims_are_refused_as_claims() {
+    fn unusable_identity_claims_are_refused_as_claims() {
         let profiles = AccessProfiles::new(&project());
         let claims = Map::new();
         let custody = vec!["documents:custody".to_owned()];
         let present = ActorKindClaim::Present(ActorKind::Service);
-        let malformed = facts(
-            "civil-registry-app",
-            "s",
-            &custody,
-            ActorKindClaim::Malformed,
-            &claims,
-        );
-        assert_eq!(profiles.resolve(&malformed), Err(AccessRefusal::Claims));
         let empty_subject = facts("civil-registry-app", "", &custody, present, &claims);
         assert_eq!(profiles.resolve(&empty_subject), Err(AccessRefusal::Claims));
         let mut no_issuer = facts("civil-registry-app", "s", &custody, present, &claims);
@@ -643,6 +646,23 @@ mod tests {
     }
 
     #[test]
+    fn the_same_subject_at_another_issuer_is_another_principal() {
+        let policy = policy("citizen-delivery");
+        let custody = place_custody(&policy, &app(), ask("citizen-1")).unwrap();
+        assert_eq!(custody.issuer, ISSUER);
+        let held = standing(&policy, &custody, BY_APP, &citizen("citizen-1"));
+        assert!(held.custodian && held.may_grant);
+        let mut elsewhere = citizen("citizen-1");
+        elsewhere.issuer = "https://other.example.test".to_owned();
+        let stranger = standing(&policy, &custody, BY_APP, &elsewhere);
+        assert!(!stranger.sees() && !stranger.may_grant);
+        let mut service = app();
+        service.issuer = "https://other.example.test".to_owned();
+        let reserving = standing(&policy, &custody, BY_APP, &service);
+        assert!(!reserving.sees());
+    }
+
+    #[test]
     fn a_human_may_place_a_document_only_in_its_own_custody() {
         let policy = policy("named-share");
         let own = place_custody(&policy, &citizen("citizen-1"), ask("citizen-1")).unwrap();
@@ -650,6 +670,41 @@ mod tests {
         assert_eq!(own.represented_principal.as_deref(), Some("citizen-1"));
         assert_eq!(
             place_custody(&policy, &citizen("citizen-1"), ask("citizen-2")),
+            Err(ProblemCode::CustodyNotPermitted)
+        );
+    }
+
+    #[test]
+    fn a_human_naming_no_custodian_places_the_document_in_its_own_custody() {
+        let policy = policy("named-share");
+        let omitted = place_custody(&policy, &citizen("citizen-1"), unnamed()).unwrap();
+        let named = place_custody(&policy, &citizen("citizen-1"), ask("citizen-1")).unwrap();
+        assert_eq!(omitted, named);
+        assert_eq!(omitted.subject, "citizen-1");
+        assert_eq!(omitted.kind, ActorKind::Human);
+        assert_eq!(omitted.issuer, ISSUER);
+        assert_eq!(omitted.represented_principal.as_deref(), Some("citizen-1"));
+    }
+
+    #[test]
+    fn a_service_must_name_whom_it_places_a_document_for() {
+        for rule in ["citizen-delivery", "institutional-custody"] {
+            assert_eq!(
+                place_custody(&policy(rule), &app(), unnamed()),
+                Err(ProblemCode::RequestUnprocessable),
+                "{rule}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_human_outside_the_custody_profiles_is_refused_without_a_named_custodian() {
+        assert_eq!(
+            place_custody(
+                &policy("citizen-delivery"),
+                &citizen("citizen-1"),
+                unnamed()
+            ),
             Err(ProblemCode::CustodyNotPermitted)
         );
     }
@@ -674,12 +729,12 @@ mod tests {
     fn the_issuing_institution_is_the_profile_s_never_the_body_s() {
         let policy = policy("citizen-delivery");
         let same = CustodyAsk {
-            subject: "citizen-1",
+            subject: Some("citizen-1"),
             issuing_institution: Some("civil-registry"),
         };
         assert!(place_custody(&policy, &app(), same).is_ok());
         let other = CustodyAsk {
-            subject: "citizen-1",
+            subject: Some("citizen-1"),
             issuing_institution: Some("someone-else"),
         };
         assert_eq!(
@@ -687,7 +742,7 @@ mod tests {
             Err(ProblemCode::CustodyNotPermitted)
         );
         let named_by_a_profile_without_one = CustodyAsk {
-            subject: "citizen-1",
+            subject: Some("citizen-1"),
             issuing_institution: Some("civil-registry"),
         };
         assert_eq!(

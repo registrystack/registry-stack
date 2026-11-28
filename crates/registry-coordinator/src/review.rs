@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use crate::event_trigger::IngressKeys;
 use registry_casework_client::{
     submission_digest, CaseworkAuth, CaseworkClient, CaseworkClientError, CaseworkProblemCode,
     ReviewCancelRequest, ReviewCreateRequest, ReviewRequestAccepted, ReviewResultResponse,
@@ -13,7 +14,6 @@ use registry_casework_client::{
 use registry_platform_httputil::client::{PrivateKeyJwt, RetryAfter, TokenProvider};
 use serde::Deserialize;
 use serde_json::Value;
-use zeroize::Zeroizing;
 
 use crate::{
     adapters::{refused, retryable, token_failure, valid_key},
@@ -30,27 +30,10 @@ pub(crate) struct CancelReviewInput {
     reason: String,
 }
 
-/// How Casework's completion destination for this producer authenticates:
-/// the bearer token it sends and the recipient binding it names.
+/// Verified delivery keys and routing binding for Casework completions.
 pub(crate) struct CompletionSender {
-    pub(crate) token: Zeroizing<String>,
+    pub(crate) ingress: IngressKeys,
     pub(crate) recipient: String,
-}
-
-impl CompletionSender {
-    /// Both values must match, each compared in time that depends only on
-    /// their lengths.
-    fn matches(&self, token: &str, recipient: &str) -> bool {
-        let token_matches = registry_platform_crypto::mac::constant_time_eq(
-            self.token.as_bytes(),
-            token.as_bytes(),
-        );
-        let recipient_matches = registry_platform_crypto::mac::constant_time_eq(
-            self.recipient.as_bytes(),
-            recipient.as_bytes(),
-        );
-        token_matches && recipient_matches
-    }
 }
 
 pub(crate) struct CaseworkConnection {
@@ -85,10 +68,8 @@ impl CaseworkConnection {
         self.result_check_seconds
     }
 
-    pub(crate) fn completion_matches(&self, token: &str, recipient: &str) -> bool {
-        self.completion
-            .as_ref()
-            .is_some_and(|sender| sender.matches(token, recipient))
+    pub(crate) fn completion(&self) -> Option<&CompletionSender> {
+        self.completion.as_ref()
     }
 
     /// Read the result of an accepted request. The client holds a 200 answer
@@ -250,7 +231,9 @@ fn read_failure(error: CaseworkClientError) -> CallOutcome {
         {
             retryable("transport-unavailable")
         }
-        CaseworkClientError::Protocol { .. } => refused("invalid-response"),
+        CaseworkClientError::Protocol { .. } | CaseworkClientError::DevelopmentPeer => {
+            refused("invalid-response")
+        }
         CaseworkClientError::Problem {
             status: 401 | 403, ..
         } => refused("product-forbidden"),
@@ -264,9 +247,11 @@ fn read_failure(error: CaseworkClientError) -> CallOutcome {
 /// same-key recovery an operator chooses.
 fn failure(error: CaseworkClientError) -> CallOutcome {
     match error {
-        CaseworkClientError::Protocol { .. } => CallOutcome::Uncertain {
-            code: "invalid-response".into(),
-        },
+        CaseworkClientError::Protocol { .. } | CaseworkClientError::DevelopmentPeer => {
+            CallOutcome::Uncertain {
+                code: "invalid-response".into(),
+            }
+        }
         CaseworkClientError::Problem {
             code: CaseworkProblemCode::IdempotencyExpired,
             ..
@@ -282,5 +267,28 @@ fn failure(error: CaseworkClientError) -> CallOutcome {
         CaseworkClientError::Problem { status: 404, .. } => refused("product-not-found"),
         CaseworkClientError::InvalidRequest { .. } => refused("invalid-command"),
         _ => refused("product-refused"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{failure, read_failure};
+    use crate::protocol::CallOutcome;
+    use registry_casework_client::CaseworkClientError;
+
+    #[test]
+    fn a_development_peer_read_is_refused_as_an_invalid_response() {
+        assert!(matches!(
+            read_failure(CaseworkClientError::DevelopmentPeer),
+            CallOutcome::Refused { code } if code == "invalid-response"
+        ));
+    }
+
+    #[test]
+    fn a_development_peer_on_a_keyed_review_call_holds_the_step_as_an_invalid_response() {
+        assert!(matches!(
+            failure(CaseworkClientError::DevelopmentPeer),
+            CallOutcome::Uncertain { code } if code == "invalid-response"
+        ));
     }
 }

@@ -34,12 +34,13 @@ class ReviewedNoticeSessionStartupTests(unittest.TestCase):
             journey.root = root
             journey.bin = root / "bin"
             journey.containers = []
-            journey.sessions = []
+            journey.rstack_runs = []
+            journey.issuer_fixture = root / "journey-issuer"
             journey.env = {}
             journey.ports = {"breg": 18100, "issuer": 18101, "bregdb": 15432}
             journey.urls = {"breg": "http://127.0.0.1:18100"}
             journey.tls_database.side_effect = [("coordinator-test-db", None), ("messaging-test-db", None)]
-            journey.ctl.return_value = {"resource": "urn:test:breg"}
+            journey.start_breg.return_value = {"resource": "urn:test:breg"}
             journey.messaging_service.return_value = ("http://127.0.0.1:18104", root / "messaging.yaml")
             journey.export.return_value = {"resource": "urn:test:messaging"}
             journey.coordinator_service.side_effect = RuntimeError("stopped before starting Coordinator")

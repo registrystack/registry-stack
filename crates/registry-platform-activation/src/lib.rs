@@ -2,6 +2,7 @@
 //! Shared PostgreSQL package activation ledger and runtime-role boundary.
 
 use chrono::{DateTime, Utc};
+use registry_platform_posture::Posture;
 use serde::Serialize;
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
@@ -12,7 +13,7 @@ pub const SINGLE_ROLE_STATEMENT: &str =
 
 const ACTIVATION_COLUMNS: &str = "activation_id,apply_order,package_digest,\
     predecessor_package_digest,database_id,plan_kind,applied_at,\
-    operator_reference_hash,backup_references,role_mode";
+    operator_reference_hash,backup_references,role_mode,posture";
 
 /// One trigger installed by a product migration and therefore allowed on a
 /// product-owned relation in split-role mode.
@@ -189,6 +190,10 @@ pub struct Activation {
     pub operator_reference_hash: Option<String>,
     pub backup_references: Vec<String>,
     pub role_mode: RoleMode,
+    /// The posture the activating process declared.
+    #[serde(serialize_with = "serialize_posture")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    pub posture: Posture,
     /// Present for ledgers that retain the PostgreSQL runtime user.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_role: Option<String>,
@@ -202,7 +207,46 @@ pub struct NewActivation<'a> {
     pub operator_reference_hash: Option<&'a str>,
     pub backup_references: &'a [String],
     pub role_mode: RoleMode,
+    pub posture: Posture,
     pub runtime_role: Option<&'a str>,
+}
+
+impl<'a> NewActivation<'a> {
+    /// Builds a request that records the production posture. Callers that
+    /// do not yet declare a posture use this, and it is the only
+    /// constructor that picks one on their behalf.
+    #[must_use]
+    pub fn without_posture(
+        activation_id: Uuid,
+        package_digest: &'a str,
+        database_id: &'a str,
+        operator_reference_hash: Option<&'a str>,
+        backup_references: &'a [String],
+        role_mode: RoleMode,
+        runtime_role: Option<&'a str>,
+    ) -> Self {
+        Self {
+            activation_id,
+            package_digest,
+            database_id,
+            operator_reference_hash,
+            backup_references,
+            role_mode,
+            posture: Posture::Production,
+            runtime_role,
+        }
+    }
+}
+
+fn parse_posture(value: &str) -> Result<Posture, Error> {
+    Posture::parse(value).ok_or(Error::Corrupt)
+}
+
+fn serialize_posture<S: serde::Serializer>(
+    posture: &Posture,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(posture.as_str())
 }
 
 /// How a configured deployment identity compares with the ledger.
@@ -280,8 +324,18 @@ pub async fn relation_exists(client: &impl GenericClient, relation: &str) -> Res
     Ok(row.get(1))
 }
 
+/// Lowest `server_version_num` every Registry Stack product that uses this
+/// ledger accepts (PostgreSQL 17).
+///
+/// The recorded reason is the maintained database support floor
+/// (`README.md`). The one technical reason found is BReg's: its closed-catalog
+/// check expects every managed table to grant the MAINTAIN privilege, which
+/// PostgreSQL introduced in version 17
+/// (`registry-breg/src/postgres/schema.rs`, `MIN_POSTGRES_VERSION_NUM`).
+pub const MINIMUM_SERVER_VERSION_NUM: i32 = 170_000;
+
 fn verify_postgres_version(version_num: i32) -> Result<(), Error> {
-    if version_num < 170_000 {
+    if version_num < MINIMUM_SERVER_VERSION_NUM {
         return Err(Error::UnsupportedPostgres);
     }
     Ok(())
@@ -295,11 +349,11 @@ pub async fn active_activation(
     if !relation_exists(client, layout.ledger_relation).await? {
         return Ok(None);
     }
-    let columns = activation_columns(layout);
+    let columns = read_columns(layout);
     client
         .query_opt(
             &format!(
-                "SELECT {columns} FROM {} ORDER BY apply_order DESC LIMIT 1",
+                "SELECT {columns} FROM {} AS ledger_row ORDER BY apply_order DESC LIMIT 1",
                 layout.ledger_relation
             ),
             &[],
@@ -318,11 +372,11 @@ pub async fn activation_history(
     if !relation_exists(client, layout.ledger_relation).await? {
         return Ok(Vec::new());
     }
-    let columns = activation_columns(layout);
+    let columns = read_columns(layout);
     client
         .query(
             &format!(
-                "SELECT {columns} FROM {} ORDER BY apply_order",
+                "SELECT {columns} FROM {} AS ledger_row ORDER BY apply_order",
                 layout.ledger_relation
             ),
             &[],
@@ -341,6 +395,18 @@ fn activation_columns(layout: &Layout) -> String {
     }
 }
 
+/// The columns a read selects, in the order `activation_from_row` expects, from
+/// a relation aliased `ledger_row`. A ledger that predates the `posture`
+/// column has no such field, and its rows read as production.
+fn read_columns(layout: &Layout) -> String {
+    let columns = activation_columns(layout);
+    columns.replacen(
+        ",posture",
+        ",COALESCE(to_jsonb(ledger_row) ->> 'posture','production') AS posture",
+        1,
+    )
+}
+
 fn activation_from_row(row: &tokio_postgres::Row, layout: &Layout) -> Result<Activation, Error> {
     Ok(Activation {
         activation_id: row.try_get(0)?,
@@ -353,8 +419,9 @@ fn activation_from_row(row: &tokio_postgres::Row, layout: &Layout) -> Result<Act
         operator_reference_hash: row.try_get(7)?,
         backup_references: row.try_get(8)?,
         role_mode: RoleMode::parse(row.try_get(9)?)?,
+        posture: parse_posture(row.try_get(10)?)?,
         runtime_role: if layout.stores_runtime_role {
-            Some(row.try_get(10)?)
+            Some(row.try_get(11)?)
         } else {
             None
         },
@@ -381,6 +448,29 @@ pub async fn append_activation(
             .query_one(
                 &format!(
                     "INSERT INTO {}({columns}) \
+                     SELECT $1,COALESCE(max(apply_order),0)+1,$2,$3,$4,$5,now(),$6,$7,$8,$9,$10 \
+                     FROM {} RETURNING {columns}",
+                    layout.ledger_relation, layout.ledger_relation
+                ),
+                &[
+                    &request.activation_id,
+                    &request.package_digest,
+                    &predecessor,
+                    &request.database_id,
+                    &plan_kind.as_str(),
+                    &request.operator_reference_hash,
+                    &request.backup_references,
+                    &request.role_mode.as_str(),
+                    &request.posture.as_str(),
+                    &runtime_role,
+                ],
+            )
+            .await?
+    } else {
+        client
+            .query_one(
+                &format!(
+                    "INSERT INTO {}({columns}) \
                      SELECT $1,COALESCE(max(apply_order),0)+1,$2,$3,$4,$5,now(),$6,$7,$8,$9 \
                      FROM {} RETURNING {columns}",
                     layout.ledger_relation, layout.ledger_relation
@@ -394,28 +484,7 @@ pub async fn append_activation(
                     &request.operator_reference_hash,
                     &request.backup_references,
                     &request.role_mode.as_str(),
-                    &runtime_role,
-                ],
-            )
-            .await?
-    } else {
-        client
-            .query_one(
-                &format!(
-                    "INSERT INTO {}({columns}) \
-                     SELECT $1,COALESCE(max(apply_order),0)+1,$2,$3,$4,$5,now(),$6,$7,$8 \
-                     FROM {} RETURNING {columns}",
-                    layout.ledger_relation, layout.ledger_relation
-                ),
-                &[
-                    &request.activation_id,
-                    &request.package_digest,
-                    &predecessor,
-                    &request.database_id,
-                    &plan_kind.as_str(),
-                    &request.operator_reference_hash,
-                    &request.backup_references,
-                    &request.role_mode.as_str(),
+                    &request.posture.as_str(),
                 ],
             )
             .await?
@@ -455,12 +524,17 @@ pub fn database_id_check(active: Option<&Activation>, expected: &str) -> Databas
     }
 }
 
-/// Verify the package and database identity a runtime must serve.
+/// Verify the package and database identity a runtime must serve, and that
+/// the ledger recorded the posture the process declares.
+///
+/// A posture mismatch is a distinct error that carries both postures, so a
+/// caller that only reports (such as `doctor`) can match it and continue.
 pub async fn check_active_package(
     client: &impl GenericClient,
     layout: &Layout,
     database_id: &str,
     package_digest: &str,
+    declared: Posture,
 ) -> Result<Activation, ActivePackageError> {
     let active = active_activation(client, layout)
         .await?
@@ -474,7 +548,31 @@ pub async fn check_active_package(
             candidate: package_digest.to_owned(),
         });
     }
+    if active.posture != declared {
+        return Err(ActivePackageError::PostureMismatch {
+            recorded: active.posture,
+            declared,
+        });
+    }
     Ok(active)
+}
+
+/// [`check_active_package`] for callers that do not yet declare a posture:
+/// it checks as production.
+pub async fn check_active_package_without_posture(
+    client: &impl GenericClient,
+    layout: &Layout,
+    database_id: &str,
+    package_digest: &str,
+) -> Result<Activation, ActivePackageError> {
+    check_active_package(
+        client,
+        layout,
+        database_id,
+        package_digest,
+        Posture::Production,
+    )
+    .await
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -485,6 +583,15 @@ pub enum ActivePackageError {
     DatabaseIdMismatch,
     #[error("package {candidate} is not active; the database serves {active}")]
     PackageNotActive { active: String, candidate: String },
+    #[error(
+        "the database was activated in the {} posture and this process declares {}",
+        .recorded.as_str(),
+        .declared.as_str()
+    )]
+    PostureMismatch {
+        recorded: Posture,
+        declared: Posture,
+    },
     #[error(transparent)]
     Activation(#[from] Error),
 }
@@ -1017,6 +1124,11 @@ mod tests {
         for version in [170_000, 170_011, 180_000] {
             assert!(verify_postgres_version(version).is_ok());
         }
+    }
+
+    #[test]
+    fn postgres_floor_constant_is_version_17() {
+        assert_eq!(MINIMUM_SERVER_VERSION_NUM, 170_000);
     }
 
     #[test]

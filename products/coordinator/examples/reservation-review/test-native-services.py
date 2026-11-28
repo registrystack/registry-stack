@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import UTC, datetime, timedelta
 import hashlib
 import http.server as http_server
 import importlib.util
@@ -17,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -36,6 +38,7 @@ SCRIPTS = REPO / "products/coordinator/scripts"
 EXAMPLE = REPO / "products/coordinator/examples/reservation-review"
 SCHEDULING_PROJECT = EXAMPLE / "scheduling"
 REQUIRED_BINARIES = (
+    "rstack",
     "breg",
     "bregctl",
     "casework",
@@ -278,6 +281,12 @@ def add_reservation_source_client(project: Path) -> None:
             },
         }
     )
+    issuer = document.setdefault("issuer", {})
+    issuer.setdefault("resources", []).append({
+        "audience": "urn:example:reservation-source",
+        "scopes": ["reservations:workflow"],
+    })
+    issuer.setdefault("clientResources", {})["reservation-source-agent"] = "urn:example:reservation-source"
     native.private(path, document)
 
 
@@ -387,11 +396,17 @@ def write_reservation_messaging(root: Path) -> Path:
     return root
 
 
-def write_reservation_scheduling(root: Path, _day: str) -> Path:
+def write_reservation_scheduling(root: Path, day: str) -> Path:
     root = Path(root)
     root.mkdir(parents=True)
-    for name in ("scheduling.yaml", "records.yaml"):
-        shutil.copy2(SCHEDULING_PROJECT / name, root / name)
+    project = yaml.safe_load((SCHEDULING_PROJECT / "scheduling.yaml").read_text())
+    opening = project["openings"]["reservation-hours"]
+    opening["effectiveFrom"] = day
+    opening["effectiveUntil"] = (
+        datetime.fromisoformat(day) + timedelta(days=7)
+    ).date().isoformat()
+    native.private(root / "scheduling.yaml", project)
+    shutil.copy2(SCHEDULING_PROJECT / "records.yaml", root / "records.yaml")
     return root
 
 
@@ -524,23 +539,10 @@ class ReservationJourney(native.Journey):
         ]
         native.private(clients_path, clients)
         self.ctl("bregctl", "check", source)
-        source_port, database_port = native.free_ports(2)
-        self.sessions.append(("bregctl", source))
-        report = self.ctl(
-            "bregctl",
-            "dev",
-            "start",
-            source,
-            "--breg-port",
-            source_port,
-            "--database-port",
-            database_port,
-            "--issuer-project",
-            issuer,
-            "--breg-bin",
-            self.bin / "breg",
-        )
-        return source, f"http://127.0.0.1:{source_port}", report
+        journeys = source / "tests/journeys.yaml"
+        native.private(journeys, yaml.safe_load(journeys.read_text()))
+        report = self.start_breg(source, resource="urn:example:reservation-source")
+        return source, self.urls["breg"], report
 
     def review_casework(
         self,
@@ -548,7 +550,7 @@ class ReservationJourney(native.Journey):
         resource: str,
         port: int,
         completion_url: str,
-        completion_token: str,
+        completion_key: bytes,
         agent_subject: str,
     ) -> tuple[Path, str, dict[str, object]]:
         project = write_review_casework(
@@ -573,7 +575,7 @@ class ReservationJourney(native.Journey):
         native.private(
             keys / "jwks", native.http("GET", self.urls["issuer"] + "/oauth2/jwks")
         )
-        native.private(keys / "completion-token", completion_token)
+        native.private(keys / "reservation-review-completion-key", completion_key)
         authority_key = generate_task_authority_key()
         native.private(keys / "task-authority-signing-key", authority_key)
         jwks = JwksFixture(self.ports["jwks"], authority_key)
@@ -600,24 +602,23 @@ class ReservationJourney(native.Journey):
                 },
                 "authentication": {
                     "oidc": {
-                        "issuer": self.urls["issuer"],
-                        "audience": resource,
-                        "allowedClients": [
-                            "review-producer",
-                            "staff",
-                            "administrator",
-                            "task-agent",
-                            "scheduling-status",
-                        ],
-                        "scopeClaim": "scope",
-                        "jwksSource": {
-                            "type": "static",
-                            "documentRef": "secret:file/jwks",
-                        },
-                        "humanIdentity": {
-                            "claim": "registry_actor_kind",
-                            "value": "human",
-                        },
+                        "issuers": {
+                            "main": {
+                                "issuer": self.urls["issuer"],
+                                "audience": resource,
+                                "allowedClients": [
+                                    "review-producer",
+                                    "staff",
+                                    "administrator",
+                                    "task-agent",
+                                    "scheduling-status",
+                                ],
+                                "jwksSource": {
+                                    "type": "static",
+                                    "documentRef": "secret:file/jwks",
+                                },
+                            }
+                        }
                     }
                 },
                 "audit": {
@@ -634,7 +635,7 @@ class ReservationJourney(native.Journey):
                 "reviewCompletionDestinations": {
                     "coordinator": {
                         "url": completion_url,
-                        "bearerTokenRef": "secret:file/completion-token",
+                        "hmacSha256KeyRef": "secret:file/reservation-review-completion-key",
                         "attemptTimeoutMilliseconds": 5000,
                         "maximumAttempts": 10,
                         "retryDelaySeconds": 1,
@@ -645,7 +646,7 @@ class ReservationJourney(native.Journey):
         self.ctl("caseworkctl", "apply", "--runtime-config", runtime)
         child = self.spawn("casework", runtime, "reservation-review-casework")
         self.ready(child, url)
-        administrator = self.token("bregctl", owner, "administrator")
+        administrator = self.token("administrator")
         headers = {"Registry-Casework-Profile": "administrator"}
         directory = native.http(
             "GET", url + "/v1/directory", administrator, headers=headers
@@ -681,7 +682,7 @@ class ReservationJourney(native.Journey):
         casework_url: str,
         scheduling_url: str,
         messaging_url: str,
-        completion_token: str,
+        completion_key: bytes,
         agent_subject: str,
         binding: dict[str, object],
         port: int,
@@ -692,7 +693,7 @@ class ReservationJourney(native.Journey):
         catalogue = self.export(owner, "scheduling-reader", keys)
         booking = self.export(owner, "task-agent", keys)
         sender = self.export(owner, "case-system", keys)
-        native.private(keys / "review-completion-token", completion_token)
+        native.private(keys / "reservation-review-completion-key", completion_key)
         task = {
             "baseUrl": casework_url,
             "issuer": native.AUTHORITY,
@@ -704,6 +705,7 @@ class ReservationJourney(native.Journey):
         shutil.copytree(EXAMPLE / "request-only", project)
         bind_review_policy(project, binding)
         return self.coordinator_service(
+            owner,
             "reservation-review-request-only",
             keys,
             {
@@ -727,7 +729,7 @@ class ReservationJourney(native.Journey):
                     ),
                     "completion": {
                         "recipientBinding": "reservation-review-v1",
-                        "bearerTokenRef": "secret:file/review-completion-token",
+                        "hmacSha256KeyRef": "secret:file/reservation-review-completion-key",
                     },
                     "resultCheckSeconds": 900,
                 },
@@ -857,7 +859,7 @@ class ReservationJourney(native.Journey):
         identifier: str,
         record: dict[str, object],
     ) -> tuple[dict[str, object], str]:
-        producer = self.token("bregctl", owner, "review-producer")
+        producer = self.token("review-producer")
         grant_request = self.review_request(binding, identifier, record)
         grant_request["subject"]["type"] = "reservation-capacity-authorization"
         grant_request["requesterReference"] = "capacity:" + identifier
@@ -870,7 +872,7 @@ class ReservationJourney(native.Journey):
                 "Idempotency-Key": "native-grant-review-" + identifier,
             },
         )
-        staff = self.token("bregctl", owner, "staff")
+        staff = self.token("staff")
         headers = {"Registry-Casework-Profile": "staff"}
         deadline = time.monotonic() + 30
         while True:
@@ -915,7 +917,7 @@ class ReservationJourney(native.Journey):
                 "Idempotency-Key": "native-capacity-grant-" + identifier,
             },
         )
-        bootstrap = self.token("bregctl", owner, "task-agent")
+        bootstrap = self.token("task-agent")
         assertion = native.http(
             "POST",
             casework_url + f"/v1/task-grants/{grant['id']}/assertion",
@@ -953,7 +955,7 @@ class ReservationJourney(native.Journey):
         excluded_request: str,
         decision: str,
     ) -> None:
-        staff = self.token("bregctl", owner, "staff")
+        staff = self.token("staff")
         headers = {"Registry-Casework-Profile": "staff"}
         deadline = time.monotonic() + 60
         while True:
@@ -1013,29 +1015,14 @@ class ReservationJourney(native.Journey):
         bootstrap = native.write_breg(self.root / "issuer-owner", self.urls)
         add_reservation_source_client(bootstrap)
         self.ctl("bregctl", "check", bootstrap)
-        bootstrap_breg, bootstrap_database = native.free_ports(2)
-        self.sessions.append(("bregctl", bootstrap))
-        bootstrap_report = self.ctl(
-            "bregctl",
-            "dev",
-            "start",
-            bootstrap,
-            "--breg-port",
-            bootstrap_breg,
-            "--issuer-port",
-            self.ports["issuer"],
-            "--database-port",
-            bootstrap_database,
-            "--breg-bin",
-            self.bin / "breg",
-        )
+        bootstrap_report = self.start_breg(bootstrap)
         resource = bootstrap_report["resource"]
-        agent_subject = native.subject(self.token("bregctl", bootstrap, "task-agent"))
+        agent_subject = native.subject(self.token("task-agent"))
         source, source_url, _ = self.source_service(bootstrap)
 
         (coordinator_port,) = native.free_ports(1)
         casework_port = self.ports["casework"]
-        completion_token = uuid.uuid4().hex + uuid.uuid4().hex
+        completion_key = secrets.token_bytes(32)
         receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
         casework_project = write_review_casework(
             self.root / "review-casework-source", self.urls, agent_subject
@@ -1050,8 +1037,13 @@ class ReservationJourney(native.Journey):
         native.write_messaging = write_reservation_messaging
         native.write_scheduling = write_reservation_scheduling
         messaging_url, messaging_runtime = self.messaging_service(bootstrap)
+        # Native Scheduling enforces lead time and opens only on weekdays.
+        first = datetime.now(UTC).date() + timedelta(days=2)
+        while first.weekday() >= 5:
+            first += timedelta(days=1)
+        second = first + timedelta(days=1 if first.weekday() < 4 else 3)
         scheduling_url, scheduling_runtime = self.scheduling_service(
-            bootstrap, resource, "2026-11-03"
+            bootstrap, resource, first.isoformat()
         )
         scheduling_proxy = LostSchedulingResponseProxy(
             scheduling_url, "/v1/appointments"
@@ -1072,7 +1064,7 @@ class ReservationJourney(native.Journey):
             casework_placeholder,
             scheduling_proxy.url,
             messaging_url,
-            completion_token,
+            completion_key,
             agent_subject,
             binding,
             coordinator_port,
@@ -1082,16 +1074,16 @@ class ReservationJourney(native.Journey):
             resource,
             casework_port,
             receiver,
-            completion_token,
+            completion_key,
             agent_subject,
         )
         assert runtime_binding == binding
 
-        source_token = self.token("bregctl", bootstrap, "reservation-source-agent")
+        source_token = self.token("reservation-source-agent")
         reservations = {}
         for label, policy, start in (
-            ("request-only-success", "request-only", "2026-11-03T09:00:00Z"),
-            ("request-only-rejected", "request-only", "2026-11-04T09:00:00Z"),
+            ("request-only-success", "request-only", f"{first.isoformat()}T09:00:00Z"),
+            ("request-only-rejected", "request-only", f"{second.isoformat()}T09:00:00Z"),
         ):
             identifier, record = self.create_reservation(
                 source_url, source_token, label, policy, start

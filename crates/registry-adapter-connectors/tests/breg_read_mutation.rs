@@ -43,6 +43,54 @@ fn single_record() -> support::MockResponse {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn connector_applies_the_configured_breg_peer_policy_to_metadata() {
+    use registry_adapter_connectors::breg::{BregConnector, BregConnectorConfig};
+    use registry_breg_client::{PeerPolicy, StaticToken};
+    use std::sync::Arc;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/tenant/prefix", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let app = axum::Router::new().fallback(|| async {
+            (
+                [
+                    ("registry-posture", "development"),
+                    ("traceparent", support::TRACEPARENT),
+                ],
+                axum::Json(support::metadata("immediate", false)),
+            )
+        });
+        axum::serve(listener, app).await.unwrap();
+    });
+    for policy in [
+        PeerPolicy::RefuseDevelopmentPeer,
+        PeerPolicy::AcceptDevelopmentPeer,
+    ] {
+        let token = Arc::new(StaticToken::new(TOKEN).unwrap());
+        let mut config = BregConnectorConfig::for_action(
+            &endpoint,
+            token,
+            support::PROFILE,
+            support::IMMEDIATE_ACTION,
+        );
+        config.peer_policy = policy;
+        let connected = BregConnector::connect(config).await;
+        match policy {
+            PeerPolicy::RefuseDevelopmentPeer => assert_eq!(
+                connected.err().unwrap(),
+                ConnectorFault::Native {
+                    code: Some("development-peer".to_owned())
+                },
+            ),
+            PeerPolicy::AcceptDevelopmentPeer => {
+                assert!(connected.is_ok(), "{:?}", connected.err())
+            }
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn catalog_advertises_exactly_the_bound_families() {
     let mock = Mock::start("immediate", false).await;
     let names: Vec<&str> = mock

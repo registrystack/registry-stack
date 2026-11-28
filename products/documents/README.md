@@ -18,12 +18,19 @@ are delivered to after-commit URL observers.
 
 Every document route carries the API's major version, `/v1/`, in its path;
 the probes `GET /health` and `GET /ready` are unversioned. Every route but
-the probes takes a bearer access token the configured issuer signed. The token's client, scopes, and actor kind select one access
+the probes takes a bearer access token one of the configured issuers signed.
+The token's client, scopes, and actor kind select one access
 profile in `documents.yaml`; the profile and the document policy decide what
-the caller may do. The token is an RFC 9068 `at+jwt` access token signed with
+the caller may do. The token is an RFC 9068 `at+jwt` access token (an issuer
+that types its tokens `JWT` says so with `accessTokenType: JWT`) signed with
 `RS256` or `ES256`, whose `azp` or `client_id` is in a profile's
 `requesterClients`, whose scopes include the profile's `requiredScopes`, and
-whose `registry_actor_kind` is the profile's `actorKind`; the
+whose actor kind is the profile's `actorKind`. The kind comes from the token's
+`registry_actor_kind`, or from the `actorKind` or `clientActorKinds` the
+operator declared for the issuer entry. A caller with no kind is refused by
+every profile. Custody and grants are scoped to the caller's issuer entry: a
+service places custody for, and grants to, subjects at its own issuer, and a
+person who signs in through another entry does not see them. The
 [Deploy and operate the Document Store](https://docs.registrystack.org/operate/documents/#access-tokens)
 guide states every rule.
 `generated/registry-documents.openapi.json` is the full contract.
@@ -47,7 +54,7 @@ guide states every rule.
 The two routes that create a resource, `POST /v1/documents` and
 `POST /v1/documents/{documentId}/grants`, refuse a request without an
 `Idempotency-Key` of 1 to 128 printable ASCII characters as
-`request.invalid` (400). A key belongs to its caller, by issuer, actor kind, and subject,
+`request.invalid` (400). A key belongs to its caller, by issuer, actor kind, and subject (the same subject at two issuers is two callers),
 and to its operation, for a grant the document it names. A retry under the
 same key with the same body, compared in canonical JSON after parsing,
 answers `201` with the resource the first request created, changes nothing,
@@ -215,7 +222,28 @@ the rehearsal does not restore an S3 bucket.
 | `registry-documentsctl` | Configuration checks, packaging, activation, dead-letter replay, and the `documentsctl` binary |
 | `registry-documents-client` | Bounded Rust client over the runtime's HTTP contract |
 
-## Configuration
+## Start a development run
+
+Install the product with `rstack install` or set the binary overrides for a source build.
+See [Build from source](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#build-from-source) for the override names. Start Docker before running the example.
+
+```sh
+documentsctl init ./documents
+rstack dev start ./documents
+```
+
+Copy the run ID and loopback URL from the report. Ask for the starter reader’s token
+and use the header file the command prints.
+Set `RUN` and `ORIGIN` to those reported values before running the commands.
+Set `HEADERS` to the header file path before calling curl.
+
+```sh
+rstack dev token "$RUN" --as reader
+curl --fail --header @"$HEADERS" "$ORIGIN/v1/document-policies"
+rstack dev stop "$RUN"
+```
+
+## Configure a deployment you operate
 
 Two operator documents configure a deployment:
 
@@ -320,7 +348,11 @@ A project may declare `hooks`: after-commit URL observers of three event
 families. Each hook names a trigger, the document policies whose
 documents it hears about, the fields it projects, and a destination id; the
 runtime configuration binds that id under `destinations.hooks` to a URL and
-an HMAC signing key. The project file never carries an endpoint or a secret.
+a current HMAC signing key under `hmacSha256KeyRef`. Use distinct key bytes across
+destinations. Each key contains 32 to 64 exact bytes. Generate a 64-byte file
+with `openssl rand -hex 32 | tr -d '\n' > key`. The optional
+`previousHmacSha256KeyRef` adds a second signature during rotation, with the
+current signature first. The project file never carries an endpoint or a secret.
 
 `policies` is required and lists at least one policy the project declares,
 each once. A hook hears only about documents held under a policy it names,
@@ -360,10 +392,14 @@ so a rolled-back verdict or grant change reports nothing, and a capture that
 cannot be written fails the transition. A repeated verdict, an issue replayed
 under its `Idempotency-Key`, a repeated revocation, and a repeated removal
 request report nothing.
-Delivery runs after commit: each attempt is a signed Version 1 hook envelope
-whose `source` is `urn:registrystack:documents:<project id>`, whose `type`
-is the hook id, and whose `dataschema` names the family's published schema
-under `generated/events/`. A failed attempt is retried with backoff from 30
+Delivery runs after commit. Each attempt carries a hook envelope signed with
+Standard Webhooks. Its `source` is `urn:registrystack:documents:<project id>`,
+its `type` is the hook id, and its `dataschema` names the family's published schema
+under `generated/events/`. The HTTP POST carries `accept`, `content-type`,
+`webhook-id`, `webhook-timestamp`, and `webhook-signature`. The id matches the
+envelope and stays stable on retries. The receiver verifies the signature
+over the id, attempt timestamp, and exact body bytes, checks freshness,
+and compares the header id with the authenticated envelope id. A failed attempt is retried with backoff from 30
 seconds to an hour until the destination's `maximumAttempts` are spent, then
 dead-lettered; delivery never delays or undoes a transition. An observer may
 not answer with a proposal: every proposal is refused and recorded as

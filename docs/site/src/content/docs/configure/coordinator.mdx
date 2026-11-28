@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -38,6 +38,8 @@ coordinatorctl init --directory follow-up
 
 ```text test-expect
 created: follow-up
+  dev.yaml
+  dev-scenarios.yaml
   workflow.yaml
   functions.rhai
   runtime.yaml
@@ -473,12 +475,12 @@ The event source owns event meaning and disclosure, and product event names and 
 The receiving workflow uses the same finite execution engine and independently authorised downstream connections as an explicit start.
 
 The receiver is `POST /v1/events/{workflow}/{trigger}`.
-It accepts the HookEnvelope Registry Stack products share, with its v1 delivery signature, under the operator's `eventSources` key binding.
+It accepts the shared HookEnvelope signed with Standard Webhooks using the key configured for that workflow and trigger under `eventSources`.
 
 - The authenticated source URI, the event ID, and the trigger bind admission independently of the local source alias, and the canonical event bytes bind exact retries.
 - The admission, the run, and its durable job commit together.
   A repeated exact delivery recovers the same run before evaluating any changed mapping, and changed event bytes conflict.
-- The delivery attempt time must be fresh within 30 seconds.
+- The signed Unix timestamp must be within 300 seconds in either direction.
   The immutable event time may be older after an outage.
 - Acknowledgement is an empty HTTP 204 and never a source mutation proposal.
   An admitted event grants no source mutation authority.
@@ -488,8 +490,9 @@ An event workflow that writes back to its own source must select meaningful stat
 Ordinary product API calls do not propagate event causation across products, so the envelope's hop bound alone does not prevent those loops.
 The [product events example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/product-events) admits committed BReg events, and a conforming alternate-source fixture, through the same signed event contract.
 
-{/* Evidence: crates/registry-coordinator/src/event_trigger_tests.rs substituted_signature_destination_source_and_contract_are_refused,
-    stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused,
+{/* Evidence: crates/registry-coordinator/src/event_trigger_tests.rs a_delivery_for_another_trigger_is_refused_by_that_triggers_key,
+    the_event_window_is_300_seconds_in_both_directions,
+    an_authentic_noncanonical_body_is_refused,
     exact_event_identity_survives_retry_replay_and_old_commit_time,
     event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation;
     crates/registry-coordinator/tests/breg_event_native.rs native_proposal_event_admits_one_run_without_conferring_apply_authority. */}

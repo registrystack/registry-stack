@@ -15,11 +15,12 @@ use breg_client_sdk::{
     BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
     BRegEventRecordError, BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection,
     BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegHookDelivery as CoreHookDelivery,
-    BRegHookVerificationError, BRegIdempotencyKey, BRegIngestionChunk as CoreIngestionChunk,
-    BRegIngestionError, BRegIngestionPrefixDigest as CoreIngestionPrefixDigest,
-    BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest,
-    BRegMetadata as CoreMetadata, BRegMetadataSelectionError, BRegMetadataSelectionErrorKind,
-    BRegPage, BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    BRegHookFreshness, BRegHookVerificationError, BRegIdempotencyKey,
+    BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
+    BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
+    BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
+    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
+    BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
     BRegPreparedCreate as CorePreparedCreate, BRegProtocolFailure, BRegRawDocument,
     BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
@@ -955,14 +956,6 @@ fn encode_ingestion_chunk(
         .map_err(|error| ingestion_error(py, error))
 }
 
-fn hook_text(py: Python<'_>, value: &Bound<'_, PyAny>, field: &str) -> PyResult<String> {
-    value
-        .cast::<PyString>()
-        .ok()
-        .and_then(|text| text.to_str().ok().map(str::to_owned))
-        .ok_or_else(|| invalid(py, format!("hook {field} must be a string")))
-}
-
 fn hook_bytes<'py>(
     py: Python<'py>,
     value: &Bound<'py, PyAny>,
@@ -1045,49 +1038,96 @@ fn event_record_view<'py>(
     json_to_python(py, view.as_value())
 }
 
-/// Verify one exact Base Registry Engine Version 1 hook delivery with the
+const HOOK_MAXIMUM_SKEW_SECONDS: u32 = 3600;
+
+/// The freshness window of one hook delivery. A `bool` is not a count.
+fn hook_freshness(
+    py: Python<'_>,
+    max_skew_seconds: Option<&Bound<'_, PyAny>>,
+    caller_enforced_freshness: Option<&Bound<'_, PyAny>>,
+) -> PyResult<BRegHookFreshness> {
+    let invalid = || {
+        to_py_err(
+            py,
+            MappedError::binding(
+                "invalid-request",
+                "hook freshness options are invalid: max_skew_seconds is a whole number from 1 to 3600, caller_enforced_freshness is a bool, and the two cannot be combined",
+            ),
+        )
+    };
+    let caller_enforced_freshness = match caller_enforced_freshness {
+        None => false,
+        Some(value) if value.is_none() => false,
+        Some(value) => match value.cast::<PyBool>() {
+            Ok(flag) => flag.is_true(),
+            Err(_) => return Err(invalid()),
+        },
+    };
+    let Some(value) = max_skew_seconds.filter(|value| !value.is_none()) else {
+        return Ok(if caller_enforced_freshness {
+            BRegHookFreshness::CallerEnforced
+        } else {
+            BRegHookFreshness::DefaultWindow
+        });
+    };
+    if caller_enforced_freshness || value.is_instance_of::<PyBool>() {
+        return Err(invalid());
+    }
+    let seconds = value.extract::<u32>().map_err(|_| invalid())?;
+    if !(1..=HOOK_MAXIMUM_SKEW_SECONDS).contains(&seconds) {
+        return Err(invalid());
+    }
+    Ok(BRegHookFreshness::Within {
+        skew: Duration::from_secs(u64::from(seconds)),
+    })
+}
+
+/// Verify one exact Base Registry Engine Standard Webhooks delivery with the
 /// shared Rust verifier and return its authenticated attributes and body.
 ///
-/// `path` is the request target the receiver was called on, `headers` is an
-/// ordered sequence of name/value pairs (matched without regard to ASCII case), `body` is
-/// the exact request body, and `key` is the destination's HMAC key. Receiver
-/// policy is the caller's: bound `delivery_time` against the receiver clock
-/// and deduplicate before acting on `body`. Refusal raises
+/// Pass `headers` as ordered name/value pairs, `body` as exact request bytes,
+/// and `key` as the destination's HMAC key. Use `previous_key` during rotation.
+/// The signed timestamp must fall within 300 seconds of the receiver clock. Pass
+/// `max_skew_seconds` (a whole number from 1 to 3600) for another window, or
+/// `caller_enforced_freshness=True` to enforce the window yourself. Choose one
+/// freshness option. A timestamp outside the window raises code `stale-delivery`.
+/// Deduplicate by `source` and `id` before acting on `body`. Refusal raises
 /// `BaseRegistryClientError` with kind `hook-verification` and a value-free
 /// `code`; input of the wrong shape raises kind `invalid-request`.
 #[pyfunction]
-#[pyo3(signature = (*, method, path, headers, body, key))]
+#[pyo3(signature = (*, headers, body, key, previous_key=None, max_skew_seconds=None, caller_enforced_freshness=None))]
+#[allow(clippy::too_many_arguments)]
 fn verify_hook_delivery<'py>(
     py: Python<'py>,
-    method: &Bound<'py, PyAny>,
-    path: &Bound<'py, PyAny>,
     headers: &Bound<'py, PyAny>,
     body: &Bound<'py, PyAny>,
     key: &Bound<'py, PyAny>,
+    previous_key: Option<&Bound<'py, PyAny>>,
+    max_skew_seconds: Option<&Bound<'py, PyAny>>,
+    caller_enforced_freshness: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let method = hook_text(py, method, "method")?;
-    let path = hook_text(py, path, "path")?;
+    let freshness = hook_freshness(py, max_skew_seconds, caller_enforced_freshness)?;
     let headers = hook_headers(py, headers)?;
     let body = hook_bytes(py, body, "body")?;
     let key = hook_bytes(py, key, "key")?;
+    let previous_key = previous_key
+        .map(|value| hook_bytes(py, value, "previous_key"))
+        .transpose()?;
     let verified = verify_core_hook_delivery(CoreHookDelivery {
-        method: &method,
-        path: &path,
         headers: &headers,
         body: body.as_bytes(),
         key: key.as_bytes(),
+        previous_key: previous_key.as_ref().map(|value| value.as_bytes()),
+        freshness,
     })
     .map_err(|error| hook_verification_error(py, error))?;
     let result = PyDict::new(py);
     result.set_item("id", verified.id)?;
+    result.set_item("timestamp", verified.timestamp)?;
     result.set_item("source", verified.source)?;
     result.set_item("type", verified.event_type)?;
     result.set_item("time", verified.time)?;
     result.set_item("dataschema", verified.data_schema)?;
-    result.set_item("generation", verified.generation)?;
-    result.set_item("attempt", verified.attempt)?;
-    result.set_item("delivery_time", verified.delivery_time)?;
-    result.set_item("idempotency_key", verified.idempotency_key)?;
     result.set_item("body", PyBytes::new(py, &verified.body))?;
     Ok(result)
 }
@@ -1722,7 +1762,7 @@ struct BaseRegistryClient {
 #[pymethods]
 impl BaseRegistryClient {
     #[new]
-    #[pyo3(signature = (base_url, authorization=None, attempt_timeout_seconds=None, connect_timeout_seconds=None, user_agent=None, maximum_response_bytes=None, trusted_root_certificates=None, maximum_mutation_retries=None))]
+    #[pyo3(signature = (base_url, authorization=None, attempt_timeout_seconds=None, connect_timeout_seconds=None, user_agent=None, maximum_response_bytes=None, trusted_root_certificates=None, maximum_mutation_retries=None, refuse_development_peer=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -1734,9 +1774,15 @@ impl BaseRegistryClient {
         maximum_response_bytes: Option<&Bound<'_, PyAny>>,
         trusted_root_certificates: Option<Vec<u8>>,
         maximum_mutation_retries: Option<&Bound<'_, PyAny>>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let (authorization, private_roots) = authorization_from_python(authorization)
             .map_err(|error| conversion_error(py, "configuration", error))?;
+        let peer_policy = if refuse_development_peer {
+            breg_client_sdk::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            breg_client_sdk::PeerPolicy::AcceptDevelopmentPeer
+        };
         let config = config_from_parts(
             base_url,
             &authorization,
@@ -1752,6 +1798,7 @@ impl BaseRegistryClient {
                 .map(|value| parse_maximum_response_bytes(py, value))
                 .transpose()?,
             trusted_root_certificates,
+            peer_policy,
         )
         .map_err(|error| config_error(py, error))?;
         let config = match maximum_mutation_retries {

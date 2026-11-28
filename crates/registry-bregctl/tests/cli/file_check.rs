@@ -120,9 +120,6 @@ fn every_registered_tool_example_checks_without_a_diagnostic() {
         "crates/registry-linkml/publicschema/starters/household.yaml",
         "products/breg/acceptance/facility/dev-clients.yaml",
         "crates/registry-bregctl/tests/fixtures/retained-native/example-catalog/examples/scenarios.json",
-        "products/breg/examples/formats/dev-session/.breg/dev/state.json",
-        "products/breg/examples/formats/dev-session/.breg/dev/source-prepared-source.json",
-        "products/breg/examples/formats/dev-session/.breg/dev/source-transition.json",
     ] {
         let output = check_file(&repository(example), &["--format", "json", "--deny-warnings"]);
         let report = json_report(&output);
@@ -421,8 +418,9 @@ reviewAuthorities:
     producerId: registry-producer
     recoveryDays: 7
     client: facility-operator
-    completionTokenRef: secret:file/completion-token
-    completionRecipient: registry-breg
+    completion:
+      hmacSha256KeyRef: secret:file/completion-key
+      recipientBinding: registry-breg
 ",
         scratch.path().join("no-secrets-here").display()
     );
@@ -437,14 +435,14 @@ reviewAuthorities:
     for (planted, code) in [
         (
             clients.replace(
-                "secret:file/completion-token",
+                "secret:file/completion-key",
                 &format!("secret:vault/{MARKER}"),
             ),
             "config.invalid-value",
         ),
         (
             clients.replace(
-                "secret:file/completion-token",
+                "secret:file/completion-key",
                 &format!("secret:env/{}", MARKER.replace('-', "_")),
             ),
             "breg.dev-clients.refused",
@@ -488,8 +486,7 @@ fn an_oversize_file_is_refused_by_the_shared_reader() {
     }
 }
 
-/// CFG-SEC-2: a file BReg reads as written refuses a substitution
-/// expression; a file a command wrote keeps the text it copied.
+/// CFG-SEC-2: authoring refuses substitution, while command output keeps literal expressions.
 #[test]
 fn an_expression_is_refused_in_a_file_read_as_written_and_kept_in_a_written_one() {
     let scratch = scratch();
@@ -516,22 +513,19 @@ fn an_expression_is_refused_in_a_file_read_as_written_and_kept_in_a_written_one(
         .as_str()
         .is_some_and(|action| action.contains("secret reference")));
 
-    let transition = scratch.path().join("source-transition.json");
+    let checkpoint = scratch.path().join("export.checkpoint.json");
     let example = fs::read_to_string(repository(
-        "products/breg/examples/formats/dev-session/.breg/dev/source-transition.json",
+        "products/breg/examples/formats/export.checkpoint.json",
     ))
     .unwrap();
-    let copied = "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\\n";
-    assert!(example.contains(copied));
-    fs::write(
-        &transition,
-        example.replace(copied, "url: ${BREG_DATABASE_URL}\\n"),
-    )
-    .unwrap();
-    let output = check_file(&transition, &["--format", "json"]);
+    let literal = example.replace("eyJhZnRlciI6IjUwIn0", "${CURSOR}");
+    assert_ne!(literal, example);
+    fs::write(&checkpoint, &literal).unwrap();
+    let output = check_file(&checkpoint, &["--format", "json"]);
     let report = json_report(&output);
-    assert_eq!(output.status.code(), Some(0), "{report}");
-    assert_eq!(report["diagnostics"], json!([]));
+    assert!(output.status.success(), "{report}");
+    assert!(codes(&report).is_empty(), "{report}");
+    assert_eq!(fs::read_to_string(&checkpoint).unwrap(), literal);
 }
 
 /// An explicit native project with journeys and local clients for reader checks.

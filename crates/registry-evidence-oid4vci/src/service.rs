@@ -54,6 +54,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use registry_evidence_client::{HolderPublicKey, MAXIMUM_HOLDER_KEYS};
 use registry_evidence_verifier::sdjwt_vc::holder_thumbprint;
+use registry_platform_authcommon::{FailedCheck, RefusalNote};
 use registry_platform_config::describe_secret_failure;
 use registry_platform_crypto::PublicJwk;
 use registry_platform_httpsec::{
@@ -239,9 +240,11 @@ async fn admit(limiter: &TokenBucketLimiter, key: &str) -> Result<(), Response> 
 /// own key or cost is a fault of this service, so it is logged without the key
 /// and answered as a server error that carries no Retry-After.
 fn limiter_refusal(error: &TokenBucketError) -> Response {
-    let wait = match error {
-        TokenBucketError::Exceeded { retry_after } => retry_after.as_secs() + 1,
-        TokenBucketError::Capacity => CAPACITY_RETRY_SECONDS,
+    let (wait, check) = match error {
+        TokenBucketError::Exceeded { retry_after } => {
+            (retry_after.as_secs() + 1, Some(FailedCheck::RateLimit))
+        }
+        TokenBucketError::Capacity => (CAPACITY_RETRY_SECONDS, None),
         TokenBucketError::Configuration | TokenBucketError::CostExceedsBurst => {
             tracing::error!(
                 fault = %error,
@@ -262,7 +265,10 @@ fn limiter_refusal(error: &TokenBucketError) -> Response {
     response
         .headers_mut()
         .insert(RETRY_AFTER, HeaderValue::from(wait));
-    response
+    match check {
+        Some(check) => refused(response, check),
+        None => response,
+    }
 }
 
 /// The limiter key of an authorized offer principal: a digest, so a client id
@@ -374,11 +380,12 @@ impl DeliveryService {
             .audit
             .destination()
             .map_err(|error| ServiceError::AuditDestination(error.to_string()))?;
-        let audit = Arc::new(DeliveryAudit::initialize(destination, audit_key).await?);
-        let authorizer = Arc::new(MintResourceServer::from_config(
-            &config.offers,
-            config.validation_mode,
-        ));
+        let audit = Arc::new(
+            DeliveryAudit::initialize(destination, audit_key, config.posture.posture()).await?,
+        );
+        let authorizer = Arc::new(
+            MintResourceServer::from_config(&config.offers).with_posture(config.posture.posture()),
+        );
         Ok(Self::with_halves(config, authorizer, issuer, audit))
     }
 
@@ -392,7 +399,10 @@ impl DeliveryService {
     ) -> Self {
         let store = Arc::new(OfferStore::new(&config.store));
         let nonces = NonceMinter::new(config.store.nonce_lifetime_seconds);
-        let metrics = Arc::new(Metrics::new(config.store.maximum_offers));
+        let metrics = Arc::new(
+            Metrics::new(config.store.maximum_offers)
+                .with_declared_scope(authorizer.declared_scope()),
+        );
         let limits = Limits::new(&config.rate_limits);
         Self {
             config,
@@ -568,6 +578,7 @@ fn resolve_audit_key(config: &DeliveryConfig) -> Result<Zeroizing<Vec<u8>>, Serv
 /// bounds the whole request, so a body that arrives a byte at a time is bounded
 /// by the same limit as a handler that waits on a slow source.
 pub fn build_app(service: Arc<DeliveryService>) -> Router {
+    let posture = service.config.posture.posture();
     let body_limit = service.config.listener.maximum_request_bytes as usize;
     let request_timeout =
         Duration::from_millis(service.config.listener.request_timeout_milliseconds);
@@ -608,7 +619,7 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
             refuse_a_stalled_request,
         ))
         .layer(from_fn(normalize_rejections))
-        .layer(security_headers(CspBuilder::deny_by_default()))
+        .layer(security_headers(CspBuilder::deny_by_default(), posture))
         .layer(from_fn_with_state(metrics, observability::observe))
         .layer(from_fn(add_no_store))
 }
@@ -672,7 +683,10 @@ where
         "delivery service listening"
     );
     let app = build_app(Arc::clone(&service));
-    let metrics_app = observability::metrics_app(Arc::clone(&service.metrics));
+    let metrics_app = observability::metrics_app(
+        Arc::clone(&service.metrics),
+        service.config.posture.posture(),
+    );
     let (stop, stopped) = watch::channel(false);
     let public_stopped = stopped.clone();
     let metrics_stopped = stopped.clone();
@@ -767,7 +781,9 @@ async fn health() -> Response {
 /// releasable operation unavailable and therefore makes this process unready.
 async fn ready(State(service): State<Arc<DeliveryService>>) -> Response {
     if service.audit.ready().await {
-        json_response(StatusCode::OK, br#"{"status":"ready"}"#.to_vec())
+        let mut body = service.config.posture.ready_member();
+        body.insert("status".to_owned(), Value::from("ready"));
+        axum::Json(body).into_response()
     } else {
         json_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1133,8 +1149,9 @@ async fn credential(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Some(access_token) = bearer_credential(&headers) else {
-        return unauthorized("a bearer access token is required");
+    let access_token = match bearer_credential(&headers) {
+        Ok(access_token) => access_token,
+        Err(check) => return unauthorized(check, "a bearer access token is required"),
     };
     let access_token = Zeroizing::new(access_token.to_owned());
     stage.mark_claiming_token();
@@ -1146,7 +1163,10 @@ async fn credential(
         Ok(prepared) => prepared,
         Err(StoreError::Unknown) => {
             service.metrics.record_outcome(Outcome::TokenClaimRefused);
-            return unauthorized("the access token cannot be used");
+            return unauthorized(
+                FailedCheck::OneTimeCredential,
+                "the access token cannot be used",
+            );
         }
         Err(error) => return store_response(&service, &error, Outcome::TokenClaimRefused),
     };
@@ -1506,31 +1526,58 @@ async fn authorize_offer(
     service: &DeliveryService,
     headers: &HeaderMap,
 ) -> Result<crate::authorizer::AuthorizedOffer, Response> {
-    let credential = bearer_credential(headers).unwrap_or_default();
+    let credential = bearer_credential(headers)
+        .map_err(|check| unauthorized(check, "a bearer access token is required"))?;
     service
         .authorizer
         .authorize(credential)
         .await
-        .map_err(|error| match error {
-            AuthorizationError::Missing => unauthorized("a bearer access token is required"),
-            AuthorizationError::Refused => unauthorized("the presented credential was refused"),
-            AuthorizationError::KeySource => problem(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "temporarily_unavailable",
-                "offers cannot be authorized at the moment",
-            ),
+        .map_err(|error| {
+            let check = error.failed_check();
+            match error {
+                AuthorizationError::Missing => {
+                    unauthorized(check, "a bearer access token is required")
+                }
+                AuthorizationError::Refused(_) => {
+                    unauthorized(check, "the presented credential was refused")
+                }
+                AuthorizationError::KeySource => refused(
+                    problem(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "temporarily_unavailable",
+                        "offers cannot be authorized at the moment",
+                    ),
+                    check,
+                ),
+            }
         })
 }
 
-/// The bearer credential a request presented, if it presented one.
-fn bearer_credential(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, credential) = value.split_once(' ')?;
+/// The bearer credential a request presented, or the check its header failed:
+/// no header, or one naming another scheme, is a missing credential. An
+/// unreadable header, or the Bearer scheme with no token after it, is a
+/// malformed credential.
+fn bearer_credential(headers: &HeaderMap) -> Result<&str, FailedCheck> {
+    let value = headers
+        .get(AUTHORIZATION)
+        .ok_or(FailedCheck::CredentialMissing)?
+        .to_str()
+        .map_err(|_| FailedCheck::CredentialMalformed)?;
+    let Some((scheme, credential)) = value.split_once(' ') else {
+        return Err(if value.eq_ignore_ascii_case("Bearer") {
+            FailedCheck::CredentialMalformed
+        } else {
+            FailedCheck::CredentialMissing
+        });
+    };
     if !scheme.eq_ignore_ascii_case("Bearer") {
-        return None;
+        return Err(FailedCheck::CredentialMissing);
     }
     let credential = credential.trim();
-    (!credential.is_empty()).then_some(credential)
+    if credential.is_empty() {
+        return Err(FailedCheck::CredentialMalformed);
+    }
+    Ok(credential)
 }
 
 /// The system clock, which is the reading a serving process takes.
@@ -1546,19 +1593,21 @@ fn now() -> i64 {
 fn store_response(
     service: &Arc<DeliveryService>,
     error: &StoreError,
-    refused: Outcome,
+    claim_refused: Outcome,
 ) -> Response {
     service.metrics.record_outcome(match error {
         StoreError::Saturated => Outcome::StoreSaturated,
         StoreError::Poisoned | StoreError::Unavailable => Outcome::StoreFault,
-        _ => refused,
+        _ => claim_refused,
     });
     refresh_store_entries_in_background(service);
     match error {
         StoreError::Unknown
         | StoreError::AlreadyRedeemed
         | StoreError::TransactionCodeRefused
-        | StoreError::LockedOut => unredeemable_code_response(),
+        | StoreError::LockedOut => {
+            refused(unredeemable_code_response(), FailedCheck::OneTimeCredential)
+        }
         StoreError::Saturated | StoreError::Poisoned | StoreError::Unavailable => {
             tracing::warn!(
                 target: "registry_evidence_oid4vci::service",
@@ -1618,10 +1667,11 @@ fn warn_on_unusable_issuance(error: &IssuanceError) {
 fn issuance_response(service: &DeliveryService, error: &IssuanceError) -> Response {
     record_issuance_outcome(service, error);
     match error {
-        IssuanceError::Refused => problem(
+        IssuanceError::Refused => refusal(
             StatusCode::FORBIDDEN,
             "invalid_credential_request",
             "the credential source refused this request",
+            FailedCheck::SourceAuthority,
         ),
         IssuanceError::NotAvailable => problem(
             StatusCode::BAD_REQUEST,
@@ -1648,7 +1698,12 @@ fn issuance_response(service: &DeliveryService, error: &IssuanceError) -> Respon
 fn credential_issuance_response(service: &DeliveryService, error: &IssuanceError) -> Response {
     record_issuance_outcome(service, error);
     warn_on_unusable_issuance(error);
-    terminal_credential_response()
+    match error {
+        IssuanceError::Refused => {
+            refused(terminal_credential_response(), FailedCheck::SourceAuthority)
+        }
+        _ => terminal_credential_response(),
+    }
 }
 
 fn terminal_credential_response() -> Response {
@@ -1684,17 +1739,61 @@ async fn unknown_route() -> Response {
     problem(StatusCode::NOT_FOUND, "invalid_request", "no such route")
 }
 
-fn unauthorized(description: &'static str) -> Response {
-    let mut response = problem(StatusCode::UNAUTHORIZED, "invalid_token", description);
+/// The answer carrying the check that refused the caller in its response
+/// extensions, which are never serialized. The request observer reads it.
+fn refused(mut response: Response, check: FailedCheck) -> Response {
+    response.extensions_mut().insert(RefusalNote::new(check));
+    response
+}
+
+fn unauthorized(check: FailedCheck, description: &'static str) -> Response {
+    let mut response = problem_answer(StatusCode::UNAUTHORIZED, "invalid_token", description);
     response
         .headers_mut()
         .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-    response
+    refused(response, check)
+}
+
+/// Whether a status is an authentication or authorization refusal, which names
+/// the check that failed.
+fn is_refusal_status(status: StatusCode) -> bool {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
+
+/// An authentication or authorization refusal with the check that failed.
+fn refusal(
+    status: StatusCode,
+    error: &'static str,
+    description: impl Into<Cow<'static, str>>,
+    check: FailedCheck,
+) -> Response {
+    refused(problem_answer(status, error, description), check)
+}
+
+/// One error shape for every answer that is not an authentication or
+/// authorization refusal. Those are built by [`refusal`] and [`unauthorized`],
+/// which take the failed check.
+fn problem(
+    status: StatusCode,
+    error: &'static str,
+    description: impl Into<Cow<'static, str>>,
+) -> Response {
+    if is_refusal_status(status) {
+        tracing::error!(
+            target: "registry_evidence_oid4vci::service",
+            "a refusal was built without naming its failed check"
+        );
+        debug_assert!(
+            false,
+            "a refusal is built with `refusal`, which names its check"
+        );
+    }
+    problem_answer(status, error, description)
 }
 
 /// One error shape for every refusal: the OAuth members a wallet already reads,
 /// carrying fixed text chosen here and never any part of the request.
-fn problem(
+fn problem_answer(
     status: StatusCode,
     error: &'static str,
     description: impl Into<Cow<'static, str>>,
@@ -1762,6 +1861,78 @@ async fn add_no_store(request: Request<Body>, next: Next) -> Response {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_bearer_header_is_classified_by_what_it_lacks() {
+        let classify = |value: Option<&[u8]>| {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(
+                    AUTHORIZATION,
+                    HeaderValue::from_bytes(value).expect("test header is valid"),
+                );
+            }
+            bearer_credential(&headers).map(str::to_owned)
+        };
+        assert_eq!(classify(Some(b"Bearer abc")), Ok("abc".to_owned()));
+        assert_eq!(classify(Some(b"bearer abc")), Ok("abc".to_owned()));
+        assert_eq!(classify(None), Err(FailedCheck::CredentialMissing));
+        assert_eq!(
+            classify(Some(b"Basic abc")),
+            Err(FailedCheck::CredentialMissing)
+        );
+        assert_eq!(
+            classify(Some(b"Basic")),
+            Err(FailedCheck::CredentialMissing)
+        );
+        assert_eq!(
+            classify(Some(b"Bearer ")),
+            Err(FailedCheck::CredentialMalformed)
+        );
+        assert_eq!(
+            classify(Some(b"Bearer")),
+            Err(FailedCheck::CredentialMalformed)
+        );
+        assert_eq!(
+            classify(Some(&[0xff, 0xfe])),
+            Err(FailedCheck::CredentialMalformed)
+        );
+    }
+
+    #[test]
+    fn refusal_answers_carry_their_failed_check() {
+        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+            let response = refusal(
+                status,
+                "invalid_token",
+                "refused",
+                FailedCheck::CredentialMissing,
+            );
+            assert_eq!(response.status(), status);
+            assert!(response.extensions().get::<RefusalNote>().is_some());
+        }
+        let response = unauthorized(FailedCheck::CredentialMissing, "refused");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.extensions().get::<RefusalNote>().is_some());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal is built with `refusal`")]
+    fn an_unauthorized_answer_built_without_a_failed_check_is_caught() {
+        let _ = problem(StatusCode::UNAUTHORIZED, "invalid_token", "refused");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal is built with `refusal`")]
+    fn a_forbidden_answer_built_without_a_failed_check_is_caught() {
+        let _ = problem(
+            StatusCode::FORBIDDEN,
+            "invalid_credential_request",
+            "refused",
+        );
+    }
+
     use std::{
         fs,
         io::Write,
@@ -1775,6 +1946,7 @@ mod tests {
     use axum_test::TestServer;
     use registry_evidence_client::HolderBoundRequestSpec;
     use registry_platform_audit::AuditWriter;
+    use registry_platform_authcommon::FailedCheck;
 
     use crate::{
         authorizer::AuthorizedOffer,
@@ -1798,7 +1970,7 @@ mod tests {
     fn test_audit_with(sink: Box<dyn Write + Send>) -> Arc<DeliveryAudit> {
         Arc::new(
             DeliveryAudit::with_writer(
-                AuditWriter::from_line_sink(sink),
+                AuditWriter::from_line_sink(sink, registry_platform_config::Posture::Development),
                 b"0123456789abcdef0123456789abcdef".to_vec(),
             )
             .expect("the test audit profile is valid"),
@@ -1886,12 +2058,40 @@ mod tests {
                 return Err(AuthorizationError::Missing);
             }
             if credential != self.accepted {
-                return Err(AuthorizationError::Refused);
+                return Err(AuthorizationError::Refused(FailedCheck::TokenSignature));
             }
             Ok(AuthorizedOffer {
                 client: Some("adopter-front-end".to_owned()),
                 subject: Some(OFFER_SUBJECT.to_owned()),
             })
+        }
+    }
+
+    /// An authorizer that refuses every credential for its scope and declares
+    /// the scope gate it enforces.
+    struct ScopeGateAuthorizer;
+
+    #[async_trait]
+    impl OfferAuthorizer for ScopeGateAuthorizer {
+        async fn authorize(&self, _: &str) -> Result<AuthorizedOffer, AuthorizationError> {
+            Err(AuthorizationError::Refused(FailedCheck::Scope))
+        }
+
+        fn declared_scope(&self) -> Option<registry_platform_authcommon::DeclaredScope> {
+            Some(
+                registry_platform_authcommon::DeclaredScope::new("scope")
+                    .with_required_scope("offers:create"),
+            )
+        }
+    }
+
+    /// An authorizer whose issuer key set cannot be reached.
+    struct UnreachableKeySetAuthorizer;
+
+    #[async_trait]
+    impl OfferAuthorizer for UnreachableKeySetAuthorizer {
+        async fn authorize(&self, _: &str) -> Result<AuthorizedOffer, AuthorizationError> {
+            Err(AuthorizationError::KeySource)
         }
     }
 
@@ -1974,8 +2174,14 @@ mod tests {
     }
 
     fn load_deployment(directory: &Path) -> DeliveryConfig {
-        DeliveryConfig::load(&write_deployment(directory, 8090, 0o600))
-            .expect("the deployment configuration loads")
+        DeliveryConfig::load(
+            &write_deployment(directory, 8090, 0o600),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the deployment configuration loads")
     }
 
     /// A service over the two stubs, so a test drives the protocol rather than
@@ -2338,6 +2544,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn loaded_services_apply_posture_to_marked_ordinary_offer_tokens() {
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+
+        let issuer = registry_platform_testing::MockHttpUpstream::start().await;
+        let key = private_jwk("offer-test");
+        issuer
+            .expect("GET", "/jwks.json")
+            .respond_json(200, json!({"keys": [public_jwk(&key)]}))
+            .await;
+        let token = proof_jwt_with_header(
+            &key,
+            json!({"alg": "ES256", "typ": "at+jwt", "kid": "offer-test"}),
+            json!({
+                "iss": issuer.url(),
+                "sub": "offer-caller",
+                "aud": "https://wallet.example.org",
+                "client_id": "adopter-front-end",
+                "scope": "oid4vci:offer",
+                "iat": now(),
+                "exp": now() + 300,
+                "registry_posture": "development",
+            }),
+        );
+        for posture in [Posture::Development, Posture::Production] {
+            let directory = canonical_tempdir();
+            let path = write_deployment(directory.path(), 8090, 0o600);
+            let document = fs::read_to_string(&path)
+                .unwrap()
+                .replace(
+                    "  issuer: https://mint.example.org",
+                    &format!("  issuer: {}", issuer.url()),
+                )
+                .replace(
+                    "  jwksUri: https://mint.example.org/.well-known/jwks.json",
+                    &format!(
+                        "  jwksUri: {}/jwks.json\n  algorithms: [ES256]",
+                        issuer.url()
+                    ),
+                );
+            fs::write(&path, document).unwrap();
+            let config = DeliveryConfig::load(
+                &path,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let service = DeliveryService::load(config).await.unwrap();
+            let result = service.authorizer.authorize(&token).await;
+            match posture {
+                Posture::Development => {
+                    result.unwrap();
+                }
+                Posture::Production => assert!(matches!(
+                    result,
+                    Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims))
+                )),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn loading_a_deployment_binds_nothing() {
         let directory = canonical_tempdir();
         // Hold the configured port while the service loads. A load that bound
@@ -2345,7 +2614,14 @@ mod tests {
         let occupied = StdTcpListener::bind(("127.0.0.1", 0)).expect("hold a port");
         let port = occupied.local_addr().expect("read the held port").port();
         let path = write_deployment(directory.path(), port, 0o600);
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
 
         DeliveryService::load(config)
             .await
@@ -2357,7 +2633,14 @@ mod tests {
         for mode in [0o640, 0o604, 0o644, 0o660] {
             let directory = canonical_tempdir();
             let path = write_deployment(directory.path(), 8090, mode);
-            let config = DeliveryConfig::load(&path).expect("the configuration loads");
+            let config = DeliveryConfig::load(
+                &path,
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            )
+            .expect("the configuration loads");
 
             let error = DeliveryService::load(config)
                 .await
@@ -2373,7 +2656,14 @@ mod tests {
     async fn loading_refuses_a_client_key_that_is_not_there() {
         let directory = canonical_tempdir();
         let path = write_deployment(directory.path(), 8090, 0o600);
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         fs::remove_file(directory.path().join("delivery-client.jwk.json"))
             .expect("remove the client key file");
 
@@ -2402,7 +2692,14 @@ mod tests {
         fs::write(&audit_key_path, audit_key).expect("write the binary audit key");
         fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
             .expect("keep the audit key owner-only");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
 
         DeliveryService::load(config)
             .await
@@ -2418,7 +2715,14 @@ mod tests {
         fs::write(&audit_key_path, WEAK_KEY.as_bytes()).expect("write the weak audit key");
         fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
             .expect("keep the audit key owner-only");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
 
         let error = DeliveryService::load(config)
             .await
@@ -2438,7 +2742,14 @@ mod tests {
         fs::write(&key_path, b"\xffKEYMATERIAL").expect("write a binary key");
         fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
             .expect("set the client key mode");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
 
         let error = DeliveryService::load(config)
             .await
@@ -2738,7 +3049,7 @@ mod tests {
     impl OfferAuthorizer for PrincipalAuthorizer {
         async fn authorize(&self, credential: &str) -> Result<AuthorizedOffer, AuthorizationError> {
             if credential != self.token {
-                return Err(AuthorizationError::Refused);
+                return Err(AuthorizationError::Refused(FailedCheck::TokenSignature));
             }
             Ok(AuthorizedOffer {
                 client: self.client.clone(),
@@ -2766,7 +3077,7 @@ mod tests {
                         return Ok(authorized);
                     }
                 }
-                Err(AuthorizationError::Refused)
+                Err(AuthorizationError::Refused(FailedCheck::TokenSignature))
             }
         }
 
@@ -3066,7 +3377,7 @@ mod tests {
     #[tokio::test]
     async fn offer_endpoint_refuses_malformed_expired_and_renamed_grants() {
         use crate::authorizer::MintResourceServer;
-        use crate::config::{AccessTokenAlgorithm, ValidationMode};
+        use crate::config::AccessTokenAlgorithm;
         use registry_platform_oidc::ClaimNames;
 
         let directory = canonical_tempdir();
@@ -3109,10 +3420,7 @@ mod tests {
                 names.approver = "task_approver".into();
             }
             config.offers.claims = names.clone();
-            let authorizer = MintResourceServer::from_config(
-                &config.offers,
-                ValidationMode::SupervisedLocalDevelopment,
-            );
+            let authorizer = MintResourceServer::from_config(&config.offers);
             let issuer = Arc::new(RecordingIssuer::new());
             let server = TestServer::new(build_app(Arc::new(DeliveryService::with_halves(
                 config,
@@ -3187,7 +3495,14 @@ mod tests {
             fs::Permissions::from_mode(0o600),
         )
         .expect("set the client key mode");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         assert!(
             matches!(
                 DeliveryService::load(config).await,
@@ -3528,7 +3843,14 @@ mod tests {
                 document.replace("credentialIssuer:", &format!("{member}\ncredentialIssuer:"));
             fs::write(&path, &text).expect("write the configuration document");
             assert!(
-                DeliveryConfig::load(&path).is_err(),
+                DeliveryConfig::load(
+                    &path,
+                    registry_platform_config::DeclaredPosture {
+                        posture: registry_platform_config::Posture::Development,
+                        source: registry_platform_config::PostureSource::Flag
+                    }
+                )
+                .is_err(),
                 "the configuration accepted {member}"
             );
         }
@@ -3771,6 +4093,49 @@ mod tests {
 
     /// The failed check reaches the operator log as well, with the same fixed
     /// wording and none of the proof's contents.
+    #[tokio::test]
+    async fn a_scope_refusal_logs_the_declared_values_and_none_of_the_tokens() {
+        let buffer = TestLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(buffer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let directory = canonical_tempdir();
+        let service = DeliveryService::with_halves(
+            load_deployment(directory.path()),
+            Arc::new(ScopeGateAuthorizer),
+            Arc::new(RecordingIssuer::new()),
+            test_audit(),
+        );
+        let server = TestServer::new(build_app(Arc::new(service)));
+        let refused = server
+            .post(OFFERS_PATH)
+            .add_header("authorization", "Bearer scope-canary-held-by-the-token")
+            .json(&offer_body(false))
+            .await;
+        assert_eq!(refused.status_code(), StatusCode::UNAUTHORIZED);
+
+        let rendered = String::from_utf8(buffer.0.lock().expect("log buffer lock").clone())
+            .expect("logs are UTF-8");
+        assert!(rendered.contains("request refused"), "logs: {rendered}");
+        assert!(
+            rendered.contains("failed_check=\"scope\""),
+            "logs: {rendered}"
+        );
+        assert!(
+            rendered.contains("scope_claim=\"scope\""),
+            "logs: {rendered}"
+        );
+        assert!(
+            rendered.contains("required_scope=\"offers:create\""),
+            "logs: {rendered}"
+        );
+        assert!(!rendered.contains("scope-canary"), "logs: {rendered}");
+    }
+
     #[tokio::test]
     async fn a_refused_proof_logs_the_failed_check_without_the_proof_or_nonce() {
         let buffer = TestLogBuffer::default();
@@ -4125,7 +4490,14 @@ mod tests {
             ),
         )
         .expect("write the configuration document");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         let (service, issuer) = wired_service_over(config);
         let server = TestServer::new(build_app(service));
 
@@ -5086,7 +5458,14 @@ mod tests {
             ),
         )
         .expect("write the configuration document");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         assert_eq!(config.listener.request_timeout_milliseconds, 200);
         let service = Arc::new(
             DeliveryService::load(config)
@@ -5140,7 +5519,14 @@ mod tests {
             probe.local_addr().expect("read the probed port").port()
         };
         let path = write_deployment(directory.path(), port, 0o600);
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         let service = Arc::new(
             DeliveryService::load(config)
                 .await
@@ -5183,7 +5569,14 @@ mod tests {
             probe.local_addr().expect("read the probed port").port()
         };
         let path = write_deployment(directory.path(), port, 0o600);
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         let expired_at = now()
             .saturating_sub(config.store.offer_lifetime_seconds as i64)
             .saturating_sub(1);
@@ -5249,7 +5642,14 @@ mod tests {
             ),
         )
         .expect("configure metrics");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         let service = Arc::new(
             DeliveryService::load(config)
                 .await
@@ -5308,6 +5708,375 @@ mod tests {
                 .await
                 .expect_err("a mutated unsafe metrics listener is refused");
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+    }
+
+    /// An Evidence boundary that refuses: the catalog when `catalog_refused`
+    /// is set, and every issuance otherwise.
+    struct RefusingIssuer {
+        inner: RecordingIssuer,
+        catalog_refused: bool,
+    }
+
+    #[async_trait]
+    impl CredentialIssuer for RefusingIssuer {
+        async fn catalog(&self) -> Result<Arc<CredentialCatalog>, IssuanceError> {
+            if self.catalog_refused {
+                return Err(IssuanceError::Refused);
+            }
+            self.inner.catalog().await
+        }
+
+        async fn issue(&self, _: HolderBoundRequestSpec) -> Result<Vec<String>, IssuanceError> {
+            Err(IssuanceError::Refused)
+        }
+    }
+
+    fn refusing_server(
+        directory: &Path,
+        catalog_refused: bool,
+    ) -> (TestServer, Arc<DeliveryService>) {
+        let service = Arc::new(DeliveryService::with_halves(
+            load_deployment(directory),
+            Arc::new(StubAuthorizer {
+                accepted: OFFER_TOKEN.to_owned(),
+            }),
+            Arc::new(RefusingIssuer {
+                inner: RecordingIssuer::new(),
+                catalog_refused,
+            }),
+            test_audit(),
+        ));
+        (TestServer::new(build_app(Arc::clone(&service))), service)
+    }
+
+    fn unreachable_key_set_server(directory: &Path) -> (TestServer, Arc<DeliveryService>) {
+        let service = Arc::new(DeliveryService::with_halves(
+            load_deployment(directory),
+            Arc::new(UnreachableKeySetAuthorizer),
+            Arc::new(RecordingIssuer::new()),
+            test_audit(),
+        ));
+        (TestServer::new(build_app(Arc::clone(&service))), service)
+    }
+
+    fn draft13_server(directory: &Path) -> (TestServer, Arc<DeliveryService>) {
+        let mut config = load_deployment(directory);
+        config.draft13_profile = true;
+        let (service, _) = wired_service_over(config);
+        (TestServer::new(build_app(Arc::clone(&service))), service)
+    }
+
+    fn limited_server(directory: &Path) -> (TestServer, Arc<DeliveryService>) {
+        let mut config = load_deployment(directory);
+        config.rate_limits = tight_limits();
+        let (service, _) = wired_service_over(config);
+        (TestServer::new(build_app(Arc::clone(&service))), service)
+    }
+
+    /// One refusal as the golden freezes it: status, the headers a caller or
+    /// proxy acts on, and the body. A `retry-after` on a 429 is the bucket's
+    /// remaining wait, which moves with the clock, so only its presence is
+    /// frozen there.
+    fn frozen_answer(response: &axum_test::TestResponse) -> Value {
+        let status = response.status_code().as_u16();
+        let mut headers = serde_json::Map::new();
+        for name in [
+            "content-type",
+            "www-authenticate",
+            "cache-control",
+            "pragma",
+            "retry-after",
+        ] {
+            if let Some(value) = response.maybe_header(name) {
+                let text = if name == "retry-after" && status == 429 {
+                    "<seconds>".to_owned()
+                } else {
+                    value.to_str().expect("ASCII header").to_owned()
+                };
+                headers.insert(name.to_owned(), text.into());
+            }
+        }
+        let body: Value = serde_json::from_slice(response.as_bytes()).expect("a JSON body");
+        json!({"status": status, "headers": headers, "body": body})
+    }
+
+    /// Every refusal a caller can provoke, with the name the golden files it
+    /// under and the check that refuses it, or `None` where the answer
+    /// carries no check.
+    ///
+    /// Each case also names which of the returned services answered it, so a
+    /// test can read that service's counter.
+    async fn refusal_cases() -> (
+        Vec<(&'static str, Option<FailedCheck>, Value, usize)>,
+        Vec<Arc<DeliveryService>>,
+    ) {
+        let mut cases = Vec::new();
+        let current = std::cell::Cell::new(0_usize);
+        let mut put = |name, check, response: axum_test::TestResponse| {
+            cases.push((name, check, frozen_answer(&response), current.get()));
+        };
+        let directory = canonical_tempdir();
+        let (service, _) = wired_service(directory.path());
+        let mut services = vec![Arc::clone(&service)];
+        let server = TestServer::new(build_app(service));
+        let offer = |authorization: Option<&str>| {
+            let mut request = server.post(OFFERS_PATH);
+            if let Some(value) = authorization {
+                request = request.add_header("authorization", value.to_owned());
+            }
+            request.json(&offer_body(false))
+        };
+        put(
+            "offer-no-header",
+            Some(FailedCheck::CredentialMissing),
+            offer(None).await,
+        );
+        put(
+            "offer-non-bearer-scheme",
+            Some(FailedCheck::CredentialMissing),
+            offer(Some("Basic dXNlcjpwYXNz")).await,
+        );
+        put(
+            "offer-wrong-token",
+            Some(FailedCheck::TokenSignature),
+            offer(Some("Bearer not-the-offer-token")).await,
+        );
+        put(
+            "token-unknown-code",
+            Some(FailedCheck::OneTimeCredential),
+            server
+                .post(TOKEN_PATH)
+                .form(&token_form("unknown-code", None))
+                .await,
+        );
+        let created = offer(Some(&format!("Bearer {OFFER_TOKEN}"))).await;
+        let code = offered_code(&created.json());
+        server
+            .post(TOKEN_PATH)
+            .form(&token_form(&code, None))
+            .await
+            .assert_status_ok();
+        put(
+            "token-redeemed-code",
+            Some(FailedCheck::OneTimeCredential),
+            server.post(TOKEN_PATH).form(&token_form(&code, None)).await,
+        );
+        put(
+            "credential-no-header",
+            Some(FailedCheck::CredentialMissing),
+            server.post(CREDENTIAL_PATH).json(&json!({})).await,
+        );
+        put(
+            "credential-unknown-token",
+            Some(FailedCheck::OneTimeCredential),
+            server
+                .post(CREDENTIAL_PATH)
+                .add_header("authorization", "Bearer unknown-token")
+                .json(&json!({}))
+                .await,
+        );
+
+        // The draft 13 profile's own handlers.
+        let (draft13, service) = draft13_server(directory.path());
+        services.push(service);
+        current.set(1);
+        put(
+            "draft13-credential-no-header",
+            Some(FailedCheck::CredentialMissing),
+            draft13
+                .post(crate::draft13::CREDENTIAL_PATH)
+                .json(&json!({}))
+                .await,
+        );
+        put(
+            "draft13-credential-unknown-token",
+            Some(FailedCheck::OneTimeCredential),
+            draft13
+                .post(crate::draft13::CREDENTIAL_PATH)
+                .add_header("authorization", "Bearer unknown-token")
+                .json(&json!({}))
+                .await,
+        );
+        put(
+            "draft13-token-unknown-code",
+            Some(FailedCheck::OneTimeCredential),
+            draft13
+                .post(crate::draft13::TOKEN_PATH)
+                .form(&token_form("unknown-code", None))
+                .await,
+        );
+
+        // Spent budgets.
+        let (limited, service) = limited_server(directory.path());
+        services.push(service);
+        current.set(2);
+        limited.post(NONCE_PATH).await.assert_status_ok();
+        put(
+            "nonce-rate-limited",
+            Some(FailedCheck::RateLimit),
+            limited.post(NONCE_PATH).await,
+        );
+        put(
+            "setup-token",
+            Some(FailedCheck::OneTimeCredential),
+            limited.post(TOKEN_PATH).form(&token_form("x", None)).await,
+        );
+        put(
+            "token-rate-limited",
+            Some(FailedCheck::RateLimit),
+            limited.post(TOKEN_PATH).form(&token_form("x", None)).await,
+        );
+        put(
+            "setup-credential",
+            Some(FailedCheck::CredentialMissing),
+            limited.post(CREDENTIAL_PATH).json(&json!({})).await,
+        );
+        put(
+            "credential-rate-limited",
+            Some(FailedCheck::RateLimit),
+            limited.post(CREDENTIAL_PATH).json(&json!({})).await,
+        );
+        let offers = || {
+            limited
+                .post(OFFERS_PATH)
+                .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+                .json(&offer_body(false))
+        };
+        offers().await;
+        put(
+            "offer-rate-limited",
+            Some(FailedCheck::RateLimit),
+            offers().await,
+        );
+
+        // An issuer key set that cannot be reached.
+        let (unreachable, service) = unreachable_key_set_server(directory.path());
+        services.push(service);
+        current.set(3);
+        put(
+            "offer-key-source-unavailable",
+            Some(FailedCheck::KeySourceUnavailable),
+            unreachable
+                .post(OFFERS_PATH)
+                .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+                .json(&offer_body(false))
+                .await,
+        );
+
+        // Evidence refusing.
+        let (refused_catalog, service) = refusing_server(directory.path(), true);
+        services.push(service);
+        current.set(4);
+        put(
+            "offer-evidence-refused",
+            Some(FailedCheck::SourceAuthority),
+            refused_catalog
+                .post(OFFERS_PATH)
+                .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+                .json(&offer_body(false))
+                .await,
+        );
+        let (refused_issue, service) = refusing_server(directory.path(), false);
+        services.push(service);
+        current.set(5);
+        let token = access_token(&refused_issue).await;
+        let nonce = minted_nonce(&refused_issue).await;
+        let key = private_jwk("refusal-golden");
+        put(
+            "credential-evidence-refused",
+            Some(FailedCheck::SourceAuthority),
+            refused_issue
+                .post(CREDENTIAL_PATH)
+                .add_header("authorization", format!("Bearer {token}"))
+                .json(&json!({
+                    "credential_configuration_id": CONFIGURATION_ID,
+                    "proofs": {"jwt": [proof_jwt(&key, "https://wallet.example.org", &nonce, now())]},
+                }))
+                .await,
+        );
+        (cases, services)
+    }
+
+    /// The refusals as the whole router answers them, frozen in a checked-in
+    /// file that was written from the tree before any recording existed. Run
+    /// with `REGISTRY_OID4VCI_WRITE_GOLDEN=1` to rewrite it.
+    #[tokio::test]
+    async fn refusal_answers_match_the_golden() {
+        let mut answers = serde_json::Map::new();
+        for (name, _, answer, _) in refusal_cases().await.0 {
+            // Setup requests spend a budget and are counted, but are not part
+            // of the frozen set.
+            if !name.starts_with("setup-") {
+                answers.insert(name.to_owned(), answer);
+            }
+        }
+        let actual = Value::Object(answers);
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/refusals.json");
+        if std::env::var_os("REGISTRY_OID4VCI_WRITE_GOLDEN").is_some() {
+            fs::create_dir_all(path.parent().expect("parent")).expect("golden directory");
+            fs::write(
+                &path,
+                format!("{}\n", serde_json::to_string_pretty(&actual).expect("json")),
+            )
+            .expect("write golden");
+        }
+        let expected: Value =
+            serde_json::from_slice(&fs::read(&path).expect("golden file")).expect("golden json");
+        assert_eq!(actual, expected);
+    }
+
+    /// Every refusal is counted under its check in the service that answered
+    /// it, nothing else is counted, and the log carries fixed lines only.
+    #[tokio::test]
+    async fn each_refusal_is_counted_and_logged_under_its_check() {
+        // The shared capture keeps a parallel test that reaches the refusal
+        // callsite with no subscriber from disabling it for this one.
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let _logging = tracing::dispatcher::set_default(&captured.subscriber());
+
+        let (cases, services) = refusal_cases().await;
+        for (index, service) in services.iter().enumerate() {
+            for check in FailedCheck::ALL {
+                let expected = cases
+                    .iter()
+                    .filter(|(_, case_check, _, case_index)| {
+                        *case_index == index && *case_check == Some(check)
+                    })
+                    .count() as u64;
+                assert_eq!(
+                    service
+                        .metrics
+                        .refusal_recorder()
+                        .counter()
+                        .get(&[check.as_str()])
+                        .expect("every check is declared"),
+                    expected,
+                    "service {index}, check {}",
+                    check.as_str()
+                );
+            }
+        }
+        let rendered = captured.text();
+        for (name, check, _, _) in &cases {
+            let check = check.expect("every case names its check");
+            assert!(
+                rendered.contains(&format!("\"failed_check\":\"{}\"", check.as_str())),
+                "{name}: no log line for {}: {rendered}",
+                check.as_str()
+            );
+        }
+        assert!(rendered.contains("request refused"), "{rendered}");
+        for canary in [
+            OFFER_TOKEN,
+            "not-the-offer-token",
+            "unknown-token",
+            "unknown-code",
+            SELECTOR_VALUE,
+            "adopter-front-end",
+            "Basic dXNlcjpwYXNz",
+        ] {
+            assert!(!rendered.contains(canary), "logs rendered {canary}");
         }
     }
 }

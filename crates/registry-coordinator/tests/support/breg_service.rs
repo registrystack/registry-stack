@@ -283,19 +283,19 @@ impl Breg {
             let mut config = json!({
                 "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1", "kind":"BRegRuntimeConfig",
             "listener":{"bind":address.to_string()},
-                "identity":{"environment":"test", "instanceId":"coordinator-action-proof", "databaseId":"coordinator-action-proof", "databaseInitializationEnvironment":"test"},
+                "identity":{"environment":"test", "instanceId":"coordinator-action-proof", "databaseId":"coordinator-action-proof"},
                 "secretProviders":{"file":{"root":service.root}},
                 "database":{"runtimeUrlRef":format!("secret:file/database-{database}-1"), "migrationUrlRef":format!("secret:file/database-{database}-0"), "testOnlyPlaintext":true,
                     "pool":{"maximumConnections":4}, "roles":{"migration":service.roles[0], "runtime":service.roles[1]}},
                 "package":{"root":package},
-                "authentication":{"oidc":{"issuer":issuer.issuer(), "audience":"urn:example:applications", "allowedAlgorithm":"ES256", "accessTokenType":"at+jwt", "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":["application-reader"],
-                    "maximumTokenLifetimeSeconds":3600, "leewayMilliseconds":0, "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}}, "authorityClaims":{"principal":"sub"}},
+                "authentication":{"oidc":{"issuers":{"primary":{"issuer":issuer.issuer(), "audience":"urn:example:applications", "allowedAlgorithm":"ES256", "accessTokenType":"at+jwt", "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":["application-reader"],
+                    "maximumTokenLifetimeSeconds":3600, "leewayMilliseconds":0, "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}}}}, "authorityClaims":{"principal":"sub"}},
                 "audit":{"hashKeyRef":"secret:file/audit-key", "path":service.root.join("audit/breg.jsonl")},
                 "cursor":{"secretRef":"secret:file/cursor-key"}
             });
             if citizen {
                 config["authentication"]["authorityClaims"]["purpose"] = json!("registry_purpose");
-                config["authentication"]["oidc"]["allowedClients"] = json!([
+                config["authentication"]["oidc"]["issuers"]["primary"]["allowedClients"] = json!([
                     "application-reader",
                     "citizen-gateway",
                     "citizen-review-page"
@@ -309,7 +309,7 @@ impl Breg {
             if let Some(origin) = event_origin {
                 config["destinations"] = json!({"hooks":{"coordinator":{
                     "origin":format!("{origin}/"),"path":"/v1/events/proposal-event-proof/submitted",
-                    "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
+                    "networkProfile":"loopback-http","dnsFamily":"dual-stack-strict",
                     "allowedPrivateCidrs":[],"hmacSha256KeyRef":"secret:file/event-key",
                     "classificationCeiling":"internal","deliveryCeilings":{"attemptTimeoutMilliseconds":1000,"maximumAttempts":3}
                 }}});
@@ -432,7 +432,7 @@ impl Breg {
             chrono::Utc::now().timestamp() + 300,
         );
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(base_url.parse().unwrap())
+            BaseRegistryClientConfig::new_without_peer_policy(base_url.parse().unwrap())
                 .with_token_provider(std::sync::Arc::new(StaticToken::new(token).unwrap()))
                 .with_maximum_mutation_retries(0),
         )

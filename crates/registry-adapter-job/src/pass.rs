@@ -128,6 +128,8 @@ pub const ITEM_IDENTITY_MIGRATION_REQUIRED: &str = "adapter.job.identity-migrati
 /// The options one pass runs under.
 #[derive(Clone, Debug)]
 pub struct PassOptions {
+    /// The deployment posture recorded when this pass settles.
+    pub posture: registry_platform_config::Posture,
     /// The consecutive item-scoped refusals with one code that stop the
     /// pass with the position unchanged.
     pub refusal_limit: u32,
@@ -148,6 +150,7 @@ pub struct PassOptions {
 impl Default for PassOptions {
     fn default() -> Self {
         Self {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: DEFAULT_REFUSAL_LIMIT,
             rescan: false,
             dry_run: false,
@@ -295,9 +298,9 @@ pub async fn run_pass(
     // The dry run writes nothing: it reads the state to report what a
     // real pass would do from it, and skips the lease.
     let state = if options.dry_run {
-        read_pass_state(&mut client, job_id, program, &mut report).await
+        read_pass_state(&mut client, job_id, program, options.posture, &mut report).await
     } else {
-        take_pass_state(&mut client, job_id, program, &mut report).await
+        take_pass_state(&mut client, job_id, program, options.posture, &mut report).await
     };
     let Some(state) = state else {
         return report;
@@ -830,7 +833,10 @@ pub async fn run_pass(
             next,
             report.items_read == 0,
             rescan,
-            SystemTime::now(),
+            store::PassFinished {
+                at: SystemTime::now(),
+                posture: options.posture,
+            },
         )
         .await
         {
@@ -903,7 +909,10 @@ async fn finish_stopped(
                 job_id,
                 token,
                 &reason.stop_text(),
-                SystemTime::now(),
+                store::PassFinished {
+                    at: SystemTime::now(),
+                    posture: options.posture,
+                },
             )
             .await
             .map_err(|error| error.to_string()),
@@ -971,9 +980,15 @@ fn identity_stop_reason(error: &store::StoreError) -> StopReason {
     }
 }
 
-/// The stop reason for a store refusal: [`STORE_REFUSED`] with the
-/// store's closed cause token, value-free.
+/// The value-free stop reason carries the posture mismatch code or
+/// [`STORE_REFUSED`] with the store's closed cause token.
 fn store_refused_reason(error: &store::StoreError) -> StopReason {
+    if matches!(error, store::StoreError::PostureMismatch { .. }) {
+        return StopReason::PageFault {
+            code: store::POSTURE_MISMATCH.to_owned(),
+            record: None,
+        };
+    }
     store_refused_cause(&error.cause())
 }
 
@@ -998,6 +1013,7 @@ async fn read_pass_state(
     client: &mut deadpool_postgres::Object,
     job_id: &str,
     program: &JobProgram,
+    posture: registry_platform_config::Posture,
     report: &mut PassReport,
 ) -> Option<PassState> {
     let row = match store::read_state(client, job_id).await {
@@ -1008,6 +1024,10 @@ async fn read_pass_state(
         }
     };
     let row = row.unwrap_or_default();
+    if let Err(error) = row.check_posture(posture) {
+        *report = store_refused(std::mem::take(report), &error);
+        return None;
+    }
     report.overdue = overdue(&row, program);
     Some(PassState {
         position: row.position,
@@ -1025,6 +1045,7 @@ async fn take_pass_state(
     client: &mut deadpool_postgres::Object,
     job_id: &str,
     program: &JobProgram,
+    posture: registry_platform_config::Posture,
     report: &mut PassReport,
 ) -> Option<PassState> {
     if let Err(error) = store::ensure_state(client, job_id).await {
@@ -1040,8 +1061,12 @@ async fn take_pass_state(
             return None;
         }
     };
+    if let Err(error) = before.check_posture(posture) {
+        *report = store_refused(std::mem::take(report), &error);
+        return None;
+    }
     report.overdue = overdue(&before, program);
-    let leased = match store::take_lease(client, job_id, lease_ttl(program)).await {
+    let leased = match store::take_lease(client, job_id, lease_ttl(program), posture).await {
         Ok(leased) => leased,
         Err(error) => {
             *report = store_refused(std::mem::take(report), &error);

@@ -21,7 +21,7 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::extract::{MatchedPath, State};
 use axum::http::header::CONTENT_TYPE;
@@ -31,6 +31,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use registry_adapter_core::ErrorClass;
+use registry_platform_authcommon::{DeclaredScope, RefusalNote, RefusalRecorder};
 use registry_platform_metrics::{
     CounterVec, Exposition, LabelSpace, CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
@@ -68,7 +69,20 @@ const UPSTREAM_CLASSES: [ErrorClass; 11] = [
 /// `adapter_retention_sweep_failures_total`.
 const SWEEP_STORES: [&str; 3] = ["journal", "idempotency", "other"];
 
+/// The process's refusal recorder: one counter and one log budget for every
+/// listener of this process, the facade and the payment routes alike.
+static REFUSALS: OnceLock<Arc<RefusalRecorder>> = OnceLock::new();
+
+/// The recorder behind `adapter_request_refusals_total` and the
+/// `request refused` log line.
+pub fn refusal_recorder() -> Arc<RefusalRecorder> {
+    Arc::clone(
+        REFUSALS.get_or_init(|| Arc::new(RefusalRecorder::new("adapter").expect(DECLARATION))),
+    )
+}
+
 pub struct Metrics {
+    refusals: Arc<RefusalRecorder>,
     requests: CounterVec,
     upstream_failures: CounterVec,
     journal_write_failures: CounterVec,
@@ -88,6 +102,7 @@ impl Default for Metrics {
         let sweep: Vec<[&str; 1]> = SWEEP_STORES.iter().map(|s| [*s]).collect();
         let sweep: Vec<&[&str]> = sweep.iter().map(|s| s.as_slice()).collect();
         Self {
+            refusals: refusal_recorder(),
             requests: CounterVec::new(
                 "adapter_http_requests_total",
                 "Answered facade HTTP requests, by route template, method, and status class.",
@@ -118,6 +133,12 @@ impl Default for Metrics {
 }
 
 impl Metrics {
+    /// The recorder that counts and logs every refused request.
+    #[must_use]
+    pub fn refusals(&self) -> Arc<RefusalRecorder> {
+        Arc::clone(&self.refusals)
+    }
+
     /// Count one answered request under its closed labels.
     pub fn record_request(&self, route: &str, method: &Method, status: StatusCode) {
         count(
@@ -158,6 +179,7 @@ impl Metrics {
             &self.upstream_failures,
             &self.journal_write_failures,
             &self.sweep_failures,
+            self.refusals.counter(),
         ] {
             counter.write(&mut out).expect(DECLARATION);
         }
@@ -222,8 +244,31 @@ pub async fn count_requests(
     response
 }
 
+/// Count and log every refused request once, under the check its answer
+/// carries in the response extensions. The extension is not serialized, so
+/// no byte of the answer depends on it.
+pub async fn record_refusals(
+    State(recorder): State<Arc<RefusalRecorder>>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let response = next.run(request).await;
+    if let Some(note) = response.extensions().get::<RefusalNote>() {
+        let declared = response.extensions().get::<DeclaredScope>();
+        registry_platform_authcommon::record_refusal!(recorder, *note, declared = declared);
+    }
+    response
+}
+
 /// The router the metrics listener serves: the counters and nothing else.
 pub fn metrics_router(metrics: Arc<Metrics>) -> Router {
+    metrics_router_in_posture(metrics, registry_platform_config::Posture::Production)
+}
+
+fn metrics_router_in_posture(
+    metrics: Arc<Metrics>,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         .route(
             METRICS_PATH,
@@ -232,6 +277,7 @@ pub fn metrics_router(metrics: Arc<Metrics>) -> Router {
             }),
         )
         .with_state(metrics)
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 /// How long open metrics connections get to drain once shutdown starts.
@@ -250,13 +296,16 @@ pub async fn serve(
     metrics: Arc<Metrics>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
     shutdown_timeout: std::time::Duration,
+    posture: registry_platform_config::Posture,
 ) -> std::io::Result<()> {
     let (shutdown_started, shutdown_started_rx) = tokio::sync::oneshot::channel();
     let server = std::future::IntoFuture::into_future(
-        axum::serve(listener, metrics_router(metrics)).with_graceful_shutdown(async move {
-            shutdown.await;
-            let _ = shutdown_started.send(());
-        }),
+        axum::serve(listener, metrics_router_in_posture(metrics, posture)).with_graceful_shutdown(
+            async move {
+                shutdown.await;
+                let _ = shutdown_started.send(());
+            },
+        ),
     );
     tokio::pin!(server);
     tokio::select! {
@@ -353,6 +402,124 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn the_refusal_counter_declares_every_check_and_publishes_it_at_zero() {
+        let text = Metrics::default().render();
+        let declared = text
+            .lines()
+            .filter(|line| line.starts_with("adapter_request_refusals_total{check=\""))
+            .count();
+        assert_eq!(declared, registry_platform_authcommon::FailedCheck::COUNT);
+    }
+
+    /// The refusal line a scope refusal writes, driven through the recording
+    /// layer with the scope values the answer carries.
+    async fn refusal_line(check: registry_platform_authcommon::FailedCheck) -> String {
+        use registry_platform_testing::CapturedDiagnosticLogs;
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let recorder = Arc::new(RefusalRecorder::new("adapter_test").expect("recorder"));
+        let app = Router::new()
+            .route(
+                "/",
+                get(move || async move {
+                    let mut response = StatusCode::FORBIDDEN.into_response();
+                    response.extensions_mut().insert(RefusalNote::new(check));
+                    response.extensions_mut().insert(
+                        DeclaredScope::new("scope")
+                            .with_required_scope("records.read")
+                            .with_access_profile("records-reader"),
+                    );
+                    response
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                recorder,
+                record_refusals,
+            ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback test listener");
+        let address = listener.local_addr().expect("the bound address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let logs = CapturedDiagnosticLogs::default();
+        let _guard = tracing::dispatcher::set_default(&logs.subscriber());
+        let mut stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connect");
+        stream
+            .write_all(
+                b"GET / HTTP/1.1\r\nhost: test\r\nauthorization: Bearer canary-token-scope\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .expect("send");
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.expect("read");
+        assert!(answer.starts_with(b"HTTP/1.1 403"));
+        logs.text()
+    }
+
+    #[tokio::test]
+    async fn metrics_responses_mark_development_only() {
+        use registry_platform_config::Posture;
+        for (posture, mark) in [
+            (Posture::Production, None),
+            (Posture::Development, Some("development")),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    metrics_router_in_posture(Arc::new(Metrics::default()), posture),
+                )
+                .await
+            });
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+            stream
+                .write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await.unwrap();
+            let headers = response.split_once("\r\n\r\n").unwrap().0;
+            assert!(headers.starts_with("HTTP/1.1 200"), "{headers}");
+            let actual = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("registry-posture")
+                    .then(|| value.trim())
+            });
+            assert_eq!(actual, mark);
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_scope_refusal_line_names_the_declared_values_and_no_token_value() {
+        let text = refusal_line(registry_platform_authcommon::FailedCheck::Scope).await;
+        assert!(text.contains("\"scope_claim\":\"scope\""), "{text}");
+        assert!(
+            text.contains("\"required_scope\":\"records.read\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("\"access_profile\":\"records-reader\""),
+            "{text}"
+        );
+        assert!(!text.contains("canary-token-scope"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_other_than_scope_names_no_declared_values() {
+        let text = refusal_line(registry_platform_authcommon::FailedCheck::Operation).await;
+        assert!(text.contains("request refused"), "{text}");
+        assert!(!text.contains("scope_claim"), "{text}");
+        assert!(!text.contains("required_scope"), "{text}");
+    }
+
     fn text_has(metrics: &Metrics, line: &str) -> bool {
         metrics.render().lines().any(|found| found == line)
     }
@@ -372,6 +539,7 @@ mod tests {
                 let _ = shutdown_rx.await;
             },
             std::time::Duration::from_millis(25),
+            registry_platform_config::Posture::Production,
         ));
 
         let mut partial = tokio::net::TcpStream::connect(address)

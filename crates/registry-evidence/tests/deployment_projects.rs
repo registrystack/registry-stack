@@ -37,10 +37,20 @@ impl Drop for LoadedProject {
     }
 }
 
+fn bundle_posture(bundle: &Bundle) -> registry_platform_config::Posture {
+    if bundle.config.assurance_profile == registry_evidence_verifier::AssuranceProfile::Local {
+        registry_platform_config::Posture::Development
+    } else {
+        registry_platform_config::Posture::Production
+    }
+}
+
 fn evaluate(project: &LoadedProject, fixture: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .arg("evaluate")
+        .args(["--posture", bundle_posture(&project.bundle).as_str()])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--runtime-config")
         .arg(&project.runtime_path)
         .arg("--fixture")
@@ -351,6 +361,7 @@ fn load_project_with(
     fs::set_permissions(&ca_path, fs::Permissions::from_mode(0o444))
         .expect("temporary CA is immutable");
 
+    let posture = bundle_posture(&Bundle::load(&bundle_root).expect("the packaged fixture loads"));
     if activated_authority {
         // Activation is audited, so it resolves the project's audit key.
         let audit_key = secret_root.join("audit-hmac-key");
@@ -359,7 +370,10 @@ fn load_project_with(
             .expect("synthetic audit key is private");
         let activated = Command::new(env!("CARGO_BIN_EXE_evidence"))
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-            .args(["authority", "activate", "--runtime-config"])
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .args(["authority", "activate", "--posture"])
+            .arg(posture.as_str())
+            .arg("--runtime-config")
             .arg(&runtime_path)
             .arg("--document")
             .arg(project_root.join("compiled-authority.yaml"))
@@ -371,7 +385,14 @@ fn load_project_with(
             String::from_utf8_lossy(&activated.stderr)
         );
     }
-    let deployment = DeploymentInputs::load(&runtime_path).unwrap_or_else(|error| {
+    let deployment = DeploymentInputs::load(
+        &runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .unwrap_or_else(|error| {
         panic!("{project_name}: production deployment loading failed: {error:?}")
     });
     let (loaded_bundle, _loaded_runtime) = deployment.into_parts();

@@ -200,6 +200,10 @@ pub(crate) struct RecordFactsArgs {
     #[arg(long, value_name = "TARGET")]
     pub(crate) target: PathBuf,
 
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long, value_name = "POSTURE")]
+    pub(crate) posture: Option<String>,
+
     /// Exact project-relative fixture path referenced by one definition.
     #[arg(long, value_name = "FIXTURE")]
     pub(crate) fixture: String,
@@ -233,7 +237,11 @@ struct RecordReport<'a> {
     changed: bool,
 }
 
-pub(crate) fn run(args: RecordFactsArgs, format: OutputFormat) -> Result<ExitCode> {
+pub(crate) fn run(
+    args: RecordFactsArgs,
+    format: OutputFormat,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
     if !args.write {
         bail!("--write is required to record fixture facts");
     }
@@ -277,6 +285,8 @@ pub(crate) fn run(args: RecordFactsArgs, format: OutputFormat) -> Result<ExitCod
         &evidence_bin,
         &[
             "bundle-check".into(),
+            "--posture".into(),
+            declared.posture.as_str().into(),
             "--bundle".into(),
             compilation.bundle_path.as_os_str().to_owned(),
             "--runtime-config".into(),
@@ -288,6 +298,8 @@ pub(crate) fn run(args: RecordFactsArgs, format: OutputFormat) -> Result<ExitCod
 
     let command = vec![
         "bundle-record-fixture-facts".into(),
+        "--posture".into(),
+        declared.posture.as_str().into(),
         "--bundle".into(),
         compilation.bundle_path.as_os_str().to_owned(),
         "--fixture".into(),
@@ -326,6 +338,8 @@ pub(crate) fn run(args: RecordFactsArgs, format: OutputFormat) -> Result<ExitCod
         &evidence_bin,
         &[
             "bundle-evaluate".into(),
+            "--posture".into(),
+            declared.posture.as_str().into(),
             "--bundle".into(),
             compilation.bundle_path.as_os_str().to_owned(),
             "--fixture".into(),
@@ -368,11 +382,14 @@ pub(crate) fn run(args: RecordFactsArgs, format: OutputFormat) -> Result<ExitCod
         ),
         OutputFormat::Json => {
             let members = serde_json::to_value(report).context("encoding fact record report")?;
-            crate::print_report(&crate::report::success(
-                "fixtures record-facts",
-                if changed { "written" } else { "unchanged" },
-                members,
-            ));
+            crate::report::print_with_posture(
+                &crate::report::success(
+                    "fixtures record-facts",
+                    if changed { "written" } else { "unchanged" },
+                    members,
+                ),
+                Some(declared),
+            )?;
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -1300,14 +1317,19 @@ cases:
         let arguments = |project: &Path| RecordFactsArgs {
             project: project.to_path_buf(),
             target: std::path::PathBuf::from("target.yaml"),
+            posture: None,
             fixture: "fixtures/cases.yaml".to_owned(),
             write: true,
             evidence_bin: None,
         };
 
         let (missing_code, missing_action, _) = safe_fixture_failure(
-            run(arguments(directory.path()), OutputFormat::Human)
-                .expect_err("a directory without evidence.yaml is refused"),
+            run(
+                arguments(directory.path()),
+                OutputFormat::Human,
+                crate::DEFAULT_POSTURE,
+            )
+            .expect_err("a directory without evidence.yaml is refused"),
         );
         assert_eq!(
             missing_code,
@@ -1317,8 +1339,12 @@ cases:
 
         fs::write(directory.path().join("runtime.yaml"), b"x: 1\n").expect("write runtime.yaml");
         let (deployment_code, deployment_action, _) = safe_fixture_failure(
-            run(arguments(directory.path()), OutputFormat::Human)
-                .expect_err("a deployment project is refused"),
+            run(
+                arguments(directory.path()),
+                OutputFormat::Human,
+                crate::DEFAULT_POSTURE,
+            )
+            .expect_err("a deployment project is refused"),
         );
         assert_eq!(
             deployment_code,

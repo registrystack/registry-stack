@@ -44,6 +44,10 @@ NAMES = {
     "coordinator-client": "registry-coordinator-client",
     "stack-client": "registry-stack-client",
     "cli-docs": "registry-cli-docs",
+    "cli-report": "registry-cli-report",
+    "platform-config": "registry-platform-config",
+    "thunderid-tooling": "registry-thunderid-tooling",
+    "rstack-dev": "registry-rstack-dev",
     "evidence": "registry-evidence",
     "casework": "registry-casework",
     "caseworkctl": "registry-caseworkctl",
@@ -89,6 +93,9 @@ INTENDED = {
     "coordinator-client": ["platform"],
     "stack-client": ["breg-client", "coordinator-client"],
     "cli-docs": ["engine", "ctl", "job"],
+    "cli-report": ["serde"],
+    "platform-config": ["serde"],
+    "thunderid-tooling": ["platform-config"],
     "evidence": ["shared-engine", "core", "platform"],
     "casework": ["platform", "breg"],
     "caseworkctl": ["casework"],
@@ -133,6 +140,7 @@ def metadata(**changes: list) -> dict:
         ],
         "signed-coordinator-event": [
             "dep:registry-adapter-connectors",
+            "dep:registry-platform-crypto",
             "dep:registry-platform-httputil",
             "registry-adapter-connectors/coordinator-event",
         ],
@@ -175,6 +183,70 @@ class EngineTests(unittest.TestCase):
         self.assertIn(
             NAMES["breg-client"],
             failures(ctl=[*INTENDED["ctl"], "breg-client"]),
+        )
+
+    def test_platform_config_can_use_the_cli_report_type(self):
+        graph = metadata(
+            core=[*INTENDED["core"], "platform-config"],
+            **{"platform-config": ["cli-report"]},
+        )
+        self.assertEqual(MODULE.violations(graph), [])
+
+    def test_only_adapterctl_has_a_direct_identity_tooling_edge(self):
+        graph = metadata(ctl=[*INTENDED["ctl"], "thunderid-tooling"])
+        self.assertEqual(MODULE.violations(graph), [])
+        self.assertIn(NAMES["thunderid-tooling"],
+                      failures(core=[*INTENDED["core"], "thunderid-tooling"]))
+
+    def test_identity_tooling_and_cli_report_dependencies_are_still_checked(self):
+        graph = metadata(
+            core=[*INTENDED["core"], "platform-config", "cli-report"],
+            ctl=[*INTENDED["ctl"], "thunderid-tooling"],
+            **{
+                "platform-config": ["cli-report"],
+                "cli-report": ["coordinator"],
+                "thunderid-tooling": ["bregctl"],
+            },
+        )
+        refused = "\n".join(MODULE.violations(graph))
+        self.assertIn("registry-adapter-core reaches package(s)", refused)
+        self.assertIn(NAMES["cli-report"], refused)
+        self.assertIn(NAMES["coordinator"], refused)
+        self.assertIn(NAMES["bregctl"], refused)
+
+    def test_authoring_reports_through_the_shared_cli_report_crate_only(self):
+        graph = metadata(ctl=[*INTENDED["ctl"], "cli-report"])
+        self.assertEqual(MODULE.violations(graph), [])
+        for reached in ("bregctl", "breg-client", "coordinator"):
+            with self.subTest(reached=reached):
+                self.assertIn(
+                    NAMES[reached],
+                    failures(ctl=[*INTENDED["ctl"], "cli-report", reached]),
+                )
+        for owner in ("shared-engine", "engine", "job"):
+            with self.subTest(owner=owner):
+                self.assertIn(
+                    NAMES["cli-report"],
+                    failures(**{owner: [*INTENDED[owner], "cli-report"]}),
+                )
+
+    def test_only_authoring_may_reach_the_development_run_helper(self):
+        self.assertEqual(MODULE.violations(metadata(ctl=[*INTENDED["ctl"], "rstack-dev"])), [])
+        for owner in ("core", "shared-engine", "engine", "job"):
+            with self.subTest(owner=owner):
+                self.assertIn(
+                    NAMES["rstack-dev"],
+                    failures(**{owner: [*INTENDED[owner], "rstack-dev"]}),
+                )
+
+    def test_authoring_refuses_a_product_runtime_behind_the_development_run_helper(self):
+        graph = metadata(ctl=[*INTENDED["ctl"], "rstack-dev"], **{"rstack-dev": ["breg"]})
+        self.assertTrue(
+            any(
+                finding.startswith("registry-adapterctl reaches") and "registry-breg" in finding
+                for finding in MODULE.violations(graph)
+            ),
+            MODULE.violations(graph),
         )
 
     def test_only_the_payment_host_reaches_the_payment_contract_and_breg_client(self):

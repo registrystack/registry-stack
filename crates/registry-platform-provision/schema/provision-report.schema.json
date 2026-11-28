@@ -1,0 +1,361 @@
+{
+  "$defs": {
+    "CheckScope": {
+      "additionalProperties": false,
+      "description": "A source file relative to the project and the resource path a check reports.",
+      "properties": {
+        "file": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "path": {
+          "description": "A pointer whose list positions use existing unique identifiers when available.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "path"
+      ],
+      "type": "object"
+    },
+    "Diagnostic": {
+      "additionalProperties": false,
+      "description": "One problem, in the shape every checking command reports (CFG-DIAG-1).\n\nMessages name keys, paths, accepted values, bounds, and the expected\nenvelope without repeating rejected scalar values (CFG-SEC-3). Warning\nacceptance metadata separately identifies the resource and carries the\nproject's deliberately authored reason.",
+      "properties": {
+        "acceptedReason": {
+          "description": "The project's reason for accepting this advisory warning.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artifact": {
+          "description": "The document's `kind`, or the expected kind when the document's own is\nabsent or wrong and the reader expected exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "description": "RFC 6901 JSON pointer into the document as written; `\"\"` is the root.",
+          "type": "string"
+        },
+        "related": {
+          "items": {
+            "$ref": "#/$defs/Related"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Project-relative identity copied into a check acceptance."
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Source"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggestedAction": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "code",
+        "path",
+        "message",
+        "suggestedAction"
+      ],
+      "type": "object"
+    },
+    "ProvisionPosture": {
+      "additionalProperties": false,
+      "description": "The declaration under which the provision runner reads the runtime file.",
+      "properties": {
+        "source": {
+          "enum": [
+            "flag",
+            "environment",
+            "default"
+          ],
+          "type": "string"
+        },
+        "value": {
+          "enum": [
+            "development",
+            "production"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Related": {
+      "additionalProperties": false,
+      "description": "A second place that explains a diagnostic, such as the first occurrence\nof a duplicate. Human output prints it as a `note:` line.",
+      "properties": {
+        "column": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "path",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ReportNeeds": {
+      "enum": [
+        "createrole",
+        "createdb",
+        "database-owner",
+        "superuser"
+      ],
+      "type": "string"
+    },
+    "ReportOutcome": {
+      "enum": [
+        "created",
+        "present",
+        "applied",
+        "not-run"
+      ],
+      "type": "string"
+    },
+    "ReportScope": {
+      "enum": [
+        "server",
+        "database"
+      ],
+      "type": "string"
+    },
+    "ReportStatement": {
+      "additionalProperties": false,
+      "description": "One planned statement. `sql` is the printable form, never a password or a\nverifier.",
+      "properties": {
+        "needs": {
+          "$ref": "#/$defs/ReportNeeds"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ReportOutcome",
+          "description": "`not-run` for a statement the run did not reach, the one that failed\nincluded. After `platform.provision.effect-unconfirmed` the statement\nthe diagnostic names was sent and may have taken effect."
+        },
+        "scope": {
+          "$ref": "#/$defs/ReportScope"
+        },
+        "sql": {
+          "type": "string"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "step",
+        "scope",
+        "needs",
+        "outcome",
+        "sql"
+      ],
+      "type": "object"
+    },
+    "ReportStatus": {
+      "description": "Result class of a run, as in every other verb's report.",
+      "enum": [
+        "complete",
+        "domain-refusal",
+        "usage-error",
+        "operational-failure"
+      ],
+      "type": "string"
+    },
+    "RoleMode": {
+      "enum": [
+        "split",
+        "single"
+      ],
+      "type": "string"
+    },
+    "Severity": {
+      "description": "Whether a diagnostic refuses the input.",
+      "enum": [
+        "error",
+        "warning"
+      ],
+      "type": "string"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "description": "Where a diagnostic points. `file` is the path exactly as the caller gave\nit; `line` and `column` are 1-based and absent when the problem concerns\nthe file as a whole.",
+      "properties": {
+        "column": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/cli-database-provision-report/cli-database-provision-report.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Machine-readable result of `provision` for every database-backed tool.\nThe identity members are absent when the run stopped before the product's\nruntime file could name them.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/cli-database-provision-report/v1alpha1"
+    },
+    "command": {
+      "const": "provision"
+    },
+    "database": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "diagnostics": {
+      "items": {
+        "$ref": "#/$defs/Diagnostic"
+      },
+      "type": "array"
+    },
+    "executed": {
+      "description": "Whether a statement could have been sent to the server: false for a\nprint-mode run and for a run that stopped before the first statement.\nTrue whenever a statement is listed as run.",
+      "type": "boolean"
+    },
+    "kind": {
+      "const": "PlatformCliDatabaseProvisionReport"
+    },
+    "migrationRole": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "posture": {
+      "$ref": "#/$defs/ProvisionPosture"
+    },
+    "product": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "roleMode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RoleMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runtimeRole": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "statements": {
+      "items": {
+        "$ref": "#/$defs/ReportStatement"
+      },
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/ReportStatus"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "command",
+    "status",
+    "apiVersion",
+    "kind",
+    "version",
+    "posture",
+    "executed",
+    "statements",
+    "diagnostics"
+  ],
+  "title": "Registry Stack CLI database provision report",
+  "type": "object"
+}

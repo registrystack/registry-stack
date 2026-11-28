@@ -32,6 +32,7 @@ fi
 
 build_dir=$(dirname -- "$rstack")
 export RSTACK_DEV_STATE_DIR="$state_dir" RSTACK_BREG_BIN="$build_dir/breg" RSTACK_BREGCTL_BIN="$build_dir/bregctl"
-"$rstack" --install-root "$build_dir" --format json dev stop "$run_id" >"$run_dir/stop-report.json"
+# Clean the database even if the run already stopped.
+"$rstack" --install-root "$build_dir" --format json dev stop "$run_id" --clean >"$run_dir/stop-report.json"
 printf '%s\n' 'Load-test services and their managed database were removed through rstack dev.'
-printf '%s\n' "Evidence and synthetic seeds remain at $run_dir; move that directory aside before another start."
+printf '%s\n' "Evidence and synthetic seeds remain at $run_dir. The next start archives that directory."

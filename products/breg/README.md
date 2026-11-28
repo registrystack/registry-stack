@@ -29,6 +29,17 @@ AI-assisted authoring remains outside the production authority boundary. It
 may propose configuration and run deterministic checks, but it cannot bypass
 package review or the separate migration database role.
 
+## Start a development run
+
+With Docker running, create and start a small directory registry.
+
+```sh
+bregctl init ./directory
+rstack dev start ./directory
+```
+
+Copy the run ID to stop the run with `rstack dev stop RUN`.
+
 ## First-hour local quickstart
 
 Use the adopter guides for authoring, local evaluation, and operation.
@@ -82,8 +93,7 @@ To verify only the checked quickstart structure without Docker or network, run:
 products/breg/quickstart/self-test.sh
 ```
 
-This route is intentionally local-only: the supervised stock ThunderID issuer,
-loopback HTTP, disposable PostgreSQL, and an unsigned local package.
+This route is intentionally local-only: a run-scoped test issuer, loopback HTTP, disposable PostgreSQL, and an unsigned local package.
 It is the first-hour learning path, not a shortcut around production package
 review, operated database roles, TLS, migration review, or secret custody.
 
@@ -91,8 +101,7 @@ For a disposable local run that needs no checkout, Python launcher, or shell
 script, `rstack dev` starts a project against installed binaries and Docker
 PostgreSQL from a `dev.yaml` plan. [Run a project with rstack dev](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/)
 describes it, and [examples/minimal](examples/minimal/README.md) shows a plan
-for a BReg project. [Native local BReg lifecycle](https://docs.registrystack.org/reference/bregctl-dev/) documents the older
-`bregctl dev` loop.
+for a BReg project.
 
 `bregctl init <destination>` writes the complete [minimal directory](examples/minimal/README.md).
 Use `--template facility-registry` for the complete [facility project](examples/facility/README.md).

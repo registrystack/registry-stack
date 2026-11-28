@@ -91,7 +91,9 @@ impl registry_platform_httputil::TokenProvider for NoToken {
 fn review_authorities() -> std::sync::Arc<registry_breg::review_store::ReviewAuthorityRegistry> {
     use registry_breg::review_store::{ReviewAuthorityClient, ReviewAuthorityRegistry};
     let client = registry_review_client::ReviewClient::new(
-        registry_review_client::ReviewClientConfig::new("http://127.0.0.1:9/".parse().unwrap()),
+        registry_review_client::ReviewClientConfig::new_without_peer_policy(
+            "http://127.0.0.1:9/".parse().unwrap(),
+        ),
     )
     .unwrap();
     let authority = std::sync::Arc::new(
@@ -212,6 +214,7 @@ async fn generated_typescript_and_python_consoles_use_live_http_and_rls() {
                     "live.py"
                 });
         let mut command = std::process::Command::new(language);
+        command.env_remove("REGISTRY_STACK_POSTURE");
         command
             .arg(script)
             .current_dir(&root)

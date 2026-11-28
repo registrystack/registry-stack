@@ -12,6 +12,7 @@
 //! `messagingctl apply` owns migrations and activation in one transaction;
 //! the runtime only reads the resulting schema and activation state.
 
+use registry_platform_config::{DatabaseTransport, DatabaseTransportError, DevelopmentWitness};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -37,14 +38,17 @@ fn database_error_class(error: &tokio_postgres::Error) -> String {
 const MESSAGING_MIGRATION: &str = include_str!("../migrations/0100_messaging.sql");
 const DISPATCH_LEASE_EXPIRY_MIGRATION: &str =
     include_str!("../migrations/0101_dispatch_lease_expiry.sql");
+const ACTIVATION_POSTURE_MIGRATION: &str =
+    include_str!("../migrations/0102_activation_posture.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list. The 1.0 baseline is version
 /// [`BASELINE_SCHEMA_VERSION`], above every version a pre-1.0 release
 /// applied; each later migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 3] = [
     (100, MESSAGING_MIGRATION),
     (101, DISPATCH_LEASE_EXPIRY_MIGRATION),
+    (102, ACTIVATION_POSTURE_MIGRATION),
 ];
 /// The 1.0 baseline schema version. A ledger holding any version below it
 /// was left by a pre-1.0 release, which this release refuses by name.
@@ -85,6 +89,8 @@ pub(crate) const MIGRATION_LOCK_KEY: i64 = 0x6d65_7373_6167_696e;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
+    #[error(transparent)]
+    DatabaseTransport(#[from] DatabaseTransportError),
     #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]
     UnsupportedPostgres,
     #[error("the Messaging database configuration is invalid")]
@@ -137,10 +143,12 @@ impl PostgresStore {
     pub fn connect_runtime(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.runtimeUrlRef",
             &config.runtime_url_ref,
         )
@@ -149,10 +157,12 @@ impl PostgresStore {
     pub fn connect_migration(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
+            witness,
             "database.migrationUrlRef",
             &config.migration_url_ref,
         )
@@ -161,6 +171,7 @@ impl PostgresStore {
     fn connect_reference(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
         field: &'static str,
         reference: &str,
     ) -> Result<Self, StoreError> {
@@ -169,30 +180,20 @@ impl PostgresStore {
         })?;
         let url = std::str::from_utf8(protected.expose_secret())
             .map_err(|_| StoreError::Configuration)?;
-        let mut postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
-        if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
-            return Err(StoreError::Configuration);
-        }
+        let (postgres, verified_tls) = driver_config(
+            config,
+            url,
+            witness,
+            &registry_platform_config::resolve_database_host,
+        )?;
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
-        #[cfg(feature = "postgres-test")]
-        let manager = if config.test_only_plaintext {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
+        let manager = if verified_tls {
+            let connector = tls_connector(config, secrets)?;
+            Manager::from_config(postgres, connector, manager_config)
         } else {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
-        };
-        #[cfg(not(feature = "postgres-test"))]
-        let manager = {
-            if config.test_only_plaintext {
-                return Err(StoreError::Configuration);
-            }
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
+            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
         };
         let pool = Pool::builder(manager)
             .max_size(32)
@@ -491,6 +492,76 @@ fn tls_connector(
     }
 }
 
+/// The driver configuration the pool is built from, and whether it requires
+/// verified TLS. Under a plaintext transport every TCP host is replaced by
+/// the numeric addresses its check accepted, so the driver never resolves a
+/// name again.
+fn driver_config(
+    config: &DatabaseConfig,
+    url: &str,
+    witness: Option<&DevelopmentWitness>,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<(PgConfig, bool), StoreError> {
+    let postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
+    if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
+        return Err(StoreError::Configuration);
+    }
+    config.check(cfg!(feature = "postgres-test"))?;
+    let (transport, mut postgres) =
+        registry_platform_postgres::postgres_connection(config, postgres, witness, resolve)?;
+    let verified_tls = transport == DatabaseTransport::VerifiedTls && !config.test_only_plaintext;
+    postgres.ssl_mode(if verified_tls {
+        tokio_postgres::config::SslMode::Require
+    } else {
+        tokio_postgres::config::SslMode::Disable
+    });
+    Ok((postgres, verified_tls))
+}
+
+#[cfg(test)]
+mod driver_config_tests {
+    use registry_platform_config::Gated;
+
+    use super::*;
+
+    #[test]
+    fn a_loopback_name_reaches_the_pool_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        let config = DatabaseConfig {
+            runtime_url_ref: "secret:env/DB_RUNTIME".to_owned(),
+            migration_url_ref: "secret:env/DB_MIGRATION".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap()),
+        };
+        let (postgres, verified_tls) = driver_config(
+            &config,
+            "postgresql://app@localhost:5433/messaging",
+            None,
+            &fixed,
+        )
+        .unwrap();
+        assert!(!verified_tls);
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,6 +606,7 @@ mod tests {
     fn the_baseline_is_version_100_and_later_versions_increase() {
         assert_eq!(MIGRATIONS[0].0, 100);
         assert_eq!(MIGRATIONS[1].0, 101);
+        assert_eq!(MIGRATIONS[2].0, 102);
         assert!(versions_start_at_baseline_and_increase(&MIGRATIONS));
         assert!(versions_start_at_baseline_and_increase(&[
             (100, ""),

@@ -57,14 +57,23 @@ split.
 
 ## Bind adult-status to the holder
 
-`adult-status` declares `subjectBinding: audience-scoped`, and the project checks clean:
+For the local target checks below, declare development in your shell:
+
+```sh
+export REGISTRY_STACK_POSTURE=development
+```
+
+`adult-status` declares `subjectBinding: audience-scoped`, and the project checks with no errors and one development warning for the local target:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
 rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-excerpt
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml:1:1 /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 ```
 
 Declare [`holder-bound`](../../reference/glossary/#holder-bound) instead, and keep only
@@ -119,7 +128,10 @@ rstack evidence check . --target local-target.yaml
 Evidence project check: complete
 Project: .
 Target: local-target.yaml
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml:1:1 /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 ```
 
 A request for `adult-status` now carries `holderKeys`. Each key becomes the `cnf` claim of its

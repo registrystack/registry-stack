@@ -148,6 +148,13 @@ impl TestDatabase {
         }
     }
 
+    #[allow(dead_code)] // The operator startup target opens its connection from the runtime file.
+    pub fn runtime_raw_config(&self) -> Config {
+        let mut runtime = self.migration_raw.clone();
+        runtime.user(self.runtime_role.as_str());
+        runtime
+    }
+
     /// An audit handle whose entries land in this database's capture. Every
     /// handle a test builds shares the one capture, so entries from several
     /// services read back in append order.

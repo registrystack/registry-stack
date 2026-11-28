@@ -4,7 +4,7 @@
 
 mod baseline;
 pub(crate) mod cancellation;
-mod catalog;
+pub(crate) mod catalog;
 mod config;
 mod context;
 pub(crate) mod external_label_acquisition;
@@ -36,13 +36,15 @@ pub use baseline::{
 };
 pub use catalog::{
     catalog_drift_objects, managed_schema_fingerprint, verify_catalog_identity_for_catalog,
-    CatalogIdentity, ExpectedManagedCatalog, ExpectedRegistryIdentity,
+    CatalogIdentity, ExpectedManagedCatalog, ExpectedRegistryIdentity, MANAGED_SCHEMAS,
 };
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use catalog::{
-    initialize_compiled_registry_state_for_test, initialize_registry_state_for_catalog_test,
-    test_activation_id, test_package_digest, RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test,
+    initialize_compiled_registry_state_with_posture_for_test,
+    initialize_registry_state_for_catalog_test, test_activation_id, test_package_digest,
+    RegistryStateTestIdentity,
 };
 pub(crate) use catalog::{
     pre_1_0_attachment_verification_present, registry_state_shape, runtime_grants_missing,
@@ -226,7 +228,7 @@ pub fn strong_record_etag_for_test(
 pub use roles::{
     provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
     spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
-    RuntimeWriteAuthority, SqlIdentifier,
+    RuntimeWriteAuthority, SqlIdentifier, MIN_POSTGIS_MAJOR, MIN_POSTGIS_MINOR,
 };
 pub(crate) use schema::compiled_pattern_field;
 pub use schema::install_compiled_schema;
@@ -238,7 +240,7 @@ pub(crate) use schema::verify_postgres_17_or_newer;
 pub(crate) use schema::PreparedSchemaTestCatalogVerifier;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub use schema::{
-    prepare_schema_test_database_with_connections, PreparedSchemaTestDatabase,
+    prepare_schema_test_database_with_connections, PreparedSchemaTestDatabase, SchemaMeasurement,
     SchemaTestDatabaseIdentity,
 };
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -555,3 +557,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, feature = "postgres-test"))]
+pub(crate) mod posture_test_support;

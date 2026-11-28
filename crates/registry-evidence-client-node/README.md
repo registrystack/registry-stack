@@ -6,16 +6,16 @@ client, via [napi-rs](https://napi.rs). Every Evidence semantic decision
 own; this crate is a thin `#[napi]` surface plus a JSON conversion layer, and
 re-implements none of it.
 
-This crate publishes through the unified `@registrystack/client` package.
+This crate publishes through the unified `@registrystack/client-node` package.
 Install the exact client version that matches the Evidence deployment, and use
 its `evidence` namespace:
 
 ```sh
-npm install "@registrystack/client@<version>"
+npm install "@registrystack/client-node@<version>"
 ```
 
 ```js
-const { evidence: { EvidenceClient } } = require('@registrystack/client');
+const { evidence: { EvidenceClient } } = require('@registrystack/client-node');
 ```
 
 The root package selects one exact native package for Linux amd64 with glibc,
@@ -24,9 +24,8 @@ installed Node.js runtime may impose a newer system requirement. The Linux
 packages do not support musl-based distributions such as Alpine.
 
 Registry Stack v0.22.0 through v0.26.0 published this binding on its own, as
-`@registrystack/evidence-client`. Those versions stay published and unchanged,
-and no later version joins them: from v0.26.1 the maintained Node.js client is
-`@registrystack/client`.
+`@registrystack/evidence-client`. The unified Node client first shipped in
+v0.26.1. Install `@registrystack/client-node` for v0.49.0 and later.
 
 ## JS surface
 
@@ -47,7 +46,7 @@ const verifiedAt = client.verifyAsOf(prepared, response, asOfMillis);
 
 // A profile-driven result also carries exact assertion or credential bytes
 // and its pre-response verification context for application-owned retention.
-const { verifyRetained, verifyRetainedAsOf } = require('@registrystack/client').evidence;
+const { verifyRetained, verifyRetainedAsOf } = require('@registrystack/client-node').evidence;
 const profileClient = EvidenceClient.fromProfile('client.json');
 const result = await profileClient.request({ handle: 'status-check', selectors: {} });
 const replayed = verifyRetainedAsOf(result.retainedVerification, result.assertion, decisionMillis);
@@ -148,7 +147,7 @@ from the package root. Its `kind` is always present; `status`, `code`,
 when the underlying failure carries them. `message` is human prose, not JSON:
 read it, do not parse it. `kind` is one of: `configuration`, `nonce`, `token`,
 `transport`, `denied`, `not-available`, `invalid-request`, `unavailable`,
-`protocol`, `verification`.
+`protocol`, `development-peer`, `verification`.
 
 Underneath, the native layer throws every mapped failure as a plain
 `napi::Error` whose `message` is a JSON-stringified envelope; `client.js`
@@ -158,7 +157,7 @@ caller-facing contract: do not `JSON.parse(error.message)`.
 
 A failure that is not a recognized envelope (a serialization defect, a caught
 panic, napi's own argument-type checking) is left exactly as thrown, so it
-cannot be mistaken for one of the ten kinds above.
+cannot be mistaken for one of the kinds above.
 
 HTTP 401, 403, and 429 map to `denied`; 422 maps to `not-available`; other
 contract-valid 4xx responses map to `invalid-request`; and contract-valid 5xx
@@ -275,3 +274,5 @@ compares them byte for byte against the committed `index.js` and `index.d.ts`,
 so a change to the `#[napi]` surface that is not reflected in the committed
 declaration file, or a napi-rs CLI change to the loader, fails this check
 rather than silently drifting.
+
+The client accepts development-marked responses by default. Set `refuseDevelopmentPeer: true` when constructing the client to reject them.

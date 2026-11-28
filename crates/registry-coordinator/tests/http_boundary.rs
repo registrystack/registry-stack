@@ -17,6 +17,60 @@ use wiremock::{
 };
 
 #[tokio::test]
+async fn runtime_breg_client_follows_the_declared_peer_policy() {
+    use registry_coordinator::runtime::RuntimeConfig;
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+
+    let issuer = issuer().await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/applications/{RECORD}")))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("Registry-Posture", "development")
+            .insert_header("traceparent", TRACE)
+            .insert_header("etag", "\"breg-record-000000000001\"")
+            .insert_header("link", "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/application>; rel=\"describedby\"")
+            .set_body_json(record(true, "synthetic@example.test")))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime.yaml");
+    support::write_runtime(
+        &runtime,
+        &config(root.path(), &issuer, &server.uri(), &server.uri()),
+    );
+
+    for posture in [Posture::Production, Posture::Development] {
+        let runtime = RuntimeConfig::load_with_posture(
+            &runtime,
+            DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            },
+        )
+        .unwrap();
+        let adapters = HttpAdapters::new(&runtime).unwrap();
+        let outcome = adapters
+            .call(&CallRequest {
+                operation_contract: None,
+                connection: "applications".into(),
+                operation: Operation::ReadRecord,
+                input: json!({"collection":"applications", "recordId":RECORD}),
+                idempotency_key: None,
+            })
+            .await;
+        match posture {
+            Posture::Production => assert!(matches!(
+                outcome, CallOutcome::Refused { code } if code == "invalid-response"
+            )),
+            Posture::Development => assert!(matches!(outcome, CallOutcome::Success(_))),
+        }
+    }
+    issuer.stop().await;
+}
+
+#[tokio::test]
 async fn breg_transient_http_failures_are_retryable_without_retrying_inside_an_attempt() {
     let issuer = issuer().await;
     for (status, response) in [408, 429, 500, 503, 599].into_iter().flat_map(|status| {
@@ -41,7 +95,7 @@ async fn breg_transient_http_failures_are_retryable_without_retrying_inside_an_a
             .expect(2)
             .mount(&server)
             .await;
-        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
             url::Url::parse(&server.uri()).unwrap(),
         ))
         .unwrap();
@@ -113,7 +167,7 @@ async fn breg_malformed_success_and_product_refusals_remain_permanent() {
             ResponseTemplate::new(401)
                 .insert_header("traceparent", TRACE)
                 .insert_header("cache-control", "no-store")
-                .set_body_raw(json!({"type":"https://id.registrystack.org/problems/registry-breg/authentication/refused", "title":"Unauthorized", "status":401, "detail":"The bearer credential is missing or refused.", "code":"authentication.refused", "traceId":"4bf92f3577b34da6a3ce929d0e0e4736"}).to_string(), "application/problem+json"),
+                .set_body_raw(json!({"type":"https://id.registrystack.org/problems/registry-breg/authentication/refused", "title":"Unauthorized", "status":401, "detail":"The bearer token or delivery signature was not accepted.", "code":"authentication.refused", "traceId":"4bf92f3577b34da6a3ce929d0e0e4736"}).to_string(), "application/problem+json"),
 
             "product-forbidden",
         ),

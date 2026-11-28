@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::{fmt, time::Duration};
 
+use crate::PeerPolicy;
 use registry_platform_httputil::client::{
     ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_MUTATION_RETRIES, DEFAULT_REQUEST_TIMEOUT,
     MAXIMUM_MUTATION_RETRIES, MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
@@ -13,6 +14,7 @@ use crate::CoordinatorClientError;
 /// credential acquisition.
 #[derive(Clone)]
 pub struct CoordinatorClientConfig {
+    pub(crate) peer_policy: PeerPolicy,
     pub(crate) base_url: Url,
     pub(crate) attempt_timeout: Duration,
     pub(crate) connect_timeout: Duration,
@@ -23,9 +25,14 @@ pub struct CoordinatorClientConfig {
 }
 
 impl CoordinatorClientConfig {
+    pub fn new_without_peer_policy(base_url: Url) -> Self {
+        Self::new(base_url, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
     #[must_use]
-    pub fn new(base_url: Url) -> Self {
+    pub fn new(base_url: Url, peer_policy: PeerPolicy) -> Self {
         Self {
+            peer_policy,
             base_url,
             attempt_timeout: DEFAULT_REQUEST_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,

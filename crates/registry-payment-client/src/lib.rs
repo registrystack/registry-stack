@@ -26,3 +26,4 @@ pub use registry_payment_protocol::{
     RequestCollection, RequestDisbursement,
 };
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
+pub use registry_platform_httputil::PeerPolicy;

@@ -80,6 +80,9 @@ impl ExchangeAssertionSource for CaseworkTaskAssertionSource {
 // Never carry the product's remote problem text or identifiers into token errors.
 fn assertion_error(error: CaseworkClientError) -> TokenError {
     match error {
+        CaseworkClientError::DevelopmentPeer => TokenError::Invalid {
+            reason: "Casework declared the development posture",
+        },
         CaseworkClientError::Configuration { .. } => TokenError::Configuration {
             reason: "the Casework assertion client cannot be used as configured",
         },
@@ -142,7 +145,7 @@ mod tests {
     #[tokio::test]
     async fn bootstrap_scope_and_grant_mismatch_refuse_before_http() {
         let server = MockServer::start().await;
-        let client = CaseworkClient::new(crate::CaseworkClientConfig::new(
+        let client = CaseworkClient::new(crate::CaseworkClientConfig::new_without_peer_policy(
             server.uri().parse().unwrap(),
         ))
         .unwrap();
@@ -156,7 +159,7 @@ mod tests {
             ),
             Err(TokenError::Configuration { .. })
         ));
-        let client = CaseworkClient::new(crate::CaseworkClientConfig::new(
+        let client = CaseworkClient::new(crate::CaseworkClientConfig::new_without_peer_policy(
             server.uri().parse().unwrap(),
         ))
         .unwrap();
@@ -196,7 +199,7 @@ mod tests {
                 .insert_header("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
                 .set_body_json(json!({"assertion":"a.b.c","expiresAt":1_800_000_060u64,"grantExpiresAt":deadline})))
             .mount(&server).await;
-        let client = CaseworkClient::new(crate::CaseworkClientConfig::new(
+        let client = CaseworkClient::new(crate::CaseworkClientConfig::new_without_peer_policy(
             server.uri().parse().unwrap(),
         ))
         .unwrap();
@@ -294,7 +297,7 @@ mod tests {
                 .respond_with(response)
                 .mount(&server)
                 .await;
-            let client = CaseworkClient::new(crate::CaseworkClientConfig::new(
+            let client = CaseworkClient::new(crate::CaseworkClientConfig::new_without_peer_policy(
                 server.uri().parse().unwrap(),
             ))
             .unwrap();

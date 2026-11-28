@@ -36,19 +36,11 @@ invariants:
       comparison stays textual. The declared issuer may use a private address,
       while discovered private JWKS addresses are accepted only on the same
       origin. Cloud metadata and redirects remain denied. Non-loopback HTTP
-      requires the explicit `allowInsecureHttp: true` runtime exception and a
-      fixed startup warning; loopback HTTP remains available for development.
-      For a development session borrowing a ready BReg issuer, `messagingctl`
-      obtains each requester client's credential only through public
-      `bregctl dev export-client`, then uses the explicit Messaging resource,
-      the profile's scopes, `scopeClaim: scope`, and a bounded static RS256
-      key snapshot to acquire and authenticate a real token before reporting
-      ready. A later `dev token` requires that ready state, re-exports and
-      compares the credential and endpoint, and authenticates the new token
-      against the retained keys and caller identity before publishing it.
-      A local raw API request uses the same client-token acquisition without
-      publishing a header file, requires the ready session's exact numeric
-      loopback API origin, and passes the token to the shared CLI transport.
+      requires development and explicit `allowInsecureHttp: true`, with a
+      startup warning. A loopback HTTP issuer needs no opt-in in either posture.
+      For a development run with external issuer keys, Messaging verifies
+      the declared issuer, audience and current key set. A caller supplies
+      the credential to the shared CLI transport.
       That transport confines the relative path to the selected origin and
       deployment prefix, owns Host and automatic Authorization, follows no
       redirects, and ignores ambient proxy settings. The runtime still makes
@@ -59,17 +51,11 @@ invariants:
       separate file and root policy, and the saved-connections document uses
       the platform's separate bounded regular-file reader. Standard input is
       available only for a request body explicitly named by `--input -`.
-      Messaging reads no private BReg state and has no owner lifecycle action.
     refusal: >-
       Refuse with profile.not-authorized for a sender profile, template, or
       direct content outside the profile, and with operation.not-authorized
-      for an operator; accept nothing. Refuse a borrowed development session
-      or token before readiness or header publication when its issuer,
-      resource, credential, scopes, keys, or caller identity do not match the
-      foreground session's capture. Refuse a local raw API request before
-      connection when the session is not ready, its retained API endpoint is
-      not one exact numeric-loopback HTTP origin, its path escapes the selected
-      endpoint, or a caller attempts to replace connection-owned authority.
+      for an operator; accept nothing. Refuse tokens from a replaced key
+      or for a different audience.
       Refuse non-regular file inputs before the API request is sent; on Unix,
       refuse a FIFO without blocking while opening it. Refuse an explicit or
       implicit saved-connections store that is not a regular file, likewise
@@ -214,10 +200,11 @@ invariants:
       template reference, correlation, outcome class, and a keyed recipient
       reference; log fields never carry payload values; metric labels are
       closed sets fixed in code. Authentication refusal diagnostics use only
-      fixed stage labels and static remedy keys, at most once per stage per
-      minute per verifier. This includes HTTP bearer and compact-token
-      admission failures; required time claims and maximum-lifetime failures
-      are time-stage refusals. These diagnostics never contain credentials,
+      a fixed failed-check label and static remedy keys, at most five lines
+      per check per minute, with every refusal counted by its check. This
+      includes HTTP bearer and compact-token admission failures; required
+      time claims and maximum-lifetime failures are token-time refusals.
+      These diagnostics never contain credentials,
       claim or scope values, issuer URLs, or underlying error text, and do not
       change public refusal/outage status or audit acceptance.
       The audit writer opens before serving and its
@@ -227,12 +214,13 @@ invariants:
       in one locked transaction. Split-role runtime grants allow product work
       and ledger reads while withholding ledger writes, ownership, schema
       creation, and migration-owned write paths. Startup verifies the exact
-      schema, database identity, package digest, and effective role boundary.
+      schema, database identity, package digest, declared posture, and role
+      boundary. Journal lines record the process posture.
       Activation and startup require PostgreSQL 17 or newer.
     refusal: >-
       Nothing to refuse at the caller for minimized telemetry. Refuse apply
       before commit when identity or role authority is wrong, and refuse
-      startup before binding when schema, activation, or role grants differ.
+      startup before binding when schema, activation, posture, or role grants differ.
       Audit records are minimized JSON envelopes, not a keyed hash chain.
     negativeTest:
       path: crates/registry-messaging/tests/postgres_callbacks.rs

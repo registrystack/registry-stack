@@ -1422,7 +1422,7 @@ class GateInventoryTest(unittest.TestCase):
         )
         platform_link = (
             '"${client_dir}/node_modules/@registrystack/'
-            'client-${{ matrix.napi_platform }}"'
+            'client-node-${{ matrix.napi_platform }}"'
         )
         self.assertIn(platform_link, proof)
         self.assertLess(
@@ -1435,7 +1435,7 @@ class GateInventoryTest(unittest.TestCase):
             proof.index("node smoke-registry-client-package.mjs"),
         )
         self.assertNotIn(
-            '"${smoke}/node_modules/@registrystack/client-${{ matrix.napi_platform }}"',
+            '"${smoke}/node_modules/@registrystack/client-node-${{ matrix.napi_platform }}"',
             proof,
         )
         self.assertNotIn("napi build", proof)

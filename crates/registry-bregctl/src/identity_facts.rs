@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The identity facts BReg states about its issuer, from the deployment's
-//! runtime `authentication.oidc` block and the project's access profiles.
+//! The identity facts BReg states about one issuer, from the deployment's
+//! runtime `authentication.oidc.issuers` entry and the project's access
+//! profiles.
 //!
 //! `generate identity-facts` writes them for the hosted identity generator.
-//! `bregctl dev` derives its local authority claim names through
+//! Development tooling derives its local authority claim names through
 //! [`authority_claims`], the function the facts use, so a session and a
 //! deployment name the same claims.
 
@@ -21,7 +22,7 @@ use registry_breg::contract::{
 use registry_breg::model::{
     CompiledActionExecution, CompiledActionPermission, CompiledProposalPermission,
 };
-use registry_breg::runtime_config::RuntimeConfig;
+use registry_breg::runtime_config::{OidcVerifierConfig, RuntimeConfig};
 use registry_breg::CompiledRegistry;
 use registry_thunderid_tooling::identity_facts::{
     self, AccessProfile as FactsProfile, ActorKind as FactsActorKind, Admission, ClaimType,
@@ -32,8 +33,12 @@ use registry_thunderid_tooling::identity_facts::{
 const PRODUCT: &str = "breg";
 /// The claim BReg reads scopes from unless the runtime names another.
 const DEFAULT_SCOPE_CLAIM: &str = "scope";
-/// The claim BReg reads an actor kind from.
-const ACTOR_KIND_CLAIM: &str = "registry_actor_kind";
+/// The claim the hosted generator derives an actor kind under.
+const ACTOR_KIND_CLAIM: &str = identity_facts::ACTOR_KIND_CLAIM;
+/// The code of the refusal for two or more issuer entries and no `--issuer`.
+pub(crate) const ISSUER_REQUIRED_CODE: &str = "identity.facts.issuer-required";
+/// The code of the refusal for an `--issuer` that names no entry.
+pub(crate) const UNKNOWN_ISSUER_CODE: &str = "identity.facts.unknown-issuer";
 /// The one purpose claim hosted generation derives and checks.
 const PURPOSE_CLAIM: &str = "registry_purpose";
 
@@ -41,12 +46,10 @@ const PURPOSE_CLAIM: &str = "registry_purpose";
 pub(crate) struct AuthorityClaims {
     /// The one claim every profile reads the principal from.
     pub principal: String,
-    /// Whether any profile requires a purpose.
-    pub purpose_required: bool,
 }
 
-/// The principal claim the compiled profiles share, and whether a purpose is
-/// required. Refuses when profiles disagree on the principal claim, because
+/// The principal claim the compiled profiles share. Refuses when profiles
+/// disagree on the principal claim, because
 /// one runtime names one.
 pub(crate) fn authority_claims(compiled: &CompiledRegistry) -> Result<AuthorityClaims, String> {
     let inventory = authority_inventory(compiled)
@@ -66,24 +69,39 @@ pub(crate) fn authority_claims(compiled: &CompiledRegistry) -> Result<AuthorityC
             ))
         }
     };
-    Ok(AuthorityClaims {
-        principal,
-        purpose_required: inventory.purpose_required,
-    })
+    Ok(AuthorityClaims { principal })
 }
 
 #[derive(Debug)]
 pub(crate) enum FactsError {
     /// The configuration or project cannot be stated as facts.
     Unstatable(String),
+    /// The runtime declares several issuer entries and none was named.
+    IssuerRequired(String),
+    /// The named issuer is not an entry of the runtime.
+    UnknownIssuer(String),
     Encode,
     Write(io::Error),
+}
+
+impl FactsError {
+    /// The diagnostic code of the refusal.
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::IssuerRequired(_) => ISSUER_REQUIRED_CODE,
+            Self::UnknownIssuer(_) => UNKNOWN_ISSUER_CODE,
+            Self::Unstatable(_) | Self::Encode => "identity-facts.unstatable",
+            Self::Write(_) => "identity-facts.output-failed",
+        }
+    }
 }
 
 impl fmt::Display for FactsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unstatable(message) => formatter.write_str(message),
+            Self::Unstatable(message)
+            | Self::IssuerRequired(message)
+            | Self::UnknownIssuer(message) => formatter.write_str(message),
             Self::Encode => formatter.write_str("the identity facts could not be encoded"),
             Self::Write(error) => write!(
                 formatter,
@@ -185,8 +203,8 @@ impl<'a> Grant<'a> {
                 .then(|| self.requester_clients.clone()),
             exchange: None,
             selected_by: BTreeMap::new(),
-            // BReg resolves the profile by client id and then requires this
-            // kind, so it is a requirement, not a selector.
+            // A human or service profile admits a caller of this kind only,
+            // so the facts state a requirement and not a selector.
             actor_kind: self.actor_kind.map(facts_actor_kind),
             required_claims: required_claims(principal, &self.claims)
                 .into_iter()
@@ -245,14 +263,34 @@ fn required_claims(principal: &str, claims: &BTreeSet<&str>) -> BTreeSet<String>
 fn facts_actor_kind(kind: ActorKindSource) -> FactsActorKind {
     match kind {
         ActorKindSource::Human => FactsActorKind::Human,
-        // Profiles that require an agent never reach here; see `facts`.
-        ActorKindSource::Agent => unreachable!("agent profiles are left out of the facts"),
+        ActorKindSource::Agent => FactsActorKind::Agent,
         ActorKindSource::Service => FactsActorKind::Service,
     }
 }
 
-/// The facts a runtime configuration and the project it serves state, and the
-/// ids of the access profiles left out of them.
+/// The issuer entry the facts describe: the one `issuer` names, or the only
+/// entry when the runtime has one.
+fn selected<'a>(
+    config: &'a RuntimeConfig,
+    issuer: Option<&str>,
+) -> Result<&'a OidcVerifierConfig, FactsError> {
+    let oidc = config.authentication().oidc();
+    match issuer {
+        Some(wanted) => oidc.issuer(wanted).ok_or_else(|| {
+            FactsError::UnknownIssuer(
+                "authentication.oidc.issuers declares no issuer with the id given to --issuer. Name one of the issuer ids under authentication.oidc.issuers".to_owned(),
+            )
+        }),
+        None if oidc.issuers().count() == 1 => Ok(oidc.first()),
+        None => Err(FactsError::IssuerRequired(format!(
+            "authentication.oidc.issuers declares {} issuers, and the facts describe one. Pass --issuer with the id of the issuer to describe",
+            oidc.issuers().count()
+        ))),
+    }
+}
+
+/// The facts for one issuer entry, and the ids of the access profiles left
+/// out of them.
 ///
 /// A profile that requires an agent is left out: BReg refuses every direct
 /// token on it and reaches it only through a delegated or task-grant token,
@@ -263,34 +301,39 @@ pub(crate) struct Stated {
     pub omitted_agent_profiles: BTreeSet<String>,
 }
 
+/// The facts a runtime configuration and the project it serves state for one
+/// issuer entry. When the runtime declares several entries, a profile that
+/// names requester clients is stated with those the entry lists, and left out
+/// when it lists none of them. A client is listed by an entry only when the
+/// entry names it: `unrestricted` lists none, as at startup.
 pub(crate) fn facts(
     config: &RuntimeConfig,
     compiled: &CompiledRegistry,
+    issuer: Option<&str>,
 ) -> Result<Stated, FactsError> {
-    let verifier = config.authentication().oidc().token_verifier_config();
+    let entry = selected(config, issuer)?;
+    let several_issuers = config.authentication().oidc().issuers().count() > 1;
+    let verifier = entry.token_verifier_config();
     let [audience] = verifier.audiences.as_slice() else {
-        return Err(unstatable(
-            "authentication.oidc names more than one audience",
-        ));
-    };
-    if verifier.scope_claim != DEFAULT_SCOPE_CLAIM {
-        return Err(unstatable(
-            "authentication.oidc.scopeClaim is not the default `scope`, which hosted generation does not support yet; set it to `scope`",
-        ));
-    }
-    let authentication = config.authentication();
-    if authentication.authority_claim_config().actor_kind_claim() != ACTOR_KIND_CLAIM {
         return Err(unstatable(format!(
-            "authentication.authorityClaims.contextual.actorKind is not the default `{ACTOR_KIND_CLAIM}`, which hosted generation does not support yet; set it to `{ACTOR_KIND_CLAIM}`"
+            "authentication.oidc.issuers.{}.audience names more than one audience",
+            entry.id()
+        )));
+    };
+    let authentication = config.authentication();
+    let scope_claim = verifier.scope_claim.as_str();
+    let claim_names = authentication.authority_claim_config();
+    if claim_names.actor_kind_claim() != ACTOR_KIND_CLAIM {
+        return Err(unstatable(format!(
+            "authentication.authorityClaims.contextual.actorKind is not the default `{ACTOR_KIND_CLAIM}`, which hosted generation does not support yet. Set it to `{ACTOR_KIND_CLAIM}`"
         )));
     }
-    if authentication
-        .authority_claim_config()
+    if claim_names
         .purpose_claim()
         .is_some_and(|claim| claim != PURPOSE_CLAIM)
     {
         return Err(unstatable(format!(
-            "authentication.authorityClaims.purpose is not `{PURPOSE_CLAIM}`, which hosted generation does not support yet; set it to `{PURPOSE_CLAIM}`"
+            "authentication.authorityClaims.purpose is not `{PURPOSE_CLAIM}`, which hosted generation does not support yet. Set it to `{PURPOSE_CLAIM}`"
         )));
     }
     let allowed = if verifier.allowed_clients.is_empty() {
@@ -300,9 +343,16 @@ pub(crate) fn facts(
     };
     let mut facts = IdentityFacts::new(PRODUCT, &verifier.issuer, audience, allowed.clone());
 
-    // BReg refuses a token without the actor-kind claim unless it is
-    // delegated, whatever profile the token reaches, so the claim is always
-    // declared and every generated client carries a kind.
+    // The verifier accepts the scope claim as a space-separated string or an
+    // array of strings. The facts state the array, which needs no separator.
+    if scope_claim != DEFAULT_SCOPE_CLAIM {
+        refuse_reserved_scope_claim(&facts, scope_claim, entry.id())?;
+        facts
+            .claims
+            .insert(scope_claim.to_owned(), ClaimType::StringArray);
+    }
+    // The generator derives a kind for every principal. A token that carries
+    // none authenticates with no kind, so every generated client states one.
     facts
         .claims
         .insert(ACTOR_KIND_CLAIM.to_owned(), ClaimType::String);
@@ -315,6 +365,25 @@ pub(crate) fn facts(
             continue;
         }
         let mut stated = grant.facts()?;
+        // A renamed scope claim is how the issuer selects this profile: the
+        // principal must carry every scope the profile requires there.
+        if scope_claim != DEFAULT_SCOPE_CLAIM {
+            stated.selected_by = BTreeMap::from([(scope_claim.to_owned(), stated.scopes.clone())]);
+        }
+        if several_issuers && !stated.requester_clients.as_ref().is_none_or(Vec::is_empty) {
+            refuse_clients_no_entry_lists(config, &stated)?;
+            let requesters: Vec<String> = stated
+                .requester_clients
+                .iter()
+                .flatten()
+                .filter(|client| verifier.allowed_clients.contains(client))
+                .cloned()
+                .collect();
+            if requesters.is_empty() {
+                continue;
+            }
+            stated.requester_clients = Some(requesters);
+        }
         match profiles.get_mut(grant.id) {
             Some(existing) => {
                 // Row boundaries are set per record type, Action and
@@ -343,19 +412,20 @@ pub(crate) fn facts(
     for stated in profiles.values() {
         if stated.scopes.is_empty() {
             return Err(unstatable(format!(
-                "the access profile `{}` requires no scope, so it names no scope to grant; list its scopes in requiredScopes",
+                "the access profile `{}` requires no scope, so it names no scope to grant. List its scopes in requiredScopes",
                 stated.id
             )));
         }
-        if let Some(client) = stated
+        if stated
             .requester_clients
             .iter()
             .flatten()
-            .find(|client| !allowed.admits(client))
+            .any(|client| !verifier.allowed_clients.contains(client))
         {
             return Err(unstatable(format!(
-                "the access profile `{}` names the client `{client}`, which authentication.oidc.allowedClients does not admit",
-                stated.id
+                "the access profile `{}` names a requester client that authentication.oidc.issuers.{}.allowedClients does not admit",
+                stated.id,
+                entry.id()
             )));
         }
     }
@@ -398,6 +468,65 @@ pub(crate) fn facts(
     })
 }
 
+/// Refuse a scope claim name the facts reader reserves. The reader exposes no
+/// check of its own, so the name is declared in an otherwise valid document and
+/// the reader decides.
+fn refuse_reserved_scope_claim(
+    base: &IdentityFacts,
+    scope_claim: &str,
+    entry: &str,
+) -> Result<(), FactsError> {
+    let reads = |facts: &IdentityFacts| {
+        facts
+            .to_yaml()
+            .map_err(|_| FactsError::Encode)
+            .map(|yaml| identity_facts::read("identity-facts", yaml.as_bytes()).is_ok())
+    };
+    let mut probe = base.clone();
+    if !reads(&probe)? {
+        // The base itself is refused: the final read-back reports it.
+        return Ok(());
+    }
+    probe
+        .claims
+        .insert(scope_claim.to_owned(), ClaimType::StringArray);
+    if reads(&probe)? {
+        return Ok(());
+    }
+    Err(unstatable(format!(
+        "authentication.oidc.issuers.{entry}.scopeClaim names a claim hosted generation cannot issue: a JWT or OpenID Connect claim such as scp or roles, a registry_grant_ claim, or a name with characters other than letters, digits and `_`. Set it to scope, or to a name of letters, digits and `_`"
+    )))
+}
+
+/// Refuse a profile that names a requester client no issuer entry of the
+/// runtime lists, as the runtime does at startup.
+fn refuse_clients_no_entry_lists(
+    config: &RuntimeConfig,
+    stated: &FactsProfile,
+) -> Result<(), FactsError> {
+    let oidc = config.authentication().oidc();
+    let listed_somewhere = |client: &String| {
+        oidc.issuers().any(|entry| {
+            entry
+                .token_verifier_config()
+                .allowed_clients
+                .contains(client)
+        })
+    };
+    if stated
+        .requester_clients
+        .iter()
+        .flatten()
+        .all(listed_somewhere)
+    {
+        return Ok(());
+    }
+    Err(unstatable(format!(
+        "the access profile `{}` names a requester client that no authentication.oidc.issuers entry's allowedClients admits",
+        stated.id
+    )))
+}
+
 /// Refuse a claim BReg reads as a JSON value other than a string.
 ///
 /// `mapped_scalar_claim` in `registry-breg` `auth.rs` reads a claim compared
@@ -423,7 +552,7 @@ fn refuse_unissuable_claim(
         .map(|usage| format!(" `{}` of `{}`", usage.field_id, usage.entity_id))
         .unwrap_or_default();
     Err(unstatable(format!(
-        "the claim `{name}` is compared with the {field_type} field{field}, which BReg reads from a token as a non-string JSON value; hosted generation issues every claim value as a string, so bind the claim to a string field"
+        "the claim `{name}` is compared with the {field_type} field{field}, which BReg reads from a token as a non-string JSON value. Hosted generation issues every claim value as a string, so bind the claim to a string field"
     )))
 }
 

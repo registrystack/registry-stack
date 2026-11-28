@@ -17,6 +17,8 @@ use serde_json::json;
 use thiserror::Error;
 use uuid::Uuid;
 
+use registry_platform_config::Posture;
+
 use crate::audit::{DocumentsAudit, PACKAGE_ACTIVATION_EVENT};
 use crate::store::{migrate_in, PostgresStore, StoreError, MIGRATIONS, MIGRATION_LOCK_KEY};
 
@@ -93,7 +95,7 @@ fn schema_history_refusal(schema: &platform::SchemaState) -> Option<ActivationRe
     if known.last().is_some_and(|latest| unexpected > *latest) {
         Some(ActivationRefusal::new(
             "documentsctl.activation.schema-newer",
-            "database",
+            "/database",
             format!(
                 "the database schema contains version {unexpected}, which is newer than this Document Store release"
             ),
@@ -101,7 +103,7 @@ fn schema_history_refusal(schema: &platform::SchemaState) -> Option<ActivationRe
     } else {
         Some(ActivationRefusal::new(
             "documentsctl.activation.schema-invalid",
-            "database",
+            "/database",
             format!(
                 "the database schema history is not an ordered prefix of this Document Store release at version {unexpected}"
             ),
@@ -138,6 +140,7 @@ pub struct ActivationStatus {
     pub schema_version: Option<i64>,
     pub runtime_role_mode: Option<RoleMode>,
     pub grants_current: Option<bool>,
+    pub findings: Vec<ActivationRefusal>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -154,6 +157,8 @@ pub struct ActivationRefusal {
     pub code: &'static str,
     pub path: &'static str,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_action: Option<&'static str>,
 }
 
 impl ActivationRefusal {
@@ -162,6 +167,7 @@ impl ActivationRefusal {
             code,
             path,
             message: message.into(),
+            suggested_action: None,
         }
     }
 }
@@ -189,6 +195,11 @@ pub enum ActivationError {
     DatabaseIdMismatch,
     #[error("the configured package is not active; run `documentsctl plan --runtime-config FILE` then `documentsctl apply --runtime-config FILE`")]
     PackageNotActive,
+    #[error("platform.activation.posture-mismatch: {message} {action}")]
+    PostureMismatch {
+        message: &'static str,
+        action: &'static str,
+    },
     #[error("the runtime credential has gained authority over the activation boundary; restore the split-role boundary, then apply again")]
     RoleModeWeakened,
     #[error("the runtime credential is missing required grants; run `documentsctl apply --runtime-config FILE` with the migration credential")]
@@ -213,6 +224,7 @@ impl ActivationError {
         match self {
             Self::NotActivated => Some("documentsctl.activation.not-activated"),
             Self::DatabaseIdMismatch => Some("documentsctl.activation.database-id-mismatch"),
+            Self::PostureMismatch { .. } => Some("platform.activation.posture-mismatch"),
             Self::PackageNotActive => Some("documentsctl.activation.package-not-active"),
             Self::RoleModeWeakened => Some("documentsctl.activation.role-mode-weakened"),
             Self::GrantsStale => Some("documentsctl.activation.grants-stale"),
@@ -232,6 +244,36 @@ impl From<tokio_postgres::Error> for ActivationError {
     }
 }
 
+fn posture_mismatch(recorded: Posture, declared: Posture) -> Option<ActivationError> {
+    let (message, action) = match (recorded, declared) {
+        (Posture::Production, Posture::Development) => (
+            "this database was activated in the production posture; a development process never opens it",
+            "Start it as production. To develop, use a fresh database: a fresh apply is the way.",
+        ),
+        (Posture::Development, Posture::Production) => (
+            "this database was activated in the development posture; development data and settings are never promoted in place",
+            "Create a fresh database and apply the package as production: a fresh apply is the way.",
+        ),
+        _ => return None,
+    };
+    Some(ActivationError::PostureMismatch { message, action })
+}
+
+fn posture_finding(active: &Activation, declared: Posture) -> Option<ActivationRefusal> {
+    let ActivationError::PostureMismatch { message, action } =
+        posture_mismatch(active.posture, declared)?
+    else {
+        unreachable!("posture_mismatch returns only posture errors");
+    };
+    let mut finding = ActivationRefusal::new(
+        "platform.activation.posture-mismatch",
+        "/database/runtimeUrlRef",
+        message,
+    );
+    finding.suggested_action = Some(action);
+    Some(finding)
+}
+
 pub async fn plan(
     store: &PostgresStore,
     database_id: &str,
@@ -246,7 +288,7 @@ pub async fn plan(
     {
         return Err(ActivationError::Refused(vec![ActivationRefusal::new(
             "documentsctl.activation.ledger-unreadable",
-            "database.runtimeUrlRef",
+            "/database/runtimeUrlRef",
             "the runtime credential cannot read the activation ledger; run documentsctl apply with the migration credential",
         )]));
     }
@@ -258,11 +300,15 @@ pub async fn plan(
         .map_err(platform_error)?;
     let observation = observe(&*tx, None).await?;
     let database_id_check = platform::database_id_check(active.as_ref(), database_id);
-    let mut refusals = Vec::new();
+    let mut refusals: Vec<_> = active
+        .as_ref()
+        .and_then(|active| posture_finding(active, store.posture))
+        .into_iter()
+        .collect();
     if database_id_check == DatabaseIdCheck::Differs {
         refusals.push(ActivationRefusal::new(
             "documentsctl.activation.database-id-mismatch",
-            "identity.databaseId",
+            "/identity/databaseId",
             "the database belongs to another deployment",
         ));
     }
@@ -273,13 +319,13 @@ pub async fn plan(
         if active.role_mode == RoleMode::Split && role.mode == RoleMode::Single {
             refusals.push(ActivationRefusal::new(
                 "documentsctl.activation.role-mode-weakened",
-                "database.runtimeUrlRef",
+                "/database/runtimeUrlRef",
                 "the runtime credential gained authority over the activation boundary; restore split-role ownership and apply again",
             ));
         } else if role.mode == RoleMode::Split && !role.grants_current {
             refusals.push(ActivationRefusal::new(
                 "documentsctl.activation.grants-stale",
-                "database.runtimeUrlRef",
+                "/database/runtimeUrlRef",
                 "the runtime credential is missing required grants; apply the package again",
             ));
         }
@@ -323,7 +369,7 @@ pub async fn status(store: &PostgresStore) -> Result<ActivationStatus, Activatio
     {
         return Err(ActivationError::Refused(vec![ActivationRefusal::new(
             "documentsctl.activation.ledger-unreadable",
-            "database.runtimeUrlRef",
+            "/database/runtimeUrlRef",
             "the runtime credential cannot read the activation ledger; run documentsctl apply with the migration credential",
         )]));
     }
@@ -336,6 +382,11 @@ pub async fn status(store: &PostgresStore) -> Result<ActivationStatus, Activatio
     let active = history.last().cloned();
     let observation = observe(&*tx, None).await?;
     let result = ActivationStatus {
+        findings: active
+            .as_ref()
+            .and_then(|active| posture_finding(active, store.posture))
+            .into_iter()
+            .collect(),
         active,
         history,
         schema_version: schema.current(),
@@ -366,7 +417,7 @@ pub async fn apply(
     {
         return Err(ActivationError::Refused(vec![ActivationRefusal::new(
             "documentsctl.activation.invalid-reference",
-            "arguments",
+            "/arguments",
             "operator references must be non-empty, free of control characters, at most 256 bytes, with at most 16 backups",
         )]));
     }
@@ -462,9 +513,18 @@ async fn apply_begun(
     {
         let refusals = vec![ActivationRefusal::new(
             "documentsctl.activation.database-id-mismatch",
-            "identity.databaseId",
+            "/identity/databaseId",
             "the database belongs to another deployment",
         )];
+        drop(tx);
+        respond_refused(audit_request, activation_id, package_digest, &refusals).await?;
+        return Err(ActivationError::Refused(refusals));
+    }
+    if let Some(refusal) = current_active
+        .as_ref()
+        .and_then(|active| posture_finding(active, migration.posture))
+    {
+        let refusals = vec![refusal];
         drop(tx);
         respond_refused(audit_request, activation_id, package_digest, &refusals).await?;
         return Err(ActivationError::Refused(refusals));
@@ -482,7 +542,7 @@ async fn apply_begun(
         if !stray.is_empty() {
             let refusals = vec![ActivationRefusal::new(
                 "documentsctl.activation.role-mode-weakened",
-                "database.runtimeUrlRef",
+                "/database/runtimeUrlRef",
                 format!(
                     "the runtime role has migration authority; apply these corrections first: {}",
                     stray.join("; ")
@@ -532,7 +592,7 @@ async fn apply_begun(
     if role_mode == RoleMode::Single && split || !grants_current || !readable {
         let refusals = vec![ActivationRefusal::new(
             "documentsctl.activation.role-mode-weakened",
-            "database.runtimeUrlRef",
+            "/database/runtimeUrlRef",
             "the runtime role retains activation authority or lacks the complete runtime grants",
         )];
         drop(tx);
@@ -587,6 +647,7 @@ async fn apply_begun(
             operator_reference_hash: operator_reference_hash.as_deref(),
             backup_references: &request.backup_references,
             role_mode,
+            posture: migration.posture,
             runtime_role: None,
         },
     )
@@ -649,18 +710,25 @@ pub async fn check_runtime(
         return Err(ActivationError::LedgerUnreadable);
     }
     crate::store::check_activation_schema(&**client).await?;
-    let active = platform::check_active_package(&**client, &layout(), database_id, package_digest)
-        .await
-        .map_err(|error| match error {
-            platform::ActivePackageError::NotActivated => ActivationError::NotActivated,
-            platform::ActivePackageError::DatabaseIdMismatch => ActivationError::DatabaseIdMismatch,
-            platform::ActivePackageError::PackageNotActive { .. } => {
-                ActivationError::PackageNotActive
-            }
-            platform::ActivePackageError::Activation(error) => {
-                ActivationError::Store(platform_error(error))
-            }
-        })?;
+    let active = platform::check_active_package(
+        &**client,
+        &layout(),
+        database_id,
+        package_digest,
+        store.posture,
+    )
+    .await
+    .map_err(|error| match error {
+        platform::ActivePackageError::NotActivated => ActivationError::NotActivated,
+        platform::ActivePackageError::DatabaseIdMismatch => ActivationError::DatabaseIdMismatch,
+        platform::ActivePackageError::PackageNotActive { .. } => ActivationError::PackageNotActive,
+        platform::ActivePackageError::PostureMismatch { recorded, declared } => {
+            posture_mismatch(recorded, declared).expect("the postures differ")
+        }
+        platform::ActivePackageError::Activation(error) => {
+            ActivationError::Store(platform_error(error))
+        }
+    })?;
     crate::store::schema_ready(&client).await?;
     let role = observe(&**client, None)
         .await?
@@ -705,6 +773,27 @@ mod tests {
             applied: applied.to_vec(),
             pending: Vec::new(),
         }
+    }
+
+    /// Tools resolve a refusal path as a JSON pointer, so every refusal in one
+    /// `diagnostics` list uses the pointer form.
+    #[test]
+    fn every_activation_refusal_names_its_path_as_a_json_pointer() {
+        let source = include_str!("activation.rs");
+        let production = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("the production source");
+        let marker = concat!("ActivationRefusal", "::new(");
+        let mut checked = 0;
+        for call in production.split(marker).skip(1) {
+            let mut literals = call.split('"').skip(1).step_by(2);
+            let code = literals.next().expect("a code literal");
+            let path = literals.next().expect("a path literal");
+            assert!(path.starts_with('/'), "{code} names {path}");
+            checked += 1;
+        }
+        assert!(checked >= 10, "only {checked} refusals found");
     }
 
     #[test]

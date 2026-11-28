@@ -1378,13 +1378,19 @@ jobs:
           }
           version="${{ needs.verify.outputs.version }}"
           client="${{ matrix.client }}"
+          web_package=
           if [[ "${client}" == stack ]]; then
+            web_package="$(python3 release/scripts/client_registry.py web-npm-name --version "${version}")"
+            node_stem="registrystack-client-node"
+            if [[ -z "${web_package}" ]]; then
+              node_stem="registrystack-client"
+            fi
             platform_packages=(
-              "registrystack-client-darwin-arm64-${version}.tgz"
-              "registrystack-client-linux-arm64-gnu-${version}.tgz"
-              "registrystack-client-linux-x64-gnu-${version}.tgz"
+              "${node_stem}-darwin-arm64-${version}.tgz"
+              "${node_stem}-linux-arm64-gnu-${version}.tgz"
+              "${node_stem}-linux-x64-gnu-${version}.tgz"
             )
-            root_package="registrystack-client-${version}.tgz"
+            root_package="${node_stem}-${version}.tgz"
           else
             platform_packages=(
               "registrystack-${client}-client-darwin-arm64-${version}.tgz"
@@ -1432,28 +1438,36 @@ jobs:
             fi
             sleep 10
           done
-          root_tarball="dist/${root_package}"
-          root_state="$(python3 release/scripts/client_registry.py npm-state \
-            --tarball "${root_tarball}")"
-          if [[ "${root_state}" == absent ]]; then
-            require_unexpired_candidate
-            npm publish "./${root_tarball}" --access public --provenance
-          else
-            test "${root_state}" = present
+          root_packages=("${root_package}")
+          if [[ -n "${web_package}" ]]; then
+            python3 release/scripts/client_registry.py validate-web-npm \
+              --directory dist --version "${version}"
+            root_packages+=("${web_package}")
           fi
-          root_deadline=$((SECONDS + 600))
-          while true; do
-            observed="$(python3 release/scripts/client_registry.py npm-state \
+          for root_package in "${root_packages[@]}"; do
+            root_tarball="dist/${root_package}"
+            root_state="$(python3 release/scripts/client_registry.py npm-state \
               --tarball "${root_tarball}")"
-            if [[ "${observed}" == present ]]; then
-              break
+            if [[ "${root_state}" == absent ]]; then
+              require_unexpired_candidate
+              npm publish "./${root_tarball}" --access public --provenance
+            else
+              test "${root_state}" = present
             fi
-            test "${observed}" = absent
-            if (( SECONDS >= root_deadline )); then
-              echo "npm did not expose exact root package ${root_package}" >&2
-              exit 1
-            fi
-            sleep 10
+            root_deadline=$((SECONDS + 600))
+            while true; do
+              observed="$(python3 release/scripts/client_registry.py npm-state \
+                --tarball "${root_tarball}")"
+              if [[ "${observed}" == present ]]; then
+                break
+              fi
+              test "${observed}" = absent
+              if (( SECONDS >= root_deadline )); then
+                echo "npm did not expose exact root package ${root_package}" >&2
+                exit 1
+              fi
+              sleep 10
+            done
           done
 
   publish_client_pypi:

@@ -1,6 +1,146 @@
 # Registry Scheduling changelog
 
 ## Unreleased
+- `scheduling` refuses repeated `--posture` flags, including flags on both sides of `serve`.
+- Production rejects verified bearer tokens marked as development with a 401, `platform.task-grant.development-assertion`, and a Bearer challenge.
+
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
+
+- BREAKING: Rust client configurations take a peer policy in `SchedulingClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, the database connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, a keyword connection string host written as an IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`, is skipped when the transport otherwise permits it and the driver would dial it, as the driver itself fails that entry and tries the next. When no other host is left, the connection is refused when it is configured, with `platform.database.bracketed-host` naming the address. Write `host=::1`. When a keyword host has an authored `hostaddr`, the connection still uses that `hostaddr`. A bracketed IPv6 address in a URL, such as `postgresql://app@[::1]/registry`, still works.
+
+- Start a local development run from the starter with `rstack dev start`.
+
+- BREAKING: `schedulingctl records apply` reports a swap the store refuses (`package-not-active`, `deployment-identity`, `not-activated`, `database-id-mismatch`, `combined-invariant`) as a domain refusal with exit 1 and its own code, as the other activation commands do. It was exit 3 `store-unavailable`. Migration: Scripts that retry on exit 3 no longer retry these refusals. Run the command the message names.
+
+- Startup refuses a hook destination's URL, transport or private range with
+  the code and pointer `schedulingctl check` reports, such as `config.invalid-value:
+  /destinations/hooks/appointment-events/url: ...` for `https://localhost.:9443/hooks`.
+  Before, startup said only that a hook destination binding was invalid.
+  BREAKING (Rust API): `HookActivationError` gains `DestinationRefused`,
+  `HookActivationError::code` is no longer `const` and returns
+  `Option<&str>`, and the new `HookActivationError::pointer` gives the
+  refused member's pointer.
+
+- A `destinations.hooks` URL over https to a loopback address literal or the
+  exact name `localhost`, such as `https://localhost:9443/hooks`, now
+  activates and delivers. Before, `https://localhost` was refused at startup
+  and an https loopback literal failed at every delivery. `localhost` is
+  delivered to only when every address it resolves to is loopback. The
+  reminder destination keeps its rule.
+- `schedulingctl check` runs the shared hook destination check on each
+  `destinations.hooks` entry, so it refuses what startup refuses, at the
+  destination's own pointer. For example, `https://localhost.:9443/hooks`
+  or a name under `localhost` is now refused by the check with
+  `config.invalid-value` at `/destinations/hooks/<id>/url`. Before, it
+  passed the check and was refused at startup. A refusal the check already
+  reports at that member keeps its scheduling code.
+- BREAKING: Scheduling signs every reminder delivery with Standard Webhooks.
+  The POST carries `accept`, `content-type`, `webhook-id`,
+  `webhook-timestamp` and `webhook-signature`. `webhook-id` is the outbox id and
+  stays the same on every retry. The timestamp is the Unix time at which
+  Scheduling leases the attempt. The signature covers the id, the timestamp and
+  the exact body bytes. A receiver checks a 300-second window in either
+  direction. Hook deliveries use the same signature.
+- BREAKING: `destinations.reminders.hmacSha256KeyRef` is required, and
+  `bearerTokenRef` is removed. `destinations.reminders.purposeUrls` is
+  replaced by `destinations.reminders.purposes.<purpose>`, which takes its own
+  `url` and `hmacSha256KeyRef` for `confirmation`, `change`, `cancellation` or
+  `reminder`. A purpose URL keeps the fallback URL's scheme, host and port.
+  Startup and `schedulingctl plan` refuse `bearerTokenRef` and `purposeUrls`
+  with the replacement.
+- Each key is 32 to 64 exact bytes. Startup and `schedulingctl plan` refuse a
+  key that is unavailable, too long, or starts with `whsec_`, and two reminder
+  or hook destinations that share key bytes. The refusal names both full
+  paths and never a key byte.
+- To rotate, set `previousHmacSha256KeyRef` on the reminder destination, a
+  purpose or a hook destination. Scheduling signs with both keys, current
+  first. A previous key equal to the current key is refused.
+
+- BREAKING: An undeclared posture is production. Runtime files with development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `schedulingctl check` and `schedulingctl test` refuse development-only runtime settings under production. Migration: Use `--posture development` or `REGISTRY_STACK_POSTURE=development` when checking or replaying fixtures for a development project.
+- `schedulingctl plan` reports `platform.activation.posture-mismatch` at `/database` as its first diagnostic when the activation posture differs.
+- BREAKING: Use `loopback-plaintext` to bind a plaintext listener to loopback in either posture. Migration: Write tlsTermination: loopback-plaintext; settings it used to relax now follow the posture.
+- BREAKING: Issuer `allowInsecureHttp: true` requires development. Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
+- BREAKING: Plaintext PostgreSQL on a private address requires development. The test-only plaintext diagnostic becomes `platform.database.test-only-plaintext`. Migration: Use database.transport: private-network-plaintext for a database container beside the product. Update scripts that match the old codes.
+- BREAKING: Activation records the deployment posture. Existing rows read as production. Migration: Recreate development databases: a fresh apply is the way.
+- BREAKING: Successful `/ready` replies include `posture` and `developmentSettings` in JSON. Migration: No change for probes that read the status code.
+- BREAKING: Audit lines include the process posture. Migration: Audit readers with a closed line parser accept the posture member.
+- BREAKING: Development responses carry `Registry-Posture: development`, and production peers refuse development responses. Migration: Point production runtimes at production peers.
+- BREAKING: The runtime accepts tokens from an issuer set. `authentication.oidc` holds `issuers`, keyed by issuer id, and each entry carries `issuer`, `audience`, `allowedClients`, `jwksSource`, `allowInsecureHttp`, `scopeClaim`, `accessTokenType`, `actorKind`, `clientActorKinds` and `assertionIssuers`. `readsScope`, `explainScope`, `appointmentReadProfiles` and `busyImportProfiles` stay under `authentication.oidc`. A client belongs to one issuer, and two entries cannot name one issuer. Startup and `schedulingctl check` refuse the old members of `authentication.oidc` and name where each one moves. Migration: Move `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`, `allowedClients`, `assertionIssuers` and `scopeClaim` under `authentication.oidc.issuers.<id>`.
+- BREAKING: Scheduling refuses `allowedClients: unrestricted` in every entry, under `scheduling.runtime.allowed-clients-required`. Migration: List the clients each entry admits.
+- BREAKING: An access token typed `JWT` is accepted only when the entry states `accessTokenType: JWT`, and an ID token stays refused in either setting. Migration: State `accessTokenType: JWT` for an issuer that does not type its access tokens `at+jwt`.
+- BREAKING: A token that grants no scope, or only OpenID Connect scopes, is refused unless the issuer or client declares an actor kind. A booking agent that holds only a task grant is such a caller. Migration: Request a scope with the access token, such as `scheduling:commit`, or declare the client's kind with `clientActorKinds`, as `clientActorKinds: {<client>: agent}` for a Casework task agent, whose assertion claims that kind.
+- A runtime declares the kind of a caller with `actorKind` for an issuer or `clientActorKinds` for named clients. A token without a kind claim is an unspecified caller, and the audit record names its kind as `unspecified`. A kind that is not `human`, `agent` or `service`, or that contradicts the declared kind, is refused.
+- With more than one issuer entry, the audit record of a granted commitment names its principal by its verified issuer as well as its subject, so one subject from two issuers is two principals. Going from one issuer entry to more changes the principal pseudonym of audit records for task-grant callers, as rotating the audit hash key does. Going back to one entry restores the one-entry form.
+- A caller that does not own a hold is refused as not authorized before anything about the hold's state, offering or window is read. Only the owner is told the hold has expired, been released or changed policy.
+- With status authorities listed under `taskGrantStatus`, every issuer entry names the same audience, and startup and `schedulingctl check` refuse entries that differ under `platform.oidc.audiences-differ`.
+- A development refusal body names the `failedCheck`. A production body is unchanged.
+- `schedulingctl check --runtime-config` lists the production settings the runtime states explicitly as `explicitProductionSettings`, including when the check refuses the file.
+
+- Add `schedulingctl provision`. From the two database URLs in the runtime file
+  and an administrator URL (`--admin-url-file` or `--admin-url-env`, a role
+  with `CREATEROLE` and `CREATEDB` on the same host and port, over verified
+  TLS), it creates the migration role and the runtime role, each with `LOGIN`
+  and no other privilege, and the database, closed to `PUBLIC`. Both roles get
+  `CONNECT` on the database. The migration role gets `USAGE` and `CREATE` on
+  the `public` schema, `CREATE` on it is taken from `PUBLIC`, and the runtime
+  role gets `USAGE` on it. Running it again creates only what is missing and
+  refuses a role that exists with a different password than its URL holds.
+  `--print-sql` connects to nothing and prints a `psql` script that prompts for
+  each password. `--format json` reports each statement and its outcome.
+- Scheduling counts every refused request by the check that refused it, in
+  `scheduling_request_refusals_total{check}` on the metrics listener,
+  published at zero for every check. Each refusal writes one
+  `request refused` line with `failed_check` and the request's trace id, at
+  most five lines per check per minute. That line replaces the
+  authentication refusal line that carried a `stage` field. Refusal statuses,
+  headers and production bodies are unchanged. An answer replayed from a stored receipt
+  under the same idempotency key is not counted again, because the decision
+  was counted when it was made. A grant or access token that lapses while a
+  commitment waits inside the capacity transaction counts under
+  `task-grant-expired`, a hold or appointment that another caller or
+  source manager holds counts under `ownership`, and an appointment that takes
+  no attendance in its current state counts under `visibility`.
+- A `request refused` line for a scope refusal names the scope claim the
+  deployment configured, the scope the route needs, and the source-busy
+  profile id when one applies. It never names a scope the token carries.
+  Production answers are unchanged.
+- A static key set that the shared key set rule refuses is refused at startup
+  under `scheduling.runtime.unreadable-jwks-secret`, with the rule it broke,
+  in place of `scheduling.runtime-dependency.unavailable`. The rule refuses a
+  key set that is not JSON, is not a key set, is empty, holds a key that is
+  not an object, a symmetric or unsupported key type, an OKP key or a key of
+  the wrong shape, a private key member, a missing `kid`, or a repeated
+  `kid`.
+- A reminder or hook destination in plain `http` accepts any loopback host by
+  the shared rule: an address of `127.0.0.0/8`, `::1`, an IPv4-mapped form of
+  `127.0.0.0/8`, or `localhost` in any case. `localhost.` and `*.localhost`
+  stay refused.
+
+- Add `GET /health` and `GET /ready`, answering `{"status":"ok"}` on
+  `/health` and JSON with `status: "ready"`, `posture` and
+  `developmentSettings` on `/ready` as `application/json` with no token, as
+  the other services do. `/healthz` keeps answering an empty 200, and
+  `/readyz` returns the same JSON readiness body as `/ready`.
+
+- A task grant with more than 900 seconds left on the offline path
+  (`taskGrantStatus: unchecked-final-fifteen-minutes`) now answers 403
+  `grant.lifetime-too-long` in place of `operation.not-authorized`, so the
+  caller learns to present a grant that expires sooner. The status is
+  unchanged. An expired grant, a missing grant, and a grant that does not cover
+  the offering still answer `operation.not-authorized`, and a deployment that
+  lists status authorities never answers the new code. The code is answered
+  only where no existing hold or appointment is named, which is creating a
+  hold and creating an appointment. Releasing or confirming a hold,
+  rescheduling, recording attendance and cancelling answer
+  `operation.not-authorized` for the same grant, as an unknown identifier does,
+  so the answer does not say whether the identifier exists. Clients that
+  branch on the code gain the new member in `SchedulingProblemCode`. A client
+  from before this release reports the code as a protocol error with an
+  unknown outcome, so upgrade clients before upgrading the server if their
+  grants can have more than 900 seconds left on the offline path.
 
 ## 0.47.0 - 2026-11-21
 

@@ -17,7 +17,11 @@ use std::str::FromStr;
 use registry_platform_yaml::{BoundedU32, ExternalId, Invalid, LocalId, Url};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES};
+use crate::{
+    DestinationTransport, DevelopmentClass, DevelopmentOnlyRefused, DevelopmentSetting,
+    DevelopmentWitness, ExplicitClass, ExplicitProductionSetting, Gated, PrivateRanges,
+    SecretError, SecretProvider, SecretReference, SecretResolver, Stated, MAX_SECRET_BYTES,
+};
 
 /// The schema pattern of a field that must name an enabled secret provider.
 pub const SECRET_PROVIDER_PATTERN: &str = "^secret:(?:env|file)/";
@@ -128,9 +132,13 @@ pub struct SecretProvidersConfig {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileSecretProviderConfig {
-    /// Absolute directory holding one file per secret. Each file must be a
-    /// regular file owned by the runtime user, mode 0400 or 0600, with exactly
-    /// one hard link.
+    /// Absolute directory holding one file per secret. A name may be a
+    /// relative link that stays below this directory, through at most 8 links.
+    /// The file it reaches must be a regular file with one hard link, owned by
+    /// the runtime user with mode 0400 or 0600, or owned by root with no
+    /// access beyond group read (0440 or 0640) when the runtime is not root.
+    /// A process that declared development loads a file with looser read or
+    /// mode bits and logs a warning.
     #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^/")))]
     pub root: PathBuf,
 }
@@ -227,11 +235,12 @@ pub fn describe_secret_failure(field: &str, _reference: &str, error: &SecretErro
         SecretError::Unavailable => {
             "no readable secret of that name exists under the configured provider".to_owned()
         }
-        SecretError::UnsafeFile => concat!(
-            "the secret file must be a regular file owned by the runtime user, ",
-            "with mode 0400 or 0600, and exactly one hard link"
-        )
-        .to_owned(),
+        SecretError::UnsafeFile(check) => format!(
+            "{} ({}). {}",
+            check.message(),
+            check.code(),
+            check.suggested_action()
+        ),
         SecretError::Read => "the secret could not be read".to_owned(),
         SecretError::InvalidValue => format!(
             "the secret value must be non-empty text of at most {MAX_SECRET_BYTES} bytes \
@@ -261,6 +270,12 @@ pub struct DatabaseConfig {
     /// Allow a plaintext connection. Refused outside test builds.
     #[serde(default)]
     pub test_only_plaintext: bool,
+    /// How the connection is protected. Absent means `verified-tls`. A
+    /// plaintext transport must match the database hosts, and cannot be
+    /// written beside `testOnlyPlaintext`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Gated<DatabaseTransport>"))]
+    pub transport: Option<Gated<DatabaseTransport>>,
 }
 
 impl fmt::Debug for DatabaseConfig {
@@ -274,6 +289,7 @@ impl fmt::Debug for DatabaseConfig {
                 &self.ca_bundle_ref.as_ref().map(|_| "<redacted>"),
             )
             .field("test_only_plaintext", &self.test_only_plaintext)
+            .field("transport", &self.transport)
             .finish()
     }
 }
@@ -291,6 +307,365 @@ impl DatabaseConfig {
         }
         references
     }
+}
+
+/// How a PostgreSQL connection is protected.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DatabaseTransport {
+    /// TLS with verification. `caBundleRef` is optional.
+    #[default]
+    VerifiedTls,
+    /// No TLS. Every host must be a Unix socket, a numeric loopback address
+    /// or `localhost`.
+    LoopbackPlaintext,
+    /// No TLS, in development only. Every host must also be loopback, a
+    /// socket, a private IPv4 address (RFC 1918), an IPv6 unique local
+    /// address (`fc00::/7`), or a name that resolves only to such addresses.
+    PrivateNetworkPlaintext,
+}
+
+static DATABASE_PRIVATE_PLAINTEXT: DevelopmentSetting = DevelopmentSetting {
+    code: "platform.posture.database-private-plaintext",
+    key: "transport",
+    summary: "The database connection is not encrypted and reaches a private network",
+    production: "Write database.transport: verified-tls, and give the database a certificate the runtime trusts.",
+};
+
+impl DevelopmentClass for DatabaseTransport {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&DATABASE_PRIVATE_PLAINTEXT];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::VerifiedTls | Self::LoopbackPlaintext => None,
+            Self::PrivateNetworkPlaintext => Some(&DATABASE_PRIVATE_PLAINTEXT),
+        }
+    }
+}
+
+/// A host a PostgreSQL URL names, once the secret is resolved and the URL
+/// parsed by the product's driver.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DatabaseHost {
+    /// A host name or address, with no brackets required around an IPv6
+    /// literal.
+    Tcp(String),
+    /// A Unix socket directory.
+    Unix,
+}
+
+/// Why a database transport was refused. No variant repeats a configured
+/// value, except that `BracketedHost` names the IP address literal it
+/// refuses: never a name, a port or a credential.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DatabaseTransportError {
+    /// A host is not one the plaintext transport permits.
+    HostMismatch(DatabaseTransport),
+    /// The transport is development-only and the caller holds no witness.
+    DevelopmentOnly(DevelopmentOnlyRefused),
+    /// `transport` and `testOnlyPlaintext` are both written.
+    Conflict,
+    /// `testOnlyPlaintext` in a build that is not a test build.
+    TestOnlyPlaintext,
+    /// A keyword connection string writes every host the driver dials as an
+    /// IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`.
+    /// The driver would look the bracketed text up as a name and never
+    /// connect. The first such address is named.
+    BracketedHost(IpAddr),
+}
+
+impl DatabaseTransportError {
+    /// The stable code of the refusal (CFG-DIAG-3).
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::HostMismatch(_) => "platform.database.transport-host-mismatch",
+            Self::DevelopmentOnly(refused) => refused.setting.code,
+            Self::Conflict => "platform.database.transport-conflict",
+            Self::TestOnlyPlaintext => "platform.database.test-only-plaintext",
+            Self::BracketedHost(_) => "platform.database.bracketed-host",
+        }
+    }
+
+    /// What to write instead.
+    #[must_use]
+    pub const fn suggested_action(&self) -> &'static str {
+        match self {
+            Self::HostMismatch(DatabaseTransport::PrivateNetworkPlaintext) => {
+                "Name a Unix socket, a loopback address, a private-network address or a name that resolves only to such addresses, or write database.transport: verified-tls."
+            }
+            Self::HostMismatch(_) => {
+                "Name a Unix socket, a loopback address, or localhost where it resolves only to loopback addresses, or write database.transport: verified-tls."
+            }
+            Self::DevelopmentOnly(refused) => refused.setting.production,
+            Self::Conflict => "Remove database.testOnlyPlaintext, and keep database.transport.",
+            Self::TestOnlyPlaintext => {
+                "Remove it, and set database.transport for a plaintext connection on the same host."
+            }
+            Self::BracketedHost(_) => {
+                "Write the IP address host without brackets in a keyword connection string, such as host=::1; brackets belong only in a URL authority."
+            }
+        }
+    }
+}
+
+impl fmt::Display for DatabaseTransportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            Self::HostMismatch(_) => {
+                "a database host is not one the configured plaintext transport permits"
+            }
+            Self::DevelopmentOnly(_) => {
+                "the database transport is accepted only when the process declares development"
+            }
+            Self::Conflict => "database.transport and database.testOnlyPlaintext are both set",
+            Self::TestOnlyPlaintext => "database.testOnlyPlaintext is accepted only by test builds",
+            Self::BracketedHost(address) => {
+                return write!(
+                    formatter,
+                    "the database host [{address}] is written in brackets in a keyword connection string"
+                );
+            }
+        };
+        formatter.write_str(text)
+    }
+}
+
+impl std::error::Error for DatabaseTransportError {}
+
+impl DatabaseConfig {
+    /// The checks every posture applies to the transport: `transport` is not
+    /// written beside `testOnlyPlaintext`, and `testOnlyPlaintext` is
+    /// written only in a test build, which the product states with
+    /// `test_build`.
+    pub fn check(&self, test_build: bool) -> Result<(), DatabaseTransportError> {
+        if self.test_only_plaintext && self.transport.is_some() {
+            return Err(DatabaseTransportError::Conflict);
+        }
+        if self.test_only_plaintext && !test_build {
+            return Err(DatabaseTransportError::TestOnlyPlaintext);
+        }
+        Ok(())
+    }
+
+    /// The transport the connection uses, once `hosts` are known, and under a
+    /// plaintext transport the numeric addresses each host was checked as. A
+    /// plaintext transport is returned only when every host is one it
+    /// permits. A development-only transport is readable with `witness`
+    /// alone. A name, `localhost` included, is resolved here, once, and a name
+    /// that does not resolve is refused. The pool dials the checked addresses,
+    /// never the name, so a second answer for the name cannot reach an
+    /// address that was not checked.
+    pub fn permitted_transport(
+        &self,
+        hosts: &[DatabaseHost],
+        witness: Option<&DevelopmentWitness>,
+    ) -> Result<PermittedTransport, DatabaseTransportError> {
+        permitted_transport_with(self, hosts, witness, &resolve_database_host)
+    }
+
+    /// [`DatabaseConfig::permitted_transport`] with the host names looked up
+    /// by `resolve`, which a runtime sets to [`resolve_database_host`].
+    pub fn permitted_transport_with_resolver(
+        &self,
+        hosts: &[DatabaseHost],
+        witness: Option<&DevelopmentWitness>,
+        resolve: &HostResolver,
+    ) -> Result<PermittedTransport, DatabaseTransportError> {
+        permitted_transport_with(self, hosts, witness, resolve)
+    }
+}
+
+/// A database transport and what its host check accepted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PermittedTransport {
+    /// The transport the connection uses.
+    pub transport: DatabaseTransport,
+    /// Under a plaintext transport, one entry for each host given to the
+    /// check, in the same order. `None` under `verified-tls`: certificate
+    /// verification needs the name, and nothing is resolved.
+    pub checked: Option<Vec<CheckedHost>>,
+}
+
+/// One host as a plaintext transport's check accepted it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CheckedHost {
+    /// A Unix socket directory, which no lookup reaches.
+    Unix,
+    /// The numeric addresses the host was checked as: the literal itself, or
+    /// every answer the name resolved to, in the resolver's order.
+    Tcp(Vec<IpAddr>),
+}
+
+/// Looks a database host name up: every address it resolves to, in order.
+pub type HostResolver = dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>;
+
+/// The system resolver, as the PostgreSQL driver itself would ask it. Every
+/// runtime passes this; tests pass a fixed answer instead.
+pub fn resolve_database_host(name: &str) -> std::io::Result<Vec<IpAddr>> {
+    use std::net::ToSocketAddrs;
+    (name, 0)
+        .to_socket_addrs()
+        .map(|addresses| addresses.map(|address| address.ip()).collect())
+}
+
+pub(crate) fn permitted_transport_with(
+    config: &DatabaseConfig,
+    hosts: &[DatabaseHost],
+    witness: Option<&DevelopmentWitness>,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Result<PermittedTransport, DatabaseTransportError> {
+    let transport = match &config.transport {
+        None => DatabaseTransport::VerifiedTls,
+        Some(gated) => *gated
+            .get(witness)
+            .map_err(DatabaseTransportError::DevelopmentOnly)?,
+    };
+    check_database_hosts(transport, hosts, resolve)
+}
+
+/// Check `hosts` against a `transport` already read from its gate, as
+/// [`DatabaseConfig::permitted_transport`] does. For a caller that holds no
+/// database block and permits one transport only.
+pub fn check_database_hosts(
+    transport: DatabaseTransport,
+    hosts: &[DatabaseHost],
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Result<PermittedTransport, DatabaseTransportError> {
+    if transport == DatabaseTransport::VerifiedTls {
+        return Ok(PermittedTransport {
+            transport,
+            checked: None,
+        });
+    }
+    let mismatch = DatabaseTransportError::HostMismatch(transport);
+    let checked = hosts
+        .iter()
+        .map(|host| match host {
+            DatabaseHost::Unix => Ok(CheckedHost::Unix),
+            DatabaseHost::Tcp(name) => plaintext_host_addresses(transport, name, resolve)
+                .map(CheckedHost::Tcp)
+                .ok_or_else(|| {
+                    if transport == DatabaseTransport::LoopbackPlaintext {
+                        if let Some(address) = name
+                            .strip_prefix('[')
+                            .and_then(|name| name.strip_suffix(']'))
+                            .and_then(|name| name.parse().ok())
+                        {
+                            return DatabaseTransportError::BracketedHost(address);
+                        }
+                    }
+                    mismatch
+                }),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PermittedTransport {
+        transport,
+        checked: Some(checked),
+    })
+}
+
+/// The numeric addresses a plaintext `transport` permits a TCP host `name`
+/// to reach, looked up once with `resolve`, or `None` when the transport
+/// refuses the host. `verified-tls` checks no address and answers `None`.
+///
+/// Under `loopback-plaintext` that is a loopback literal, or the name
+/// `localhost` resolving, and resolving only, to loopback addresses. Under
+/// `private-network-plaintext` it is also a private IPv4 address, an IPv6
+/// unique local address, or a name that resolves, and resolves only, to such
+/// addresses. A caller dials the returned addresses, never the name.
+pub fn plaintext_host_addresses(
+    transport: DatabaseTransport,
+    name: &str,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Option<Vec<IpAddr>> {
+    match transport {
+        DatabaseTransport::VerifiedTls => None,
+        DatabaseTransport::LoopbackPlaintext => loopback_database_addresses(name, resolve),
+        DatabaseTransport::PrivateNetworkPlaintext => private_network_addresses(name, resolve),
+    }
+}
+
+/// The addresses of a loopback address literal, or of the name `localhost`
+/// when it resolves, and resolves only, to loopback addresses. `localhost` is
+/// looked up rather than trusted by its spelling.
+fn loopback_database_addresses(
+    name: &str,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Option<Vec<IpAddr>> {
+    match registry_platform_loopback::loopback_host(name)? {
+        registry_platform_loopback::LoopbackHost::Literal(address) => Some(vec![address]),
+        host @ registry_platform_loopback::LoopbackHost::LocalhostName => resolve(name)
+            .ok()
+            .filter(|addresses| host.pinned_by(addresses)),
+    }
+}
+
+/// The addresses of a loopback host, a private IPv4 address, an IPv6 unique
+/// local address, or a name that resolves, and resolves only, to such
+/// addresses. A name is looked up once, and its answer is judged first as
+/// `localhost` resolving only to loopback addresses, then as private.
+fn private_network_addresses(
+    name: &str,
+    resolve: &dyn Fn(&str) -> std::io::Result<Vec<IpAddr>>,
+) -> Option<Vec<IpAddr>> {
+    let localhost = match registry_platform_loopback::loopback_host(name) {
+        Some(registry_platform_loopback::LoopbackHost::Literal(address)) => {
+            return Some(vec![address]);
+        }
+        Some(host @ registry_platform_loopback::LoopbackHost::LocalhostName) => Some(host),
+        None => None,
+    };
+    let literal = name
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(name);
+    if let Ok(address) = literal.parse::<IpAddr>() {
+        return private_address(address).then(|| vec![address]);
+    }
+    let addresses = resolve(name).ok()?;
+    let loopback = localhost.is_some_and(|host| host.pinned_by(&addresses));
+    let private = !addresses.is_empty() && addresses.iter().copied().all(private_address);
+    (loopback || private).then_some(addresses)
+}
+
+fn private_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => address.is_loopback() || address.is_private(),
+        IpAddr::V6(address) => address.is_loopback() || is_unique_local(address),
+    }
+}
+
+static ISSUER_LOOPBACK_PLAINTEXT: ExplicitProductionSetting = ExplicitProductionSetting {
+    code: "platform.posture.issuer-loopback-plaintext",
+    key: "issuer",
+    summary: "An issuer endpoint uses plain HTTP on loopback",
+};
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct IssuerEndpoint(Url);
+
+impl ExplicitClass for IssuerEndpoint {
+    const SETTINGS: &'static [&'static ExplicitProductionSetting] = &[&ISSUER_LOOPBACK_PLAINTEXT];
+
+    fn explicit_setting(&self) -> Option<&'static ExplicitProductionSetting> {
+        let url = self.0.to_url();
+        (url.scheme() == "http"
+            && url
+                .host_str()
+                .and_then(registry_platform_loopback::loopback_host)
+                .is_some())
+        .then_some(&ISSUER_LOOPBACK_PLAINTEXT)
+    }
+}
+
+/// Read an issuer or key endpoint while recording an authored loopback HTTP URL.
+pub fn deserialize_issuer_endpoint<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Url, D::Error> {
+    Stated::<IssuerEndpoint>::deserialize(deserializer).map(|endpoint| endpoint.into_inner().0)
 }
 
 /// Where a runtime obtains the OIDC issuer's signing keys.
@@ -313,7 +688,10 @@ pub enum JwksSource {
     /// A plain `http` URI is accepted on loopback for supervised local
     /// development, and beyond loopback only when the issuer block sets
     /// `allowInsecureHttp`.
-    Uri { uri: Url },
+    Uri {
+        #[serde(deserialize_with = "deserialize_issuer_endpoint")]
+        uri: Url,
+    },
     /// Read the key set from a secret, for deployments without network access
     /// to the issuer.
     Static {
@@ -321,9 +699,35 @@ pub enum JwksSource {
         #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
         document_ref: String,
     },
+    /// Read the key set from a secret, as `static` does, for a test issuer a
+    /// development run supervises. Development only: production refuses it.
+    TestIssuer {
+        #[serde(rename = "documentRef")]
+        #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+        document_ref: String,
+    },
 }
 
 registry_platform_yaml::tagged_union!(JwksSource);
+
+static TEST_ISSUER: DevelopmentSetting = DevelopmentSetting {
+    code: "platform.posture.test-issuer",
+    key: "type",
+    summary: "The issuer's signing keys come from a test issuer",
+    production:
+        "Write jwksSource: {type: discovery}, or a static or uri source for the real issuer.",
+};
+
+impl DevelopmentClass for JwksSource {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&TEST_ISSUER];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::Discovery {} | Self::Uri { .. } | Self::Static { .. } => None,
+            Self::TestIssuer { .. } => Some(&TEST_ISSUER),
+        }
+    }
+}
 
 impl Serialize for JwksSource {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -333,6 +737,9 @@ impl Serialize for JwksSource {
             Self::Uri { uri } => ("uri", Some(("uri", uri.as_str()))),
             Self::Static { document_ref } => {
                 ("static", Some(("documentRef", document_ref.as_str())))
+            }
+            Self::TestIssuer { document_ref } => {
+                ("test-issuer", Some(("documentRef", document_ref.as_str())))
             }
         };
         let mut map = serializer.serialize_map(Some(1 + usize::from(member.is_some())))?;
@@ -382,7 +789,7 @@ impl JwksSource {
                     ))
                 }
             }
-            Self::Static { document_ref } => {
+            Self::Static { document_ref } | Self::TestIssuer { document_ref } => {
                 if document_ref.is_empty() {
                     let field = format!("{field}.documentRef");
                     Err(ConfigBlockError::new(
@@ -406,11 +813,11 @@ impl JwksSource {
         }
     }
 
-    /// The secret reference a `static` source reads.
+    /// The secret reference a `static` or `test-issuer` source reads.
     #[must_use]
     pub fn document_ref(&self) -> Option<&str> {
         match self {
-            Self::Static { document_ref } => Some(document_ref),
+            Self::Static { document_ref } | Self::TestIssuer { document_ref } => Some(document_ref),
             _ => None,
         }
     }
@@ -426,12 +833,10 @@ fn valid_jwks_uri(value: &Url, allow_loopback_http: bool, allow_insecure_http: b
         "http" => {
             allow_insecure_http
                 || (allow_loopback_http
-                    && match parsed.host() {
-                        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-                        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-                        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-                        None => false,
-                    })
+                    && parsed
+                        .host_str()
+                        .and_then(registry_platform_loopback::loopback_host)
+                        .is_some())
         }
         _ => false,
     }
@@ -451,6 +856,51 @@ fn valid_jwks_uri(value: &Url, allow_loopback_http: bool, allow_insecure_http: b
 pub struct AuditKeyConfig {
     /// Secret reference to the audit hash key.
     pub hash_key_ref: SecretReference,
+    /// Who provisioned the key. Absent means `operator-provisioned`.
+    /// `development-generated` marks a key a development tool made.
+    #[serde(
+        default = "operator_provisioned",
+        skip_serializing_if = "is_operator_provisioned"
+    )]
+    pub hash_key_custody: Gated<AuditKeyCustody>,
+}
+
+/// Who provisioned the audit hash key.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuditKeyCustody {
+    /// The operator provisioned the key.
+    #[default]
+    OperatorProvisioned,
+    /// A development tool generated the key.
+    DevelopmentGenerated,
+}
+
+static GENERATED_AUDIT_KEY: DevelopmentSetting = DevelopmentSetting {
+    code: "platform.posture.generated-audit-key",
+    key: "hashKeyCustody",
+    summary: "The audit hash key was generated by a development tool",
+    production: "Provision an audit hash key, reference it in audit.hashKeyRef, and write audit.hashKeyCustody: operator-provisioned.",
+};
+
+impl DevelopmentClass for AuditKeyCustody {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&GENERATED_AUDIT_KEY];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::OperatorProvisioned => None,
+            Self::DevelopmentGenerated => Some(&GENERATED_AUDIT_KEY),
+        }
+    }
+}
+
+fn operator_provisioned() -> Gated<AuditKeyCustody> {
+    Gated::wrap(AuditKeyCustody::OperatorProvisioned)
+}
+
+fn is_operator_provisioned(custody: &Gated<AuditKeyCustody>) -> bool {
+    custody.development_setting().is_none()
 }
 
 impl AuditKeyConfig {
@@ -478,31 +928,89 @@ pub const MAX_OIDC_AUDIENCE_CHARACTERS: usize = 512;
 pub struct OidcIssuerConfig {
     /// Exact issuer accepted in access-token `iss` claims, an absolute
     /// `https` URL, or a plain `http` URL when `allowInsecureHttp` is set.
+    #[serde(deserialize_with = "deserialize_issuer_endpoint")]
     pub issuer: Url,
     /// The audience every accepted access token must carry in `aud`.
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
     pub audience: String,
     /// Where the issuer's signing keys come from. Absent reads the issuer's
     /// OpenID Connect discovery document.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_jwks_source")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-development-only" = ["platform.posture.test-issuer"]))
+    )]
     pub jwks_source: JwksSource,
     /// Permit plain HTTP beyond loopback to the configured issuer and to a
-    /// JWKS URI declared in configuration. TLS remains required unless the
-    /// operator explicitly accepts this transport risk.
-    #[serde(default)]
+    /// JWKS URI declared in configuration. Loopback needs no setting. The
+    /// value `true` is a development-only setting: the loader records it, and
+    /// production refuses it.
+    #[serde(default, deserialize_with = "deserialize_insecure_http")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-development-only" = ["platform.posture.insecure-issuer-http"]))
+    )]
     pub allow_insecure_http: bool,
+}
+
+/// The value of `allowInsecureHttp`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct InsecureHttp(pub bool);
+
+static INSECURE_ISSUER_HTTP: DevelopmentSetting = DevelopmentSetting {
+    code: "platform.posture.insecure-issuer-http",
+    key: "allowInsecureHttp",
+    summary: "Plain http is permitted to an issuer beyond loopback",
+    production: "Delete allowInsecureHttp and use an https issuer.",
+};
+
+impl DevelopmentClass for InsecureHttp {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&INSECURE_ISSUER_HTTP];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        self.0.then_some(&INSECURE_ISSUER_HTTP)
+    }
+}
+
+/// Read `allowInsecureHttp` through [`Gated`], so a loader that collects
+/// development-only settings records `true` with its pointer.
+fn deserialize_insecure_http<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Gated::<InsecureHttp>::deserialize(deserializer)
+        .map(|value| value.development_setting().is_some())
+}
+
+/// Read `jwksSource` through [`Gated`], so a loader that collects
+/// development-only settings records a test issuer with its pointer.
+fn deserialize_jwks_source<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<JwksSource, D::Error> {
+    Gated::<JwksSource>::deserialize(deserializer).map(Gated::into_inner)
 }
 
 impl OidcIssuerConfig {
     /// The issuer is an absolute `https` URL without credentials, query, or
-    /// fragment, or a plain `http` one when `allow_insecure_http` is set, the
-    /// audience is non-empty bounded text without control characters, and
-    /// the key source passes [`JwksSource::check`]. Without
-    /// `allow_insecure_http`, a loopback `http` issuer or key URI is accepted
-    /// only when `allow_loopback_http` is set, for supervised local
-    /// development. `field` is the dotted path of the block,
-    /// such as `authentication.oidc`.
-    pub fn check(&self, field: &str, allow_loopback_http: bool) -> Result<(), ConfigBlockError> {
+    /// fragment, a loopback `http` one, or a plain `http` one when
+    /// `allow_insecure_http` is set, the audience is non-empty bounded text
+    /// without control characters, and the key source passes
+    /// [`JwksSource::check`]. Loopback needs no setting in any posture. A
+    /// plain `http` issuer beyond loopback is accepted here when
+    /// `allow_insecure_http` is set, and the posture decision refuses it in
+    /// production. `field` is the dotted path of the block, such as
+    /// `authentication.oidc`.
+    pub fn check(&self, field: &str) -> Result<(), ConfigBlockError> {
+        self.check_without_posture(field, true)
+    }
+
+    /// [`OidcIssuerConfig::check`] for a runtime that has not adopted the
+    /// posture: a loopback `http` issuer or key URI is accepted only when
+    /// `allow_loopback_http` is set.
+    pub fn check_without_posture(
+        &self,
+        field: &str,
+        allow_loopback_http: bool,
+    ) -> Result<(), ConfigBlockError> {
         let issuer = self.issuer.to_url();
         let issuer_ok = valid_jwks_uri(&self.issuer, allow_loopback_http, self.allow_insecure_http)
             && issuer.query().is_none()
@@ -604,7 +1112,7 @@ fn allowed_clients_refused<E: serde::de::Error>() -> E {
 // shared-block drift check compares by name.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(untagged))]
-enum OidcAllowedClients {
+pub(crate) enum OidcAllowedClients {
     /// Admit a token from every client the issuer verifies.
     Unrestricted(UnrestrictedClients),
     /// Admit a token only from a listed client.
@@ -614,7 +1122,7 @@ enum OidcAllowedClients {
 registry_platform_yaml::shape_union!(OidcAllowedClients { scalar => Unrestricted, list => Listed });
 
 /// The keyword `unrestricted`.
-struct UnrestrictedClients;
+pub(crate) struct UnrestrictedClients;
 
 impl<'de> Deserialize<'de> for UnrestrictedClients {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -642,7 +1150,7 @@ impl schemars::JsonSchema for UnrestrictedClients {
 }
 
 /// At least one client, none repeated (CFG-ID-6).
-struct ListedClients(Vec<String>);
+pub(crate) struct ListedClients(pub(crate) Vec<String>);
 
 impl<'de> Deserialize<'de> for ListedClients {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -693,9 +1201,10 @@ fn serialize_allowed_clients<S: serde::Serializer>(
 
 /// Client identifiers are external identifiers (CFG-ID-2) with a stated
 /// bound, so the schema types the keys with the shared `ExternalId` and states
-/// the bounds `OidcClientsConfig::check` enforces.
+/// the bounds `OidcClientsConfig::check` enforces. A product that holds
+/// `assertionIssuers` in its own issuer entry uses it as `schema_with`.
 #[cfg(feature = "schema")]
-fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+pub fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     let mut client = generator.subschema_for::<registry_platform_yaml::ExternalId>();
     client.insert(
         "maxLength".to_owned(),
@@ -717,8 +1226,10 @@ fn assertion_issuers_schema(generator: &mut schemars::SchemaGenerator) -> schema
 }
 
 /// An empty mapping is not how a file says "no assertion-issuer rule"
-/// (CFG-EMPTY-2): omitting the member says it.
-fn non_empty_assertion_issuers<'de, D: Deserializer<'de>>(
+/// (CFG-EMPTY-2): omitting the member says it. A product that holds
+/// `assertionIssuers` in its own issuer entry reads it with this as
+/// `deserialize_with`, beside `#[serde(default)]`.
+pub fn non_empty_assertion_issuers<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<BTreeMap<String, Vec<String>>, D::Error> {
     let issuers = BTreeMap::<String, ListedIssuers>::deserialize(deserializer)?;
@@ -786,6 +1297,235 @@ impl OidcClientsConfig {
                  {MAX_ASSERTION_ISSUER_BYTES} bytes"
             ),
         ))
+    }
+}
+
+const FROM_PACKAGE: &str = "from-package";
+
+/// How `allowedClients` is written where the governed package names the
+/// clients (CFG-EMPTY-2): the keyword `from-package`, the keyword
+/// `unrestricted`, or a list of at least one client. The member stays
+/// required and an empty list is refused. A runtime resolves the value with
+/// [`PackageClients::resolve`] before it builds a token verifier.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PackageClients {
+    /// Admit exactly the clients the package's access profiles name.
+    FromPackage,
+    /// Admit a token from every client the issuer verifies. A runtime decides
+    /// whether that is acceptable in production.
+    Unrestricted,
+    /// Admit the listed clients, which must cover every package client.
+    Listed(Vec<String>),
+}
+
+/// The keywords `allowedClients` takes beside a list.
+enum PackageClientsKeyword {
+    FromPackage,
+    Unrestricted,
+}
+
+fn package_clients_refused<E: serde::de::Error>() -> E {
+    registry_platform_yaml::Invalid::expected(
+        "from-package, unrestricted, or a list of at least one OAuth client",
+        "Write from-package to admit the package's requester clients, list the OAuth clients whose access tokens are admitted, or write unrestricted to admit every client the issuer verifies.",
+    )
+    .into_error()
+}
+
+impl<'de> Deserialize<'de> for PackageClientsKeyword {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match String::deserialize(deserializer)?.as_str() {
+            FROM_PACKAGE => Ok(Self::FromPackage),
+            UNRESTRICTED => Ok(Self::Unrestricted),
+            _ => Err(package_clients_refused()),
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for PackageClientsKeyword {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PackageClientsKeyword".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": "string", "enum": [FROM_PACKAGE, UNRESTRICTED]})
+    }
+}
+
+/// The authored shape of [`PackageClients`], so the schema and the reader
+/// agree on the two forms.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(untagged))]
+enum OidcPackageAllowedClients {
+    /// A keyword.
+    Keyword(PackageClientsKeyword),
+    /// Admit a token only from a listed client.
+    Listed(ListedClients),
+}
+
+registry_platform_yaml::shape_union!(OidcPackageAllowedClients { scalar => Keyword, list => Listed });
+
+impl<'de> Deserialize<'de> for PackageClients {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(
+            match OidcPackageAllowedClients::deserialize(deserializer)? {
+                OidcPackageAllowedClients::Keyword(PackageClientsKeyword::FromPackage) => {
+                    Self::FromPackage
+                }
+                OidcPackageAllowedClients::Keyword(PackageClientsKeyword::Unrestricted) => {
+                    Self::Unrestricted
+                }
+                OidcPackageAllowedClients::Listed(ListedClients(clients)) => Self::Listed(clients),
+            },
+        )
+    }
+}
+
+impl Serialize for PackageClients {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::FromPackage => serializer.serialize_str(FROM_PACKAGE),
+            Self::Unrestricted => serializer.serialize_str(UNRESTRICTED),
+            Self::Listed(clients) => clients.serialize(serializer),
+        }
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for PackageClients {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "OidcPackageAllowedClients".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        OidcPackageAllowedClients::json_schema(generator)
+    }
+}
+
+/// The OAuth clients a runtime admits access tokens for when the governed
+/// package names its requester clients, and the assertion authorities each
+/// client may exchange a subject token from, written under
+/// `authentication.oidc` beside the issuer. Runtimes whose package does not
+/// name clients keep [`OidcClientsConfig`].
+// A product's `authentication.oidc` block embeds this with
+// `#[serde(flatten)]`, as it does `OidcClientsConfig`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+pub struct OidcPackageClientsConfig {
+    /// The OAuth clients whose access tokens are admitted: `from-package` for
+    /// the package's requester clients, `unrestricted` for every client the
+    /// issuer verifies, or a list of at least one distinct client that covers
+    /// the package's requester clients.
+    pub allowed_clients: PackageClients,
+    /// Assertion authorities each client may exchange a subject token from,
+    /// with the meaning and bounds of `OidcClientsConfig::assertion_issuers`.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "non_empty_assertion_issuers"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "assertion_issuers_schema"))]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+impl OidcPackageClientsConfig {
+    /// The bounds of [`OidcClientsConfig::check`] on `assertionIssuers`.
+    pub fn check(&self, field: &str) -> Result<(), ConfigBlockError> {
+        OidcClientsConfig {
+            allowed_clients: Vec::new(),
+            assertion_issuers: self.assertion_issuers.clone(),
+        }
+        .check(field)
+    }
+}
+
+/// A non-empty, sorted list of the clients a token verifier admits. It is the
+/// only value a runtime passes to a verifier built from [`PackageClients`], so
+/// an unresolved keyword cannot reach it as the empty list, which a verifier
+/// reads as "every client".
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdmittedClients(Vec<String>);
+
+impl AdmittedClients {
+    /// The sorted, de-duplicated clients, or `None` when there are none.
+    #[must_use]
+    pub fn new(clients: Vec<String>) -> Option<Self> {
+        let clients: BTreeSet<String> = clients.into_iter().collect();
+        if clients.is_empty() {
+            None
+        } else {
+            Some(Self(clients.into_iter().collect()))
+        }
+    }
+
+    #[must_use]
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn into_vec(self) -> Vec<String> {
+        self.0
+    }
+}
+
+/// Why [`PackageClients::resolve`] produced no admitted clients. Client
+/// identifiers are not secrets.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum PackageClientsError {
+    /// `allowedClients` is `unrestricted`, which this resolution never turns
+    /// into a list.
+    #[error("allowedClients is unrestricted and admits no resolved list of clients")]
+    Unrestricted,
+    /// The resolved list has no client: the package names none, or the list
+    /// is empty.
+    #[error("allowedClients resolves to no client")]
+    Empty,
+    /// The explicit list leaves out a client the package names.
+    #[error("allowedClients does not list the package client {0}")]
+    Missing(String),
+}
+
+impl PackageClients {
+    /// The clients to admit, given the requester clients of every access
+    /// profile of the loaded package. `FromPackage` is the sorted union of
+    /// `package_clients`. `Listed` is returned when it covers every package
+    /// client, and refused naming the first missing one otherwise. Extra
+    /// clients in a list stay admitted. `Unrestricted` and an empty result are
+    /// errors: the runtime decides what `Unrestricted` means for it.
+    pub fn resolve(
+        &self,
+        package_clients: &[String],
+    ) -> Result<AdmittedClients, PackageClientsError> {
+        match self {
+            Self::Unrestricted => Err(PackageClientsError::Unrestricted),
+            Self::FromPackage => {
+                AdmittedClients::new(package_clients.to_vec()).ok_or(PackageClientsError::Empty)
+            }
+            Self::Listed(listed) => {
+                let admitted =
+                    AdmittedClients::new(listed.clone()).ok_or(PackageClientsError::Empty)?;
+                let missing = package_clients
+                    .iter()
+                    .filter(|client| !admitted.0.contains(client))
+                    .min();
+                match missing {
+                    Some(client) => Err(PackageClientsError::Missing(client.clone())),
+                    None => Ok(admitted),
+                }
+            }
+        }
     }
 }
 
@@ -958,6 +1698,10 @@ pub struct MetricsListenerConfig {
 pub enum TlsTermination {
     OperatorControlledUpstream,
     DevelopmentLoopback,
+    /// Plaintext on a loopback bind, behind a proxy on the same host. Valid
+    /// in every posture. It is placement only: it relaxes nothing a product
+    /// relaxes under `development-loopback`.
+    LoopbackPlaintext,
 }
 
 /// The operator-declared private network placement of an HTTP listener.
@@ -993,9 +1737,16 @@ impl PrivateListenerConfig {
         if address.is_multicast() {
             return false;
         }
-        if self.tls_termination == TlsTermination::DevelopmentLoopback {
-            return self.network_exposure == ListenerNetworkExposure::PrivateAddress
-                && address.is_loopback();
+        match self.tls_termination {
+            TlsTermination::DevelopmentLoopback => {
+                return self.network_exposure == ListenerNetworkExposure::PrivateAddress
+                    && address.is_loopback();
+            }
+            TlsTermination::LoopbackPlaintext => {
+                return self.network_exposure == ListenerNetworkExposure::PrivateAddress
+                    && registry_platform_loopback::loopback_address(address);
+            }
+            TlsTermination::OperatorControlledUpstream => {}
         }
         match (address, self.network_exposure) {
             (IpAddr::V4(address), ListenerNetworkExposure::PrivateAddress) => {
@@ -1192,18 +1943,40 @@ pub const MAX_HOOK_ATTEMPTS: u8 = 20;
 pub const DEFAULT_HOOK_MAXIMUM_ATTEMPTS: u8 = 8;
 
 /// One URL hook destination a runtime signs and sends hook deliveries to:
-/// the URL, the HMAC-SHA256 key reference, and the delivery budget. The
-/// outbound policy is fixed: `registry-platform-hooks` activates it with no
-/// private address range and no client certificate. A runtime whose
-/// destinations need either configures its own full outbound policy instead.
+/// the URL, how it is reached, the HMAC-SHA256 key references, and the
+/// delivery budget. `registry-platform-hooks` activates it under the
+/// transport and private ranges it declares, with no client certificate. A
+/// runtime whose destinations need a client certificate configures its own
+/// full outbound policy instead.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UrlHookDestinationConfig {
     /// An https URL, or http on 127.0.0.1, localhost, or [::1], without a
-    /// query or fragment.
+    /// query or fragment. Plain http to any other host needs
+    /// `transport: private-network-plaintext`.
     pub url: Url,
+    /// How the destination is reached. Absent, https reads `verified-tls`
+    /// and http to a loopback host reads `loopback-plaintext`.
+    /// `private-network-plaintext` needs `allowedPrivateCidrs`, and is
+    /// reported as an explicit production setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Stated<DestinationTransport>"))]
+    pub transport: Option<Stated<DestinationTransport>>,
+    /// The private ranges the destination's host may resolve to. Empty
+    /// admits none.
+    #[serde(default, skip_serializing_if = "PrivateRanges::is_empty")]
+    pub allowed_private_cidrs: PrivateRanges,
     pub hmac_sha256_key_ref: SecretReference,
+    /// Optional previous signing key for rotation, excluded from the
+    /// destination binding digest.
+    #[serde(
+        default,
+        deserialize_with = "present_hook_key_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
     /// How long one delivery attempt may take, from 100 through 10000
     /// milliseconds.
     #[serde(
@@ -1225,6 +1998,13 @@ pub struct UrlHookDestinationConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAX_HOOK_ATTEMPTS)))]
     pub maximum_attempts: u8,
+}
+
+fn present_hook_key_reference<'de, D>(deserializer: D) -> Result<Option<SecretReference>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    SecretReference::deserialize(deserializer).map(Some)
 }
 
 impl UrlHookDestinationConfig {

@@ -27,6 +27,7 @@ export const PROSE_SYMBOL_ALLOWLIST = new Set([
 // all and leaves its anchor checked against nothing. The entries are regular expression
 // source, so a dot-directory carries its escape.
 export const REPOSITORY_ROOTS = [
+  'clients',
   'crates',
   'products',
   'release',

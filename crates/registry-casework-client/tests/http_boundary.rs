@@ -43,7 +43,7 @@ async fn separate_human_source_credential_is_explicit_per_call_and_never_retaine
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -194,7 +194,7 @@ async fn ordinary_nested_response_members_are_ignored() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -286,7 +286,7 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -355,7 +355,7 @@ async fn review_policy_refuses_unverified_governed_response_members() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -426,7 +426,7 @@ async fn review_policy_refuses_duplicate_additive_response_members() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -514,7 +514,7 @@ async fn review_create_refuses_an_accepted_binding_for_another_policy() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -585,7 +585,7 @@ async fn review_result_feed_refuses_unbounded_or_invalid_continuations() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -663,7 +663,7 @@ async fn review_tasks_refuses_an_oversized_response_page() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -723,7 +723,7 @@ async fn review_tasks_refuses_a_page_outside_the_requested_inbox() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -768,7 +768,7 @@ async fn review_task_discovery_forwards_ownership_and_supervision_without_expand
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -931,7 +931,7 @@ async fn review_note_refuses_a_response_for_another_request() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -981,7 +981,7 @@ async fn review_note_refuses_a_response_whose_event_is_not_a_note() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1030,7 +1030,7 @@ async fn review_note_refuses_a_response_whose_note_detail_was_substituted() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1083,7 +1083,7 @@ async fn review_accountability_refuses_a_response_for_another_event() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1123,7 +1123,7 @@ async fn review_task_grant_revocation_requires_the_selected_invalidated_grant() 
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1195,7 +1195,7 @@ async fn review_task_grant_approval_requires_the_selected_active_template() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1304,7 +1304,7 @@ async fn staffing_operation_rows_ignore_additive_response_members() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1405,7 +1405,7 @@ async fn review_result_refuses_a_non_object_payload() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1468,7 +1468,7 @@ async fn exact_claim_and_release_refuse_a_response_for_another_task() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1534,7 +1534,7 @@ async fn claim_refuses_a_response_that_left_the_task_open() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1579,7 +1579,7 @@ async fn release_refuses_a_response_that_left_the_task_held() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1628,7 +1628,7 @@ async fn exact_assignment_and_delegation_refuse_a_response_for_another_task() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1707,7 +1707,7 @@ async fn assignment_and_delegation_refuse_a_response_that_did_not_advance_the_re
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1782,7 +1782,7 @@ async fn exact_draft_read_refuses_a_response_for_another_task() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1830,7 +1830,7 @@ async fn exact_draft_save_refuses_a_response_for_another_task() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1883,7 +1883,7 @@ async fn draft_save_refuses_a_response_echoing_a_different_body() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -1936,7 +1936,7 @@ async fn draft_save_refuses_a_response_without_a_valid_draft_revision() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -2020,7 +2020,7 @@ async fn own_decision_discovery_validates_scope_order_and_receipt_shape() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = CaseworkClient::new(CaseworkClientConfig::new(
+        let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/")).unwrap(),
         ))
         .unwrap();
@@ -2100,7 +2100,7 @@ async fn accountability_receipts_must_match_the_retained_action_and_time() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = CaseworkClient::new(CaseworkClientConfig::new(
+        let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/")).unwrap(),
         ))
         .unwrap();
@@ -2166,7 +2166,7 @@ async fn decided_by_caller_appears_only_on_a_single_decided_task_read() {
         let server = tokio::spawn(async move {
             axum::serve(listener, router).await.expect("serve fixture");
         });
-        let client = CaseworkClient::new(CaseworkClientConfig::new(
+        let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/")).expect("fixture URL"),
         ))
         .expect("client");
@@ -2300,7 +2300,7 @@ async fn review_task_context_preserves_the_frozen_source_neutral_shape() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -2392,7 +2392,7 @@ async fn serve_context(
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -2630,7 +2630,7 @@ async fn mutation_forwards_one_call_token_profile_revision_and_key_once() {
         axum::serve(listener, app).await.expect("serve fixture");
     });
 
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -2683,7 +2683,7 @@ async fn review_note_forwards_the_selected_source_profile() {
         axum::serve(listener, app).await.expect("serve fixture");
     });
 
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -2743,7 +2743,7 @@ async fn review_clocks_forward_the_selected_source_profile() {
         axum::serve(listener, app).await.expect("serve fixture");
     });
 
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -2811,7 +2811,7 @@ async fn review_clocks_refuse_occurrences_for_another_request() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -2909,7 +2909,7 @@ async fn cancel_with_response(
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -3038,7 +3038,7 @@ async fn review_history_refuses_oversized_or_cross_request_pages() {
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve fixture");
         });
-        let client = CaseworkClient::new(CaseworkClientConfig::new(
+        let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
             Url::parse(&format!("http://{address}/")).expect("fixture URL"),
         ))
         .expect("client");
@@ -3076,7 +3076,7 @@ async fn directory_targets_forward_the_exact_context_without_a_source_profile() 
         axum::serve(listener, app).await.expect("serve fixture");
     });
 
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -3146,7 +3146,7 @@ async fn absence_list_propagates_pagination_and_decodes_the_next_cursor() {
         axum::serve(listener, app).await.expect("serve fixture");
     });
 
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -3216,7 +3216,7 @@ async fn capture_absences(
 
 #[tokio::test]
 async fn invalid_mutation_input_fails_before_network_io() {
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse("http://127.0.0.1:1/").expect("fixture URL"),
     ))
     .expect("client");
@@ -3237,7 +3237,7 @@ async fn invalid_mutation_input_fails_before_network_io() {
 
 #[tokio::test]
 async fn invalid_directory_target_queries_fail_before_network_io() {
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse("http://127.0.0.1:1/").expect("fixture URL"),
     ))
     .expect("client");
@@ -3302,7 +3302,7 @@ async fn problem_classification_ignores_prose_and_additive_members() {
         axum::serve(listener, app).await.expect("serve fixture");
     });
 
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -3334,7 +3334,7 @@ async fn review_validation_headers_preserve_only_path_and_closed_reason() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -3365,7 +3365,7 @@ async fn unknown_future_problem_code_remains_a_safe_typed_problem() {
         axum::serve(listener, app).await.expect("serve fixture");
     });
 
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -3418,7 +3418,7 @@ async fn draft_read_maps_a_problem_bearing_404_to_the_typed_problem() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -3475,7 +3475,7 @@ async fn draft_read_keeps_an_empty_404_as_an_absent_draft() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = CaseworkClient::new(CaseworkClientConfig::new(
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");

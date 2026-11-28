@@ -142,7 +142,10 @@ impl Harness {
                     database_id: namespace.clone(),
                     keys: StateKeys::new(1, BTreeMap::from([(1, [0x11; 32])]), [0x22; 32])
                         .expect("test keys"),
-                    audit: AuditWriter::from_line_sink(Box::new(capture.clone())),
+                    audit: AuditWriter::from_line_sink(
+                        Box::new(capture.clone()),
+                        registry_platform_config::Posture::Production,
+                    ),
                     audit_profile: AuditProfile::production_from_secret_bytes(
                         zeroize::Zeroizing::new(vec![0x33; 32]),
                     )

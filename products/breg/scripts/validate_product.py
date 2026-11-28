@@ -31,7 +31,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 25))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 224) if index not in {61, 62})
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 225) if index not in {61, 62})
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -82,7 +82,16 @@ POSTGRES_ENTRYPOINT = PRODUCT_ROOT / "scripts/test-postgres.sh"
 # The citizen review page and gateway link the runtime only under their own
 # PostgreSQL test feature, so their suites run in the product's lane.
 POSTGRES_TEST_PACKAGES = frozenset({"registry-breg", "registry-breg-review", "registry-breg-mcp"})
+POSTGRES_POSTURE_TEST_COMMAND = (
+    "cargo test --locked -p registry-bregctl --features postgres-test --test cli "
+    "posture_tests::"
+)
+POSTGRES_POSTURE_COMMANDS = (
+    POSTGRES_POSTURE_TEST_COMMAND,
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --lib postgres_posture_",
+)
 POSTGRES_TEST_COMMANDS = (
+    *POSTGRES_POSTURE_COMMANDS,
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test http_auth",
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test http_read_only",
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test runtime_config",
@@ -570,6 +579,10 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
                 arguments = shlex.split(line)
             except ValueError:
                 errors.append("PostgreSQL entrypoint: invalid Cargo command quoting")
+                continue
+            command = " ".join(arguments)
+            if command in POSTGRES_POSTURE_COMMANDS:
+                cargo_commands.append(command)
                 continue
             if arguments == serial_record_timers_arguments:
                 serial_record_timers_invocations += 1

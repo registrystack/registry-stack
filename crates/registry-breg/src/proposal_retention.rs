@@ -47,6 +47,11 @@ const RETENTION_REFERENCE: &str = "proposal-retention-erasure";
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ProposalRetentionError {
+    #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
+    PostureMismatch {
+        recorded: registry_platform_config::Posture,
+        declared: registry_platform_config::Posture,
+    },
     #[error("active Proposals require explicit rebase or cancellation")]
     ActiveProposalRecoveryUnavailable,
     #[error("Proposal detail is still pinned by an active submission")]
@@ -220,11 +225,19 @@ pub struct ProposalRetentionOperatorService {
 }
 
 impl ProposalRetentionOperatorService {
-    pub async fn from_runtime_config(path: &Path) -> Result<Self> {
+    pub async fn from_runtime_config(
+        path: &Path,
+        posture: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self> {
         if !path.is_absolute() {
             return Err(ProposalRetentionError::Unavailable);
         }
-        let config = load_runtime_config(path).map_err(|_| ProposalRetentionError::Unavailable)?;
+        let config =
+            load_runtime_config(path, posture).map_err(|_| ProposalRetentionError::Unavailable)?;
+        Self::from_loaded_config(config).await
+    }
+
+    pub async fn from_loaded_config(config: crate::runtime_config::RuntimeConfig) -> Result<Self> {
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => {
                 ProposalRetentionError::PackagePinMismatch(mismatch)
@@ -249,7 +262,12 @@ impl ProposalRetentionOperatorService {
             config.database().roles().runtime(),
         )
         .await
-        .map_err(|_| ProposalRetentionError::Unavailable)?;
+        .map_err(|error| match error {
+            crate::startup::StartupError::PostureMismatch { recorded, declared } => {
+                ProposalRetentionError::PostureMismatch { recorded, declared }
+            }
+            _ => ProposalRetentionError::Unavailable,
+        })?;
         drop(client);
         let migration_connection = config
             .migration_database_connection_config()

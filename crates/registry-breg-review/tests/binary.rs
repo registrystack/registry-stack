@@ -74,7 +74,7 @@ fn spawn(environment: &Environment) -> Running {
     let child = Command::new(BINARY)
         .arg("--runtime-config")
         .arg(&environment.config_path)
-        .arg("serve")
+        .args(["serve", "--posture", "development"])
         .env("BREG_REVIEW_LOG", "info")
         .stdout(std::fs::File::create(&log).unwrap())
         .stderr(std::fs::File::create(&errors).unwrap())
@@ -87,7 +87,7 @@ fn check(environment: &Environment, arguments: &[&str]) -> std::process::Output 
     Command::new(BINARY)
         .arg("--runtime-config")
         .arg(&environment.config_path)
-        .arg("check")
+        .args(["check", "--posture", "development"])
         .args(arguments)
         .env_remove("BREG_REVIEW_LOG")
         .stdin(Stdio::null())
@@ -129,7 +129,7 @@ async fn serve_failing(environment: &Environment) -> std::process::Output {
         Command::new(BINARY)
             .arg("--runtime-config")
             .arg(config_path)
-            .arg("serve")
+            .args(["serve", "--posture", "development"])
             .env_remove("BREG_REVIEW_LOG")
             .stdin(Stdio::null())
             .output()
@@ -316,7 +316,14 @@ async fn check_accepts_a_valid_configuration_without_reading_its_secrets() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    assert_eq!(stdout, "0 errors, 0 warnings in 1 file\n");
+    assert!(
+        stdout.contains("breg.posture.review-http-public-origin"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with("0 errors, 1 warning in 1 file\n"),
+        "{stdout}"
+    );
     assert!(stderr.is_empty(), "{stderr}");
     // `check` opens no journal: the audit directory stays empty.
     assert!(
@@ -335,7 +342,14 @@ async fn check_accepts_a_valid_configuration_without_reading_its_secrets() {
     assert_eq!(report["status"], "complete");
     assert_eq!(report["ok"], true);
     assert_eq!(report["filesChecked"], 1);
-    assert!(codes(&report).is_empty(), "{report}");
+    assert_eq!(
+        codes(&report),
+        [(
+            "breg.posture.review-http-public-origin".to_owned(),
+            "/publicOrigin".to_owned(),
+        )]
+    );
+    assert_eq!(report["posture"]["value"], "development");
 }
 
 #[tokio::test]
@@ -361,10 +375,16 @@ async fn check_refuses_an_invalid_configuration_without_echoing_it() {
     assert_eq!(report["status"], "domain-refusal");
     assert_eq!(
         codes(&report),
-        [(
-            "config.invalid-value".to_owned(),
-            "/signIn/clientKeyRef".to_owned()
-        )]
+        [
+            (
+                "config.invalid-value".to_owned(),
+                "/signIn/clientKeyRef".to_owned()
+            ),
+            (
+                "breg.posture.review-http-public-origin".to_owned(),
+                "/publicOrigin".to_owned()
+            ),
+        ]
     );
     assert!(
         !report.to_string().contains("inline-canary-value"),
@@ -397,6 +417,10 @@ async fn check_reports_every_semantic_finding_by_code() {
     assert_eq!(
         codes(&report),
         [
+            (
+                "breg.posture.review-http-public-origin".to_owned(),
+                "/publicOrigin".to_owned(),
+            ),
             (
                 "breg.review-runtime.public-bind".to_owned(),
                 "/listener/bind".to_owned()
@@ -509,7 +533,7 @@ async fn an_unknown_log_level_stops_startup() {
         Command::new(BINARY)
             .arg("--runtime-config")
             .arg(&environment.config_path)
-            .arg(subcommand)
+            .args([subcommand, "--posture", "development"])
             .env("BREG_REVIEW_LOG", "debug")
             .output()
             .expect("run breg-review")
@@ -525,7 +549,7 @@ async fn an_unknown_log_level_stops_startup() {
 
     let checked = run("check");
     assert_eq!(checked.status.code(), Some(0));
-    assert_eq!(checked.stdout, b"0 errors, 0 warnings in 1 file\n");
+    assert!(checked.stdout.ends_with(b"0 errors, 1 warning in 1 file\n"));
 }
 
 #[tokio::test]

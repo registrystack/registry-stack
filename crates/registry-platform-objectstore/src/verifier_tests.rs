@@ -54,6 +54,15 @@ struct Hook {
 
 impl Hook {
     async fn new(status: StatusCode, body: String, delay: Duration) -> Self {
+        Self::with_posture(status, body, delay, None).await
+    }
+
+    async fn with_posture(
+        status: StatusCode,
+        body: String,
+        delay: Duration,
+        posture: Option<&'static str>,
+    ) -> Self {
         let count = Arc::new(AtomicUsize::new(0));
         let received = Arc::new(Mutex::new(Vec::new()));
         let calls = count.clone();
@@ -86,7 +95,14 @@ impl Hook {
                     body: bytes.to_vec(),
                 });
                 tokio::time::sleep(delay).await;
-                (status, body)
+                let mut headers = axum::http::HeaderMap::new();
+                if let Some(posture) = posture {
+                    headers.insert(
+                        "registry-posture",
+                        axum::http::HeaderValue::from_static(posture),
+                    );
+                }
+                (status, headers, body)
             }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -114,7 +130,7 @@ fn raw(url: &str) -> serde_json::Value {
 }
 
 fn settings(input: serde_json::Value) -> Result<HttpVerifierSettings> {
-    HttpVerifierSettings::from_config(
+    HttpVerifierSettings::from_config_without_peer_policy(
         &serde_json::from_value::<AttachmentVerifierConfig>(input).unwrap(),
     )
 }
@@ -130,12 +146,68 @@ fn content_digest() -> String {
     hex::encode(Sha256::digest(CONTENT))
 }
 
+/// D4 (c): an https verifier never reaches the cloud metadata address or an
+/// always-denied address. A literal is refused when the verifier is
+/// activated, before anything is sent.
+#[test]
+fn a_metadata_or_always_denied_literal_over_https_is_refused_at_activation() {
+    let files = SecretFile::new();
+    for url in [
+        "https://169.254.169.254/verify",
+        "https://[fd00:ec2::254]/verify",
+        "https://0.0.0.0/verify",
+    ] {
+        let settings = settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+        assert_eq!(
+            settings.activate(NAMESPACE, &files.resolver()).unwrap_err(),
+            VerifierError::InvalidConfiguration,
+            "{url}"
+        );
+    }
+}
+
+/// D1: an explicit loopback literal over https is admitted when the
+/// verifier is activated.
+#[test]
+fn a_loopback_literal_over_https_is_admitted_at_activation() {
+    let files = SecretFile::new();
+    for url in ["https://127.0.0.1:9443/verify", "https://[::1]:9443/verify"] {
+        let settings = settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+        settings
+            .activate(NAMESPACE, &files.resolver())
+            .unwrap_or_else(|error| panic!("{url}: {error:?}"));
+    }
+}
+
 #[test]
 fn verifier_config_is_strict_and_redacted() {
     for url in [
         "http://public.example/verify",
         "http://10.0.0.1/verify",
         "https://example/verify#fragment",
+    ] {
+        assert_eq!(
+            settings(raw(url)).unwrap_err(),
+            VerifierError::InvalidConfiguration,
+            "{url}"
+        );
+    }
+    // Loopback plain text is the selector's rule: a loopback literal, or the
+    // name localhost, which the client pins to loopback.
+    for url in [
+        "http://localhost/verify",
+        "http://127.0.0.2/verify",
+        "http://[::1]/verify",
+        "http://[::ffff:127.0.0.1]/verify",
+        "http://localhost/verify",
+    ] {
+        settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+    }
+    for url in [
+        "http://verifier.localhost/verify",
+        "http://10.0.0.1/verify",
+        "http://0.0.0.0/verify",
+        "http://[::ffff:10.0.0.1]/verify",
     ] {
         assert_eq!(
             settings(raw(url)).unwrap_err(),
@@ -491,4 +563,34 @@ fn the_binding_commits_to_domain_url_and_policy_but_not_the_credential_or_timeou
         )
         .unwrap();
     assert_ne!(other_domain.binding_digest(), pinned);
+}
+
+#[tokio::test]
+async fn a_marked_verifier_requires_a_development_peer_policy() {
+    use registry_platform_httputil::PeerPolicy::{AcceptDevelopmentPeer, RefuseDevelopmentPeer};
+
+    let hook = Hook::with_posture(
+        StatusCode::OK,
+        r#"{"verdict":"approved"}"#.to_owned(),
+        Duration::ZERO,
+        Some("development"),
+    )
+    .await;
+    let files = SecretFile::new();
+    let config = serde_json::from_value(raw(&hook.url)).unwrap();
+    for (policy, expected) in [
+        (RefuseDevelopmentPeer, Err(VerifierError::DevelopmentPeer)),
+        (AcceptDevelopmentPeer, Ok(Verdict::Approved)),
+    ] {
+        let verifier = HttpVerifierSettings::from_config(&config, policy)
+            .unwrap()
+            .activate(NAMESPACE, &files.resolver())
+            .unwrap();
+        assert_eq!(
+            verifier
+                .verify(&content_digest(), "application/pdf", CONTENT.to_vec())
+                .await,
+            expected,
+        );
+    }
 }

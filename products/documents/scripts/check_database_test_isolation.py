@@ -19,6 +19,8 @@ DATABASE_SUITES = {
         "postgres_operator",
         "postgres_s3",
         "postgres_startup",
+        "refusal_golden",
+        "refusal_key_source",
     },
     "registry-documentsctl": {"postgres_cli"},
 }

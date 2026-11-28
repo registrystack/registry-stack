@@ -6,6 +6,9 @@
 //! semantics; this suite proves the host exposes that implementation only
 //! through its explicit feature.
 
+#[path = "support/job_fixture.rs"]
+mod job_fixture;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -183,12 +186,12 @@ fn runtime_json(source: &Path, component: &str) -> String {
         "allowedPrivateCidrs": ["10.0.0.0/8"],
         "store": {
             "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "testOnlyPlaintext": true
+            "transport": "loopback-plaintext"
         },
         "destinations": {"coordinator-test": {
             "type": "signed-coordinator-event",
             "baseUrl": "http://127.0.0.1:9/events",
-            "signingKeyRef": "secret:env/JOB_TEST_SIGNING_KEY",
+            "hmacSha256KeyRef": "secret:env/JOB_TEST_SIGNING_KEY",
             "attemptTimeoutMilliseconds": 1000
         }}
     });
@@ -247,6 +250,65 @@ fn the_actual_check_accepts_a_file_source_when_the_host_feature_is_present() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("the report is JSON");
     assert_eq!(report["ok"], true);
     assert_eq!(report["source"]["route"], "kobo-submissions");
+}
+
+#[cfg(feature = "signed-coordinator-event")]
+#[test]
+fn a_named_plain_http_endpoint_is_refused_whatever_its_private_ranges() {
+    let fixture = FileFixture::new("csv", "file", 1_048_576);
+    let declared = std::fs::read_to_string(&fixture.runtime).expect("the runtime config");
+    let named = declared.replace(
+        "https://cases.example.invalid",
+        "http://cases.internal.example",
+    );
+    assert_ne!(named, declared, "the fixture names an https endpoint");
+    let empty = named.replace(
+        "\"allowedPrivateCidrs\": [\n    \"10.0.0.0/8\"\n  ]",
+        "\"allowedPrivateCidrs\": []",
+    );
+    assert_ne!(empty, named, "the fixture declares one private range");
+
+    // Adapter sources are https or loopback only: a declared range admits
+    // an https answer, never plain http.
+    for (runtime, ranges) in [(&empty, "no range"), (&named, "a declared range")] {
+        std::fs::write(&fixture.runtime, runtime).expect("the runtime config");
+        let output = run_check(&fixture);
+        assert!(!output.status.success(), "{ranges}: the check passed");
+        let findings = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            findings.lines().any(|line| {
+                line.contains("error[adapter.runtime.insecure-origin]")
+                    && line.contains("/endpoints/0/baseUrl")
+            }),
+            "{ranges}: {findings}"
+        );
+    }
+
+    // Plain http on loopback is admitted. The https-only acknowledgement is
+    // removed, since the check refuses it beside a plain-http origin.
+    let mut loopback: Value = serde_json::from_str(&declared).expect("the runtime config is JSON");
+    let endpoint = loopback["endpoints"][0]
+        .as_object_mut()
+        .expect("the fixture's endpoint");
+    assert!(
+        endpoint.remove("anonymousHttps").is_some(),
+        "the fixture acknowledges anonymous https"
+    );
+    endpoint.insert("baseUrl".to_owned(), json!("http://127.0.0.1:8081"));
+    std::fs::write(
+        &fixture.runtime,
+        serde_json::to_string_pretty(&loopback).expect("the runtime config"),
+    )
+    .expect("the runtime config");
+    fixture.write_source("submissions.csv", b"id,status,note\n001,new,ready\n");
+    let output = run_check(&fixture);
+    assert!(
+        output.status.success(),
+        "plain http on loopback is admitted: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("the report is JSON");
+    assert_eq!(report["ok"], true);
 }
 
 #[tokio::test]
@@ -330,8 +392,7 @@ fn unserved_job_sources_remain_refused_by_the_host() {
 
 #[cfg(feature = "postgres-test")]
 async fn isolated_store_url() -> String {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let base = crate::job_fixture::test_database_url();
     // The macOS clock ticks in microseconds, so parallel tests can read the
     // same instant; the serial keeps each schema name distinct.
     static NEXT_SCHEMA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -563,9 +624,11 @@ async fn legacy_file_and_raw_state_stop_before_source_or_destination_io() {
     }
 }
 
+#[cfg(feature = "postgres-test")]
 fn run_host(store_url: &str, fixture: &FileFixture, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_adapter-job"))
         .env("JOB_TEST_DB", store_url)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(args)
         .arg(&fixture.job)
         .arg("--pack")
@@ -626,6 +689,45 @@ async fn rebind_identity_clears_the_fence_the_dry_run_reports() {
         .as_str()
         .expect("the fence refusal carries a next step");
     assert!(next.contains("adapter-job rebind-identity"), "{next}");
+
+    for (recorded, declared) in [("development", "production"), ("production", "development")] {
+        let previous_digest = vec![42_u8; 32];
+        client
+            .execute(
+                "UPDATE adapter_job_state SET last_pass_posture = $1, item_identity_digest = $2 \
+                 WHERE job_id = 'file-daily'",
+                &[&recorded, &previous_digest],
+            )
+            .await
+            .unwrap();
+        let refused = run_host(
+            &store_url,
+            &fixture,
+            &["rebind-identity", "--posture", declared],
+        );
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            !refused.status.success(),
+            "recorded {recorded}: {refused:?}"
+        );
+        assert!(stderr.contains("adapter.job.posture-mismatch"), "{stderr}");
+        let surviving: Vec<u8> = client
+            .query_one(
+                "SELECT item_identity_digest FROM adapter_job_state WHERE job_id = 'file-daily'",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(surviving, previous_digest, "recorded {recorded}");
+    }
+    client
+        .batch_execute(
+            "UPDATE adapter_job_state SET last_pass_posture = NULL, item_identity_digest = NULL \
+             WHERE job_id = 'file-daily'",
+        )
+        .await
+        .unwrap();
 
     let rebound = run_host(&store_url, &fixture, &["rebind-identity"]);
     assert!(

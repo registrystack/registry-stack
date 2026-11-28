@@ -47,7 +47,9 @@ fn raw(url: &str) -> serde_json::Value {
 }
 
 fn settings(input: serde_json::Value) -> Result<S3Settings> {
-    S3Settings::from_config(&serde_json::from_value::<ObjectStorageConfig>(input).unwrap())
+    S3Settings::from_config_without_peer_policy(
+        &serde_json::from_value::<ObjectStorageConfig>(input).unwrap(),
+    )
 }
 
 /// A store over `url` built without the versioning probe, so a test can
@@ -57,9 +59,11 @@ fn store_from(input: serde_json::Value, scope: &str, files: &SecretFiles) -> S3O
     let resolver = files.resolver();
     let scope = hex::encode(Sha256::digest(scope));
     S3ObjectStore {
+        peer_policy: PeerPolicy::RefuseDevelopmentPeer,
         client: OutboundClientBuilder::new()
             .timeout(settings.timeout)
             .connect_timeout(connect_timeout(settings.timeout))
+            .destination(&settings.destination)
             .try_build()
             .unwrap(),
         namespace: NAMESPACE,
@@ -192,6 +196,27 @@ fn a_put_signs_exactly_host_payload_date_and_session_token_and_marks_secrets_sen
     );
 }
 
+/// A path-style endpoint written with a root dot signs that name as its
+/// `Host`, root dot included. The selected client admits exactly this value
+/// (`registry-platform-httputil`'s
+/// `a_root_dot_name_passes_its_own_signed_host_header`).
+#[test]
+fn a_root_dot_path_style_endpoint_signs_its_written_name() {
+    for (url, expected_host) in [
+        ("https://objects.example./", "objects.example."),
+        ("https://objects.example.:9000/", "objects.example.:9000"),
+    ] {
+        let store = store(url, "registry");
+        let object = store.bucket_url.join("key").unwrap();
+        assert_eq!(object.host_str(), Some("objects.example."), "{url}");
+        let headers = store
+            .signed_headers(&Method::GET, &object, &[], TIMESTAMP)
+            .unwrap();
+        assert_eq!(headers["host"], expected_host, "{url}");
+        assert_eq!(headers.get_all("host").iter().count(), 1, "{url}");
+    }
+}
+
 #[test]
 fn ipv6_signed_host_preserves_brackets_and_normalizes_default_ports() {
     // Generated independently with Python hashlib/hmac using the explicitly
@@ -239,7 +264,8 @@ fn ipv6_signed_host_preserves_brackets_and_normalizes_default_ports() {
         assert_eq!(headers["host"], expected_host);
         let expected_authorization = format!("AWS4-HMAC-SHA256 Credential=breg960test/20260909/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}");
         assert_eq!(headers["authorization"], expected_authorization);
-        let request = store.client.get(url).headers(headers).build().unwrap();
+        let mut request = reqwest::Request::new(Method::GET, url);
+        *request.headers_mut() = headers;
         assert_eq!(request.headers()["host"], expected_host);
     }
 }
@@ -293,6 +319,61 @@ async fn ipv6_signed_request_preserves_bracketed_host_on_wire() {
     assert!(received.load(Ordering::SeqCst));
 }
 
+/// D4 (c): an https store never reaches the cloud metadata address or an
+/// always-denied address. A literal is refused when the client is built,
+/// before the versioning probe sends anything.
+#[tokio::test]
+async fn a_metadata_or_always_denied_literal_over_https_is_refused_at_activation() {
+    let files = SecretFiles::new();
+    for url in [
+        "https://169.254.169.254",
+        "https://[fd00:ec2::254]",
+        "https://0.0.0.0",
+    ] {
+        let settings = settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+        assert_eq!(
+            settings
+                .activate(NAMESPACE, "registry", &files.resolver())
+                .await
+                .unwrap_err(),
+            ObjectStoreError::InvalidConfiguration,
+            "{url}"
+        );
+    }
+}
+
+/// D1: an explicit loopback literal over https is admitted when the client
+/// is built, so activation reaches the versioning probe. The listener closes
+/// every connection, so the probe fails as unavailable, not as a refused
+/// configuration.
+#[tokio::test]
+async fn a_loopback_literal_over_https_reaches_the_versioning_probe() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let files = SecretFiles::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    let server = tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            counter.fetch_add(1, Ordering::SeqCst);
+            drop(socket);
+        }
+    });
+    let settings = settings(raw(&format!("https://{address}"))).unwrap();
+    let error = settings
+        .activate(NAMESPACE, "registry", &files.resolver())
+        .await
+        .unwrap_err();
+    server.abort();
+    assert_eq!(error, ObjectStoreError::Unavailable);
+    assert!(
+        accepted.load(Ordering::SeqCst) >= 1,
+        "the probe dialled the loopback literal"
+    );
+}
+
 #[test]
 fn strict_storage_configuration_and_debug_are_value_free() {
     for url in [
@@ -337,6 +418,38 @@ fn strict_storage_configuration_and_debug_are_value_free() {
         settings(input).unwrap_err(),
         ObjectStoreError::InvalidConfiguration
     );
+    // Loopback plain text is the selector's rule: a loopback literal, or the
+    // name localhost, which the client pins to loopback.
+    for url in [
+        "http://localhost:1234",
+        "http://127.0.0.2:1234",
+        "http://[::1]:1234",
+        "http://[::ffff:127.0.0.1]:1234",
+        "http://localhost:1234",
+    ] {
+        settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+    }
+    // A virtual-hosted bucket under localhost is a name below localhost,
+    // which is not loopback.
+    let mut input = raw("http://localhost:1234");
+    input["pathStyle"] = json!(false);
+    assert_eq!(
+        settings(input).unwrap_err(),
+        ObjectStoreError::InvalidConfiguration
+    );
+    for url in [
+        "http://storage.localhost:1234",
+        "http://10.0.0.1:1234",
+        "http://0.0.0.0:1234",
+        "http://[::ffff:10.0.0.1]:1234",
+        "http://10.0.0.1:1234",
+    ] {
+        assert_eq!(
+            settings(raw(url)).unwrap_err(),
+            ObjectStoreError::InvalidConfiguration,
+            "{url}"
+        );
+    }
     let accepted = settings(raw("https://storage.example")).unwrap();
     assert_eq!(
         accepted.bucket_url.as_str(),
@@ -683,6 +796,12 @@ async fn a_scoped_store_binds_its_own_scope_without_resolving_or_sending() {
 async fn downloads_refuse_missing_corrupt_oversized_versioned_and_redirect_responses() {
     let digest = hex::encode(Sha256::digest(b"content"));
     for (body, status, headers, error) in [
+        (
+            "content",
+            StatusCode::OK,
+            &[("registry-posture", "development")][..],
+            ObjectStoreError::DevelopmentPeer,
+        ),
         (
             "content",
             StatusCode::NOT_FOUND,

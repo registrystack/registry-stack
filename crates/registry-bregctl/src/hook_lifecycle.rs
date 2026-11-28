@@ -29,17 +29,18 @@ const SAMPLE_RECORD_REFERENCE: &str =
 const SAMPLE_TIME: &str = "2026-01-01T00:00:00Z";
 const SAMPLE_PACKAGE_REVISION: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-const SAMPLE_IDEMPOTENCY_KEY: &str =
-    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 const SAMPLE_REQUEST_TARGET: &str = "<configured-hook-request-target>";
-const SAMPLE_SIGNATURE: &str = "v1=<computed-at-delivery>";
+const SAMPLE_SIGNATURE: &str = "v1,<computed-at-delivery>";
 const MAX_SCHEMA_SYNTHESIS_DEPTH: usize = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HookLifecycleError {
+    RuntimeConfig(registry_breg::runtime_config::RuntimeConfigError),
     Event,
     Sample,
     Operator,
+    PostureMismatch(registry_platform_config::Posture),
+    EventDestinations(String),
     /// The configured active package does not match the runtime file's
     /// `package.expectedDigest` pin.
     PackagePinMismatch(PackageDigestMismatch),
@@ -66,6 +67,8 @@ pub(crate) struct HookSampleRequest {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct HookListOutcome {
     pub deliveries: Vec<HookListItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<crate::ToolDiagnostic>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -193,8 +196,8 @@ pub(crate) fn sample(
     );
     let envelope = HookEnvelope {
         id: SAMPLE_EVENT_ID.to_owned(),
-        event_type: event_type.clone(),
-        source: source.clone(),
+        event_type,
+        source,
         time: sample_time()?,
         subject,
         dataschema: delivery.data_schema.clone(),
@@ -211,28 +214,11 @@ pub(crate) fn sample(
         String::from_utf8(canonical_body_bytes).map_err(|_| HookLifecycleError::Sample)?;
     let body = serde_json::to_value(&envelope).map_err(|_| HookLifecycleError::Sample)?;
     let headers = BTreeMap::from([
-        ("Accept".to_owned(), "application/json".to_owned()),
-        ("Content-Type".to_owned(), "application/json".to_owned()),
-        (
-            "Idempotency-Key".to_owned(),
-            SAMPLE_IDEMPOTENCY_KEY.to_owned(),
-        ),
-        ("X-Registry-Delivery-Attempt".to_owned(), "1".to_owned()),
-        (
-            "X-Registry-Delivery-Time".to_owned(),
-            SAMPLE_TIME.to_owned(),
-        ),
-        ("X-Registry-Event-Generation".to_owned(), "1".to_owned()),
-        (
-            "X-Registry-Signature".to_owned(),
-            SAMPLE_SIGNATURE.to_owned(),
-        ),
-        ("ce-dataschema".to_owned(), delivery.data_schema.clone()),
-        ("ce-id".to_owned(), SAMPLE_EVENT_ID.to_owned()),
-        ("ce-source".to_owned(), source),
-        ("ce-specversion".to_owned(), "1.0".to_owned()),
-        ("ce-time".to_owned(), SAMPLE_TIME.to_owned()),
-        ("ce-type".to_owned(), event_type),
+        ("accept".to_owned(), "application/json".to_owned()),
+        ("content-type".to_owned(), "application/json".to_owned()),
+        ("webhook-id".to_owned(), SAMPLE_EVENT_ID.to_owned()),
+        ("webhook-timestamp".to_owned(), "1767225600".to_owned()),
+        ("webhook-signature".to_owned(), SAMPLE_SIGNATURE.to_owned()),
     ]);
     Ok(HookSampleOutcome {
         event_id: delivery.event_id.clone(),
@@ -247,33 +233,57 @@ pub(crate) fn sample(
 }
 
 pub(crate) fn list(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     limit: u16,
 ) -> Result<HookListOutcome, HookLifecycleError> {
     let runtime = operator_runtime()?;
-    list_with(runtime_config, limit, |runtime_config, limit| {
+    let mut diagnostics = Vec::new();
+    let mut outcome = list_with(runtime_config, limit, |runtime_config, limit| {
+        let config = load_operator_config(runtime_config, posture)?;
+        diagnostics =
+            crate::runtime_posture_findings(config.posture_report().diagnostics(runtime_config));
         runtime.block_on(async {
-            let service = HookOperatorService::from_runtime_config(runtime_config).await?;
-            service.list(limit).await
+            let service = HookOperatorService::from_loaded_config(config, false)
+                .await
+                .map_err(operator_failure)?;
+            service.list(limit).await.map_err(operator_failure)
         })
+    })?;
+    outcome.diagnostics = diagnostics;
+    Ok(outcome)
+}
+
+fn load_operator_config(
+    path: &Path,
+    posture: registry_platform_config::DeclaredPosture,
+) -> Result<registry_breg::runtime_config::RuntimeConfig, HookLifecycleError> {
+    registry_breg::runtime_config::load_runtime_config(path, posture).map_err(|error| {
+        if crate::is_posture_refusal(&error) {
+            HookLifecycleError::RuntimeConfig(error)
+        } else {
+            HookLifecycleError::Operator
+        }
     })
 }
 
 fn list_with(
     runtime_config: &Path,
     limit: u16,
-    operation: impl FnOnce(&Path, u16) -> Result<Vec<HookDeliveryStatus>, HookOperatorError>,
+    operation: impl FnOnce(&Path, u16) -> Result<Vec<HookDeliveryStatus>, HookLifecycleError>,
 ) -> Result<HookListOutcome, HookLifecycleError> {
     if !runtime_config.is_absolute() || limit == 0 || limit > MAX_HOOK_STATUS_RESULTS {
         return Err(HookLifecycleError::Operator);
     }
-    let deliveries = operation(runtime_config, limit).map_err(operator_failure)?;
+    let deliveries = operation(runtime_config, limit)?;
     Ok(HookListOutcome {
         deliveries: deliveries.into_iter().map(list_item).collect(),
+        diagnostics: Vec::new(),
     })
 }
 
 pub(crate) fn drain(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     max_attempts: u16,
     timeout_seconds: u16,
@@ -285,8 +295,8 @@ pub(crate) fn drain(
         return Err(HookLifecycleError::Operator);
     }
     operator_runtime()?
-        .block_on(HookOperatorService::drain_local(
-            runtime_config,
+        .block_on(HookOperatorService::drain_loaded_config(
+            load_operator_config(runtime_config, posture)?,
             max_attempts,
             std::time::Duration::from_secs(u64::from(timeout_seconds)),
         ))
@@ -294,6 +304,7 @@ pub(crate) fn drain(
 }
 
 pub(crate) fn replay(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     event_id: &str,
     delivery_id: &str,
@@ -306,11 +317,15 @@ pub(crate) fn replay(
         delivery_id,
         expected_generation,
         |runtime_config, event_id, delivery_id, expected_generation| {
+            let config = load_operator_config(runtime_config, posture)?;
             runtime.block_on(async {
-                let service = HookOperatorService::from_runtime_config(runtime_config).await?;
+                let service = HookOperatorService::from_loaded_config(config, false)
+                    .await
+                    .map_err(operator_failure)?;
                 service
                     .replay(event_id, delivery_id, expected_generation)
                     .await
+                    .map_err(operator_failure)
             })
         },
     )
@@ -321,7 +336,7 @@ fn replay_with(
     event_id: &str,
     delivery_id: &str,
     expected_generation: i64,
-    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, HookOperatorError>,
+    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, HookLifecycleError>,
 ) -> Result<HookReplayOutcome, HookLifecycleError> {
     if !runtime_config.is_absolute()
         || delivery_id.is_empty()
@@ -331,8 +346,7 @@ fn replay_with(
         return Err(HookLifecycleError::Operator);
     }
     let event_id = Uuid::parse_str(event_id).map_err(|_| HookLifecycleError::Operator)?;
-    let generation = operation(runtime_config, event_id, delivery_id, expected_generation)
-        .map_err(operator_failure)?;
+    let generation = operation(runtime_config, event_id, delivery_id, expected_generation)?;
     Ok(HookReplayOutcome {
         event_id: event_id.to_string(),
         delivery_id: delivery_id.to_owned(),
@@ -341,6 +355,7 @@ fn replay_with(
 }
 
 pub(crate) fn discard(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     event_id: &str,
     delivery_id: &str,
@@ -353,11 +368,15 @@ pub(crate) fn discard(
         delivery_id,
         expected_generation,
         |runtime_config, event_id, delivery_id, expected_generation| {
+            let config = load_operator_config(runtime_config, posture)?;
             runtime.block_on(async {
-                let service = HookOperatorService::from_runtime_config(runtime_config).await?;
+                let service = HookOperatorService::from_loaded_config(config, false)
+                    .await
+                    .map_err(operator_failure)?;
                 service
                     .discard(event_id, delivery_id, expected_generation)
                     .await
+                    .map_err(operator_failure)
             })
         },
     )
@@ -368,7 +387,7 @@ fn discard_with(
     event_id: &str,
     delivery_id: &str,
     expected_generation: i64,
-    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, HookOperatorError>,
+    operation: impl FnOnce(&Path, Uuid, &str, i64) -> Result<i64, HookLifecycleError>,
 ) -> Result<HookDiscardOutcome, HookLifecycleError> {
     if !runtime_config.is_absolute()
         || delivery_id.is_empty()
@@ -378,8 +397,7 @@ fn discard_with(
         return Err(HookLifecycleError::Operator);
     }
     let event_id = Uuid::parse_str(event_id).map_err(|_| HookLifecycleError::Operator)?;
-    let generation = operation(runtime_config, event_id, delivery_id, expected_generation)
-        .map_err(operator_failure)?;
+    let generation = operation(runtime_config, event_id, delivery_id, expected_generation)?;
     Ok(HookDiscardOutcome {
         event_id: event_id.to_string(),
         delivery_id: delivery_id.to_owned(),
@@ -388,14 +406,19 @@ fn discard_with(
     })
 }
 
-/// A package pin mismatch keeps both digests; every other operator failure
-/// stays the one value-free refusal.
+/// Keep package identities and actionable event destination refusals.
 fn operator_failure(error: HookOperatorError) -> HookLifecycleError {
     match error {
         HookOperatorError::PackagePinMismatch(mismatch) => {
             HookLifecycleError::PackagePinMismatch(mismatch)
         }
+        HookOperatorError::EventDestinations(error) => {
+            HookLifecycleError::EventDestinations(error.to_string())
+        }
         HookOperatorError::Unavailable => HookLifecycleError::Operator,
+        HookOperatorError::PostureMismatch { recorded, .. } => {
+            HookLifecycleError::PostureMismatch(recorded)
+        }
     }
 }
 
@@ -849,7 +872,7 @@ mod tests {
     #[test]
     fn sample_placeholders_never_claim_a_deployed_target_or_secret() {
         assert!(SAMPLE_REQUEST_TARGET.starts_with('<'));
-        assert_eq!(SAMPLE_SIGNATURE, "v1=<computed-at-delivery>");
+        assert_eq!(SAMPLE_SIGNATURE, "v1,<computed-at-delivery>");
         assert!(!SAMPLE_SIGNATURE.contains("secret"));
     }
 
@@ -864,7 +887,7 @@ mod tests {
                 called.set(true);
                 assert_eq!(runtime_config, Path::new("/operator/runtime.yaml"));
                 assert_eq!(limit, 17);
-                Ok::<_, HookOperatorError>(vec![HookDeliveryStatus {
+                Ok::<_, HookLifecycleError>(vec![HookDeliveryStatus {
                     event_id,
                     compiled_delivery_id: "record.record-created-v1.webhook".to_owned(),
                     generation: 2,
@@ -937,7 +960,7 @@ mod tests {
                 assert_eq!(event_id.to_string(), SAMPLE_EVENT_ID);
                 assert_eq!(delivery_id, "record.record-created-v1.webhook");
                 assert_eq!(expected_generation, 7);
-                Ok::<_, HookOperatorError>(8)
+                Ok::<_, HookLifecycleError>(8)
             },
         )
         .expect("delegated replay succeeds");
@@ -960,7 +983,7 @@ mod tests {
                 assert_eq!(event_id.to_string(), SAMPLE_EVENT_ID);
                 assert_eq!(delivery_id, "record.record-created-v1.webhook");
                 assert_eq!(expected_generation, 7);
-                Ok::<_, HookOperatorError>(8)
+                Ok::<_, HookLifecycleError>(8)
             },
         )
         .expect("delegated discard succeeds");
@@ -1002,7 +1025,7 @@ mod tests {
                     generation,
                     |_, _, _, _| {
                         called.set(true);
-                        Ok::<_, HookOperatorError>(2)
+                        Ok::<_, HookLifecycleError>(2)
                     },
                 ),
                 Err(HookLifecycleError::Operator)
@@ -1020,7 +1043,7 @@ mod tests {
                 1,
                 |_, _, _, _| {
                     called.set(true);
-                    Ok::<_, HookOperatorError>(2)
+                    Ok::<_, HookLifecycleError>(2)
                 },
             ),
             Err(HookLifecycleError::Operator)

@@ -5,6 +5,7 @@ use registry_platform_activation::{
     self as platform, Activation, DatabaseIdCheck, Layout, NewActivation, PlanKind, RoleMode,
 };
 use registry_platform_audit::AuditRequest;
+use registry_platform_config::Posture;
 use serde::Serialize;
 use serde_json::json;
 use thiserror::Error;
@@ -138,6 +139,11 @@ pub struct ApplyRequest {
 
 #[derive(Debug, Error)]
 pub enum ActivationError {
+    #[error("{message}")]
+    PostureMismatch {
+        message: &'static str,
+        action: &'static str,
+    },
     #[error("the Messaging package activation was refused")]
     Refused(Vec<ActivationRefusal>),
     #[error("package {package_digest} is active as activation {activation_id}, but its audit response was not accepted; restore the audit destination and confirm with `messagingctl status --runtime-config FILE`")]
@@ -169,10 +175,30 @@ impl From<tokio_postgres::Error> for ActivationError {
     }
 }
 
+/// The shared code used when the database and process postures differ.
+pub const POSTURE_MISMATCH: &str = "platform.activation.posture-mismatch";
+
+pub fn posture_mismatch(recorded: Posture, declared: Posture) -> Option<ActivationError> {
+    let (message, action) = match (recorded, declared) {
+        (Posture::Production, Posture::Development) => (
+            "this database was activated in the production posture; a development process never opens it",
+            "Start it as production. To develop, use a fresh database: a fresh apply is the way.",
+        ),
+        (Posture::Development, Posture::Production) => (
+            "this database was activated in the development posture; development data and settings are never promoted in place",
+            "Create a fresh database and apply the package as production: a fresh apply is the way.",
+        ),
+        (Posture::Production, Posture::Production)
+        | (Posture::Development, Posture::Development) => return None,
+    };
+    Some(ActivationError::PostureMismatch { message, action })
+}
+
 pub async fn plan(
     store: &PostgresStore,
     database_id: &str,
     package_digest: &str,
+    posture: Posture,
 ) -> Result<ActivationPlan, ActivationError> {
     let mut client = store.client().await?;
     let tx = client.build_transaction().read_only(true).start().await?;
@@ -193,6 +219,12 @@ pub async fn plan(
     let active = platform::active_activation(&*tx, &layout())
         .await
         .map_err(platform_error)?;
+    if let Some(error) = active
+        .as_ref()
+        .and_then(|active| posture_mismatch(active.posture, posture))
+    {
+        return Err(error);
+    }
     let observation = platform::observe_role(&*tx, &layout(), None, &[])
         .await
         .map_err(platform_error)?;
@@ -294,6 +326,7 @@ pub async fn apply(
     package_digest: &str,
     request: &ApplyRequest,
     audit: &MessagingAudit,
+    posture: Posture,
 ) -> Result<ActivationApplied, ActivationError> {
     if request.backup_references.len() > MAX_BACKUPS
         || request
@@ -338,6 +371,21 @@ pub async fn apply(
     let current_active = platform::active_activation(&*tx, &layout())
         .await
         .map_err(platform_error)?;
+    if let Some(error @ ActivationError::PostureMismatch { message, .. }) = current_active
+        .as_ref()
+        .and_then(|active| posture_mismatch(active.posture, posture))
+    {
+        let refusal = ActivationRefusal::new(POSTURE_MISMATCH, "database", message);
+        drop(tx);
+        respond_refused(
+            &mut audit_request,
+            activation_id,
+            package_digest,
+            &[refusal],
+        )
+        .await?;
+        return Err(error);
+    }
     if platform::database_id_check(current_active.as_ref(), database_id) == DatabaseIdCheck::Differs
     {
         let refusals = vec![ActivationRefusal::new(
@@ -452,6 +500,7 @@ pub async fn apply(
             operator_reference_hash: operator_reference_hash.as_deref(),
             backup_references: &request.backup_references,
             role_mode,
+            posture,
             runtime_role: None,
         },
     )
@@ -497,21 +546,28 @@ pub async fn check_runtime(
     store: &PostgresStore,
     database_id: &str,
     package_digest: &str,
+    posture: Posture,
 ) -> Result<Activation, ActivationError> {
     store.ready().await?;
     let client = store.client().await?;
-    let active = platform::check_active_package(&**client, &layout(), database_id, package_digest)
-        .await
-        .map_err(|error| match error {
-            platform::ActivePackageError::NotActivated => ActivationError::NotActivated,
-            platform::ActivePackageError::DatabaseIdMismatch => ActivationError::DatabaseIdMismatch,
-            platform::ActivePackageError::PackageNotActive { .. } => {
-                ActivationError::PackageNotActive
-            }
-            platform::ActivePackageError::Activation(error) => {
-                ActivationError::Store(platform_error(error))
-            }
-        })?;
+    let active =
+        platform::check_active_package(&**client, &layout(), database_id, package_digest, posture)
+            .await
+            .map_err(|error| match error {
+                platform::ActivePackageError::NotActivated => ActivationError::NotActivated,
+                platform::ActivePackageError::DatabaseIdMismatch => {
+                    ActivationError::DatabaseIdMismatch
+                }
+                platform::ActivePackageError::PackageNotActive { .. } => {
+                    ActivationError::PackageNotActive
+                }
+                platform::ActivePackageError::PostureMismatch { recorded, declared } => {
+                    posture_mismatch(recorded, declared).expect("different postures")
+                }
+                platform::ActivePackageError::Activation(error) => {
+                    ActivationError::Store(platform_error(error))
+                }
+            })?;
     let role = platform::observe_role(&**client, &layout(), None, &[])
         .await
         .map_err(platform_error)?

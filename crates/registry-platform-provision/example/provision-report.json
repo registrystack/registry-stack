@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "command": "provision",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/platform/cli-database-provision-report/v1alpha1",
+  "kind": "PlatformCliDatabaseProvisionReport",
+  "version": "0.49.0",
+  "posture": {"value": "production", "source": "default"},
+  "product": "casework",
+  "executed": true,
+  "roleMode": "split",
+  "database": "casework",
+  "migrationRole": "casework_migration",
+  "runtimeRole": "casework_runtime",
+  "statements": [
+    {
+      "step": "role.migration",
+      "scope": "server",
+      "needs": "createrole",
+      "outcome": "created",
+      "sql": "CREATE ROLE \"casework_migration\" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+    },
+    {
+      "step": "database.create",
+      "scope": "server",
+      "needs": "createdb",
+      "outcome": "present",
+      "sql": "CREATE DATABASE \"casework\" WITH ALLOW_CONNECTIONS false"
+    },
+    {
+      "step": "database.revoke-public",
+      "scope": "server",
+      "needs": "database-owner",
+      "outcome": "applied",
+      "sql": "REVOKE ALL ON DATABASE \"casework\" FROM PUBLIC"
+    }
+  ],
+  "diagnostics": []
+}

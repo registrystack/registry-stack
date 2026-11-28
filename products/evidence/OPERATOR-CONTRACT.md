@@ -23,7 +23,7 @@ The supported native deployment has:
   header, static API-key, or OAuth 2.0 client-credentials authentication through
   secret references, the last authenticating by client secret or by private-key
   JWT assertion;
-- optional credential-free source access only for `assuranceProfile: local`
+- optional credential-free source access only in development with `assuranceProfile: local`
   at a canonical numeric-loopback HTTP origin with an explicit non-zero port;
 - fixed reviewed SQL statements over regular, checkpointed, read-only SQLite
   extracts bound by logical profile, with publisher metadata, bundle-declared
@@ -87,9 +87,9 @@ establishes trust through review, distribution controls, read-only mounts, and
 process replacement for every revision.
 
 Every bundle explicitly declares `assuranceProfile: local`, `production`, or
-`evidence-grade`. Local is the only authoring profile and may omit a
-requirement's fixture reference. It changes no other runtime trust boundary and
-is carried in discovery, signed assertions, SD-JWT VC responses, audit, and
+`evidence-grade`. Local requires the development posture and may omit a
+requirement's fixture reference. Production and evidence-grade require the production posture.
+The profile is carried in discovery, signed assertions, SD-JWT VC responses, audit, and
 verification policy. Production and evidence-grade require one captured,
 complete fixture suite per requirement under the existing bundle validator.
 There is no fixture receipt, certification command, or second serving path.
@@ -129,7 +129,9 @@ package report lists. The list is the deduplicated union of governed bundle
 references and generated runtime references, including a local signer's
 private-key reference; it never resolves or reports a value. Secret ownership
 and mode requirements remain unchanged: each referenced
-secret is a regular owner-only file accepted by the eventual service identity.
+secret is a regular file that meets the shared secret-file rule: one hard link, owned by the
+eventual service identity (mode 0400 or 0600) or by root (no bit outside 0640), and never
+accessible to others.
 The package and runtime must be non-writable to that identity. The
 runtime is target-specific and remains outside the immutable `bundle/`. Signed assertions continue to carry only a configuration
 revision as `configurationRevision`. That value is scoped to the one requirement
@@ -150,6 +152,10 @@ evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
 evidencectl test '<editable-project>' --target '<deployment-target>'
 evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
+
+Activation checks the pinned package, runtime configuration and their combination
+against the declared posture before opening audit or writing authority state.
+Use development to activate a local package.
 
 Activation writes `evidence-activation-audit/v1` entries to the `activation`
 companion of the runtime's configured audit destination: beside a file
@@ -189,18 +195,22 @@ took effect; restore the audit destination and confirm it with
 between the commit and the response leaves a request with no response; inspect
 authority history before proceeding. Failed state durability barriers never
 acknowledge success. The audit trail lives only in the audit destination; the
-authority store holds the history alone.
+authority store holds the history alone. History validates the runtime file and
+its posture before reading that store. The read can inspect a recorded
+activation after the referenced package has been removed.
 
 `doctor` delegates the runtime-owned startup dependency preflight without
 opening the public listener, sending an Evidence request, or appending an
 application audit event. Audit initialization may briefly hold its operational
 lock. The runtime remains the authority for startup. Route traffic only after
-`/ready`. For one approved
+`/ready` succeeds. Its JSON object includes `posture` and `developmentSettings`. For one approved
 synthetic deployment subject, retain the signed response, verify it against an
 independently prepared `production` policy and trusted keys, and confirm that
 its access and disclosure audit entries reached the audit destination.
 
-Configure an HTTPS OIDC issuer independently of Evidence. Its client registration
+Configure an OIDC issuer independently of Evidence. Use HTTPS beyond loopback.
+Loopback HTTP trusts every process and container sharing that interface, so use HTTPS with a TLS trust profile on shared hosts and multi-container Pods.
+Its client registration
 must bind the approved resource and scopes; the governed bundle pins issuer,
 JWKS URI, audience, allowed algorithms, token types, and claim mappings.
 Inspect the installed package and target with `evidencectl artifact inspect <candidate>` and verify
@@ -776,7 +786,8 @@ event.
 Operational logs contain route templates, the public `trace_id`, the
 server-minted audit operation identifier, duration,
 status category, the public problem code, and safe internal error categories
-only. The internal category is narrower than the public problem code but is
+only. A refused request adds one `request refused` line that names the failed
+check, as described under the refusal counter below. The internal category is narrower than the public problem code but is
 drawn from the same kind of fixed, closed set of service-chosen strings. It
 names the internal step that failed, never what that step saw, and it carries
 no counts. A record that was not found and a record that matched more than once
@@ -845,7 +856,8 @@ the same bytes. Operators must update semantic audit readers to recognize all
 three entry schemas before deploying the request-batch runtime.
 
 The serving process writes those records as line-delimited JSON on standard
-error, one per served request, and `EVIDENCE_LOG` selects verbosity with a
+error, one per served request, plus at most five `request refused` lines per
+check per minute, and `EVIDENCE_LOG` selects verbosity with a
 default of `info`. Offline commands print their own result and emit no
 operational records. Every response, including responses to unrouted paths,
 carries a W3C `traceparent` header. Evidence reuses a valid inbound trace
@@ -861,8 +873,9 @@ public addresses are refused. A container deployment may declare
 `metricsListener.networkExposure: container-private` to bind `0.0.0.0` or `::`.
 The evidence listener never serves `/metrics`,
 and the metrics listener never serves evidence. Series carry only the registered
-route template, request method, status category, and reviewed problem code, or
-for the source series a governed source identifier from the bundle, so series
+route template, request method, status category, and reviewed problem code, for
+the source series a governed source identifier from the bundle, or for the
+refusal series the closed failed-check name, so series
 cardinality is bounded by the deployed contract and cannot grow with caller
 input. A path that matches no route is counted as `unmatched` and a
 method outside the served set as `other`, so a caller cannot write a label
@@ -899,7 +912,7 @@ with the generic `503` until the process restarts.
 
 ## Audit destinations, rotation, and retention
 
-Every audit entry is one JSON line with exactly six members:
+The writer emits each audit entry as one JSON line with seven members.
 
 | Member | Meaning |
 |---|---|
@@ -907,6 +920,7 @@ Every audit entry is one JSON line with exactly six members:
 | `eventId` | A random UUID the writer mints for this entry. |
 | `time` | The writer's RFC 3339 UTC timestamp for the append. |
 | `phase` | `request` for an access attempt, written before the source read it authorizes; `response` for every terminal record: a release, a denial, or a failure. |
+| `posture` | The writer's posture, `development` or `production`. Retained entries may omit it. |
 | `correlation` | The server-minted operation identifier, equal to `record.operation`, shared by every entry of one operation. |
 | `record` | The closed, minimized Evidence record described above. |
 
@@ -1031,18 +1045,29 @@ lifecycle: the telemetry listener cannot outlive a failed evidence listener.
 The listener serves `GET /metrics` and answers every other path with `404`,
 including the evidence routes. The exposition is Prometheus text format,
 declared as `Content-Type: text/plain; version=0.0.4`. Two request-boundary
-series are published:
+series and one refusal counter are published:
 
 | Series | Type | Meaning |
 |---|---|---|
 | `evidence_http_requests_total` | counter | Requests served at the evidence boundary |
 | `evidence_http_request_duration_seconds` | histogram | Duration of those requests |
+| `evidence_request_refusals_total{check}` | counter | Requests refused with `401`, `403` or `429`, by the check that refused them |
+
+The refusal counter has one label, `check`. Its values are the closed set of 45
+failed-check names (for example `credential-missing`, `token-signature`, `scope`,
+`access-profile`, `purpose`, `revision-pin` and `rate-limit`), and every value is
+published at zero from startup. No caller value becomes a label. Each refusal
+also writes one `request refused` log line with `failed_check`, the request's
+`trace_id` and `suppressed`, at most five lines per check per minute. The caller
+still receives the same closed `401`, `403` or `429`. The counter and the line
+are for the operator and name which check refused a request, so scrape access
+to the private metrics listener is operator-only.
 
 The histogram publishes `_bucket`, `_sum`, and `_count`. Its upper bounds in
 seconds are `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1.0`,
 `5.0`, and `+Inf`. They are fixed by the build and are not configurable.
 
-Both series carry the same four labels, and each is drawn from a closed set
+The two request-boundary series carry the same four labels, and each is drawn from a closed set
 fixed by the deployed contract rather than by anything a caller sends:
 
 | Label | Values |
@@ -1065,10 +1090,12 @@ reviewed problem codes are the closed public set: `evidence.invalid-request`,
 exact status of a denial belongs to the closed public problem contract rather
 than to operational telemetry. `error` carries the same reviewed problem code
 the caller received, which makes a denial rate observable without making the
-reason for any one request observable.
+reason for any one request observable on these two series. The refusal counter
+is the series that names the failed check, in aggregate and without a request
+identifier.
 
-Because both label sets are closed, series cardinality is bounded by the route
-table and the problem-code set regardless of traffic, and the registry needs no
+Because every label set is closed, series cardinality is bounded by the route
+table, the problem-code set and the failed-check set regardless of traffic, and the registry needs no
 eviction. A caller cannot create a series or write a label value: a path
 matching no route is counted as `unmatched` and the requested path is never
 recorded anywhere in the exposition.
@@ -1402,6 +1429,10 @@ GET /ready
 GET /.well-known/evidence/jwks.json
 GET /.well-known/jwt-vc-issuer
 ```
+
+`GET /ready` includes the declared `posture` and the active `developmentSettings` when ready.
+Development HTTP responses carry `Registry-Posture: development`, and the audit journal records
+the posture on every new entry.
 
 `GET /openapi.json` publishes the generated public contract as
 `application/json`. It carries no credential requirement because the

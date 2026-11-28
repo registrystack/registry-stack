@@ -20,8 +20,8 @@ pub use exchange_authorization::{
 };
 pub use exchange_config::exchange_authorization_from_json;
 pub use outbound::{
-    base_url_without_userinfo, build_client, read_failure_kind, send_failure_kind,
-    transport_protects_the_credential, OutboundOptions,
+    base_url_without_userinfo, build_client, is_loopback_host, read_failure_kind,
+    send_failure_kind, transport_protects_the_credential, OutboundOptions,
 };
 pub use private_key_jwt::{
     valid_resource_uri, valid_scope_token, validate_requested_scopes, PrivateKeyJwt,
@@ -79,15 +79,27 @@ pub struct ServiceBaseUrl(Url);
 
 impl ServiceBaseUrl {
     /// Validate a URL once, before any credential-bearing request can be built.
+    ///
+    /// This is [`Self::selected`] with the selection that declares no
+    /// transport and no range: https, or http to a loopback host.
     pub fn new(url: Url) -> Result<Self, ServiceBaseUrlError> {
-        if !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(ServiceBaseUrlError::AuthorityOrSuffix);
-        }
-        if !transport_protects_the_credential(&url) {
+        Self::check_authority(&url)?;
+        let selected = crate::select::select_credential_destination(&url, None, &[])
+            .map_err(|_| ServiceBaseUrlError::UnprotectedTransport)?;
+        Self::selected(url, &selected)
+    }
+
+    /// Validate a URL against the selection made for it.
+    ///
+    /// The selection must be for the URL's own scheme, host and port. A
+    /// private plain-text selection is refused: a service base URL carries
+    /// credentials, and no credential travels over private plain text.
+    pub fn selected(
+        url: Url,
+        selected: &crate::select::SelectedDestination,
+    ) -> Result<Self, ServiceBaseUrlError> {
+        Self::check_authority(&url)?;
+        if url.origin() != selected.url().origin() || !selected.admits_credentials() {
             return Err(ServiceBaseUrlError::UnprotectedTransport);
         }
         if let Some(mut segments) = url.path_segments().map(Iterator::peekable) {
@@ -98,6 +110,17 @@ impl ServiceBaseUrl {
             }
         }
         Ok(Self(url))
+    }
+
+    fn check_authority(url: &Url) -> Result<(), ServiceBaseUrlError> {
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(ServiceBaseUrlError::AuthorityOrSuffix);
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -205,6 +228,121 @@ mod tests {
                 .expect_err("the unsafe base URL is refused");
             assert!(!error.to_string().contains("secret"));
             assert!(!format!("{error:?}").contains("secret"));
+        }
+    }
+
+    fn selection(
+        raw: &str,
+        declared: Option<crate::select::TransportClass>,
+        ranges: &[&str],
+    ) -> crate::select::SelectedDestination {
+        let ranges: Vec<crate::loopback::PrivateRange> = ranges
+            .iter()
+            .map(|raw| raw.parse().expect("test range parses"))
+            .collect();
+        crate::select::select_destination(&Url::parse(raw).unwrap(), declared, &ranges)
+            .expect("the destination selects")
+    }
+
+    #[test]
+    fn a_selected_service_base_url_carries_credentials_only_over_tls_or_loopback() {
+        for (raw, declared) in [
+            ("https://registry.example/prefix", None),
+            (
+                "https://registry.example/prefix",
+                Some(crate::select::TransportClass::VerifiedTls),
+            ),
+            ("http://localhost:8080/api/", None),
+            (
+                "http://127.0.0.1:8080/",
+                Some(crate::select::TransportClass::LoopbackPlaintext),
+            ),
+        ] {
+            let base =
+                ServiceBaseUrl::selected(Url::parse(raw).unwrap(), &selection(raw, declared, &[]))
+                    .unwrap_or_else(|error| panic!("{raw}: {error}"));
+            assert_eq!(base.as_url().as_str(), Url::parse(raw).unwrap().as_str());
+        }
+
+        let private = selection(
+            "http://breg:8080/",
+            Some(crate::select::TransportClass::PrivateNetworkPlaintext),
+            &["172.16.0.0/12"],
+        );
+        assert_eq!(
+            ServiceBaseUrl::selected(Url::parse("http://breg:8080/").unwrap(), &private),
+            Err(ServiceBaseUrlError::UnprotectedTransport),
+            "no credential travels over private plain text"
+        );
+
+        let elsewhere = selection("https://other.example/", None, &[]);
+        for raw in [
+            "https://registry.example/",
+            "http://other.example/",
+            "https://other.example:8443/",
+        ] {
+            assert_eq!(
+                ServiceBaseUrl::selected(Url::parse(raw).unwrap(), &elsewhere),
+                Err(ServiceBaseUrlError::UnprotectedTransport),
+                "{raw} was not selected"
+            );
+        }
+        let same_origin =
+            ServiceBaseUrl::selected(Url::parse("https://other.example/v2/").unwrap(), &elsewhere)
+                .expect("the selection covers the origin, whatever the path");
+        assert_eq!(same_origin.as_url().path(), "/v2/");
+
+        for (raw, error) in [
+            (
+                "https://secret@registry.example/",
+                ServiceBaseUrlError::AuthorityOrSuffix,
+            ),
+            (
+                "https://registry.example/?secret=value",
+                ServiceBaseUrlError::AuthorityOrSuffix,
+            ),
+            (
+                "https://registry.example/a//b",
+                ServiceBaseUrlError::EmptyPathSegment,
+            ),
+        ] {
+            assert_eq!(
+                ServiceBaseUrl::selected(Url::parse(raw).unwrap(), &selection(raw, None, &[])),
+                Err(error),
+                "{raw}"
+            );
+        }
+    }
+
+    /// `new` is the selection with no declared transport and no range, and
+    /// keeps every answer it gave before the selector existed.
+    #[test]
+    fn a_service_base_url_without_a_selection_keeps_its_rule() {
+        for raw in [
+            "https://registry.example/",
+            "http://127.0.0.1/",
+            "http://[::1]:8080/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://localhost:8080/",
+            "http://LOCALHOST/",
+        ] {
+            ServiceBaseUrl::new(Url::parse(raw).unwrap())
+                .unwrap_or_else(|error| panic!("{raw}: {error}"));
+        }
+        for raw in [
+            "http://a.localhost/",
+            "http://localhost./",
+            "http://10.0.0.1/",
+            "http://[::ffff:10.0.0.1]/",
+            "http://0.0.0.0/",
+            "http://registry.example/",
+            "ftp://127.0.0.1/",
+        ] {
+            assert_eq!(
+                ServiceBaseUrl::new(Url::parse(raw).unwrap()),
+                Err(ServiceBaseUrlError::UnprotectedTransport),
+                "{raw}"
+            );
         }
     }
 }

@@ -12,8 +12,8 @@ use registry_platform_activation::{self as activation, Layout, NewActivation, Ro
 use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter, FileDestination};
 use registry_platform_config::{
     package::{write_package, PackageLimits},
-    DatabaseConfig, ListenerNetworkExposure, MetricsListenerConfig, PackageConfig,
-    PrivateListenerConfig, SecretProvidersConfig, SecretReference, TlsTermination,
+    DatabaseConfig, DatabaseTransport, ListenerNetworkExposure, MetricsListenerConfig,
+    PackageConfig, Posture, PrivateListenerConfig, SecretProvidersConfig, SecretReference,
 };
 use registry_platform_yaml::{Diagnostic, Document, Source};
 use serde::{Deserialize, Serialize};
@@ -105,10 +105,8 @@ mod state_key_map {
     }
 }
 impl DeploymentConfig {
-    pub fn local(&self) -> bool {
-        self.listener.tls_termination == TlsTermination::DevelopmentLoopback
-    }
     pub fn validate(&self, secrets: &SecretProvidersConfig) -> Result<()> {
+        self.authentication.validate(secrets)?;
         self.findings(secrets)
             .into_iter()
             .next()
@@ -209,7 +207,7 @@ impl DeploymentConfig {
         {
             errors.push(config_fail("deployment.stateKeys", "configure 1..=16 deployment.stateKeys with canonical nonzero u32 versions and select an existing version in deployment.activeStateKey"));
         }
-        errors.extend(self.authentication.findings(secrets, self.local()));
+        errors.extend(self.authentication.findings());
         for (field, r) in [
             ("deployment.auditKeyRef", &self.audit_key_ref),
             ("deployment.admissionKeyRef", &self.admission_key_ref),
@@ -326,6 +324,33 @@ impl Workflows {
     pub fn validate(&self, runtime: &RuntimeConfig) -> Result<()> {
         for package in self.packages.values() {
             runtime.validate_workflow(&package.definition.workflow)?;
+        }
+        for (alias, source) in &runtime.event_sources {
+            for (workflow, triggers) in &source.triggers {
+                let package = self.get(workflow.as_str());
+                for trigger in triggers.0.keys() {
+                    let deployed = package.and_then(|package| {
+                        package
+                            .definition
+                            .workflow
+                            .event_triggers
+                            .get(trigger.as_str())
+                    });
+                    if deployed.is_none_or(|trigger| trigger.source != *alias) {
+                        let field = format!(
+                            "eventSources.{alias}.triggers.{workflow}.{trigger}.hmacSha256KeyRef"
+                        );
+                        return Err(CoordinatorError::new(
+                            "coordinator.event.configuration",
+                            "the event trigger configuration was refused",
+                        )
+                        .at("runtime.yaml", format!("/{}", field.replace('.', "/")))
+                        .suggest(format!(
+                            "Remove {field} or deploy the corresponding trigger bound to {alias}."
+                        )));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -510,7 +535,7 @@ async fn open_named(
     } else {
         destination
     };
-    let audit = AuditWriter::open(destination)
+    let audit = AuditWriter::open(destination, runtime.posture())
         .await
         .map_err(audit_open_refusal)?;
     let security = StoreSecurity {
@@ -530,18 +555,59 @@ async fn open_named(
     };
     let url = std::str::from_utf8(raw.expose_secret())
         .map_err(|_| fail("database reference must resolve to UTF-8"))?;
-    let tls = if d.local() && runtime.database.ca_bundle_ref.is_none() {
-        None
-    } else {
+    let (postgres, verified_tls) = driver_config(
+        &runtime.database,
+        url,
+        runtime.development.as_ref(),
+        &|error| runtime.database_transport_error(error),
+        &registry_platform_config::resolve_database_host,
+    )?;
+    let tls = if verified_tls {
         Some(tls(&runtime.database, &secrets)?)
+    } else {
+        None
     };
-    let store = Store::open(url, &runtime.namespace, security, tls).await?;
+    let store = Store::open_config(postgres, &runtime.namespace, security, tls).await?;
     let store = if migration {
         store
     } else {
         store.with_workflows_digest(workflows_digest(d)?)
     };
     Ok(Arc::new(store))
+}
+/// The driver configuration the store is opened with, and whether it requires
+/// verified TLS. Under a plaintext transport every TCP host is replaced by
+/// the numeric addresses its check accepted, so the driver never resolves a
+/// name again.
+fn driver_config(
+    database: &DatabaseConfig,
+    url: &str,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+    transport_error: &dyn Fn(registry_platform_config::DatabaseTransportError) -> CoordinatorError,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<(tokio_postgres::Config, bool)> {
+    let postgres: tokio_postgres::Config = url
+        .parse()
+        .map_err(|_| fail("supply a valid PostgreSQL connection URL"))?;
+    database
+        .check(cfg!(feature = "postgres-test"))
+        .map_err(transport_error)?;
+    let (transport, mut postgres) =
+        registry_platform_postgres::postgres_connection(database, postgres, development, resolve)
+            .map_err(transport_error)?;
+    if database.test_only_plaintext || transport != DatabaseTransport::VerifiedTls {
+        postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
+        return Ok((postgres, false));
+    }
+    if postgres.get_ssl_mode() != tokio_postgres::config::SslMode::Require {
+        return Err(CoordinatorError::new(
+            "database-tls-required",
+            "verified TLS requires sslmode=require in the database URL",
+        )
+        .at("runtime.yaml", "database.runtimeUrlRef")
+        .suggest("Add sslmode=require for a TLS database, or set database.transport: loopback-plaintext for PostgreSQL on this host."));
+    }
+    Ok((postgres, true))
 }
 fn tls(
     database: &DatabaseConfig,
@@ -580,7 +646,7 @@ const SCHEMA_VERSION: i64 = crate::store::SCHEMA_VERSION as i64;
 /// with the namespace as the search path. Pinned with the protected state
 /// schema it records.
 pub(crate) fn activation_ledger_statements() -> String {
-    format!("CREATE TABLE IF NOT EXISTS coordinator_migrations(version bigint PRIMARY KEY); INSERT INTO coordinator_migrations VALUES({SCHEMA_VERSION}) ON CONFLICT DO NOTHING; CREATE TABLE IF NOT EXISTS coordinator_activations(activation_id uuid PRIMARY KEY,apply_order bigint UNIQUE NOT NULL,package_digest text NOT NULL,predecessor_package_digest text,database_id text NOT NULL,plan_kind text NOT NULL,applied_at timestamptz NOT NULL,operator_reference_hash text,backup_references text[] NOT NULL,role_mode text NOT NULL,runtime_role text NOT NULL)")
+    format!("CREATE TABLE IF NOT EXISTS coordinator_migrations(version bigint PRIMARY KEY); INSERT INTO coordinator_migrations VALUES({SCHEMA_VERSION}) ON CONFLICT DO NOTHING; CREATE TABLE IF NOT EXISTS coordinator_activations(activation_id uuid PRIMARY KEY,apply_order bigint UNIQUE NOT NULL,package_digest text NOT NULL,predecessor_package_digest text,database_id text NOT NULL,plan_kind text NOT NULL,applied_at timestamptz NOT NULL,operator_reference_hash text,backup_references text[] NOT NULL,role_mode text NOT NULL,runtime_role text NOT NULL,posture text NOT NULL CHECK(posture IN ('development','production'))); DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='coordinator_activations' AND column_name='posture') THEN ALTER TABLE coordinator_activations ADD COLUMN posture text NOT NULL DEFAULT 'production' CHECK(posture IN ('development','production')); END IF; END $$")
 }
 
 fn layout() -> Result<Layout> {
@@ -612,10 +678,34 @@ async fn check_control_role(client: &impl tokio_postgres::GenericClient, role: &
     }
     Ok(())
 }
+fn posture_mismatch(recorded: Posture, declared: Posture) -> Option<CoordinatorError> {
+    let (message, action) = match (recorded, declared) {
+        (Posture::Production, Posture::Development) => (
+            "this database was activated in the production posture; a development process never opens it",
+            "Start it as production. To develop, use a fresh database: a fresh apply is the way.",
+        ),
+        (Posture::Development, Posture::Production) => (
+            "this database was activated in the development posture; development data and settings are never promoted in place",
+            "Create a fresh database and apply the package as production: a fresh apply is the way.",
+        ),
+        _ => return None,
+    };
+    Some(CoordinatorError::new("platform.activation.posture-mismatch", message).suggest(action))
+}
+
 pub async fn check(
     store: &Store,
     runtime: &RuntimeConfig,
     digest: &str,
+) -> Result<activation::Activation> {
+    check_deployment(store, runtime, digest, false).await
+}
+
+async fn check_deployment(
+    store: &Store,
+    runtime: &RuntimeConfig,
+    digest: &str,
+    observe_posture: bool,
 ) -> Result<activation::Activation> {
     let d = config(runtime)?;
     // Unreachable is not refused: the service waits this out and checks again.
@@ -624,11 +714,20 @@ pub async fn check(
             .suggest("restore database connectivity")
     })?;
     let l = layout()?;
-    let active = activation::check_active_package(&*client, &l, &d.database_id, digest)
-        .await
-        .map_err(|_| {
-            fail("run coordinatorctl plan/apply with the correct database identity and packages, then restart every service")
-        })?;
+    let checked =
+        activation::check_active_package(&*client, &l, &d.database_id, digest, runtime.posture())
+            .await;
+    let active = match checked {
+        Ok(active) => active,
+        Err(activation::ActivePackageError::PostureMismatch { recorded, declared }) => {
+            if !observe_posture {
+                return Err(posture_mismatch(recorded, declared).expect("the postures differ"));
+            }
+            activation::check_active_package(&*client, &l, &d.database_id, digest, recorded)
+                .await.map_err(|_| fail("restore the activation ledger"))?
+        }
+        Err(_) => return Err(fail("run coordinatorctl plan/apply with the correct database identity and packages, then restart every service")),
+    };
     let schema = activation::schema_state(&*client, &l, &[SCHEMA_VERSION])
         .await
         .map_err(|_| fail("restore the migration ledger"))?;
@@ -694,10 +793,21 @@ pub async fn check_status(
     store: &Store,
     runtime: &RuntimeConfig,
     digest: &str,
-) -> Result<(activation::Activation, Vec<HeldRun>)> {
-    let active = check(store, runtime, digest).await?;
+) -> Result<(activation::Activation, Vec<HeldRun>, Vec<Diagnostic>)> {
+    let active = check_deployment(store, runtime, digest, true).await?;
     let held = store.observe_runtime_bindings(runtime).await?;
-    Ok((active, held))
+    let findings = posture_mismatch(active.posture, runtime.posture())
+        .map(|error| {
+            Diagnostic::warning(
+                &error.code,
+                "/database/runtimeUrlRef",
+                error.message,
+                error.suggested_action.unwrap_or_default(),
+            )
+        })
+        .into_iter()
+        .collect();
+    Ok((active, held, findings))
 }
 /// What one plan or apply does to one workflow's active package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -859,6 +969,12 @@ pub async fn plan(
     let active = activation::active_activation(&*client, &l)
         .await
         .map_err(|_| fail("restore the activation ledger"))?;
+    if let Some(error) = active
+        .as_ref()
+        .and_then(|active| posture_mismatch(active.posture, runtime.posture()))
+    {
+        return Err(error);
+    }
     let schema = activation::schema_state(&*client, &l, &[SCHEMA_VERSION])
         .await
         .map_err(|_| fail("restore the migration ledger"))?;
@@ -929,6 +1045,12 @@ pub async fn apply(
     let prior = activation::active_activation(&tx, &l)
         .await
         .map_err(|_| fail("restore ledger"))?;
+    if let Some(error) = prior
+        .as_ref()
+        .and_then(|active| posture_mismatch(active.posture, runtime.posture()))
+    {
+        return Err(error);
+    }
     if prior
         .as_ref()
         .is_some_and(|a| a.database_id != d.database_id)
@@ -964,6 +1086,7 @@ pub async fn apply(
         operator_reference_hash: None,
         backup_references: &[],
         role_mode: RoleMode::Split,
+        posture: runtime.posture(),
         runtime_role: Some(&d.runtime_role),
     };
     let active = activation::append_activation(&tx, &l, &request)
@@ -996,6 +1119,58 @@ mod tests {
     };
     use crate::definition::Definition;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_loopback_name_reaches_the_store_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        use registry_platform_config::{DatabaseConfig, DatabaseTransport, Gated};
+        let database = DatabaseConfig {
+            runtime_url_ref: "secret:env/DB_RUNTIME".to_owned(),
+            migration_url_ref: "secret:env/DB_MIGRATION".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap()),
+        };
+        let (postgres, verified_tls) = super::driver_config(
+            &database,
+            "postgresql://app@localhost:5433/coordinator",
+            None,
+            &|error| panic!("the loopback name is refused: {error}"),
+            &fixed,
+        )
+        .unwrap();
+        assert!(!verified_tls);
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
+    }
+
+    /// The wording is shared with the Document Store, Scheduling and Messaging.
+    #[test]
+    fn a_development_database_opened_as_production_uses_the_shared_wording() {
+        use registry_platform_config::Posture;
+        let error = super::posture_mismatch(Posture::Development, Posture::Production).unwrap();
+        assert_eq!(error.code, "platform.activation.posture-mismatch");
+        assert_eq!(
+            error.message,
+            "this database was activated in the development posture; development data and settings are never promoted in place"
+        );
+        assert!(super::posture_mismatch(Posture::Production, Posture::Production).is_none());
+    }
 
     #[test]
     fn audit_open_refusals_are_fixed_and_value_free() {
@@ -1081,8 +1256,18 @@ mod tests {
             AuditDestination::File(FileDestination::new(root.path().join("audit.jsonl")).unwrap())
                 .for_process("apply")
                 .unwrap();
-        let first = AuditWriter::open(destination.clone()).await.unwrap();
-        let error = match AuditWriter::open(destination.clone()).await {
+        let first = AuditWriter::open(
+            destination.clone(),
+            registry_platform_config::Posture::Production,
+        )
+        .await
+        .unwrap();
+        let error = match AuditWriter::open(
+            destination.clone(),
+            registry_platform_config::Posture::Production,
+        )
+        .await
+        {
             Ok(_) => panic!("a second writer must not acquire the same companion"),
             Err(error) => error,
         };
@@ -1093,7 +1278,10 @@ mod tests {
             Some("restore writable durable audit custody (sink-locked)")
         );
         drop(first);
-        let reopened = AuditWriter::open(destination).await.unwrap();
+        let reopened =
+            AuditWriter::open(destination, registry_platform_config::Posture::Production)
+                .await
+                .unwrap();
         drop(reopened);
         root.close().unwrap();
     }

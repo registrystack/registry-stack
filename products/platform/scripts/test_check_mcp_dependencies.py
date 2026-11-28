@@ -22,6 +22,7 @@ NAMES = {
     "breg-runtime": "registry-breg",
     "evidence": "registry-evidence",
     "cli-docs": "registry-cli-docs",
+    "cli-report": "registry-cli-report",
     "casework-client": "registry-casework-client",
     "casework-core": "registry-casework-core",
     "casework-runtime": "registry-casework",
@@ -186,6 +187,26 @@ class McpDependencyTests(unittest.TestCase):
         self.assertIn(
             "workspace must contain exactly one registry-mcp-edge package",
             MODULE.violations(metadata(edges)),
+        )
+
+    def test_platform_crate_cannot_pull_cli_report_into_mcp_boundaries(self) -> None:
+        edges = valid_edges()
+        edges["cli-report"] = ["serde"]
+        edges["platform"] = ["cli-report", "serde"]
+        edges["provider"] = ["edge", "breg-client"]
+        failures = "\n".join(MODULE.violations(metadata(edges)))
+        self.assertIn(
+            "registry-mcp-edge depends on product package(s): registry-cli-report",
+            failures,
+        )
+        self.assertIn(
+            "outside a maintained client/provider boundary: registry-cli-report",
+            failures,
+        )
+        self.assertIn(
+            "registry-breg-mcp reaches packages outside its reviewed source closure: "
+            "registry-cli-report",
+            failures,
         )
 
 

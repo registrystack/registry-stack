@@ -39,6 +39,80 @@ async fn status(server: &TestServer, token: &str, reference: &str) -> TestRespon
 }
 
 #[tokio::test]
+async fn applicant_token_posture_follows_the_verifier_declaration() {
+    use registry_evidence_oid4vp::service::{build_app, VerifierService};
+    use registry_platform_config::{DeclaredPosture, Posture, PostureReport, PostureSource};
+    use std::sync::Arc;
+
+    let harness = Harness::new(&Options::default()).await;
+    let token = harness.idp.issue_access_token_with_claims(
+        "portal",
+        "user-1",
+        AUDIENCE,
+        common::SESSION_SCOPE,
+        chrono::Utc::now().timestamp() + 300,
+        [("registry_posture".to_owned(), json!("development"))].into(),
+    );
+    for (posture, status) in [
+        (Posture::Production, axum::http::StatusCode::UNAUTHORIZED),
+        (Posture::Development, axum::http::StatusCode::CREATED),
+    ] {
+        let mut config = harness.config();
+        config.posture = PostureReport::new(DeclaredPosture {
+            posture,
+            source: PostureSource::Flag,
+        });
+        let service = VerifierService::load_with_clock(config, harness.clock())
+            .await
+            .unwrap();
+        let server = TestServer::new(build_app(Arc::new(service)));
+        create(&server, &token, "national-id")
+            .await
+            .assert_status(status);
+    }
+}
+
+#[tokio::test]
+async fn evidence_credential_posture_follows_the_verifier_declaration() {
+    use registry_evidence_oid4vp::service::{build_app, VerifierService};
+    use registry_platform_config::{DeclaredPosture, Posture, PostureReport, PostureSource};
+    use std::sync::Arc;
+
+    let harness = Harness::new(&Options::default()).await;
+    let token = harness.idp.issue_access_token_with_claims(
+        "evidence",
+        "evidence-service",
+        AUDIENCE,
+        common::READ_SCOPE,
+        chrono::Utc::now().timestamp() + 300,
+        [("registry_posture".to_owned(), json!("development"))].into(),
+    );
+    for (posture, status) in [
+        (Posture::Production, axum::http::StatusCode::UNAUTHORIZED),
+        (Posture::Development, axum::http::StatusCode::NOT_FOUND),
+    ] {
+        let mut config = harness.config();
+        config.posture = PostureReport::new(DeclaredPosture {
+            posture,
+            source: PostureSource::Flag,
+        });
+        let service = VerifierService::load_with_clock(config, harness.clock())
+            .await
+            .unwrap();
+        let server = TestServer::new(build_app(Arc::new(service)));
+        server
+            .post("/v1/presentations/read")
+            .add_header("authorization", bearer(&token))
+            .json(&json!({
+                "reference": "absent-reference",
+                "principal": {"issuer": harness.idp.issuer(), "subject": "user-1"},
+            }))
+            .await
+            .assert_status(status);
+    }
+}
+
+#[tokio::test]
 async fn creating_a_session_requires_a_valid_applicant_token() {
     let harness = Harness::new(&Options::default()).await;
     let (server, _) = harness.server().await;
@@ -430,6 +504,7 @@ async fn the_audit_journal_records_both_operations_and_leaks_no_session_secret()
     ];
     forbidden.extend(jwk_parts);
     for entry in &entries {
+        assert_eq!(entry["posture"], "production");
         assert_json_absent_strings(entry, &forbidden).expect("no secret reaches the journal");
     }
     assert!(!text.contains("user-1"), "principals are pseudonymized");

@@ -732,16 +732,16 @@ impl MutationTransaction {
         authority: &ProposalAuthority,
     ) -> Result<(), MutationError> {
         let action = proposal_action(registry, &document.action_id)?;
-        if document.action_id != authority.common.action_id()
-            || authority
-                .proposal_scope
-                .as_ref()
-                .is_some_and(|scope| !scope.contains(&document.proposal_id))
-            || (authority.ownership == Some(ProposalOwnership::Caller)
-                && document.header.owner_reference
-                    != self.proposal_owner_reference(authority.common.principal()))
-        {
-            return Err(MutationError::AuthorizationRefused);
+        if let Some(check) = proposal_document_refusal(
+            &document.action_id,
+            authority.common.action_id(),
+            authority.proposal_scope.as_ref(),
+            document.proposal_id,
+            authority.ownership,
+            &document.header.owner_reference,
+            || self.proposal_owner_reference(authority.common.principal()),
+        ) {
+            return Err(MutationError::AuthorizationRefused(check));
         }
         for (entity_id, id) in &document.input_targets {
             let entity = registry
@@ -2384,7 +2384,7 @@ impl MutationTransaction {
                 Err(MutationError::PreconditionFailed)
             };
         };
-        if preconditions.contract != action.requires {
+        if preconditions.contract != crate::model::without_labels(&action.requires) {
             return Err(MutationError::PreconditionFailed);
         }
         preconditions.validate().map_err(workflow_error)?;
@@ -2443,7 +2443,8 @@ impl MutationTransaction {
                     Some(target.expected_revision),
                     registry,
                     trusted_now,
-                )?;
+                )
+                .map_err(|error| restore_guard_label(error, action))?;
             }
             if let Some(fields) =
                 crate::commit_evidence::target_fields(&preconditions.evidence).get(&target.id)
@@ -4368,6 +4369,20 @@ fn verify_guard(
     }
 }
 
+/// A frozen Proposal holds its guards without labels, so a refusal at Apply
+/// takes the label from the Action as it is compiled now.
+fn restore_guard_label(error: MutationError, action: &CompiledAction) -> MutationError {
+    let MutationError::ProposalGuardFailed(mut failure) = error else {
+        return error;
+    };
+    failure.guard.label = action
+        .requires
+        .iter()
+        .find(|guard| guard.input == failure.guard.input && guard.field == failure.guard.field)
+        .and_then(|guard| guard.label.clone());
+    MutationError::ProposalGuardFailed(failure)
+}
+
 fn proposal_read_fields(action: &CompiledAction, entity_id: &str) -> BTreeSet<String> {
     action
         .target_uses
@@ -4544,6 +4559,86 @@ mod disclosure_tests {
                 "private receipt member {forbidden}"
             );
         }
+    }
+}
+
+/// The check a Proposal document fails against the caller's authority, if
+/// any: another action, a Proposal outside the grant's bound scope, or a
+/// Proposal another caller owns.
+fn proposal_document_refusal(
+    document_action_id: &str,
+    authority_action_id: &str,
+    scope: Option<&BTreeSet<Uuid>>,
+    proposal_id: Uuid,
+    ownership: Option<ProposalOwnership>,
+    document_owner: &str,
+    caller_owner: impl FnOnce() -> String,
+) -> Option<registry_platform_authcommon::FailedCheck> {
+    use registry_platform_authcommon::FailedCheck;
+    if document_action_id != authority_action_id {
+        return Some(FailedCheck::Operation);
+    }
+    if scope.is_some_and(|scope| !scope.contains(&proposal_id)) {
+        return Some(FailedCheck::TaskGrantScope);
+    }
+    if ownership == Some(ProposalOwnership::Caller) && document_owner != caller_owner() {
+        return Some(FailedCheck::Ownership);
+    }
+    None
+}
+
+#[cfg(test)]
+mod document_refusal_tests {
+    use super::*;
+    use registry_platform_authcommon::FailedCheck;
+
+    #[test]
+    fn each_refusing_condition_names_its_own_check() {
+        let id = Uuid::from_u128(1);
+        let scope = BTreeSet::from([id]);
+        let owner = || "owner-a".to_owned();
+        let check =
+            |action: &str, scope: Option<&BTreeSet<Uuid>>, proposal: Uuid, ownership, who: &str| {
+                proposal_document_refusal(
+                    action, "action-a", scope, proposal, ownership, who, owner,
+                )
+            };
+        assert_eq!(
+            check("action-b", None, id, None, "owner-a"),
+            Some(FailedCheck::Operation)
+        );
+        assert_eq!(
+            check(
+                "action-a",
+                Some(&scope),
+                Uuid::from_u128(2),
+                None,
+                "owner-a"
+            ),
+            Some(FailedCheck::TaskGrantScope)
+        );
+        assert_eq!(
+            check(
+                "action-a",
+                Some(&scope),
+                id,
+                Some(ProposalOwnership::Caller),
+                "owner-b"
+            ),
+            Some(FailedCheck::Ownership)
+        );
+        assert_eq!(
+            check(
+                "action-a",
+                Some(&scope),
+                id,
+                Some(ProposalOwnership::Caller),
+                "owner-a"
+            ),
+            None
+        );
+        // Another owner's Proposal is admitted when ownership is not the caller's.
+        assert_eq!(check("action-a", None, id, None, "owner-b"), None);
     }
 }
 
@@ -4726,7 +4821,9 @@ mod commit_guard_date_tests {
             at_least: None,
             at_most: None,
             current_date: Some(crate::model::CompiledCurrentDateRelation::OnOrAfter),
+            label: None,
             current_date_offset_days: 0,
+            current_date_offset_months: 0,
             at_least_input: None,
             at_most_input: None,
         };

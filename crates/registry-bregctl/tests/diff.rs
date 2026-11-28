@@ -804,7 +804,7 @@ identity:
   environment: production
   instanceId: {INSTANCE}
   databaseId: {DATABASE}
-  databaseInitializationEnvironment: production
+
 secretProviders:
   environment: {{}}
   file:
@@ -824,22 +824,24 @@ package:
   root: {package_root}
 authentication:
   oidc:
-    issuer: https://oidc-is-not-opened.invalid
-    audience: urn:breg:diff
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [diff-client]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 1
-      outageToleranceSeconds: 900
+    issuers:
+      primary:
+        issuer: https://oidc-is-not-opened.invalid
+        audience: urn:breg:diff
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [diff-client]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 1
+          outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
@@ -883,6 +885,7 @@ fn rewrite_runtime_config(
 
 fn run(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(arguments)
         .output()
         .expect("bregctl starts")

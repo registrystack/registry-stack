@@ -530,9 +530,15 @@ async fn bounded_two_type_two_replica_fairness(
     }
 
     let operator_config = harness.write_operator_runtime_config("fairness-status")?;
-    let operator = TimerOperatorService::from_runtime_config(&operator_config.path)
-        .await
-        .map_err(|error| format!("fairness timer operator construction failed: {error}"))?;
+    let operator = TimerOperatorService::from_runtime_config(
+        &operator_config.path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .await
+    .map_err(|error| format!("fairness timer operator construction failed: {error}"))?;
     let status = operator
         .status()
         .await

@@ -1,6 +1,7 @@
 //! Compile an editable Evidence authoring project into one closed deployment
 //! candidate. Secrets and target-host paths remain operator-owned.
 
+use registry_platform_config::DeclaredPosture;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
@@ -81,15 +82,20 @@ impl std::fmt::Display for OutputExists {
 
 impl std::error::Error for OutputExists {}
 
-pub(crate) fn run_package_with_format(args: BuildArgs, format: OutputFormat) -> Result<ExitCode> {
+pub(crate) fn run_package_with_format(
+    args: BuildArgs,
+    format: OutputFormat,
+    declared: DeclaredPosture,
+) -> Result<ExitCode> {
     let interruption = BuildInterruption::install()?;
-    run_inner(args, &interruption, format)
+    run_inner(args, &interruption, format, declared)
 }
 
 fn run_inner(
     args: BuildArgs,
     interruption: &BuildInterruption,
     format: OutputFormat,
+    declared: DeclaredPosture,
 ) -> Result<ExitCode> {
     interruption.check()?;
     let _project_lock = ProjectLock::acquire(&args.project)
@@ -123,6 +129,7 @@ fn run_inner(
         &evidence_bin,
         interruption,
         args.revision.as_deref(),
+        declared,
     );
     let (checked, secret_references) = match result {
         Ok(result) => result,
@@ -138,24 +145,34 @@ fn run_inner(
     publish(staging, &candidate)?;
 
     if format == OutputFormat::Json {
-        crate::report::print(&crate::report::success(
-            "package",
-            "packaged",
-            json!({
-                "project": args.project,
-                "target": args.target,
-                "output": args.output,
-                "package": args.output.join("bundle"),
-                "runtime": args.output.join("runtime.yaml"),
-                "authority": args.output.join("compiled-authority.yaml"),
-                "packageDigest": checked.package_digest,
-                "requirements": checked.requirements,
-                "revision": args.revision,
-                "requiredSecrets": secret_references,
-                "proofBoundary": "offline deployment candidate compilation and fixture validation"
-            }),
-        ))?;
+        crate::report::print_with_posture(
+            &crate::report::success(
+                "package",
+                "packaged",
+                json!({
+                    "project": args.project,
+                    "target": args.target,
+                    "output": args.output,
+                    "package": args.output.join("bundle"),
+                    "runtime": args.output.join("runtime.yaml"),
+                    "authority": args.output.join("compiled-authority.yaml"),
+                    "packageDigest": checked.package_digest,
+                    "requirements": checked.requirements,
+                    "diagnostics": checked.diagnostics,
+                    "revision": args.revision,
+                    "requiredSecrets": secret_references,
+                    "proofBoundary": "offline deployment candidate compilation and fixture validation"
+                }),
+            ),
+            Some(declared),
+        )?;
         return Ok(ExitCode::SUCCESS);
+    }
+    if !checked.diagnostics.is_empty() {
+        eprint!(
+            "{}",
+            registry_platform_yaml::Report::new(checked.diagnostics).render_human()
+        );
     }
     println!("Package digest: {}", checked.package_digest);
     if let Some(revision) = &args.revision {
@@ -180,18 +197,22 @@ fn run_inner(
 pub(crate) fn validated_question_revisions(
     project: &Path,
     target: &Path,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<BTreeMap<String, String>> {
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
     let interruption = BuildInterruption::passive();
     let compiled = compile_target_fixture_project(project, target, &evidence_bin)?;
     let report = run_bundle_check_report(
         &evidence_bin,
-        &compiled.bundle_path,
-        &compiled.runtime_path,
-        Some(&compiled.target_path),
-        project,
-        &compiled.fixture_paths,
+        BundleCheckInputs {
+            bundle: &compiled.bundle_path,
+            runtime: &compiled.runtime_path,
+            target: Some(&compiled.target_path),
+            project,
+            fixtures: &compiled.fixture_paths,
+        },
         &interruption,
+        declared,
     )?;
     for fixture in &compiled.fixture_paths {
         run_bundle_fixture(
@@ -200,6 +221,7 @@ pub(crate) fn validated_question_revisions(
             fixture,
             project,
             &interruption,
+            declared,
         )?;
     }
     Ok(report
@@ -412,6 +434,7 @@ fn prepare_candidate(
     evidence_bin: &Path,
     interruption: &BuildInterruption,
     revision: Option<&str>,
+    declared: DeclaredPosture,
 ) -> Result<(BundleCheckReport, Vec<String>)> {
     let compiled = compile_with_target(project, target, staging_root, evidence_bin, revision)?;
     interruption.check()?;
@@ -419,12 +442,15 @@ fn prepare_candidate(
     reject_review_markers_in_bytes(&target.runtime, "runtime.yaml")?;
     let checked = run_bundle_check_report(
         evidence_bin,
-        &compiled.bundle_path,
-        &compiled.runtime_path,
-        target.source_path.as_deref(),
-        project,
-        &compiled.fixture_paths,
+        BundleCheckInputs {
+            bundle: &compiled.bundle_path,
+            runtime: &compiled.runtime_path,
+            target: target.source_path.as_deref(),
+            project,
+            fixtures: &compiled.fixture_paths,
+        },
         interruption,
+        declared,
     )?;
     for fixture in &compiled.fixture_paths {
         interruption.check()?;
@@ -434,6 +460,7 @@ fn prepare_candidate(
             fixture,
             project,
             interruption,
+            declared,
         )?;
     }
     // Secret references are collected only after the delegated bundle check
@@ -471,18 +498,31 @@ fn verify_stable_package_root(runtime_bytes: &[u8], candidate: &Path) -> Result<
     .into())
 }
 
+struct BundleCheckInputs<'a> {
+    bundle: &'a Path,
+    runtime: &'a Path,
+    target: Option<&'a Path>,
+    project: &'a Path,
+    fixtures: &'a [String],
+}
+
 fn run_bundle_check_report(
     evidence_bin: &Path,
-    bundle: &Path,
-    runtime: &Path,
-    target: Option<&Path>,
-    project: &Path,
-    fixtures: &[String],
+    inputs: BundleCheckInputs<'_>,
     interruption: &BuildInterruption,
+    declared: DeclaredPosture,
 ) -> Result<BundleCheckReport> {
+    let BundleCheckInputs {
+        bundle,
+        runtime,
+        target,
+        project,
+        fixtures,
+    } = inputs;
     let mut command = Command::new(evidence_bin);
     command
         .arg("bundle-check")
+        .args(["--posture", declared.posture.as_str()])
         .arg("--bundle")
         .arg(bundle)
         .arg("--runtime-config")
@@ -498,7 +538,7 @@ fn run_bundle_check_report(
     let output = run_evidence(command, interruption, true, true)?;
     if !output.status.success() {
         if let Some(report) = crate::authored::runtime_refusal(&output.stdout) {
-            let report = crate::authored::runtime_target_refusal(report, runtime, target);
+            let report = crate::authored::runtime_target_refusal(report, runtime, bundle, target);
             return Err(
                 crate::authored::runtime_bundle_refusal(report, bundle, project, fixtures).into(),
             );
@@ -509,12 +549,22 @@ fn run_bundle_check_report(
             bounded_diagnostic(&output.stderr).as_deref(),
         );
     }
-    parse_bundle_check_report(&output.stdout)
+    let mut checked = parse_bundle_check_report(&output.stdout)?;
+    checked.diagnostics = crate::authored::runtime_target_refusal(
+        registry_platform_yaml::Report::new(checked.diagnostics),
+        runtime,
+        bundle,
+        target,
+    )
+    .into_diagnostics();
+    Ok(checked)
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct BundleCheckReport {
+    #[serde(default)]
+    pub(crate) diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     pub(crate) package_digest: String,
     pub(crate) requirements: Vec<BundleCheckRequirement>,
 }
@@ -542,15 +592,19 @@ pub(crate) fn check_compiled_bundle(
     target: Option<&Path>,
     project: &Path,
     fixtures: &[String],
+    declared: DeclaredPosture,
 ) -> Result<BundleCheckReport> {
     run_bundle_check_report(
         evidence_bin,
-        bundle,
-        runtime,
-        target,
-        project,
-        fixtures,
+        BundleCheckInputs {
+            bundle,
+            runtime,
+            target,
+            project,
+            fixtures,
+        },
         &BuildInterruption::passive(),
+        declared,
     )
 }
 
@@ -595,10 +649,12 @@ fn run_bundle_fixture(
     fixture: &str,
     project: &Path,
     interruption: &BuildInterruption,
+    declared: DeclaredPosture,
 ) -> Result<()> {
     let mut command = Command::new(evidence_bin);
     command
         .arg("bundle-evaluate")
+        .args(["--posture", declared.posture.as_str()])
         .arg("--bundle")
         .arg(bundle)
         .arg("--fixture")

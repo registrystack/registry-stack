@@ -476,7 +476,7 @@ fn validate_requirements(
         errors.push(Diagnostic::error(
             "breg.consent.require-clients",
             &location,
-            "requireConsent needs requesterClients (with actorKind), each listed by a declared recipient organization",
+            "requireConsent needs requesterClients, each listed by a declared recipient organization",
         ));
     }
     for (index, requirement) in profile.require_consent.iter().enumerate() {

@@ -67,7 +67,10 @@ fn gateway_core() -> Arc<GatewayCore> {
         ["unused".to_owned()],
     )
     .expect("binding");
-    let audit = ToolAuditLog::new(AuditWriter::from_line_sink(Box::new(io::sink())));
+    let audit = ToolAuditLog::new(AuditWriter::from_line_sink(
+        Box::new(io::sink()),
+        registry_platform_config::Posture::Production,
+    ));
     Arc::new(
         GatewayCore::new(
             [binding],
@@ -101,11 +104,11 @@ async fn application(resource: &str) -> Router {
     let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         authorization.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let profile =
         AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![8; 32])).expect("profile");
-    let resource_server = ResourceServer::new(
+    let resource_server = ResourceServer::new_with_posture(
         &options,
         token_verifier(&options, fetcher),
         profile.key_hasher(),
@@ -119,6 +122,7 @@ async fn application(resource: &str) -> Router {
                 burst: 10,
             },
         },
+        registry_platform_config::Posture::Development,
     )
     .expect("resource server");
     router(
@@ -128,6 +132,12 @@ async fn application(resource: &str) -> Router {
             resource: Url::parse(&options.resource).expect("resource URL"),
             maximum_request_bytes: 4096,
             hsts: false,
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Production,
+                    source: registry_platform_config::PostureSource::Default,
+                },
+            ),
         },
     )
 }

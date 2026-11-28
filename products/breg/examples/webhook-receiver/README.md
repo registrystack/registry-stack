@@ -22,15 +22,17 @@ python3 products/breg/examples/webhook-receiver/receiver.py \
   --inbox /path/to/private-state/inbox.sqlite3 --port 8090
 ```
 
+During signing-key rotation, set `--key` to the current key file and pass the
+old key file with `--previous-key`. Both files must contain 32 to 64 exact key
+bytes. This option also works with `refresh_hints.py`.
+
 The listener binds only `127.0.0.1`; its destination path is `/events` and
 readiness path is `/ready`. Configure the BReg destination separately. This
 example does not provision a registry, issuer, runtime, or destination.
 
-CloudEvents source and event ID identify one accepted work item across receiver
-restart. A retry preserves that identity. Operator replay preserves the event
-but uses a new delivery generation and idempotency key, so acceptance records
-the delivery without duplicating work. Changed content or a rebound delivery
-key returns `409`. Distinct events describing the same business effect still
+The verified source and `webhook-id` identify one accepted work item across
+receiver restart. A retry and an operator replay preserve that identity.
+Changed content under the same identity returns `409`. Distinct events describing the same business effect still
 need application-level operation identity and deduplication.
 
 The inbox contains projected values. This example retains them until you
@@ -85,7 +87,7 @@ hooks:
 ```
 
 Run `bregctl hook sample PROJECT --event person-corrected-v1` and take the
-schema digest from the end of the `ce-dataschema` header. Bind the source
+schema digest from the end of the envelope's `dataschema` field. Bind the source
 destination to the listener's `/events` path. The listener uses loopback, so
 deployments with a remote source need their own ingress with a bounded
 request timeout.

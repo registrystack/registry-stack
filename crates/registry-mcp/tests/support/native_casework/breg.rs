@@ -129,7 +129,7 @@ impl Breg {
                 "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1",
                 "kind":"BRegRuntimeConfig",
                 "listener":{"bind":address.to_string()},
-                "identity":{"environment":"test","instanceId":"native-staff-proof","databaseId":format!("native-staff-{prefix}"),"databaseInitializationEnvironment":"test"},
+                "identity":{"environment":"test","instanceId":"native-staff-proof","databaseId":format!("native-staff-{prefix}")},
                 "secretProviders":{"file":{"root":root}},
                 "database":{
                     "runtimeUrlRef":format!("secret:file/{prefix}-runtime-url"),
@@ -139,11 +139,11 @@ impl Breg {
                     "roles":{"migration":databases.breg_roles()[0],"runtime":databases.breg_roles()[1]}
                 },
                 "package":{"root":package},
-                "authentication":{"oidc":{
+                "authentication":{"oidc":{"issuers":{"primary":{
                     "issuer":issuer.issuer(),"audience":BREG_AUDIENCE,"allowedAlgorithm":"ES256","accessTokenType":"at+jwt",
                     "scopeClaim":"scope","scopeSeparator":" ","allowedClients":[READER_CLIENT,OPERATOR_CLIENT,REGISTRAR_CLIENT,AUTHOR_CLIENT,HUMAN_CLIENT,SOURCE_CLIENT,STATUS_CLIENT],
                     "maximumTokenLifetimeSeconds":3600,"leewayMilliseconds":0,"jwksSource":{"type":"static","documentRef":"secret:file/jwks"}
-                },"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose","trustedActors":{"casework-source-reader":"00000000-0000-4000-8000-0000000000c7"}}},
+                }}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose","trustedActors":{"casework-source-reader":"00000000-0000-4000-8000-0000000000c7"}}},
                 "audit":{"hashKeyRef":"secret:file/audit-key","path":root.join("audit/breg.jsonl")},
                 "cursor":{"secretRef":"secret:file/cursor-key"},
                 "reviewAuthorities":{"casework":{"endpoint":casework_origin.as_str(),"profile":"requester","producerId":"facility-registry","recoveryDays":7,"tokenRef":"secret:file/review-token"}}
@@ -159,6 +159,8 @@ impl Breg {
                 project.as_os_str(),
                 "--runtime-config".as_ref(),
                 rehearsal.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
                 "--credentials".as_ref(),
                 root.join("credentials.yaml").as_os_str(),
                 "--output".as_ref(),
@@ -188,6 +190,8 @@ impl Breg {
                 "apply".as_ref(),
                 "--runtime-config".as_ref(),
                 live.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
                 "--package".as_ref(),
                 package.as_os_str(),
                 "--initial".as_ref(),
@@ -197,7 +201,12 @@ impl Breg {
         let base_url = Url::parse(&format!("http://{address}/")).expect("native BReg URL");
         let process = ServiceProcess::start(
             &binary,
-            &["--runtime-config".as_ref(), live.as_os_str()],
+            &[
+                "--runtime-config".as_ref(),
+                live.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
+            ],
             root.join("service.log"),
             base_url.join("ready").expect("BReg readiness URL").as_str(),
         )
@@ -352,9 +361,12 @@ fn install_delegated_profile(project: &Path) {
 }
 
 fn client(base_url: &Url, token: String) -> BaseRegistryClient {
-    BaseRegistryClient::new(BaseRegistryClientConfig::new(base_url.clone()))
-        .expect("native BReg client")
-        .with_bearer_token(BearerToken::new(token).expect("synthetic BReg bearer token"))
+    BaseRegistryClient::new(BaseRegistryClientConfig::new(
+        base_url.clone(),
+        registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
+    ))
+    .expect("native BReg client")
+    .with_bearer_token(BearerToken::new(token).expect("synthetic BReg bearer token"))
 }
 fn map(value: Value) -> Map<String, Value> {
     value.as_object().expect("fixture object").clone()

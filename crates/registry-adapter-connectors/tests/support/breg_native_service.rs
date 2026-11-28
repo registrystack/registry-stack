@@ -587,7 +587,6 @@ impl Breg {
                     "environment": "test",
                     "instanceId": "adapter-connector-proof",
                     "databaseId": "adapter-connector-proof",
-                    "databaseInitializationEnvironment": "test"
                 },
                 "secretProviders": {"file": {"root": service.root}},
                 "database": {
@@ -599,7 +598,7 @@ impl Breg {
                 },
                 "package": {"root": package},
                 "authentication": {
-                    "oidc": {
+                    "oidc": {"issuers": {"primary": {
                         "issuer": issuer.issuer(),
                         "audience": "urn:example:applications",
                         "allowedAlgorithm": "ES256",
@@ -614,7 +613,7 @@ impl Breg {
                         "maximumTokenLifetimeSeconds": 3600,
                         "leewayMilliseconds": 0,
                         "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"}
-                    },
+                    }}},
                     "authorityClaims": if field_site {
                         json!({"principal": "sub", "purpose": "registry_purpose"})
                     } else {
@@ -748,7 +747,7 @@ impl Breg {
             chrono::Utc::now().timestamp() + 3600,
         );
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(self.base_url.parse().unwrap())
+            BaseRegistryClientConfig::new_without_peer_policy(self.base_url.parse().unwrap())
                 .with_token_provider(std::sync::Arc::new(StaticToken::new(token).unwrap()))
                 .with_maximum_mutation_retries(0),
         )
@@ -775,7 +774,7 @@ impl Breg {
             "adapter-field-ingestion",
         );
         let client = BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(self.base_url.parse().unwrap())
+            BaseRegistryClientConfig::new_without_peer_policy(self.base_url.parse().unwrap())
                 .with_token_provider(Arc::new(StaticToken::new(token).unwrap())),
         )
         .expect("the field-site observer client starts");

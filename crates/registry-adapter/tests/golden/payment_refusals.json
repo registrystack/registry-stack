@@ -1,0 +1,182 @@
+{
+  "basic-scheme": {
+    "body": {
+      "code": "adapter.payment.authentication-required",
+      "status": 401,
+      "title": "adapter.payment.authentication-required",
+      "type": "urn:registry:problem:adapter.payment.authentication-required"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "traceparent-present": true,
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff"
+  },
+  "client-not-allowed": {
+    "body": {
+      "code": "adapter.payment.forbidden",
+      "status": 403,
+      "title": "adapter.payment.forbidden",
+      "type": "urn:registry:problem:adapter.payment.forbidden"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 403,
+    "traceparent-present": true,
+    "www-authenticate": null,
+    "x-content-type-options": "nosniff"
+  },
+  "expired": {
+    "body": {
+      "code": "adapter.payment.authentication-required",
+      "status": 401,
+      "title": "adapter.payment.authentication-required",
+      "type": "urn:registry:problem:adapter.payment.authentication-required"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "traceparent-present": true,
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff"
+  },
+  "no-authorization": {
+    "body": {
+      "code": "adapter.payment.authentication-required",
+      "status": 401,
+      "title": "adapter.payment.authentication-required",
+      "type": "urn:registry:problem:adapter.payment.authentication-required"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "traceparent-present": true,
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff"
+  },
+  "not-a-compact-token": {
+    "body": {
+      "code": "adapter.payment.authentication-required",
+      "status": 401,
+      "title": "adapter.payment.authentication-required",
+      "type": "urn:registry:problem:adapter.payment.authentication-required"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "traceparent-present": true,
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff"
+  },
+  "scope-not-held": {
+    "body": {
+      "code": "adapter.payment.forbidden",
+      "status": 403,
+      "title": "adapter.payment.forbidden",
+      "type": "urn:registry:problem:adapter.payment.forbidden"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 403,
+    "traceparent-present": true,
+    "www-authenticate": null,
+    "x-content-type-options": "nosniff"
+  },
+  "two-authorization-headers": {
+    "body": {
+      "code": "adapter.payment.authentication-required",
+      "status": 401,
+      "title": "adapter.payment.authentication-required",
+      "type": "urn:registry:problem:adapter.payment.authentication-required"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "traceparent-present": true,
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff"
+  },
+  "unknown-attempt": {
+    "body": {
+      "code": "adapter.payment.not-found",
+      "status": 404,
+      "title": "adapter.payment.not-found",
+      "type": "urn:registry:problem:adapter.payment.not-found"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 404,
+    "traceparent-present": true,
+    "www-authenticate": null,
+    "x-content-type-options": "nosniff"
+  },
+  "unknown-connection": {
+    "body": {
+      "code": "adapter.payment.not-found",
+      "status": 404,
+      "title": "adapter.payment.not-found",
+      "type": "urn:registry:problem:adapter.payment.not-found"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 404,
+    "traceparent-present": true,
+    "www-authenticate": null,
+    "x-content-type-options": "nosniff"
+  },
+  "unknown-disbursement-connection": {
+    "body": {
+      "code": "adapter.payment.not-found",
+      "status": 404,
+      "title": "adapter.payment.not-found",
+      "type": "urn:registry:problem:adapter.payment.not-found"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 404,
+    "traceparent-present": true,
+    "www-authenticate": null,
+    "x-content-type-options": "nosniff"
+  },
+  "unknown-signer": {
+    "body": {
+      "code": "adapter.payment.authentication-required",
+      "status": 401,
+      "title": "adapter.payment.authentication-required",
+      "type": "urn:registry:problem:adapter.payment.authentication-required"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "traceparent-present": true,
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff"
+  },
+  "unlisted-client": {
+    "body": {
+      "code": "adapter.payment.authentication-required",
+      "status": 401,
+      "title": "adapter.payment.authentication-required",
+      "type": "urn:registry:problem:adapter.payment.authentication-required"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "traceparent-present": true,
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff"
+  }
+}

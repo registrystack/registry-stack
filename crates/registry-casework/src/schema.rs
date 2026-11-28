@@ -100,7 +100,6 @@ fn install_runtime_constraints(schema: &mut Value) {
         Value::String(registry_platform_audit::ABSOLUTE_AUDIT_PATH_PATTERN.to_owned()),
     );
     set_secret_provider_requirements(schema);
-    set_review_completion_auth_constraints(schema);
     set_audit_destination_constraints(schema);
 }
 
@@ -131,29 +130,6 @@ fn set_audit_destination_constraints(schema: &mut Value) {
         );
         audit.insert("else".to_owned(), serde_json::json!({"required": ["path"]}));
     }
-}
-
-/// State the shape `RuntimeConfig::validate_secret_references` requires of a
-/// completion destination: exactly one of `bearerTokenRef` and `auth`, and a
-/// header name made of HTTP token characters. The reserved header set is
-/// enforced at load, where names compare case-insensitively.
-fn set_review_completion_auth_constraints(schema: &mut Value) {
-    if let Some(destination) = schema
-        .pointer_mut("/$defs/ReviewCompletionRuntimeConfig")
-        .and_then(Value::as_object_mut)
-    {
-        destination.insert(
-            "oneOf".to_owned(),
-            serde_json::json!([{"required": ["bearerTokenRef"]}, {"required": ["auth"]}]),
-        );
-    }
-    set_definition_property(
-        schema,
-        "ReviewCompletionAuthConfig",
-        "header",
-        "pattern",
-        Value::String("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$".to_owned()),
-    );
 }
 
 /// Every secret reference names its provider by its prefix. When a provider
@@ -196,8 +172,14 @@ fn absent_secret_provider_requirement(provider: &str, reference_pattern: &str) -
                     "properties": {
                         "oidc": {
                             "properties": {
-                                "jwksSource": {
-                                    "properties": {"documentRef": forbidden}
+                                "issuers": {
+                                    "additionalProperties": {
+                                        "properties": {
+                                            "jwksSource": {
+                                                "properties": {"documentRef": forbidden}
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -226,10 +208,8 @@ fn absent_secret_provider_requirement(provider: &str, reference_pattern: &str) -
                 "reviewCompletionDestinations": {
                     "additionalProperties": {
                         "properties": {
-                            "bearerTokenRef": forbidden,
-                            "auth": {
-                                "properties": {"secretRef": forbidden}
-                            }
+                            "hmacSha256KeyRef": forbidden,
+                            "previousHmacSha256KeyRef": forbidden
                         }
                     }
                 }
@@ -290,10 +270,13 @@ mod tests {
     /// before its own checks.
     fn read(instance: &Value) -> Result<RuntimeConfig, RuntimeConfigError> {
         let text = serde_norway::to_string(instance).expect("the instance serializes");
-        RuntimeConfig::loader()
-            .parse_str::<RuntimeConfig>(&text, |_| None)
-            .map(|loaded| loaded.config)
-            .map_err(RuntimeConfigError::Load)
+        RuntimeConfig::loader(registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        })
+        .parse_str::<RuntimeConfig>(&text, |_| None)
+        .map(|loaded| loaded.config)
+        .map_err(RuntimeConfigError::Load)
     }
 
     fn runtime_instance(document_ref: &str, provider: &str) -> Value {
@@ -316,18 +299,18 @@ mod tests {
             "kind": RUNTIME_CONFIG_KIND,
             "identity": {"databaseId": "casework-schema-test"},
             "package": {"root": "/var/lib/casework/package"},
-            "listener": {"bind": "127.0.0.1:8100", "tlsTermination": "development-loopback"},
+            "listener": {"bind": "127.0.0.1:8100", "tlsTermination": "loopback-plaintext"},
             "secretProviders": secret_providers,
             "database": {
                 "runtimeUrlRef": supporting_reference,
                 "migrationUrlRef": supporting_reference
             },
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:casework",
                 "allowedClients": "unrestricted",
                 "jwksSource": {"type": "static", "documentRef": document_ref}
-            }},
+            }}}},
             "audit": {"path": "/var/log/casework/audit.jsonl", "hashKeyRef": supporting_reference}
         })
     }
@@ -352,8 +335,9 @@ mod tests {
     fn delegated_staff_reader_schema_matches_the_closed_runtime_shape() {
         let schema = runtime_schema();
         let mut instance = runtime_instance("secret:env/CASEWORK_JWKS", "environment");
-        instance["authentication"]["oidc"]["allowedClients"] = serde_json::json!(["registry-mcp"]);
-        instance["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+        instance["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            serde_json::json!(["registry-mcp"]);
+        instance["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = serde_json::json!({
             "registry-mcp": ["https://people.example.test"]
         });
         instance["authentication"]["oidc"]["delegatedStaffReaders"] = serde_json::json!({
@@ -361,6 +345,7 @@ mod tests {
                 "profile": "staff",
                 "client": "registry-mcp",
                 "actorSubject": "registry-mcp",
+                "representedHuman": {"claim": "registry_subject_actor_kind", "value": "human"},
                 "assertionIssuer": "https://people.example.test",
                 "requiredScope": "casework:staff:delegated-read",
                 "maximumTokenLifetimeSeconds": 300,
@@ -389,6 +374,9 @@ mod tests {
             "/authentication/oidc/delegatedStaffReaders/assistant-reader/client",
             "/authentication/oidc/delegatedStaffReaders/assistant-reader/requiredScope",
             "/authentication/oidc/delegatedStaffReaders/assistant-reader/maximumTokenLifetimeSeconds",
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/representedHuman",
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/representedHuman/claim",
+            "/authentication/oidc/delegatedStaffReaders/assistant-reader/representedHuman/value",
         ] {
             let mut missing = instance.clone();
             missing
@@ -405,11 +393,50 @@ mod tests {
             assert!(!schema.is_valid(&missing), "schema accepted missing {pointer}");
             assert!(read(&missing).is_err(), "runtime read missing {pointer}");
         }
+        // An empty claim or value is refused by the runtime's own checks
+        // after decoding, and an unknown member by the decoder.
+        for (member, written) in [("claim", ""), ("value", ""), ("other", "x")] {
+            let mut changed = instance.clone();
+            changed["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
+                ["representedHuman"][member] = serde_json::json!(written);
+            assert!(
+                !schema.is_valid(&changed),
+                "schema accepted representedHuman.{member} = {written:?}"
+            );
+        }
+        let mut unknown = instance.clone();
+        unknown["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
+            ["representedHuman"]["other"] = serde_json::json!("x");
+        assert!(read(&unknown).is_err());
         let mut too_long = instance;
         too_long["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
             ["maximumTokenLifetimeSeconds"] = serde_json::json!(301);
         assert!(!schema.is_valid(&too_long));
         assert!(read(&too_long).is_err());
+    }
+
+    #[test]
+    fn unrestricted_allowed_clients_are_marked_development_only_in_the_schema() {
+        let document: Value =
+            serde_json::from_str(&runtime_documents().unwrap()[RUNTIME_CONFIG_SCHEMA_FILE])
+                .unwrap();
+        assert_eq!(
+            document["$defs"]["CaseworkIssuer"]["properties"]["allowedClients"]
+                ["x-registry-development-only"],
+            serde_json::json!(["casework.posture.unrestricted-clients"])
+        );
+    }
+
+    #[test]
+    fn omitted_assertion_issuers_declare_no_default_the_schema_refuses() {
+        // Omitting the member says no assertion-issuer rule applies. An empty
+        // mapping is not a value the schema accepts, so it is no default.
+        let document: Value =
+            serde_json::from_str(&runtime_documents().unwrap()[RUNTIME_CONFIG_SCHEMA_FILE])
+                .unwrap();
+        let member = &document["$defs"]["CaseworkIssuer"]["properties"]["assertionIssuers"];
+        assert_eq!(member["minProperties"], 1, "{member}");
+        assert!(member.get("default").is_none(), "{member}");
     }
 
     #[test]
@@ -477,7 +504,7 @@ mod tests {
             "#/$defs/SecretReference"
         );
         assert_eq!(
-            document["$defs"]["OidcConfig"]["properties"]["issuer"]["$ref"],
+            document["$defs"]["CaseworkIssuer"]["properties"]["issuer"]["$ref"],
             "#/$defs/Url"
         );
     }
@@ -491,7 +518,7 @@ mod tests {
         let schema = runtime_schema();
         let with = |issuers: Value| {
             let mut instance = runtime_instance("secret:file/jwks.json", "file");
-            instance["authentication"]["oidc"]["assertionIssuers"] = issuers;
+            instance["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = issuers;
             instance
         };
         let many_clients = (0..=MAX_ASSERTION_ISSUER_CLIENTS)
@@ -554,7 +581,7 @@ mod tests {
         let with = |kids: Option<Value>| {
             let mut instance = runtime_instance("secret:file/jwks.json", "file");
             if let Some(kids) = kids {
-                instance["authentication"]["oidc"]["revokedKeyIds"] = kids;
+                instance["authentication"]["oidc"]["issuers"]["main"]["revokedKeyIds"] = kids;
             }
             instance
         };
@@ -588,7 +615,7 @@ mod tests {
         let document: Value =
             serde_json::from_str(&runtime_documents().unwrap()[RUNTIME_CONFIG_SCHEMA_FILE])
                 .unwrap();
-        let revoked = &document["$defs"]["OidcConfig"]["properties"]["revokedKeyIds"];
+        let revoked = &document["$defs"]["CaseworkIssuer"]["properties"]["revokedKeyIds"];
         assert!(revoked.get("default").is_none());
         assert_eq!(revoked["uniqueItems"], true);
         assert_eq!(revoked["minItems"], 1);
@@ -597,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_destination_schema_names_exactly_one_secret_and_a_token_header() {
+    fn completion_destination_schema_requires_a_current_signing_key() {
         let schema = runtime_schema();
         let with = |destination: Value| {
             let mut instance = runtime_instance("secret:file/jwks.json", "file");
@@ -607,52 +634,26 @@ mod tests {
         };
         let url = "https://requester.example.test/completions";
         for accepted in [
-            serde_json::json!({"url": url, "bearerTokenRef": "secret:file/completion-token"}),
-            serde_json::json!({"url": url, "auth": {"secretRef": "secret:file/completion-key"}}),
-            serde_json::json!({
-                "url": url,
-                "auth": {"header": "x-api-key", "secretRef": "secret:file/completion-key"}
-            }),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current"}),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current",
+                "previousHmacSha256KeyRef": "secret:file/previous"}),
         ] {
-            assert!(schema.is_valid(&with(accepted.clone())), "{accepted}");
-        }
-        // An explicit null is refused, by the schema and by the reader alike.
-        for nulled in [
-            serde_json::json!({
-                "url": url,
-                "bearerTokenRef": null,
-                "auth": {"secretRef": "secret:file/completion-key"}
-            }),
-            serde_json::json!({
-                "url": url,
-                "bearerTokenRef": "secret:file/completion-token",
-                "auth": null
-            }),
-        ] {
-            assert!(!schema.is_valid(&with(nulled.clone())), "{nulled}");
-            assert!(read(&with(nulled.clone())).is_err(), "{nulled}");
+            let instance = with(accepted);
+            assert!(schema.is_valid(&instance));
+            assert!(read(&instance).is_ok());
         }
         for refused in [
             serde_json::json!({"url": url}),
-            serde_json::json!({"url": url, "bearerTokenRef": null}),
-            serde_json::json!({"url": url, "auth": null}),
-            serde_json::json!({"url": url, "bearerTokenRef": null, "auth": null}),
-            serde_json::json!({
-                "url": url,
-                "bearerTokenRef": "secret:file/completion-token",
-                "auth": {"secretRef": "secret:file/completion-key"}
-            }),
-            serde_json::json!({
-                "url": url,
-                "auth": {"header": "x api key", "secretRef": "secret:file/completion-key"}
-            }),
-            serde_json::json!({
-                "url": url,
-                "auth": {"header": "x-api-key", "secretRef": "completion-key"}
-            }),
-            serde_json::json!({"url": url, "auth": {"header": "x-api-key"}}),
+            serde_json::json!({"url": url, "previousHmacSha256KeyRef": "secret:file/previous"}),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": null}),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current",
+                "previousHmacSha256KeyRef": null}),
+            serde_json::json!({"url": url, "hmacSha256KeyRef": "secret:file/current", "bearerTokenRef": "secret:file/retired"}),
+            serde_json::json!({"url": url, "auth": {"secretRef": "secret:file/retired"}}),
         ] {
-            assert!(!schema.is_valid(&with(refused.clone())), "{refused}");
+            let instance = with(refused);
+            assert!(!schema.is_valid(&instance));
+            assert!(read(&instance).is_err());
         }
     }
 
@@ -664,7 +665,7 @@ mod tests {
             instance["reviewCompletionDestinations"] = serde_json::json!({
                 "review-requester": {
                     "url": "https://requester.example.test/completions",
-                    "bearerTokenRef": "secret:file/completion-token",
+                    "hmacSha256KeyRef": "secret:file/completion-key",
                     "attemptTimeoutMilliseconds": timeout_milliseconds,
                     "maximumAttempts": maximum_attempts,
                     "retryDelaySeconds": retry_seconds
@@ -755,7 +756,7 @@ mod tests {
                 config.check(),
                 Err(RuntimeConfigError::Block(error))
                     if error.kind() == ConfigBlockErrorKind::InvalidSecretReference
-                        && error.field() == "authentication.oidc.jwksSource.documentRef"
+                        && error.field() == "authentication.oidc.issuers.main.jwksSource.documentRef"
             ));
             assert!(
                 !schema.is_valid(&instance),
@@ -773,7 +774,7 @@ mod tests {
                 config.check(),
                 Err(RuntimeConfigError::Block(error))
                     if error.kind() == ConfigBlockErrorKind::SecretProviderDisabled
-                        && error.field() == "authentication.oidc.jwksSource.documentRef"
+                        && error.field() == "authentication.oidc.issuers.main.jwksSource.documentRef"
             ));
             assert!(
                 !schema.is_valid(&instance),
@@ -816,16 +817,10 @@ mod tests {
             }
         });
         instance["reviewCompletionDestinations"] = serde_json::json!({
-            "bearer": {
+            "receiver": {
                 "url": "https://producer.example.test/completions",
-                "bearerTokenRef": "secret:file/completion-token"
-            },
-            "header": {
-                "url": "https://another-producer.example.test/completions",
-                "auth": {
-                    "header": "x-api-key",
-                    "secretRef": "secret:env/COMPLETION_API_KEY"
-                }
+                "hmacSha256KeyRef": "secret:file/completion-key",
+                "previousHmacSha256KeyRef": "secret:env/PREVIOUS_COMPLETION_KEY"
             }
         });
         instance["taskAuthority"] = serde_json::json!({
@@ -873,14 +868,14 @@ mod tests {
             "/database/runtimeUrlRef",
             "/database/migrationUrlRef",
             "/database/caBundleRef",
-            "/authentication/oidc/jwksSource/documentRef",
+            "/authentication/oidc/issuers/main/jwksSource/documentRef",
             "/audit/hashKeyRef",
             "/contextProviders/facility-registry/clientIdRef",
             "/contextProviders/facility-registry/clientAssertionKeyRef",
             "/contextProviders/facility-registry/delegatedDisplayExchange/clientIdRef",
             "/contextProviders/facility-registry/delegatedDisplayExchange/clientAssertionKeyRef",
-            "/reviewCompletionDestinations/bearer/bearerTokenRef",
-            "/reviewCompletionDestinations/header/auth/secretRef",
+            "/reviewCompletionDestinations/receiver/hmacSha256KeyRef",
+            "/reviewCompletionDestinations/receiver/previousHmacSha256KeyRef",
             "/taskAuthority/signingKeyRef",
         ];
         for &pointer in &pointers {

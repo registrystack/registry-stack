@@ -73,6 +73,12 @@ pub struct Options {
     pub wallet_response_burst: u32,
     pub response_burst_per_request: u32,
     pub evidence_read_burst: u32,
+    /// Serve the applicant-token key set from this static document instead of
+    /// the test issuer's key endpoint.
+    pub applicant_static_jwks: Option<&'static str>,
+    /// Fetch the applicant-token key set from this URI instead of the test
+    /// issuer's key endpoint.
+    pub applicant_jwks_uri: Option<&'static str>,
 }
 
 impl Default for Options {
@@ -92,6 +98,8 @@ impl Default for Options {
             wallet_response_burst: 50,
             response_burst_per_request: 20,
             evidence_read_burst: 50,
+            applicant_static_jwks: None,
+            applicant_jwks_uri: None,
         }
     }
 }
@@ -235,6 +243,18 @@ impl Harness {
             keys.registered_jwk.as_bytes(),
         );
         write_secret(&secrets, "audit-hash-key", &[7u8; 48]);
+        let applicant_jwks_source = match options.applicant_static_jwks {
+            Some(document) => {
+                write_secret(&secrets, "applicant-jwks.json", document.as_bytes());
+                "type: static\n    documentRef: secret:file/applicant-jwks.json".to_owned()
+            }
+            None => format!(
+                "type: uri\n    uri: {}",
+                options
+                    .applicant_jwks_uri
+                    .map_or_else(|| idp.jwks_uri().to_string(), str::to_owned)
+            ),
+        };
         let audit_path = dir.path().join("audit.jsonl");
 
         let authorities = if options.trusted_authorities {
@@ -294,16 +314,13 @@ audit:
 applicantTokens:
   issuer: {issuer}
   audience: {AUDIENCE}
-  allowInsecureHttp: true
   jwksSource:
-    type: uri
-    uri: {jwks}
+    {applicant_jwks_source}
   algorithms: [EdDSA]
   requiredScope: {SESSION_SCOPE}
 evidenceCredentials:
   issuer: {issuer}
   audience: {AUDIENCE}
-  allowInsecureHttp: true
   jwksSource:
     type: uri
     uri: {jwks}
@@ -384,7 +401,14 @@ rateLimits:
     }
 
     pub fn config(&self) -> Oid4vpConfig {
-        Oid4vpConfig::load(&self.config_path).unwrap_or_else(|error| {
+        Oid4vpConfig::load(
+            &self.config_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Default,
+            },
+        )
+        .unwrap_or_else(|error| {
             panic!(
                 "the test deployment loads: {error} {:?}",
                 error.diagnostics()

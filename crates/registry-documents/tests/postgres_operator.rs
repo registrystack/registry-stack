@@ -22,8 +22,8 @@ use registry_documents::config::RuntimeConfig;
 use registry_documents::erasure::{ErasureStatus, ErasureStore};
 use registry_documents::runtime::{
     activation_plan, activation_status, apply_activation, dead_lettered_erasures,
-    dead_lettered_verifications, erasure_report, prepare, prepare_with_verifier, replay_erasure,
-    replay_verification, Prepared, RuntimeError,
+    dead_lettered_verifications, erasure_report, prepare_with_posture, prepare_with_verifier,
+    replay_erasure, replay_verification, Prepared, RuntimeError,
 };
 use registry_documents::store::StoreError;
 use registry_documents::verification::{
@@ -40,7 +40,8 @@ use url::Url;
 use uuid::Uuid;
 
 fn config(deployment: &Deployment) -> RuntimeConfig {
-    RuntimeConfig::load(&deployment.runtime).expect("the test runtime document loads")
+    RuntimeConfig::load_with_posture(&deployment.runtime, support::TEST_POSTURE)
+        .expect("the test runtime document loads")
 }
 
 /// The relations in the deployment's isolated schema.
@@ -86,7 +87,7 @@ fn rewrite_runtime(deployment: &Deployment, from: &str, to: &str) {
 #[tokio::test]
 async fn a_fresh_database_is_refused_by_serve_until_the_package_is_applied() {
     let deployment = Deployment::new(DATABASE_STORAGE, DISABLED_VERIFIER).await;
-    let error = prepare(&deployment.runtime)
+    let error = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("an unactivated database is refused");
     assert!(
@@ -105,10 +106,10 @@ async fn a_fresh_database_is_refused_by_serve_until_the_package_is_applied() {
         .await
         .expect("the package applies");
     assert!(applied.recorded);
-    assert_eq!(applied.schema_versions_applied, vec![100]);
+    assert_eq!(applied.schema_versions_applied, vec![100, 101]);
     assert_eq!(applied.activation.plan_kind, PlanKind::Initial);
     assert_eq!(applied.activation.role_mode, RoleMode::Single);
-    prepare(&deployment.runtime)
+    prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect("the activated database serves");
 }
@@ -123,7 +124,7 @@ async fn plan_reports_the_change_and_writes_nothing() {
     assert_eq!(plan.change, ActivationChange::Activate);
     assert_eq!(plan.plan_kind, PlanKind::Initial);
     assert_eq!(plan.active_digest, None);
-    assert_eq!(plan.pending_schema_versions, vec![100]);
+    assert_eq!(plan.pending_schema_versions, vec![100, 101]);
     assert_eq!(plan.database_id, DatabaseIdCheck::NotRecorded);
     assert!(plan.refusals.is_empty(), "{:?}", plan.refusals);
     assert!(plan.package_digest.starts_with("sha256:"));
@@ -194,7 +195,7 @@ async fn apply_is_idempotent_for_one_package_and_records_a_changed_one() {
         "package-2",
         &format!("{STARTER_PROJECT}\n# A reviewed change.\n"),
     );
-    let error = prepare(&deployment.runtime)
+    let error = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("the changed package is not active");
     assert!(
@@ -225,7 +226,7 @@ async fn apply_is_idempotent_for_one_package_and_records_a_changed_one() {
         .scalar("SELECT count(*) FROM documents_activations")
         .await;
     assert_eq!(entries, 2);
-    prepare(&deployment.runtime)
+    prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect("the applied successor serves");
 }
@@ -256,7 +257,7 @@ async fn status_reports_the_active_package_and_its_history() {
     assert_eq!(active.activation_id, second.activation.activation_id);
     assert_eq!(active.package_digest, second.activation.package_digest);
     assert_eq!(active.database_id, "registry-documents-test");
-    assert_eq!(status.schema_version, Some(100));
+    assert_eq!(status.schema_version, Some(101));
     assert_eq!(
         status
             .history
@@ -282,7 +283,7 @@ async fn a_database_recorded_for_another_deployment_is_refused() {
         "databaseId: registry-documents-test",
         "databaseId: registry-documents-other",
     );
-    let error = prepare(&deployment.runtime)
+    let error = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("another deployment's database is refused");
     assert!(
@@ -397,7 +398,7 @@ async fn split_deployment() -> (Deployment, String) {
         .await
         .expect("the migration credential applies");
     assert_eq!(applied.activation.role_mode, RoleMode::Split);
-    prepare(&deployment.runtime)
+    prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect("the runtime role serves the activated database");
     (deployment, role)
@@ -444,7 +445,7 @@ async fn apply_requires_the_migration_credential() {
     let status = activation_status(&config(&deployment)).await.unwrap();
     assert_eq!(status.runtime_role_mode, Some(RoleMode::Split));
     assert_eq!(status.grants_current, Some(true));
-    prepare(&deployment.runtime)
+    prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect("the runtime role serves the activated database");
     drop_role(&deployment, &role).await;
@@ -459,7 +460,7 @@ async fn serve_refuses_a_runtime_role_that_gained_authority_over_the_schema() {
             deployment.schema
         ))
         .await;
-    let error = prepare(&deployment.runtime)
+    let error = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("a runtime role with schema authority is refused");
     assert!(
@@ -478,7 +479,7 @@ async fn serve_refuses_a_runtime_role_that_lost_a_grant() {
     deployment
         .execute(&format!("REVOKE SELECT ON documents_versions FROM {role}"))
         .await;
-    let error = prepare(&deployment.runtime)
+    let error = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("a runtime role missing a grant is refused");
     assert!(
@@ -504,7 +505,7 @@ async fn serve_refuses_a_runtime_role_that_lost_usage_on_the_schema_as_a_grant_p
             deployment.schema
         ))
         .await;
-    let error = prepare(&deployment.runtime)
+    let error = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("a runtime role without schema usage is refused");
     let message = error.to_string();
@@ -539,7 +540,7 @@ async fn serve_refuses_an_activated_database_with_a_newer_schema_version() {
              SELECT max(version) + 1, now() FROM documents_schema_migrations",
         )
         .await;
-    let error = prepare(&deployment.runtime)
+    let error = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
         .await
         .expect_err("a newer schema version is refused");
     assert!(
@@ -552,9 +553,10 @@ async fn serve_refuses_an_activated_database_with_a_newer_schema_version() {
 }
 
 async fn start(deployment: &Deployment, verifier: &Arc<FakeVerifier>) -> (Prepared, Api) {
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares");
+    let prepared =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares");
     let api = Api::new(&prepared);
     (prepared, api)
 }
@@ -935,7 +937,9 @@ async fn runtime_and_apply_refuse_an_activation_ledger_in_a_later_search_path_sc
         &format!("-csearch_path={shadow},{}", deployment.schema),
     );
     deployment.secret("runtime-database-url", url.as_str());
-    let error = prepare(&deployment.runtime).await.unwrap_err();
+    let error = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
+        .await
+        .unwrap_err();
     assert!(
         matches!(
             error,
@@ -981,7 +985,9 @@ async fn a_running_runtime_refuses_a_new_schema_before_its_activation_ledger() {
         &format!("-csearch_path={shadow},{}", deployment.schema),
     );
     deployment.secret("runtime-database-url", url.as_str());
-    let prepared = prepare(&deployment.runtime).await.unwrap();
+    let prepared = prepare_with_posture(&deployment.runtime, support::TEST_POSTURE)
+        .await
+        .unwrap();
     let api = Api::new(&prepared);
     assert_eq!(api.get(APP, "/v1/document-policies").await.status, 200);
     deployment.execute(&format!("CREATE SCHEMA {shadow}")).await;
@@ -1163,6 +1169,7 @@ async fn a_verification_leased_before_activation_cannot_send_or_record_an_old_ve
         &config.storage,
         "registry-documents-test",
         Arc::new(config.secret_resolver().unwrap()),
+        config.peer_policy(),
     )
     .await
     .unwrap();
@@ -1339,19 +1346,18 @@ async fn replay_refuses_a_project_hook_whose_destination_is_not_bound_as_serve_d
     let RuntimeError::ConfigurationRefused(report) = &error else {
         panic!("a positioned configuration refusal, not {error}");
     };
-    let found: Vec<(&str, &str)> = report
+    let findings: Vec<_> = report
         .diagnostics()
         .iter()
-        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .filter(|diagnostic| diagnostic.severity == registry_platform_yaml::Severity::Error)
         .collect();
+    assert_eq!(findings.len(), 1);
     assert_eq!(
-        found,
-        [(
-            "documents.runtime.unbound-hook-destination",
-            "/destinations/hooks"
-        )]
+        findings[0].code,
+        "documents.runtime.unbound-hook-destination"
     );
-    let source = report.diagnostics()[0]
+    assert_eq!(findings[0].path, "/destinations/hooks");
+    let source = findings[0]
         .source
         .as_ref()
         .expect("the diagnostic names its file");
@@ -1463,7 +1469,10 @@ async fn replay_audited(
         .await
         .unwrap();
     let audit = DocumentsAudit::new(
-        AuditWriter::from_line_sink(Box::new(LimitedSink { lines })),
+        AuditWriter::from_line_sink(
+            Box::new(LimitedSink { lines }),
+            support::TEST_POSTURE.posture,
+        ),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))
@@ -1836,7 +1845,10 @@ async fn erasure_replay_audited(
         .await
         .unwrap();
     let audit = DocumentsAudit::new(
-        AuditWriter::from_line_sink(Box::new(LimitedSink { lines })),
+        AuditWriter::from_line_sink(
+            Box::new(LimitedSink { lines }),
+            support::TEST_POSTURE.posture,
+        ),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))

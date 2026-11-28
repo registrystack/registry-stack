@@ -20,6 +20,7 @@ use registry_platform_config::{
     OidcIssuerConfig, PackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
     SecretProvidersConfig,
 };
+pub use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use registry_platform_yaml::{
     local_id_collision_diagnostics, AuthoredId, BoundedU32, BoundedU64, Diagnostic, Digest,
     DisplayText, Document, EnvelopeRule, Expect, ExternalId, FormatSpec, Invalid, LocalId, Reader,
@@ -1255,6 +1256,14 @@ impl EvidenceConfig {
     /// refusal is a [`ConfigError::Refused`] report whose diagnostics name
     /// the member, its line and column, and the fix (CFG-DIAG-1).
     pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
+        Self::parse_yaml_observing(bytes, |_| {})
+    }
+
+    /// Observe the decoded assurance profile before applying semantic rules.
+    pub(crate) fn parse_yaml_observing(
+        bytes: &[u8],
+        observe_assurance: impl FnOnce(AssuranceProfile),
+    ) -> Result<Self, ConfigError> {
         if bytes.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::TooLarge);
         }
@@ -1263,6 +1272,7 @@ impl EvidenceConfig {
             .with_hook(&mut hook)
             .decode::<Self>(bytes, &Expect::one(&EVIDENCE_BUNDLE_FORMAT))
             .map_err(|report| ConfigError::Refused(Box::new(name_the_assertion_type(report))))?;
+        observe_assurance(decoded.value.assurance_profile);
         let mut diagnostics = bundle_integrity_diagnostics(&decoded);
         if let Err(violation) = decoded.value.check_rules_after_integrity() {
             diagnostics.push(violation.diagnostic(&decoded.document));
@@ -2544,8 +2554,8 @@ pub struct RuntimeAuthorityConfig {
 impl RuntimeConfig {
     /// The shared loader configured with the Evidence envelope and the keys
     /// it no longer accepts.
-    pub fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(EVIDENCE_RUNTIME_ENVELOPE)
+    pub fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(EVIDENCE_RUNTIME_ENVELOPE, declared)
             .removed_keys(EVIDENCE_RUNTIME_REMOVED_KEYS)
             .retired_api_versions(EVIDENCE_RETIRED_RUNTIME_API_VERSIONS)
     }
@@ -2553,7 +2563,15 @@ impl RuntimeConfig {
     /// Parse and validate one runtime document with no environment: an
     /// environment expression resolves only through its own default.
     pub fn parse_yaml(bytes: &[u8]) -> Result<Self, ConfigError> {
-        Self::parse_yaml_with(bytes, |_| None).map(|loaded| loaded.config)
+        Self::parse_yaml_with(
+            bytes,
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |_| None,
+        )
+        .map(|loaded| loaded.config)
     }
 
     /// Parse and validate one runtime document, substituting environment
@@ -2561,9 +2579,10 @@ impl RuntimeConfig {
     /// the document after substitution.
     pub fn parse_yaml_with(
         bytes: &[u8],
+        declared: DeclaredPosture,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
-        let loaded = Self::decode_yaml_with(bytes, lookup)?;
+        let loaded = Self::decode_yaml_with(bytes, declared, lookup)?;
         loaded.config.validate()?;
         Ok(loaded)
     }
@@ -2573,6 +2592,7 @@ impl RuntimeConfig {
     /// without the semantic checks [`RuntimeConfig::findings`] applies.
     pub fn decode_yaml_with(
         bytes: &[u8],
+        declared: DeclaredPosture,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
         // The reader refuses a document over its size bound or not in UTF-8
@@ -2581,11 +2601,26 @@ impl RuntimeConfig {
         let Ok(text) = std::str::from_utf8(bytes) else {
             return Err(unreadable_document(RUNTIME_DOCUMENT_NAME, bytes));
         };
-        Self::loader()
+        Self::loader(declared)
             .parse_str::<Self>(text, lookup)
             .map_err(|error| {
                 ConfigError::Refused(Box::new(Report::new(error.diagnostics().to_vec())))
             })
+    }
+
+    /// Decode a captured runtime for comparison with a package before deciding posture.
+    pub fn inspect_yaml(
+        path: &Path,
+        bytes: &[u8],
+        declared: DeclaredPosture,
+        environment: bool,
+    ) -> Result<LoadedRuntimeConfig<Self>, ConfigError> {
+        let check = Self::loader(declared).check_offline_bytes(path, bytes, environment, |_| {
+            registry_platform_config::DEFAULT_STAND_IN
+        });
+        check
+            .loaded
+            .ok_or_else(|| ConfigError::Refused(Box::new(Report::new(check.diagnostics))))
     }
 
     /// Refuse the document with the first rule it breaks, as startup does.
@@ -3426,12 +3461,6 @@ pub struct OidcAuthenticationConfig {
 shared_block_host!(OidcAuthenticationConfig, block = "provider");
 
 impl OidcAuthenticationConfig {
-    pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.provider.allow_insecure_http.then_some(
-            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-        )
-    }
-
     /// The exact issuer accepted in `iss`.
     pub fn issuer(&self) -> &str {
         &self.provider.issuer
@@ -3461,79 +3490,46 @@ impl OidcAuthenticationConfig {
         let jwks_uri = Url::parse(self.jwks_uri())
             .map_err(|_| ConfigError::Invalid("authentication JWKS URI is invalid"))?;
         let plain_http = issuer.scheme() == "http" || jwks_uri.scheme() == "http";
-        // Deployable bundles require HTTPS for the issuer and the JWKS URI.
-        // The plain HTTP opt-in exists for the local profile alone, so a
-        // deployable bundle that sets it is refused rather than ignored.
-        if assurance_profile != AssuranceProfile::Local {
-            if self.provider.allow_insecure_http {
-                return Err(ConfigError::InvalidField(
-                    "production and evidence-grade authentication requires HTTPS; remove allowInsecureHttp, which only the local assurance profile accepts",
-                    "authentication.oidc.allowInsecureHttp",
-                ));
-            }
-            if plain_http {
-                return invalid(
-                    "production and evidence-grade authentication requires HTTPS for the issuer and JWKS URI; plain HTTP is accepted only under the local assurance profile",
-                );
-            }
+        if assurance_profile != AssuranceProfile::Local && self.provider.allow_insecure_http {
+            return Err(ConfigError::InvalidField(
+                "production and evidence-grade authentication permits HTTP only on loopback; remove allowInsecureHttp, which only the local assurance profile accepts",
+                "authentication.oidc.allowInsecureHttp",
+            ));
         }
-        if plain_http && !self.provider.allow_insecure_http {
-            // The local permission is for a supervised issuer on this
-            // deployment's own loopback: a canonical numeric origin, with the
-            // JWKS served from that exact origin. It is not a permission for
-            // private-network HTTP, and a JWKS origin or port other than the
-            // issuer's is not supervised by the issuer that vouches for it.
-            let origin = validate_local_issuer_origin(self.issuer())?;
-            if jwks_uri.scheme() != "http"
-                || jwks_uri.host_str() != Some("127.0.0.1")
-                || jwks_uri.port() != issuer.port()
-                || !jwks_uri.path().starts_with('/')
-                || jwks_uri.query().is_some()
-                || jwks_uri.fragment().is_some()
-                || !jwks_uri.username().is_empty()
-                || jwks_uri.password().is_some()
-                || self.jwks_uri() != format!("{origin}{}", jwks_uri.path())
-            {
-                return invalid(
-                    "local authentication JWKS URI must use the exact issuer origin, an absolute path, and no query or fragment",
-                );
+        if issuer.scheme() == "https" {
+            validate_https_issuer(self.issuer())?;
+        }
+        if jwks_uri.scheme() == "https" {
+            validate_https_url(self.jwks_uri(), false)?;
+        } else if jwks_uri.scheme() == "http" {
+            if jwks_uri.fragment().is_some() {
+                return invalid("authentication JWKS URI cannot carry a fragment");
             }
             if self.tls_trust_profile.is_some() {
                 return invalid(
-                    "a local HTTP authentication JWKS URI cannot use a TLS trust profile",
+                    "a plain HTTP authentication JWKS URI cannot use a TLS trust profile",
                 );
             }
-        } else if issuer.scheme() == "https" && jwks_uri.scheme() == "https" {
-            validate_https_issuer(self.issuer())?;
-            validate_https_url(self.jwks_uri(), false)?;
-        } else {
-            if issuer.scheme() == "https" {
-                validate_https_issuer(self.issuer())?;
-            }
-            if jwks_uri.scheme() == "https" {
-                validate_https_url(self.jwks_uri(), false)?;
-            } else {
-                if jwks_uri.fragment().is_some() {
-                    return invalid("authentication JWKS URI cannot carry a fragment");
-                }
-                if self.tls_trust_profile.is_some() {
-                    return invalid(
-                        "a plain HTTP authentication JWKS URI cannot use a TLS trust profile",
-                    );
-                }
-            }
         }
-        self.provider
-            .check(
-                "authentication.oidc",
-                assurance_profile == AssuranceProfile::Local,
-            )
-            .map_err(|_| {
+        self.provider.check("authentication.oidc").map_err(|error| {
+            if plain_http && !self.provider.allow_insecure_http
+                && error.kind() == registry_platform_config::ConfigBlockErrorKind::InvalidUri
+            {
+                ConfigError::InvalidField(
+                    if assurance_profile == AssuranceProfile::Local {
+                        "plain HTTP authentication requires loopback wherever HTTP is used; local development can opt in with authentication.oidc.allowInsecureHttp: true"
+                    } else {
+                        "plain HTTP authentication requires a loopback issuer and JWKS URI wherever HTTP is used"
+                    },
+                    "authentication.oidc",
+                )
+            } else {
                 ConfigError::InvalidField(
                     "the OIDC issuer, audience, or JWKS source is invalid",
                     "authentication.oidc",
                 )
-            })?;
+            }
+        })?;
         if self
             .tls_trust_profile
             .as_deref()
@@ -3663,24 +3659,6 @@ impl OidcAuthenticationConfig {
 /// every authenticated request.
 const REGISTERED_JWT_CLAIMS: [&str; 8] =
     ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "cnf"];
-
-fn validate_local_issuer_origin(value: &str) -> Result<&str, ConfigError> {
-    let port = value
-        .strip_prefix("http://127.0.0.1:")
-        .filter(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
-        .filter(|port| !port.starts_with('0'))
-        .and_then(|port| port.parse::<u16>().ok())
-        .filter(|port| *port != 0)
-        .ok_or(ConfigError::Invalid(
-            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port; any other plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
-        ))?;
-    if value != format!("http://127.0.0.1:{port}") {
-        return invalid(
-            "local authentication issuer must be a canonical 127.0.0.1 HTTP origin with an explicit non-zero port; any other plain HTTP issuer needs authentication.oidc.allowInsecureHttp: true",
-        );
-    }
-    Ok(value)
-}
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum AccessTokenType {
@@ -7300,92 +7278,150 @@ mod tests {
         assert!(parsed.requirements[0].fixtures.is_none());
     }
 
-    /// The supervised-local issuer rule: a canonical numeric loopback origin
-    /// for the issuer, and a JWKS on that exact origin at any absolute path
-    /// without query or fragment. Local assurance only; strict profiles keep
-    /// the HTTPS requirement.
     #[test]
-    fn only_local_assurance_accepts_a_canonical_loopback_issuer_with_same_origin_jwks() {
-        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+    fn production_oidc_accepts_loopback_http_without_opt_in() {
+        let mut candidate = plain_http_issuer_candidate("local", false);
+        let oidc = &mut candidate["authentication"]["oidc"];
+        oidc["issuer"] = serde_json::json!("http://127.0.0.1:8080");
+        oidc["jwksSource"]["uri"] = serde_json::json!("http://127.0.0.1:8080/jwks");
+        let mut auth = EvidenceConfig::parse_projection(&candidate)
+            .expect("local OIDC configuration decodes")
+            .authentication
+            .oidc;
+        auth.validate(AssuranceProfile::Production)
+            .expect("production permits loopback HTTP");
+
+        auth.provider.jwks_source = JwksSource::Uri {
+            uri: registry_platform_yaml::Url::new("http://identity.internal:8080/jwks").unwrap(),
+        };
+        let error = auth
+            .validate(AssuranceProfile::Production)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("loopback"), "{error}");
+        assert!(!error.contains("identity.internal"), "{error}");
+    }
+
+    #[test]
+    fn deployable_oidc_requires_each_http_endpoint_to_be_loopback() {
+        let mut auth = EvidenceConfig::parse_yaml(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
-        .expect("strict fixture validates");
-        config.assurance_profile = AssuranceProfile::Local;
-        config.authentication.oidc.provider.issuer =
-            registry_platform_yaml::Url::new("http://127.0.0.1:8081").expect("valid URL");
-        config.authentication.oidc.provider.jwks_source =
-            registry_platform_config::JwksSource::Uri {
-                uri: registry_platform_yaml::Url::new(
-                    "http://127.0.0.1:8081/.well-known/jwks.json",
-                )
-                .expect("valid URL"),
-            };
-        config
-            .validate()
-            .expect("local profile accepts the supervised loopback identity");
-        // The JWKS path is the configured issuer's to choose.
-        config.authentication.oidc.provider.jwks_source =
-            registry_platform_config::JwksSource::Uri {
-                uri: registry_platform_yaml::Url::new("http://127.0.0.1:8081/oauth2/jwks")
-                    .expect("valid URL"),
-            };
-        config
-            .validate()
-            .expect("local profile accepts any same-origin absolute JWKS path");
-
-        EvidenceConfig::parse_projection(
-            &serde_json::to_value(&config).expect("configuration serializes"),
-        )
-        .expect("the valid configuration round-trips before invalid values are substituted");
-        for invalid in [
-            "http://localhost:8081",
-            "http://127.0.0.2:8081",
-            "http://127.0.0.1",
-            "http://127.0.0.1:0",
-            "http://127.0.0.1:08081",
-            "http://127.0.0.1:65536",
-            "http://user@127.0.0.1:8081",
-            "http://127.0.0.1:8081/",
-        ] {
-            let mut candidate = serde_json::to_value(&config).expect("configuration serializes");
-            candidate["authentication"]["oidc"]["issuer"] = serde_json::json!(invalid);
-            assert!(
-                EvidenceConfig::parse_projection(&candidate).is_err(),
-                "local assurance accepted issuer {invalid}"
-            );
-        }
-        for invalid in [
-            // A different port, host, or scheme is not the issuer's origin.
-            "http://127.0.0.1:8082/oauth2/jwks",
-            "http://localhost:8081/oauth2/jwks",
-            "https://127.0.0.1:8081/oauth2/jwks",
-            // No path stated at all, or one carrying a query, fragment, or
-            // userinfo. The root path itself is an absolute path and stays
-            // legal: the rule fixes the origin, not the route.
-            "http://127.0.0.1:8081",
-            "http://127.0.0.1:8081/oauth2/jwks?cache=1",
-            "http://127.0.0.1:8081/oauth2/jwks#fragment",
-            "http://user@127.0.0.1:8081/oauth2/jwks",
-        ] {
-            let mut candidate = serde_json::to_value(&config).expect("configuration serializes");
-            candidate["authentication"]["oidc"]["jwksSource"]["uri"] = serde_json::json!(invalid);
-            assert!(
-                EvidenceConfig::parse_projection(&candidate).is_err(),
-                "local assurance accepted JWKS URI {invalid}"
-            );
-        }
-
+        .unwrap()
+        .authentication
+        .oidc;
         for profile in [
             AssuranceProfile::Production,
             AssuranceProfile::EvidenceGrade,
         ] {
-            let mut candidate = config.clone();
-            candidate.assurance_profile = profile;
-            assert!(
-                candidate.validate().is_err(),
-                "{profile:?} inherited the local HTTP exception"
-            );
+            for (origin, accepted) in [
+                ("http://127.0.0.1:8080", true),
+                ("http://127.0.0.2:8080", true),
+                ("http://[::1]:8080", true),
+                ("http://localhost:8080", true),
+                ("http://10.0.0.5:8080", false),
+                ("http://192.168.1.10:8080", false),
+                ("http://169.254.169.254", false),
+                ("http://[::ffff:10.0.0.5]:8080", false),
+                ("http://0.0.0.0:8080", false),
+                ("http://identity.internal:8080", false),
+            ] {
+                auth.provider.issuer = registry_platform_yaml::Url::new(origin).unwrap();
+                auth.provider.jwks_source = JwksSource::Uri {
+                    uri: registry_platform_yaml::Url::new("https://identity.invalid/jwks").unwrap(),
+                };
+                assert_eq!(auth.validate(profile).is_ok(), accepted, "issuer {origin}");
+                auth.provider.issuer =
+                    registry_platform_yaml::Url::new("https://identity.invalid").unwrap();
+                auth.provider.jwks_source = JwksSource::Uri {
+                    uri: registry_platform_yaml::Url::new(format!("{origin}/jwks")).unwrap(),
+                };
+                assert_eq!(auth.validate(profile).is_ok(), accepted, "JWKS {origin}");
+            }
         }
+    }
+
+    #[test]
+    fn bundle_contract_and_parser_agree_on_deployable_http_issuers() {
+        let schema = bundle_contract_validator();
+        for profile in ["production", "evidence-grade"] {
+            for (issuer, jwks, accepted) in [
+                (
+                    "http://127.0.0.1:8080",
+                    "http://127.0.0.1:8080?keys=current",
+                    true,
+                ),
+                (
+                    "http://[0:0:0:0:0:0:0:1]:8080",
+                    "https://identity.invalid/jwks",
+                    true,
+                ),
+                (
+                    "https://identity.invalid",
+                    "http://[::ffff:192.0.2.1]:8080/jwks",
+                    false,
+                ),
+                (
+                    "http://identity.internal:8080",
+                    "https://identity.invalid/jwks",
+                    false,
+                ),
+                (
+                    "http://[::0:1]:8080",
+                    "http://[0:0:0:0:0:ffff:127.0.0.1]/jwks",
+                    true,
+                ),
+                (
+                    "HTTP://LOCALHOST:8080/realms/local",
+                    "http://[::ffff:7f01:2]?key=current",
+                    true,
+                ),
+                (
+                    "http://127.0.0.1:8080?issuer",
+                    "https://identity.invalid/jwks",
+                    false,
+                ),
+                (
+                    "https://identity.invalid",
+                    "http://localhost:8080/jwks#key",
+                    false,
+                ),
+            ] {
+                let mut candidate = bundle_contract_instance(include_bytes!(
+                    "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+                ));
+                candidate["assuranceProfile"] = serde_json::json!(profile);
+                candidate["authentication"]["oidc"]["issuer"] = serde_json::json!(issuer);
+                candidate["authentication"]["oidc"]["jwksSource"]["uri"] = serde_json::json!(jwks);
+                let yaml = serde_norway::to_string(&candidate).unwrap();
+                let parsed = EvidenceConfig::parse_yaml(yaml.as_bytes());
+                assert_eq!(
+                    parsed.is_ok(),
+                    accepted,
+                    "{profile}: {issuer}, {jwks}: {:?}",
+                    parsed.err()
+                );
+                let validated = schema.validate(&candidate);
+                assert_eq!(
+                    validated.is_ok(),
+                    accepted,
+                    "{profile}: {issuer}, {jwks}: {:?}",
+                    validated
+                        .err()
+                        .map(|errors| errors.map(|error| error.to_string()).collect::<Vec<_>>())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn local_oidc_accepts_localhost_without_opt_in() {
+        let mut candidate = plain_http_issuer_candidate("local", false);
+        assert!(EvidenceConfig::parse_projection(&candidate).is_err());
+        candidate["authentication"]["oidc"]["issuer"] = serde_json::json!("http://localhost:8082");
+        candidate["authentication"]["oidc"]["jwksSource"]["uri"] =
+            serde_json::json!("http://localhost:8082/jwks");
+        assert!(EvidenceConfig::parse_projection(&candidate).is_ok());
     }
 
     fn plain_http_issuer_candidate(profile: &str, opt_in: bool) -> serde_json::Value {
@@ -7413,16 +7449,6 @@ mod tests {
         let parsed = EvidenceConfig::parse_projection(&candidate)
             .expect("explicit HTTP issuer opt-in parses and validates under local");
         assert!(parsed.authentication.oidc.provider.allow_insecure_http);
-        assert_eq!(
-            parsed
-                .authentication
-                .oidc
-                .insecure_http_startup_diagnostic(),
-            Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-            )
-        );
-
         candidate["authentication"]["oidc"]["tlsTrustProfile"] = serde_json::json!("private-ca");
         let error = EvidenceConfig::parse_projection(&candidate)
             .expect_err("plain HTTP has no TLS trust profile")
@@ -7445,24 +7471,22 @@ mod tests {
         assert!(!error.contains("identity.internal"), "{error}");
     }
 
-    /// The frozen contract promises HTTPS for deployable bundles, so the
-    /// plain HTTP opt-in is refused there rather than honored.
+    /// Deployable bundles accept loopback HTTP without opting in.
     #[test]
-    fn deployable_profiles_refuse_plain_http_and_the_insecure_http_opt_in() {
+    fn deployable_profiles_refuse_non_loopback_http_and_the_insecure_http_opt_in() {
         for profile in ["production", "evidence-grade"] {
             for opt_in in [false, true] {
                 let error =
                     EvidenceConfig::parse_projection(&plain_http_issuer_candidate(profile, opt_in))
-                        .expect_err("deployable bundles require HTTPS")
+                        .expect_err("deployable bundles refuse non-loopback HTTP")
                         .to_string();
-                assert!(
-                    error.contains("production and evidence-grade authentication requires HTTPS"),
-                    "{profile}: {error}"
-                );
-                assert!(
-                    error.contains("local assurance profile"),
-                    "{profile}: {error}"
-                );
+                assert!(error.contains("loopback"), "{profile}: {error}");
+                if opt_in {
+                    assert!(
+                        error.contains("remove allowInsecureHttp"),
+                        "{profile}: {error}"
+                    );
+                }
                 assert!(!error.contains("identity.internal"), "{profile}: {error}");
             }
 
@@ -7530,7 +7554,7 @@ mod tests {
         assert!(matches!(
             local.validate(),
             Err(ConfigError::Invalid(
-                "a local HTTP authentication JWKS URI cannot use a TLS trust profile"
+                "a plain HTTP authentication JWKS URI cannot use a TLS trust profile"
             ))
         ));
     }
@@ -11024,22 +11048,41 @@ outboundTls:
             "path: /var/lib/registry-evidence/audit/evidence.jsonl",
             "path: ${EVIDENCE_AUDIT_PATH}",
         );
-        let loaded = RuntimeConfig::parse_yaml_with(templated.as_bytes(), |name| {
-            (name == "EVIDENCE_AUDIT_PATH").then(|| "/srv/audit/evidence.jsonl".to_owned())
-        })
+        let loaded = RuntimeConfig::parse_yaml_with(
+            templated.as_bytes(),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |name| (name == "EVIDENCE_AUDIT_PATH").then(|| "/srv/audit/evidence.jsonl".to_owned()),
+        )
         .expect("the substituted document loads");
         assert_eq!(
             loaded.config.audit.path.as_deref(),
             Some("/srv/audit/evidence.jsonl")
         );
-        let plain = RuntimeConfig::parse_yaml_with(LOADER_RUNTIME_DOCUMENT.as_bytes(), |_| None)
-            .expect("the plain document loads");
+        let plain = RuntimeConfig::parse_yaml_with(
+            LOADER_RUNTIME_DOCUMENT.as_bytes(),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |_| None,
+        )
+        .expect("the plain document loads");
         assert_ne!(
             loaded.effective_digest, plain.effective_digest,
             "the effective digest covers the substituted value"
         );
 
-        let unset = RuntimeConfig::parse_yaml_with(templated.as_bytes(), |_| None);
+        let unset = RuntimeConfig::parse_yaml_with(
+            templated.as_bytes(),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |_| None,
+        );
         assert!(
             unset.is_err(),
             "an unset variable without a default is refused"
@@ -11056,9 +11099,14 @@ outboundTls:
             ),
         ] {
             let text = LOADER_RUNTIME_DOCUMENT.replace(from, to);
-            let refused = RuntimeConfig::parse_yaml_with(text.as_bytes(), |_| {
-                Some("secret:file/other".to_owned())
-            });
+            let refused = RuntimeConfig::parse_yaml_with(
+                text.as_bytes(),
+                DeclaredPosture {
+                    posture: Posture::Production,
+                    source: PostureSource::Default,
+                },
+                |_| Some("secret:file/other".to_owned()),
+            );
             let Err(ConfigError::Refused(report)) = refused else {
                 panic!("substitution into {from} was accepted");
             };
@@ -11128,8 +11176,15 @@ outboundTls:
     allowedPrivateCidrs: []
 ";
         let disabled = format!("{LOADER_RUNTIME_DOCUMENT}{SOURCE_BINDING}");
-        let decoded = RuntimeConfig::decode_yaml_with(disabled.as_bytes(), |_| None)
-            .expect("the closed runtime wire shape decodes before semantic validation");
+        let decoded = RuntimeConfig::decode_yaml_with(
+            disabled.as_bytes(),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+            |_| None,
+        )
+        .expect("the closed runtime wire shape decodes before semantic validation");
         let findings = decoded.config.findings();
         let expected = [
             "/sourceConnections/provider/endpoints/0/credential/clientIdRef",
@@ -12425,9 +12480,16 @@ outboundTls:
                     document, LOADER_RUNTIME_DOCUMENT,
                     "{map}: the mutation applies"
                 );
-                let config = RuntimeConfig::decode_yaml_with(document.as_bytes(), |_| None)
-                    .unwrap_or_else(|error| panic!("{map}: the document decodes: {error:?}"))
-                    .config;
+                let config = RuntimeConfig::decode_yaml_with(
+                    document.as_bytes(),
+                    DeclaredPosture {
+                        posture: Posture::Production,
+                        source: PostureSource::Default,
+                    },
+                    |_| None,
+                )
+                .unwrap_or_else(|error| panic!("{map}: the document decodes: {error:?}"))
+                .config;
                 let findings = config.findings();
                 let refusal = findings
                     .iter()

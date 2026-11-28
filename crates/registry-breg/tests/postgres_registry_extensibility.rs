@@ -510,7 +510,7 @@ fn build_app(
     let key_source = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let authenticator = Arc::new(
         RegistryAuthenticator::new(
@@ -553,7 +553,7 @@ fn event_destinations(
         "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1",
         "kind":"BRegRuntimeConfig",
         "listener":{"bind":"127.0.0.1:8080"},
-        "identity":{"environment":"local", "instanceId":"facility-test", "databaseId":"facility-test", "databaseInitializationEnvironment":"local"},
+        "identity":{"environment":"local", "instanceId":"facility-test", "databaseId":"facility-test"},
         "secretProviders":{"file":{"root":root}},
         "database":{
             "runtimeUrlRef":"secret:file/database-url", "migrationUrlRef":"secret:file/migration-url",
@@ -563,9 +563,11 @@ fn event_destinations(
         "package":{"root":root},
         "authentication":{
             "oidc":{
-                "issuer":"https://issuer.example", "audience":AUDIENCE, "allowedAlgorithm":"EdDSA", "accessTokenType":"JWT",
-                "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":"unrestricted", "maximumTokenLifetimeSeconds":300, "leewayMilliseconds":60000,
-                "jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maximumDocumentBytes":65536,"attemptTimeoutMilliseconds":5000,"outageToleranceSeconds":900}
+                "issuers":{"primary":{
+                    "issuer":"https://issuer.example", "audience":AUDIENCE, "allowedAlgorithm":"EdDSA", "accessTokenType":"JWT",
+                    "scopeClaim":"scope", "scopeSeparator":" ", "allowedClients":"unrestricted", "maximumTokenLifetimeSeconds":300, "leewayMilliseconds":60000,
+                    "jwksCache":{"cacheTtlSeconds":600,"negativeCacheTtlSeconds":60,"refreshCooldownSeconds":30,"maximumDocumentBytes":65536,"attemptTimeoutMilliseconds":5000,"outageToleranceSeconds":900}
+                }}
             },
             "authorityClaims":{"principal":"registry_principal", "purpose":"purpose"}
         },
@@ -578,8 +580,14 @@ fn event_destinations(
         }}},
         "operationalTimeouts":{"httpRequestMilliseconds":10000,"shutdownGraceMilliseconds":30000,"recordLockMilliseconds":5000,"migrationLockMilliseconds":30000,"migrationStatementMilliseconds":60000}
     });
-    parse_runtime_config(&config.to_string())
-        .expect("normal destination configuration parses")
-        .activate_event_destinations(registry)
-        .expect("exact logical destination activates")
+    parse_runtime_config(
+        &config.to_string(),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("normal destination configuration parses")
+    .activate_event_destinations(registry)
+    .expect("exact logical destination activates")
 }

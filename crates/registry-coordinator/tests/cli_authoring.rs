@@ -142,6 +142,8 @@ fn init_check_and_explain_work_without_database_or_signing_keys() {
     assert_eq!(
         result["created"],
         serde_json::json!([
+            "dev.yaml",
+            "dev-scenarios.yaml",
             "workflow.yaml",
             "functions.rhai",
             "runtime.yaml",
@@ -149,7 +151,7 @@ fn init_check_and_explain_work_without_database_or_signing_keys() {
             ".gitignore"
         ])
     );
-    assert_eq!(fs::read_dir(&path).unwrap().count(), 5);
+    assert_eq!(fs::read_dir(&path).unwrap().count(), 7);
     // Local secrets and caches under `.coordinator/` stay out of version control.
     assert_eq!(
         fs::read_to_string(path.join(".gitignore")).unwrap(),
@@ -256,6 +258,7 @@ fn init_names_the_project_after_its_directory_and_writes_runtime_in_reading_orde
             api_version: registry_coordinator::runtime::API_VERSION,
             kind: registry_coordinator::runtime::KIND,
         },
+        registry_coordinator::runtime::DEFAULT_POSTURE,
     )
     .parse_str::<Value>(&runtime, |_| None)
     .unwrap()
@@ -344,7 +347,7 @@ fn init_fills_an_empty_directory_and_refuses_one_with_content_or_no_project_id()
         "{}",
         String::from_utf8_lossy(&initialized.stderr)
     );
-    assert_eq!(fs::read_dir(&empty).unwrap().count(), 5);
+    assert_eq!(fs::read_dir(&empty).unwrap().count(), 7);
 
     let occupied = root.path().join("occupied");
     fs::create_dir(&occupied).unwrap();
@@ -688,6 +691,7 @@ fn check_locates_a_missing_binding_without_printing_configured_values() {
             api_version: registry_coordinator::runtime::API_VERSION,
             kind: registry_coordinator::runtime::KIND,
         },
+        registry_coordinator::runtime::DEFAULT_POSTURE,
     )
     .parse_str::<Value>(&fs::read_to_string(&runtime).unwrap(), |_| None)
     .unwrap()
@@ -798,4 +802,43 @@ fn check_and_package_refuse_oversized_canonical_snapshot_before_writing() {
     let bytes = fs::read_to_string(output.join("definition.json")).unwrap();
     assert_eq!(bytes.len(), snapshot_boundary::SNAPSHOT_BOUND);
     registry_coordinator::definition::Definition::from_snapshot(&bytes).unwrap();
+}
+
+#[test]
+fn check_deny_warnings_still_lists_development_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = directory.path().join("runtime.yaml");
+    let text = include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml")
+        .replace(
+            "database:\n",
+            "database:\n  transport: private-network-plaintext\n",
+        );
+    fs::write(&runtime, text).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args([
+            "--format",
+            "json",
+            "check",
+            "--posture",
+            "development",
+            "--deny-warnings",
+            "--runtime-config",
+        ])
+        .arg(runtime)
+        .output()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| {
+                finding["code"] == "platform.posture.database-private-plaintext"
+                    && finding["severity"] == "warning"
+            }),
+        "{report}"
+    );
 }

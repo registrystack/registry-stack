@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-03"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -30,6 +30,13 @@ decides who may ask.
   level="Offline authoring with synthetic data"
   prerequisites={['The BReg and Evidence components installed for rstack', 'A shell, tar, yq version 4, and an editor', 'The downloaded BReg and Evidence teaching archive']}
 />
+
+For the local commands in this tutorial, declare development in your shell.
+`rstack dev` sets this value for the processes it starts.
+
+```sh
+export REGISTRY_STACK_POSTURE=development
+```
 
 ## Unpack the teaching registry
 

@@ -43,6 +43,11 @@ const MAINTENANCE: &str =
 /// the code other operator commands use for the same failure.
 #[derive(Debug, Error)]
 pub enum ExternalProjectionMaintenanceError {
+    #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
+    PostureMismatch {
+        recorded: registry_platform_config::Posture,
+        declared: registry_platform_config::Posture,
+    },
     #[error("the runtime configuration path must be absolute")]
     RuntimeConfigPath,
     #[error("the runtime configuration was refused")]
@@ -154,11 +159,14 @@ pub struct ExternalProjectionOperatorService {
 }
 
 impl ExternalProjectionOperatorService {
-    pub async fn from_runtime_config(path: &Path) -> Result<Self> {
+    pub async fn from_runtime_config(
+        path: &Path,
+        posture: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self> {
         if !path.is_absolute() {
             return Err(Error::RuntimeConfigPath);
         }
-        let config = load_runtime_config(path).map_err(Error::RuntimeConfig)?;
+        let config = load_runtime_config(path, posture).map_err(Error::RuntimeConfig)?;
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => Error::PackagePinMismatch(mismatch),
             error => Error::PackageRefused(error),
@@ -178,6 +186,9 @@ impl ExternalProjectionOperatorService {
         )
         .await
         .map_err(|error| match error {
+            crate::startup::StartupError::PostureMismatch { recorded, declared } => {
+                Error::PostureMismatch { recorded, declared }
+            }
             StartupError::RuntimeConfig(error) => Error::RuntimeConfig(error),
             StartupError::PackageRefused(error) => Error::PackageRefused(error),
             StartupError::PackageEnvelopeRefused(_) => {
@@ -495,16 +506,24 @@ fn catalog_failure(error: PostgresKernelError) -> Error {
 
 /// Inspect one indexed projection's scope. Diagnostics contain no connection
 /// or configured values.
-pub async fn inspect(path: &Path, projection: &str) -> Result<Value> {
-    ExternalProjectionOperatorService::from_runtime_config(path)
+pub async fn inspect(
+    path: &Path,
+    projection: &str,
+    posture: registry_platform_config::DeclaredPosture,
+) -> Result<Value> {
+    ExternalProjectionOperatorService::from_runtime_config(path, posture)
         .await?
         .inspect(projection)
         .await
 }
 
 /// Purge one indexed projection's scope and delete its cached rows.
-pub async fn purge(path: &Path, projection: &str) -> Result<Value> {
-    ExternalProjectionOperatorService::from_runtime_config(path)
+pub async fn purge(
+    path: &Path,
+    projection: &str,
+    posture: registry_platform_config::DeclaredPosture,
+) -> Result<Value> {
+    ExternalProjectionOperatorService::from_runtime_config(path, posture)
         .await?
         .purge(projection)
         .await

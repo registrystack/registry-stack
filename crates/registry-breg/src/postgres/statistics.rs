@@ -406,7 +406,13 @@ impl PostgresStatisticsService {
                     return Err(StatisticsServiceError::Timeout);
                 }
                 let verification_client = self.pool.get().await.map_err(unavailable)?;
-                return match active_identity_matches(&verification_client, &self.expected).await? {
+                return match active_identity_matches(
+                    &verification_client,
+                    &self.expected,
+                    self.lock_key.posture(),
+                )
+                .await?
+                {
                     Some(false) => Err(StatisticsServiceError::VersionConflict),
                     Some(true) | None => Err(StatisticsServiceError::Unavailable),
                 };
@@ -1894,7 +1900,8 @@ async fn begin_release_transaction<'a>(
     let identity = transaction
         .query_opt(
             "SELECT package_id, database_id, active_package_digest,
-                    active_activation_id::text, schema_fingerprint, maintenance_status
+                    active_activation_id::text, schema_fingerprint, maintenance_status,
+                    coalesce(to_jsonb(registry_state) ->> 'posture', 'production')
                FROM registry_internal.registry_state WHERE singleton",
             &[],
         )
@@ -1906,7 +1913,8 @@ async fn begin_release_transaction<'a>(
         && identity.get::<_, String>(2) == expected.package_digest
         && identity.get::<_, String>(3) == expected.activation_id
         && identity.get::<_, String>(4) == expected.schema_fingerprint
-        && identity.get::<_, String>(5) == "ready";
+        && identity.get::<_, String>(5) == "ready"
+        && identity.get::<_, String>(6) == lock_key.posture().as_str();
     if !matches {
         return Err(StatisticsServiceError::Unavailable);
     }
@@ -1916,23 +1924,27 @@ async fn begin_release_transaction<'a>(
 async fn active_identity_matches(
     client: &deadpool_postgres::Client,
     expected: &ExpectedRegistryIdentity,
+    posture: registry_platform_config::Posture,
 ) -> Result<Option<bool>, StatisticsServiceError> {
     let row = client
         .query_opt(
             "SELECT package_id, database_id, active_package_digest,
-                    active_activation_id::text, schema_fingerprint
+                    active_activation_id::text, schema_fingerprint,
+                    coalesce(to_jsonb(registry_state) ->> 'posture', 'production')
                FROM registry_internal.registry_state WHERE singleton",
             &[],
         )
         .await
         .map_err(unavailable)?;
-    Ok(row.map(|identity| {
-        identity.get::<_, String>(0) == expected.package_id
-            && identity.get::<_, String>(1) == expected.database_id
-            && identity.get::<_, String>(2) == expected.package_digest
-            && identity.get::<_, String>(3) == expected.activation_id
-            && identity.get::<_, String>(4) == expected.schema_fingerprint
-    }))
+    Ok(row
+        .filter(|identity| identity.get::<_, String>(5) == posture.as_str())
+        .map(|identity| {
+            identity.get::<_, String>(0) == expected.package_id
+                && identity.get::<_, String>(1) == expected.database_id
+                && identity.get::<_, String>(2) == expected.package_digest
+                && identity.get::<_, String>(3) == expected.activation_id
+                && identity.get::<_, String>(4) == expected.schema_fingerprint
+        }))
 }
 
 async fn lock_release_key(
@@ -3221,6 +3233,63 @@ fn map_statement_error(error: tokio_postgres::Error) -> StatisticsServiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "postgres-test")]
+    #[tokio::test]
+    async fn postgres_posture_statistics_transactions_require_a_match() {
+        use crate::postgres::posture_test_support::*;
+
+        let database = TestDatabase::create(2).await;
+        let expected = install_ready_identity(&database).await;
+        let pool = database.migration_config.build_pool().unwrap();
+        let mut client = pool.get().await.unwrap();
+        let key = RegistryLockKey::derive(&expected.package_id).unwrap();
+        let lock_timeout = Duration::from_secs(2);
+        for (recorded, declared) in MISMATCHES {
+            record_posture(&database, recorded).await;
+            assert_eq!(
+                active_identity_matches(&client, &expected, declared)
+                    .await
+                    .unwrap(),
+                None
+            );
+            assert!(
+                matches!(
+                    begin_release_transaction(
+                        &mut client,
+                        key.for_posture(declared),
+                        lock_timeout,
+                        &expected,
+                        tokio::time::Instant::now() + lock_timeout
+                    )
+                    .await,
+                    Err(StatisticsServiceError::Unavailable)
+                ),
+                "{recorded:?} / {declared:?}"
+            );
+        }
+        assert_eq!(
+            active_identity_matches(&client, &expected, key.posture())
+                .await
+                .unwrap(),
+            Some(true)
+        );
+        begin_release_transaction(
+            &mut client,
+            key,
+            lock_timeout,
+            &expected,
+            tokio::time::Instant::now() + lock_timeout,
+        )
+        .await
+        .unwrap()
+        .rollback()
+        .await
+        .unwrap();
+        drop(client);
+        drop(pool);
+        database.cleanup().await;
+    }
 
     #[tokio::test]
     async fn a_write_deadline_is_a_timeout_only_before_the_commit_is_reached() {

@@ -829,6 +829,7 @@ struct NarrowScopeCode {
 /// exists only to prove the sign-in client refuses a narrowed grant.
 struct NarrowScopeState {
     issuer: String,
+    authorization_endpoint: String,
     signing_key: registry_platform_crypto::PrivateJwk,
     codes: Mutex<HashMap<String, NarrowScopeCode>>,
     token_calls: Arc<AtomicU64>,
@@ -857,6 +858,12 @@ fn narrow_scope_unix_now() -> i64 {
 /// no path, so discovery's `.well-known` suffix lands where the provider
 /// serves it.
 pub async fn start_narrow_scope_provider() -> NarrowScopeProvider {
+    start_narrow_scope_provider_with_authorization(None).await
+}
+
+pub async fn start_narrow_scope_provider_with_authorization(
+    authorization_endpoint: Option<&str>,
+) -> NarrowScopeProvider {
     let (signing_key, _) = fixtures::ed25519_pair();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -864,6 +871,8 @@ pub async fn start_narrow_scope_provider() -> NarrowScopeProvider {
     let token_calls = Arc::new(AtomicU64::new(0));
     let state = Arc::new(NarrowScopeState {
         issuer: issuer.clone(),
+        authorization_endpoint: authorization_endpoint
+            .map_or_else(|| format!("{issuer}/authorize"), str::to_owned),
         signing_key,
         codes: Mutex::new(HashMap::new()),
         token_calls: Arc::clone(&token_calls),
@@ -891,7 +900,7 @@ async fn narrow_scope_metadata(State(state): State<Arc<NarrowScopeState>>) -> Re
         StatusCode::OK,
         &json!({
             "issuer": state.issuer,
-            "authorization_endpoint": format!("{}/authorize", state.issuer),
+            "authorization_endpoint": state.authorization_endpoint,
             "token_endpoint": format!("{}/token", state.issuer),
             "jwks_uri": format!("{}/jwks.json", state.issuer),
         }),
@@ -1064,7 +1073,7 @@ impl Environment {
         let document = format!(
             "apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1\n\
              kind: BRegReviewRuntimeConfig\n\
-             listener:\n  bind: \"{address}\"\n  tlsTermination: development-loopback\n\
+             listener:\n  bind: \"{address}\"\n  tlsTermination: loopback-plaintext\n\
              publicOrigin: {origin}\n\
              secretProviders:\n  file:\n    root: {secrets}\n\
              signIn:\n  issuer: {issuer}\n  clientId: {CLIENT_ID}\n  clientKeyRef: secret:file/client-key.jwk\n  scopes: [\"{SCOPE}\"]\n\
@@ -1206,14 +1215,19 @@ impl Harness {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let environment = Environment::prepare(address, &options).await;
-        let config = registry_breg_review::RuntimeConfig::load(&environment.config_path)
-            .expect("runtime document loads");
+        let loaded = registry_breg_review::RuntimeConfig::load_with_posture(
+            &environment.config_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("runtime document loads");
         let router = match sink {
             Some(sink) => {
-                let writer = registry_platform_audit::AuditWriter::from_line_sink(Box::new(sink));
-                registry_breg_review::router_with_audit_writer(config, writer).await
+                registry_breg_review::router_with_audit_writer(loaded, Box::new(sink)).await
             }
-            None => registry_breg_review::router(config).await,
+            None => registry_breg_review::router_with_posture(loaded).await,
         }
         .expect("review page starts");
         tokio::spawn(async move {

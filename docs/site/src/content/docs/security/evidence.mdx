@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -15,6 +15,26 @@ Registry Evidence is built so that a caller cannot turn it into a fact-query eng
 permissions across grants, redirect source access, learn from an absence, or receive an
 unauthenticated response, and so that its configuration cannot change underneath a request. The
 operator keeps the duties no service-side control can hold.
+
+Your stack shares one deployment posture. A stack signing with Evidence local keys runs in
+development. Production signing uses Transit, and production peers refuse development responses
+and task assertions. Development Evidence responses carry `Registry-Posture: development`.
+Audit entries record the process posture. Successful `/ready` responses include `posture`
+and `developmentSettings`.
+
+The OIDC issuer and its configured JWKS endpoint can use loopback HTTP without
+`allowInsecureHttp` in every assurance profile. Use HTTPS beyond loopback.
+Loopback HTTP trusts every process and container sharing that interface, so use HTTPS with a TLS trust profile on shared hosts and multi-container Pods.
+
+{/* Evidence: crates/registry-evidence/src/config.rs, deployable_oidc_requires_each_http_endpoint_to_be_loopback,
+    local_oidc_accepts_localhost_without_opt_in;
+    crates/registry-evidence/src/auth.rs, jwks_fetch_policy_uses_the_shared_declared_endpoint_rule. */}
+
+In production, Evidence refuses responses marked `Registry-Posture: development` from
+signed Evidence sources and wallet presentation verifiers.
+
+{/* Evidence: crates/registry-evidence/src/evidence_source_tests.rs, signed_evidence_source_applies_runtime_posture_to_marked_responses;
+    crates/registry-evidence/src/wallet_channel_tests.rs, wallet_source_applies_runtime_posture_to_marked_responses. */}
 
 ## What the runtime guarantees
 
@@ -40,6 +60,45 @@ that audit fails, the caller receives the generic `503`.
 A failed authentication, a malformed request, an invalid selector, and a rate
 limit write no native audit entry, even when Evidence decides them after
 authorisation. Watch for them in operational logs and metrics instead.
+
+Evidence counts every refused request by the check that refused it, in
+`evidence_request_refusals_total{check}` on the private metrics listener. The `check` label is a
+closed set of 45 names such as `credential-missing`, `token-signature`, `scope`, `access-profile`,
+`purpose`, `revision-pin` and `rate-limit`, every one published at zero, and no caller value becomes
+a label. An issuer key set that cannot be reached still answers `401`, and counts under
+`key-source-unavailable`. Each refusal also writes one `request refused` log line with
+`failed_check` and the request's trace id when it has one, at most five lines per check per minute,
+with `suppressed` counting what a window held back. Neither the counter nor the line holds a token,
+claim, client, subject, scope or identifier, and recording a refusal changes nothing the caller
+receives: the response is the same closed `401`, `403` or `429` it always was.
+
+{/* Evidence: crates/registry-evidence/src/observability.rs, record_refusal and Metrics::render;
+    crates/registry-evidence/src/refusal_recording_tests.rs,
+    every_refusal_is_counted_logged_once_by_its_check_and_answered_as_before;
+    crates/registry-evidence/tests/golden/refusal_answers.json. */}
+
+The wallet-facing services record refused requests the same way. Evidence OID4VCI counts each one in
+`evidence_oid4vci_request_refusals_total{check}` and Evidence OID4VP in
+`evidence_oid4vp_request_refusals_total{check}`. Each writes one bounded `request refused` log line
+with the check name, with `decision` and `suppressed`, and for OID4VP also the answer's trace id.
+The checks cover a missing or malformed bearer credential, a token that fails verification, a
+missing scope or client, a task grant the offer cannot use, an unusable single-use code or access
+token, an Evidence refusal, a session read that belongs to another principal, an unknown or foreign
+session status, and a spent request budget. An issuer key set that cannot be reached answers `503`
+from both wallet services and counts under `key-source-unavailable`, so alert on that check rather
+than on a rise in `401`. Capacity answers, unknown routes, malformed requests, the read of a
+reference nobody holds and the wallet response protocol refusals are not recorded. The answers a
+caller receives are unchanged.
+
+{/* Evidence: crates/registry-evidence-oid4vci/src/observability.rs, observe and record_refusal;
+    crates/registry-evidence-oid4vci/src/service.rs, unauthorized, store_response,
+    issuance_response and limiter_refusal;
+    crates/registry-evidence-oid4vci/src/authorizer.rs, AuthorizationError::Refused;
+    crates/registry-evidence-oid4vp/src/service.rs, record_refusals, unauthorized and admit;
+    crates/registry-evidence-oid4vp/src/auth.rs;
+    registry-evidence-oid4vci service::tests::refusal_answers_match_the_golden and
+    each_refusal_is_counted_and_logged_under_its_check;
+    crates/registry-evidence-oid4vp/tests/refusal_golden.rs and tests/refusal_recording.rs. */}
 
 An agent acts only inside its task grant. For an institutional agent task,
 Evidence consumes a complete signed grant context issued by an external task
@@ -389,15 +448,21 @@ links them, and the build fails when an invariant drops its test.
     products/evidence/scripts/check-contracts.sh;
     crates/registry-evidence/tests/security_contract_traceability.rs. */}
 
+Production verifies the token before checking for a signed development mark. A verified token
+that carries that mark returns `platform.task-grant.development-assertion` before Evidence reads
+request context or checks the grant deadline.
+
+{/* Evidence: crates/registry-evidence/src/auth.rs, DevelopmentAssertion;
+    crates/registry-evidence/src/runtime_tests.rs, production_rejects_development_task_assertions_before_context. */}
+
 ## What the operator must uphold
 
 The matrix describes what the `evidence` binary enforces.
 The [operator contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/OPERATOR-CONTRACT.md)
 holds the duties no service-side control can hold for you:
 
-- Keep every secret file below `secretProviders.file.root` a regular,
-  non-symlink file owned by the service identity with mode `0400` or `0600`.
-  The file provider refuses anything else.
+- Keep every secret file below `secretProviders.file.root` within the
+  [secret file rule](../hardening-checklist/#secret-files). The file provider refuses anything else.
 - Generate the audit and subject-binding masters independently, at least 32
   bytes each, under distinct references. The runtime refuses equal references
   or equal bytes.

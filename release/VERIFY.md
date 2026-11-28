@@ -280,7 +280,8 @@ and Python client namespace also joins in `v0.44.0`, under
 `COORDINATOR_CLIENT_FIRST_RELEASE`. Its image remains held while
 `COORDINATOR_FIRST_RELEASE` is unset.
 Registry Adapter binaries join in `v0.46.0`, as set by
-`ADAPTER_FIRST_RELEASE`; the Adapter has no image.
+`ADAPTER_FIRST_RELEASE`. Its image is authored and remains held while
+`ADAPTER_IMAGE_FIRST_RELEASE` is unset.
 The Registry Document Store is held out of every release while
 `DOCUMENTS_FIRST_RELEASE` is `None`, and no release roster names it.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
@@ -393,8 +394,10 @@ No release payload carries the Document Store runtime `documents` or operator to
 
 Registry Stack v0.22.0 publishes the checksum-covered Evidence and Relay client
 packages to npm and PyPI. Registry Stack v0.23.0 and later also publish the
-Discovery clients. Starting with v0.26.1, Registry Stack publishes only the
-unified `@registrystack/client` and `registry-stack-client` packages; releases
+Discovery clients. Starting with v0.26.1, Registry Stack publishes unified
+native Node and Python packages. The native Node package is
+`@registrystack/client-node` from v0.49.0, when the separate browser and edge package
+`@registrystack/client` joins the release. Earlier releases
 through v0.26.0 keep their immutable product-specific packages, and those are
 not republished under the unified names. With the release assets still in the
 current directory, compare every registry version with its release tarball or
@@ -419,7 +422,11 @@ gh api \
 
 for client in "${clients[@]}"; do
   if [[ "${client}" == stack ]]; then
-    stem="registrystack-client"
+    if (( major > 0 || minor >= 49 )); then
+      stem="registrystack-client-node"
+    else
+      stem="registrystack-client"
+    fi
   else
     stem="registrystack-${client}-client"
   fi
@@ -434,6 +441,14 @@ for client in "${clients[@]}"; do
       exit 1
     fi
   done
+  if [[ "${client}" == stack ]] && (( major > 0 || minor >= 49 )); then
+    tarball="$(python3 client_registry.py web-npm-name --version "${version}")"
+    npm_state="$(python3 client_registry.py npm-state --tarball "${tarball}")"
+    if [[ "${npm_state}" != present ]]; then
+      echo "missing npm package: ${tarball}" >&2
+      exit 1
+    fi
+  fi
   pypi_state="$(python3 client_registry.py pypi-state \
     --directory . --version "${version}" --client "${client}")"
   if [[ "${pypi_state}" != present ]]; then

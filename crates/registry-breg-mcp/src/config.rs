@@ -14,7 +14,9 @@
 
 use std::{fmt, path::Path};
 
-use registry_mcp_edge::config::{bounded_restricting_list, ResourceServerConfigError};
+use registry_mcp_edge::config::{
+    bounded_restricting_list, record_development_settings, ResourceServerConfigError,
+};
 pub use registry_mcp_edge::config::{
     AccessTokenAlgorithm, AuditConfig, ExchangeConfig, LimitsConfig, LogLevel, RateLimitConfig,
     ResourceServerConfig, ResourceUri, ScopeToken,
@@ -22,15 +24,17 @@ pub use registry_mcp_edge::config::{
 use registry_platform_audit::AuditDestinationError;
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::{
-    ConfigBlockError, ConfigBlockErrorKind, LoadedRuntimeConfig, PrivateListenerConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig, TlsTermination,
+    ConfigBlockError, ConfigBlockErrorKind, DeclaredPosture, DevelopmentClass,
+    DevelopmentOnlyRefused, DevelopmentSetting, DevelopmentWitness, FoundSetting, Gated,
+    LoadedRuntimeConfig, Posture, PostureSource, PrivateListenerConfig, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig, SettingOrigin, TlsTermination,
 };
+use registry_platform_httputil::loopback::loopback_host;
 use registry_platform_yaml::{
     escape_pointer_segment, BoundedU64, Diagnostic, Invalid, LocalId, Report, RetiredApiVersion,
     UniqueList, Url,
 };
 use serde::{Deserialize, Deserializer};
-use url::Host;
 
 /// apiVersion of the gateway runtime configuration document.
 pub const RUNTIME_API_VERSION: &str = "id.registrystack.org/formats/breg/mcp-runtime/v1alpha1";
@@ -123,8 +127,7 @@ pub struct RuntimeConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RegistryConfig {
     /// The registry deployment's base URL. An https URL with no query or
-    /// fragment; plain http is accepted only on a loopback host under
-    /// `development-loopback`.
+    /// fragment; plain HTTP is accepted on loopback in both postures.
     pub base_url: Url,
     /// The standing agent access profile every call names.
     pub access_profile: LocalId,
@@ -160,8 +163,112 @@ pub struct ServiceConfig {
     pub application: ApplicationConfig,
     /// The citizen-facing review page; an application is reviewed and
     /// submitted there, never through the chat host. The review page's
-    /// `publicOrigin`, with no path, query, or fragment.
-    pub review_base_url: Url,
+    /// `publicOrigin`, with no path, query, or fragment. Plain HTTP requires
+    /// declared development posture.
+    #[cfg_attr(feature = "schema", schemars(extend("x-registry-development-only" = ["breg.posture.review-http-public-origin"])))]
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
+    review_base_url: CheckedReviewOrigin,
+}
+
+static HTTP_REVIEW_ORIGIN: DevelopmentSetting = DevelopmentSetting {
+    code: "breg.posture.review-http-public-origin",
+    key: "reviewBaseUrl",
+    summary: "The review base URL is plain http",
+    production: "Use an https review base URL.",
+};
+
+/// The review page origin published in review links. Plain http is
+/// development-only on every host.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(transparent)]
+struct ReviewOrigin(Url);
+
+impl DevelopmentClass for ReviewOrigin {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&HTTP_REVIEW_ORIGIN];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        (self.0.to_url().scheme() == "http").then_some(&HTTP_REVIEW_ORIGIN)
+    }
+}
+
+/// The URL stays gated for outbound use. Offline validation needs only
+/// whether its path, query, and fragment have the shape of an origin.
+#[derive(Clone, Debug)]
+struct CheckedReviewOrigin {
+    url: Gated<ReviewOrigin>,
+    has_path: bool,
+    has_query_or_fragment: bool,
+}
+
+impl<'de> Deserialize<'de> for CheckedReviewOrigin {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ReadOrigin;
+
+        impl<'de> serde::de::Visitor<'de> for ReadOrigin {
+            type Value = CheckedReviewOrigin;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a review URL")
+            }
+
+            fn visit_newtype_struct<D: serde::Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                let authored = Url::deserialize(deserializer)?;
+                let parsed = authored.to_url();
+                // Keep the loader's source location active while decoding the gate.
+                let url =
+                    Gated::deserialize(serde_json::Value::String(authored.as_str().to_owned()))
+                        .map_err(serde::de::Error::custom)?;
+                Ok(CheckedReviewOrigin {
+                    url,
+                    has_path: parsed.path() != "/",
+                    has_query_or_fragment: parsed.query().is_some() || parsed.fragment().is_some(),
+                })
+            }
+        }
+
+        deserializer
+            .deserialize_newtype_struct(registry_platform_yaml::DEVELOPMENT_ONLY, ReadOrigin)
+    }
+}
+
+impl ServiceConfig {
+    /// The review page origin, which only a development process may read when
+    /// it is plain http.
+    pub fn review_base_url(
+        &self,
+        development: Option<&DevelopmentWitness>,
+    ) -> Result<&Url, DevelopmentOnlyRefused> {
+        self.review_base_url
+            .url
+            .get(development)
+            .map(|value| &value.0)
+    }
+
+    /// Whether the review URL has the path, query, and fragment of an origin.
+    #[must_use]
+    pub fn review_base_url_is_origin(&self) -> bool {
+        !self.review_base_url.has_path && !self.review_base_url.has_query_or_fragment
+    }
+
+    /// The development-only setting this block holds, with its pointer under
+    /// `service`, the pointer of this block in its runtime file.
+    #[must_use]
+    pub fn development_settings(&self, service: &str) -> Vec<FoundSetting> {
+        self.review_base_url
+            .url
+            .development_setting()
+            .map(|setting| FoundSetting {
+                setting,
+                pointer: Some(format!("{service}/reviewBaseUrl")),
+                position: None,
+                origin: SettingOrigin::RuntimeFile,
+            })
+            .into_iter()
+            .collect()
+    }
 }
 
 /// The Record type holding the citizen's own record, found through the agent
@@ -290,8 +397,24 @@ impl RuntimeConfig {
     /// Load and validate the operator document through the shared loader,
     /// with the process environment, as `serve` does at startup.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
-        match read_runtime(path.as_ref(), true) {
-            (Some(loaded), _) => Ok(loaded.config),
+        Self::load_with_posture(path, default_posture()).map(|loaded| loaded.config)
+    }
+
+    pub fn load_with_posture(
+        path: impl AsRef<Path>,
+        declared: DeclaredPosture,
+    ) -> Result<LoadedRuntimeConfig<Self>, RuntimeConfigError> {
+        match read_runtime(path.as_ref(), true, declared) {
+            (Some(loaded), _) => {
+                loaded
+                    .posture
+                    .decide(path.as_ref())
+                    .map_err(|error| RuntimeConfigError {
+                        diagnostics: error.diagnostics().to_vec(),
+                        unavailable: false,
+                    })?;
+                Ok(loaded)
+            }
             (None, check) => Err(RuntimeConfigError {
                 diagnostics: check.diagnostics,
                 unavailable: check.unavailable,
@@ -302,16 +425,30 @@ impl RuntimeConfig {
     /// The loader for the gateway runtime file, with its removed keys and
     /// its retired apiVersion.
     #[must_use]
-    pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(RUNTIME_ENVELOPE)
+    pub const fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(RUNTIME_ENVELOPE, declared)
             .removed_keys(REMOVED_KEYS)
             .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
     }
 
-    /// Whether plain-HTTP loopback endpoints are acceptable.
+    /// Whether TLS termination is confined to a loopback listener.
     #[must_use]
-    pub fn development_loopback(&self) -> bool {
-        self.listener.tls_termination == TlsTermination::DevelopmentLoopback
+    pub fn loopback_listener(&self) -> bool {
+        matches!(
+            self.listener.tls_termination,
+            TlsTermination::DevelopmentLoopback | TlsTermination::LoopbackPlaintext
+        )
+    }
+
+    /// Every development-only setting in the file, each with its pointer.
+    /// The reader records them, and a production gateway refuses to build
+    /// while the list is not empty.
+    #[must_use]
+    pub fn development_settings(&self) -> Vec<FoundSetting> {
+        let mut settings = self.resource_server.development_settings();
+        settings.extend(self.service.development_settings("/service"));
+        settings.extend(self.audit.development_settings());
+        settings
     }
 }
 
@@ -324,7 +461,22 @@ impl RuntimeConfig {
 /// holds one are skipped, because they need the substituted text.
 #[must_use]
 pub fn check_runtime(path: &Path, substitute: bool) -> RuntimeCheck {
-    read_runtime(path, substitute).1
+    check_runtime_with_posture(path, substitute, default_posture())
+}
+
+pub(crate) const fn default_posture() -> DeclaredPosture {
+    DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Default,
+    }
+}
+
+pub fn check_runtime_with_posture(
+    path: &Path,
+    substitute: bool,
+    declared: DeclaredPosture,
+) -> RuntimeCheck {
+    read_runtime(path, substitute, declared).1
 }
 
 /// The file read by the shared loader, then the members the loader cannot
@@ -334,13 +486,23 @@ pub fn check_runtime(path: &Path, substitute: bool) -> RuntimeCheck {
 fn read_runtime(
     path: &Path,
     substitute: bool,
+    declared: DeclaredPosture,
 ) -> (Option<LoadedRuntimeConfig<RuntimeConfig>>, RuntimeCheck) {
-    let check =
-        RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
-    let mut diagnostics = check.diagnostics.clone();
+    let mut check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+        path,
+        substitute,
+        stand_in_for,
+    );
+    if let Some(loaded) = check.loaded.as_mut() {
+        record_development_settings(&mut loaded.posture, loaded.config.development_settings());
+    }
+    let mut diagnostics = check.loaded.as_ref().map_or_else(
+        || check.diagnostics.clone(),
+        |loaded| loaded.posture.diagnostics(path),
+    );
     if let Some(loaded) = &check.loaded {
         let defers = |pointer: &str| check.defers(pointer);
-        for finding in findings(&loaded.config, &defers) {
+        for finding in findings(&loaded.config, &defers, loaded.development.as_ref()) {
             let audit_deferred =
                 finding.pointer.starts_with("/audit") && check.defers("/audit/destination");
             if !check.defers(&finding.pointer) && !audit_deferred {
@@ -355,7 +517,11 @@ fn read_runtime(
         }
     }
     let unavailable = check.unavailable;
-    let loaded = check.loaded.filter(|_| diagnostics.is_empty());
+    let loaded = check.loaded.filter(|_| {
+        !diagnostics
+            .iter()
+            .any(|finding| finding.severity == registry_platform_yaml::Severity::Error)
+    });
     (
         loaded,
         RuntimeCheck {
@@ -386,7 +552,11 @@ impl Finding {
 
 /// Every refusal of a decoded file. A rule that compares two members is
 /// skipped when either holds an expression the check did not substitute.
-fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Finding> {
+fn findings(
+    config: &RuntimeConfig,
+    defers: &dyn Fn(&str) -> bool,
+    development: Option<&DevelopmentWitness>,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     if !config.listener.is_valid() {
         findings.push(Finding::new(
@@ -415,20 +585,12 @@ fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Findin
     findings.extend(
         config
             .resource_server
-            .validate(config.development_loopback(), &config.secret_providers)
+            .validate(true, &config.secret_providers, development)
             .iter()
-            .filter(|error| {
-                !defers("/listener/tlsTermination")
-                    || !matches!(
-                        error,
-                        ResourceServerConfigError::InsecureResource
-                            | ResourceServerConfigError::InsecureIssuer
-                    )
-            })
             .map(resource_server_finding),
     );
-    endpoint_findings(config, defers, &mut findings);
-    cross_member_findings(config, defers, &mut findings);
+    endpoint_findings(config, &mut findings);
+    cross_member_findings(config, defers, development, &mut findings);
     if let Err(error) = config.audit.destination() {
         findings.push(audit_finding(&error));
     }
@@ -436,30 +598,21 @@ fn findings(config: &RuntimeConfig, defers: &dyn Fn(&str) -> bool) -> Vec<Findin
 }
 
 /// Every endpoint the gateway serves or calls is https with no query or
-/// fragment, or plain http on a loopback host under `development-loopback`.
-fn endpoint_findings(
-    config: &RuntimeConfig,
-    defers: &dyn Fn(&str) -> bool,
-    findings: &mut Vec<Finding>,
-) {
-    let termination_known = !defers("/listener/tlsTermination");
-    let development = config.development_loopback();
+/// fragment, or plain HTTP on a loopback host.
+fn endpoint_findings(config: &RuntimeConfig, findings: &mut Vec<Finding>) {
     let endpoints = [
         ("/registry/baseUrl", &config.registry.base_url),
         ("/exchange/tokenEndpoint", &config.exchange.token_endpoint),
-        ("/service/reviewBaseUrl", &config.service.review_base_url),
     ];
     for (pointer, endpoint) in endpoints {
         let url = endpoint.to_url();
-        let secure = url.scheme() == "https" || (development && loopback_host(&url));
-        if termination_known && !secure {
+        let secure = url.scheme() == "https" || (url.scheme() == "http" && is_loopback(&url));
+        if !secure {
             findings.push(Finding::new(
                 "breg.mcp-runtime.plain-http-endpoint",
                 pointer,
-                "the endpoint uses plain http, which is accepted only on a loopback host under \
-                 listener.tlsTermination development-loopback",
-                "Write an https URL, run on loopback with listener.tlsTermination \
-                 development-loopback.",
+                "the endpoint uses plain http, which is accepted only on a loopback host",
+                "Write an https URL or a plain http loopback URL.",
             ));
         } else if url.query().is_some() || url.fragment().is_some() {
             findings.push(Finding::new(
@@ -470,8 +623,16 @@ fn endpoint_findings(
             ));
         }
     }
-    // The review page serves its pages at the root of its publicOrigin.
-    if config.service.review_base_url.to_url().path() != "/" {
+    let review = &config.service.review_base_url;
+    if review.has_query_or_fragment {
+        findings.push(Finding::new(
+            "breg.mcp-runtime.endpoint-query-or-fragment",
+            "/service/reviewBaseUrl",
+            "the endpoint carries a query or a fragment",
+            "Remove the query and the fragment from the URL.",
+        ));
+    }
+    if review.has_path {
         findings.push(Finding::new(
             "breg.mcp-runtime.review-base-url-not-origin",
             "/service/reviewBaseUrl",
@@ -486,6 +647,7 @@ fn endpoint_findings(
 fn cross_member_findings(
     config: &RuntimeConfig,
     defers: &dyn Fn(&str) -> bool,
+    development: Option<&DevelopmentWitness>,
     findings: &mut Vec<Finding>,
 ) {
     let admitted = !defers("/exchange/clientId")
@@ -508,7 +670,10 @@ fn cross_member_findings(
         ));
     }
     if !defers("/resourceServer/resource")
-        && config.registry.audience.as_str() == config.resource_server.resource.as_str()
+        && config
+            .resource_server
+            .resource_url(development)
+            .is_ok_and(|resource| config.registry.audience.as_str() == resource.as_str())
     {
         findings.push(Finding::new(
             "breg.mcp-runtime.audience-reused",
@@ -520,14 +685,11 @@ fn cross_member_findings(
     }
 }
 
-fn loopback_host(url: &url::Url) -> bool {
+fn is_loopback(url: &url::Url) -> bool {
     url.scheme() == "http"
-        && match url.host() {
-            Some(Host::Ipv4(address)) => address.is_loopback(),
-            Some(Host::Ipv6(address)) => address.is_loopback(),
-            Some(Host::Domain(domain)) => domain == "localhost",
-            None => false,
-        }
+        && url
+            .host_str()
+            .is_some_and(|host| loopback_host(host).is_some())
 }
 
 /// A value that satisfies the member at `pointer`, so a deferred expression
@@ -563,6 +725,9 @@ fn pointer_of(dotted: &str) -> String {
         .collect()
 }
 
+/// The one remedy for a refused resource-server issuer, in both MCP runtimes.
+pub const ISSUER_REMEDY: &str = "Write an https issuer URL. For plain http, start with `rstack dev` or declare development with REGISTRY_STACK_POSTURE=development or --posture development; beyond loopback, also set resourceServer.allowInsecureHttp: true.";
+
 fn resource_server_finding(error: &ResourceServerConfigError) -> Finding {
     match error {
         ResourceServerConfigError::InvalidResource => Finding::new(
@@ -580,8 +745,8 @@ fn resource_server_finding(error: &ResourceServerConfigError) -> Finding {
         ResourceServerConfigError::InsecureResource => Finding::new(
             "breg.mcp-runtime.plain-http-endpoint",
             "/resourceServer/resource",
-            "the endpoint uses plain http, which is accepted only on a loopback host under listener.tlsTermination development-loopback",
-            "Write an https URL, or run on loopback with listener.tlsTermination development-loopback.",
+            "the endpoint uses plain http, which is accepted only on a loopback host",
+            "Write an https URL or a plain http loopback URL.",
         ),
         ResourceServerConfigError::InvalidIssuer => Finding::new(
             "breg.mcp-runtime.endpoint-query-or-fragment",
@@ -592,8 +757,8 @@ fn resource_server_finding(error: &ResourceServerConfigError) -> Finding {
         ResourceServerConfigError::InsecureIssuer => Finding::new(
             "breg.mcp-runtime.plain-http-endpoint",
             "/resourceServer/issuer",
-            "the endpoint uses plain http, which is accepted only on a loopback host under listener.tlsTermination development-loopback",
-            "Write an https URL, run on loopback with listener.tlsTermination development-loopback, or set resourceServer.allowInsecureHttp: true for the issuer.",
+            "the issuer uses plain http beyond loopback without allowInsecureHttp",
+            ISSUER_REMEDY,
         ),
         ResourceServerConfigError::JwksSource(error)
         | ResourceServerConfigError::JwksDocumentReference(error) => block_finding(error),
@@ -623,8 +788,7 @@ fn block_finding(error: &ConfigBlockError) -> Finding {
         ),
         ConfigBlockErrorKind::InvalidUri => (
             "breg.mcp-runtime.invalid-jwks-uri",
-            "Write an https URL without credentials; plain http is accepted only on a loopback \
-             address under listener.tlsTermination development-loopback.",
+            "Write an https URL without credentials or a plain http loopback URL. For plain http beyond loopback, set resourceServer.allowInsecureHttp: true and start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
         ),
         _ => (
             "breg.mcp-runtime.invalid-block",
@@ -818,6 +982,11 @@ rateLimits:
     }
 
     pub(crate) fn service() -> ServiceConfig {
+        service_reviewed_at("https://review.example.test/")
+    }
+
+    /// The test service, with its review page at `review_base_url`.
+    pub(crate) fn service_reviewed_at(review_base_url: &str) -> ServiceConfig {
         ServiceConfig {
             name: ServiceText::new("Address correction").expect("service name"),
             description: ServiceText::new("Correct the postal address the registry holds for you.")
@@ -831,7 +1000,8 @@ rateLimits:
                 action: LocalId::new("correct-address").expect("application action"),
                 target_input: LocalId::new("address").expect("application target input"),
             },
-            review_base_url: Url::new("https://review.example.test/").expect("review base URL"),
+            review_base_url: serde_json::from_value(serde_json::json!(review_base_url))
+                .expect("review base URL"),
         }
     }
 
@@ -873,6 +1043,18 @@ rateLimits:
     }
 
     #[test]
+    fn default_posture_refuses_http_published_url() {
+        refused(
+            &document().replace(
+                "resource: https://gateway.example.test/mcp",
+                "resource: http://127.0.0.1:8110/mcp",
+            ),
+            "platform.posture.mcp-http-resource",
+            "/resourceServer/resource",
+        );
+    }
+
+    #[test]
     fn a_complete_document_loads() {
         let config = load(&document()).expect("document loads");
         assert_eq!(config.log_level.as_str(), "info");
@@ -885,7 +1067,7 @@ rateLimits:
         );
         assert_eq!(config.resource_server.scope_claim.as_str(), "scope");
         assert!(matches!(
-            config.resource_server.jwks_source,
+            config.resource_server.jwks_source.get(None).unwrap(),
             JwksSource::Uri { .. }
         ));
     }
@@ -1117,7 +1299,7 @@ rateLimits:
         );
         let config = load(&text).expect("discovery is the shared default");
         assert!(matches!(
-            config.resource_server.jwks_source,
+            config.resource_server.jwks_source.get(None).unwrap(),
             JwksSource::Discovery {}
         ));
     }
@@ -1221,43 +1403,352 @@ rateLimits:
         refused(
             &document()
                 .replace("bind: 127.0.0.1:8110", "bind: 10.0.0.4:8110")
-                .replace("operator-controlled-upstream", "development-loopback"),
+                .replace("operator-controlled-upstream", "loopback-plaintext"),
             "breg.mcp-runtime.public-bind",
             "/listener/bind",
         );
     }
 
     #[test]
-    fn plain_http_is_accepted_only_on_loopback_in_development() {
-        let http = document().replace("https://registry.example.test/", "http://127.0.0.1:8080/");
-        refused(
-            &http,
-            "breg.mcp-runtime.plain-http-endpoint",
-            "/registry/baseUrl",
+    fn jwks_uri_refusal_names_both_migrations() {
+        let source = document().replace(
+            "uri: https://login.example.test/jwks.json",
+            "uri: http://login.example.test/jwks.json",
         );
-        let development = http.replace("operator-controlled-upstream", "development-loopback");
-        load(&development).expect("loopback http is accepted in development");
-        let remote = document()
+        let (_directory, path) = written(&source);
+        let check = check_runtime(&path, true);
+        let diagnostic = check
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.mcp-runtime.invalid-jwks-uri")
+            .unwrap();
+        assert_eq!(diagnostic.message, "resourceServer.jwksSource.uri must be an absolute https URL without credentials; plain http beyond loopback needs allowInsecureHttp: true");
+        assert_eq!(diagnostic.suggested_action, "Write an https URL without credentials or a plain http loopback URL. For plain http beyond loopback, set resourceServer.allowInsecureHttp: true and start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.");
+    }
+
+    #[test]
+    fn malformed_configuration_still_reports_http_resource() {
+        let source = document().replace(
+            "https://gateway.example.test/mcp",
+            "http://127.0.0.1:8110/mcp",
+        );
+        let findings = findings_of(&format!("{source}unknown: true\n"));
+        assert!(findings.contains(&("config.unknown-key".to_owned(), "/unknown".to_owned())));
+        assert!(findings.contains(&(
+            "platform.posture.mcp-http-resource".to_owned(),
+            "/resourceServer/resource".to_owned()
+        )));
+    }
+
+    #[test]
+    fn production_reports_http_review_url_posture_and_structure_together() {
+        let source = document().replace(
+            "reviewBaseUrl: https://review.example.test",
+            "reviewBaseUrl: http://review.example.test/nested?example=value#fragment",
+        );
+        let findings = findings_of(&source);
+        for code in [
+            "breg.posture.review-http-public-origin",
+            "breg.mcp-runtime.review-base-url-not-origin",
+            "breg.mcp-runtime.endpoint-query-or-fragment",
+        ] {
+            assert!(
+                findings.contains(&(code.to_owned(), "/service/reviewBaseUrl".to_owned())),
+                "{code}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_configuration_still_reports_http_issuer_and_review_origin() {
+        let source = document()
             .replace(
-                "https://registry.example.test/",
-                "http://registry.example.test/",
+                "  issuer: https://login.example.test",
+                "  issuer: http://127.0.0.1:8111",
             )
-            .replace("operator-controlled-upstream", "development-loopback");
-        refused(
-            &remote,
-            "breg.mcp-runtime.plain-http-endpoint",
-            "/registry/baseUrl",
+            .replace(
+                "reviewBaseUrl: https://review.example.test",
+                "reviewBaseUrl: http://127.0.0.1:8113",
+            );
+        let findings = findings_of(&format!("{source}unknown: true\n"));
+        assert!(findings.contains(&("config.unknown-key".to_owned(), "/unknown".to_owned())));
+        for (code, pointer) in [
+            (
+                "platform.posture.mcp-http-published-issuer",
+                "/resourceServer/issuer",
+            ),
+            (
+                "breg.posture.review-http-public-origin",
+                "/service/reviewBaseUrl",
+            ),
+        ] {
+            assert!(
+                findings.contains(&(code.to_owned(), pointer.to_owned())),
+                "{code}: {findings:?}"
+            );
+        }
+    }
+
+    /// Every gated member is recorded while the file decodes, at the pointer
+    /// `development_settings` names, so the runtime's own list and the
+    /// loader's report cannot drift apart.
+    #[test]
+    fn development_settings_list_what_the_decoder_records() {
+        let yaml = document()
+            .replace("https://gateway.example.test/mcp", "http://10.0.0.4/mcp")
+            .replace(
+                "  issuer: https://login.example.test",
+                "  issuer: http://login.example.test\n  allowInsecureHttp: true",
+            )
+            .replace(
+                "    type: uri\n    uri: https://login.example.test/jwks.json",
+                "    type: test-issuer\n    documentRef: secret:file/test-issuer-jwks",
+            )
+            .replace(
+                "reviewBaseUrl: https://review.example.test",
+                "reviewBaseUrl: http://review.example.test",
+            )
+            .replace(
+                "audit:\n",
+                "audit:\n  hashKeyCustody: development-generated\n",
+            );
+        let (_directory, path) = written(&yaml);
+        let declared = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+            &path,
+            true,
+            stand_in_for,
         );
-        let opted_in = document().replace(
+        let loaded = check.loaded.expect("development decodes the document");
+        let pairs = |settings: &[registry_platform_config::FoundSetting]| {
+            let mut pairs: Vec<(&str, Option<String>)> = settings
+                .iter()
+                .map(|found| (found.setting.code, found.pointer.clone()))
+                .collect();
+            pairs.sort();
+            pairs
+        };
+        let listed = loaded.config.development_settings();
+        assert_eq!(listed.len(), 6, "{:?}", pairs(&listed));
+        assert_eq!(pairs(&listed), pairs(loaded.posture.settings()));
+    }
+
+    #[test]
+    fn an_http_issuer_beyond_loopback_names_its_one_remedy() {
+        let source = document().replace(
+            "  issuer: https://login.example.test",
+            "  issuer: http://login.example.test",
+        );
+        let (_directory, path) = written(&source);
+        let check = check_runtime_with_posture(
+            &path,
+            true,
+            DeclaredPosture {
+                posture: Posture::Development,
+                source: PostureSource::Flag,
+            },
+        );
+        let diagnostic = check
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.mcp-runtime.plain-http-endpoint")
+            .unwrap_or_else(|| panic!("{:?}", check.diagnostics));
+        assert_eq!(diagnostic.path, "/resourceServer/issuer");
+        assert_eq!(
+            diagnostic.message,
+            "the issuer uses plain http beyond loopback without allowInsecureHttp"
+        );
+        assert_eq!(diagnostic.suggested_action, "Write an https issuer URL. For plain http, start with `rstack dev` or declare development with REGISTRY_STACK_POSTURE=development or --posture development; beyond loopback, also set resourceServer.allowInsecureHttp: true.");
+    }
+
+    #[test]
+    fn published_review_origin_requires_development_for_any_http_host() {
+        for host in ["127.0.0.1", "review.example.test"] {
+            let source =
+                document().replace("https://review.example.test", &format!("http://{host}"));
+            refused(
+                &source,
+                "breg.posture.review-http-public-origin",
+                "/service/reviewBaseUrl",
+            );
+            let (_directory, path) = written(&source);
+            let loaded = RuntimeConfig::load_with_posture(
+                &path,
+                DeclaredPosture {
+                    posture: Posture::Development,
+                    source: PostureSource::Flag,
+                },
+            )
+            .expect("development accepts the HTTP review URL");
+            assert_eq!(
+                loaded.posture.ready_member()["developmentSettings"][0]["pointer"],
+                "/service/reviewBaseUrl"
+            );
+        }
+    }
+
+    #[test]
+    fn default_posture_refuses_insecure_resource_server_issuer() {
+        let insecure = document().replace(
             "  issuer: https://login.example.test",
             "  issuer: http://login.example.test\n  allowInsecureHttp: true",
         );
-        let config = load(&opted_in).expect("explicit HTTP issuer opt-in");
-        assert!(config.resource_server.allow_insecure_http);
-        assert_eq!(
-            config.resource_server.insecure_http_startup_diagnostic(),
-            Some("resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
-        );
+        let actual = findings_of(&insecure);
+        assert!(actual.contains(&(
+            "platform.posture.insecure-issuer-http".to_owned(),
+            "/resourceServer/allowInsecureHttp".to_owned()
+        )));
+        assert!(actual.contains(&(
+            "platform.posture.mcp-http-published-issuer".to_owned(),
+            "/resourceServer/issuer".to_owned()
+        )));
+    }
+
+    #[test]
+    fn posture_reports_all_development_members() {
+        let yaml = document()
+            .replace("https://gateway.example.test/mcp", "http://10.0.0.4/mcp")
+            .replace(
+                "  issuer: https://login.example.test",
+                "  issuer: http://login.example.test\n  allowInsecureHttp: true",
+            )
+            .replace(
+                "    type: uri\n    uri: https://login.example.test/jwks.json",
+                "    type: test-issuer\n    documentRef: secret:file/test-issuer-jwks",
+            )
+            .replace(
+                "reviewBaseUrl: https://review.example.test",
+                "reviewBaseUrl: http://review.example.test",
+            )
+            .replace(
+                "audit:\n",
+                "audit:\n  hashKeyCustody: development-generated\n",
+            );
+        let (_directory, path) = written(&yaml);
+        let expected = [
+            (
+                "breg.posture.review-http-public-origin",
+                "/service/reviewBaseUrl",
+            ),
+            (
+                "platform.posture.mcp-http-published-issuer",
+                "/resourceServer/issuer",
+            ),
+            (
+                "platform.posture.insecure-issuer-http",
+                "/resourceServer/allowInsecureHttp",
+            ),
+            (
+                "platform.posture.mcp-http-resource",
+                "/resourceServer/resource",
+            ),
+            ("platform.posture.test-issuer", "/resourceServer/jwksSource"),
+            (
+                "platform.posture.generated-audit-key",
+                "/audit/hashKeyCustody",
+            ),
+        ];
+        for (posture, severity) in [
+            (Posture::Production, registry_platform_yaml::Severity::Error),
+            (
+                Posture::Development,
+                registry_platform_yaml::Severity::Warning,
+            ),
+        ] {
+            let declared = DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            };
+            let check = check_runtime_with_posture(&path, true, declared);
+            assert_eq!(
+                check.diagnostics.len(),
+                expected.len(),
+                "{:?}",
+                check.diagnostics
+            );
+            for (code, pointer) in expected {
+                assert!(
+                    check.diagnostics.iter().any(|finding| finding.code == code
+                        && finding.path == pointer
+                        && finding.severity == severity),
+                    "{:?}",
+                    check.diagnostics
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_posture_accepts_plain_http_loopback_registry() {
+        let local = document().replace("https://registry.example.test/", "http://127.0.0.1:8080/");
+        load(&local).expect("production accepts loopback registry transport");
+    }
+
+    #[test]
+    fn transport_and_published_urls_follow_their_own_policies() {
+        let remote = document().replace("https://registry.example.test/", "http://10.0.0.4/");
+        for listener in ["loopback-plaintext", "development-loopback"] {
+            refused(
+                &remote.replace("operator-controlled-upstream", listener),
+                "breg.mcp-runtime.plain-http-endpoint",
+                "/registry/baseUrl",
+            );
+        }
+        let insecure = document()
+            .replace(
+                "https://gateway.example.test/mcp",
+                "http://gateway.example.test/mcp",
+            )
+            .replace(
+                "  issuer: https://login.example.test",
+                "  issuer: http://login.example.test
+  allowInsecureHttp: true",
+            );
+        let (_directory, path) = written(&insecure);
+        let declared = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let loaded =
+            RuntimeConfig::load_with_posture(&path, declared).expect("development configuration");
+        assert!(loaded.config.resource_server.allow_insecure_http);
+        let ready = loaded.posture.ready_member();
+        assert_eq!(ready["posture"], "development");
+        for code in [
+            "platform.posture.insecure-issuer-http",
+            "platform.posture.mcp-http-resource",
+        ] {
+            assert!(ready["developmentSettings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|setting| setting["code"] == code));
+        }
+    }
+
+    #[test]
+    fn plain_http_follows_the_shared_loopback_definition() {
+        let development = document().replace("operator-controlled-upstream", "loopback-plaintext");
+        for host in ["LOCALHOST", "127.0.0.2", "[::1]", "[::ffff:127.0.0.1]"] {
+            let config = development.replace(
+                "https://registry.example.test/",
+                &format!("http://{host}:8080/"),
+            );
+            load(&config).unwrap_or_else(|_| panic!("{host} is loopback"));
+        }
+        for host in ["localhost.", "app.localhost", "[::ffff:10.0.0.1]"] {
+            refused(
+                &development.replace(
+                    "https://registry.example.test/",
+                    &format!("http://{host}:8080/"),
+                ),
+                "breg.mcp-runtime.plain-http-endpoint",
+                "/registry/baseUrl",
+            );
+        }
     }
 
     #[test]

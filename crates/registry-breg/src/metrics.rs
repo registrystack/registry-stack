@@ -13,7 +13,9 @@
 //! status label is one of three coarse classes. Request paths, query values,
 //! principals, record identifiers, and problem codes never become labels, so
 //! a caller cannot write arbitrary text into a series and the series count is
-//! bounded by the route table regardless of traffic. The pool gauges are
+//! bounded by the route table regardless of traffic. The refusal counter
+//! `breg_request_refusals_total` carries one `check` label from the closed
+//! `FailedCheck` set. The pool gauges are
 //! republished from the live pool at scrape time and carry only a fixed state
 //! label.
 //!
@@ -38,7 +40,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -52,6 +54,7 @@ use axum::{
     Router,
 };
 
+use registry_platform_authcommon::RefusalRecorder;
 use registry_platform_metrics::{
     sample_error_class, Exposition, HistogramSnapshot, MetricKind, ScrapeDeadline, SumCountOrder,
     CLASS_NO_TIME_LEFT, CLASS_POOL, CONTENT_TYPE as METRICS_MEDIA_TYPE,
@@ -156,9 +159,12 @@ const DURATION_BUCKETS: [f64; 9] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.
 /// Series are keyed only by the closed label set described on this module, so
 /// the registry is bounded by the route table regardless of traffic and needs
 /// no eviction.
-#[derive(Default)]
 pub struct Metrics {
     series: Mutex<BTreeMap<HttpSeriesKey, HttpSeries>>,
+    /// The refusal counter this registry publishes as
+    /// `breg_request_refusals_total`. A served registry shares the process
+    /// recorder that the request boundary counts into.
+    refusals: Arc<RefusalRecorder>,
     /// The pool the metrics scrape handler samples immediately before each
     /// render. `None` for registries that are never served on the metrics
     /// listener (for example, a focused unit test).
@@ -175,6 +181,36 @@ pub struct Metrics {
     active_package_digest: Option<String>,
     /// Failed samples since this process started, indexed by [`SampleKind`].
     sample_failures: [AtomicU64; SampleKind::ALL.len()],
+}
+
+/// The process-wide refusal recorder: the one counter family and the one log
+/// budget that every refused request in this process shares, whichever router
+/// served it. It is built once, from a closed label space the enum owns, so
+/// construction cannot fail.
+pub(crate) fn process_refusal_recorder() -> &'static Arc<RefusalRecorder> {
+    static RECORDER: OnceLock<Arc<RefusalRecorder>> = OnceLock::new();
+    RECORDER.get_or_init(|| Arc::new(new_refusal_recorder()))
+}
+
+fn new_refusal_recorder() -> RefusalRecorder {
+    RefusalRecorder::new("breg").expect("the refusal counter's closed label space is valid")
+}
+
+impl Default for Metrics {
+    /// A registry with a private refusal counter, for tests that read a
+    /// deterministic exposition. A served registry is built by
+    /// [`Metrics::new`].
+    fn default() -> Self {
+        Self {
+            series: Mutex::default(),
+            refusals: Arc::new(new_refusal_recorder()),
+            pool: None,
+            workers: Vec::new(),
+            queue_sample: tokio::sync::Mutex::new(()),
+            active_package_digest: None,
+            sample_failures: Default::default(),
+        }
+    }
 }
 
 /// A background worker reported by `breg_worker_last_success_age_seconds`.
@@ -289,14 +325,20 @@ impl Metrics {
     pub(crate) fn new(pool: RuntimePool) -> Self {
         Self {
             pool: Some(pool),
+            refusals: Arc::clone(process_refusal_recorder()),
             ..Self::default()
         }
     }
 
+    /// A registry without a pool that publishes the process refusal counter,
+    /// so a test can read what the request boundary counted.
     #[doc(hidden)]
     #[must_use]
     pub fn without_pool_for_test() -> Self {
-        Self::default()
+        Self {
+            refusals: Arc::clone(process_refusal_recorder()),
+            ..Self::default()
+        }
     }
 
     #[cfg(feature = "postgres-test")]
@@ -631,6 +673,7 @@ impl Metrics {
                 1_u8,
             );
         }
+        self.refusals.counter().write(&mut out).expect(DECLARATION);
         out.finish()
     }
 
@@ -1259,12 +1302,13 @@ pub(crate) fn route_template(request: &Request<Body>) -> &str {
 /// are operator material, and the public Registry contract does not describe
 /// them. Every other path on this listener is unserved rather than delegated
 /// back to the Registry routes.
-pub fn metrics_app(metrics: Arc<Metrics>) -> Router {
+pub fn metrics_app(metrics: Arc<Metrics>, posture: registry_platform_config::Posture) -> Router {
     Router::new()
         .route("/metrics", get(render_metrics))
         .fallback(metrics_route_absent)
         .method_not_allowed_fallback(metrics_route_absent)
         .with_state(metrics)
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 async fn render_metrics(State(metrics): State<Arc<Metrics>>) -> Response {
@@ -1287,6 +1331,27 @@ mod tests {
     use axum::middleware::Next;
     use std::collections::BTreeSet;
     use tower::util::ServiceExt;
+
+    #[test]
+    fn the_refusal_counter_declares_every_check_and_publishes_it_at_zero() {
+        use registry_platform_authcommon::FailedCheck;
+        let rendered = Metrics::default().render(None);
+        for check in FailedCheck::ALL {
+            assert!(
+                rendered.contains(&format!(
+                    "breg_request_refusals_total{{check=\"{}\"}} 0\n",
+                    check.as_str()
+                )),
+                "{} is declared",
+                check.as_str()
+            );
+        }
+        let recorder = new_refusal_recorder();
+        for check in FailedCheck::ALL {
+            let _ = recorder.record(check);
+            assert_eq!(recorder.counter().get(&[check.as_str()]), Some(1));
+        }
+    }
 
     #[test]
     fn duration_buckets_are_cumulative_and_carry_an_infinite_bound() {
@@ -1667,10 +1732,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metrics_marks_every_development_response() {
+        use registry_platform_config::Posture;
+
+        for posture in [Posture::Production, Posture::Development] {
+            for path in ["/metrics", "/unknown"] {
+                let response = metrics_app(Arc::new(Metrics::default()), posture)
+                    .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response
+                        .headers()
+                        .get("registry-posture")
+                        .map(|value| value.to_str().unwrap()),
+                    (posture == Posture::Development).then_some("development"),
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn metrics_app_serves_prometheus_text_and_refuses_other_paths() {
         let metrics = Arc::new(Metrics::default());
         metrics.record_http("/health", "GET", "success", Duration::from_millis(5));
-        let app = metrics_app(Arc::clone(&metrics));
+        let app = metrics_app(
+            Arc::clone(&metrics),
+            registry_platform_config::Posture::Production,
+        );
 
         let response = app
             .clone()

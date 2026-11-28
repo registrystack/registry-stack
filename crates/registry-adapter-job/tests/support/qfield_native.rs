@@ -86,8 +86,7 @@ struct QfieldSource {
 
 impl QfieldSource {
     async fn start(example: &Path) -> Self {
-        let admin_url = std::env::var("ADAPTER_TEST_DATABASE_URL")
-            .expect("ADAPTER_TEST_DATABASE_URL names the disposable PostGIS server");
+        let admin_url = crate::job_fixture::test_database_url();
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let database = format!("adapter_qfield_source_{suffix}");
         let role = format!("adapter_qfield_reader_{suffix}");

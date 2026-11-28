@@ -175,6 +175,34 @@ fn jwks_source_has_three_types_and_defaults_to_discovery() {
 }
 
 #[test]
+fn jwks_uri_loopback_follows_the_shared_definition() {
+    let check = |uri: &str| {
+        JwksSource::Uri {
+            uri: Url::new(uri).unwrap(),
+        }
+        .check("authentication.oidc.jwksSource", true)
+    };
+    for uri in [
+        "http://127.0.0.1:1/jwks",
+        "http://127.0.0.2:1/jwks",
+        "http://[::1]:1/jwks",
+        "http://[::ffff:127.0.0.1]:1/jwks",
+        "http://localhost:1/jwks",
+        "http://LOCALHOST:1/jwks",
+    ] {
+        check(uri).unwrap_or_else(|error| panic!("{uri}: {error:?}"));
+    }
+    for uri in [
+        "http://localhost.:1/jwks",
+        "http://issuer.localhost:1/jwks",
+        "http://0.0.0.0:1/jwks",
+        "http://[::ffff:10.0.0.1]:1/jwks",
+    ] {
+        assert!(check(uri).is_err(), "{uri}");
+    }
+}
+
+#[test]
 fn issuer_and_jwks_uri_are_checked_urls_when_read() {
     for text in [
         "https://issuer.example/a\\b".to_owned(),
@@ -209,7 +237,9 @@ fn issuer_and_jwks_uri_are_checked_urls_when_read() {
         let issuer: OidcIssuerConfig =
             read_block(&serde_json::json!({"issuer": text, "audience": "api"}).to_string())
                 .expect("ordinary issuer URL");
-        issuer.check("authentication.oidc", false).unwrap();
+        issuer
+            .check_without_posture("authentication.oidc", false)
+            .unwrap();
         assert_eq!(issuer.issuer.as_str(), text);
     }
 }
@@ -338,6 +368,97 @@ fn private_listener_follows_the_declared_boundary() {
         OperatorControlledUpstream,
         ContainerPrivate
     ));
+}
+
+#[test]
+fn loopback_plaintext_is_placement_only_and_follows_the_loopback_rule() {
+    use ListenerNetworkExposure::{ContainerPrivate, PrivateAddress};
+    use TlsTermination::{DevelopmentLoopback, LoopbackPlaintext};
+    let listener: PrivateListenerConfig =
+        read_block("bind: 127.0.0.1:8080\ntlsTermination: loopback-plaintext")
+            .expect("loopback-plaintext decodes");
+    assert_eq!(listener.tls_termination, LoopbackPlaintext);
+    assert!(listener.is_valid());
+    let unknown = read_block::<PrivateListenerConfig>(
+        "bind: 127.0.0.1:8080\ntlsTermination: loopback-plaintxt",
+    );
+    assert!(unknown.is_err(), "a misspelt value is refused");
+
+    let valid = |bind: &str, tls, exposure| {
+        PrivateListenerConfig {
+            bind: bind.parse().unwrap(),
+            tls_termination: tls,
+            network_exposure: exposure,
+        }
+        .is_valid()
+    };
+    for bind in ["127.0.0.1:1", "[::1]:1", "127.0.0.2:1"] {
+        assert!(valid(bind, LoopbackPlaintext, PrivateAddress), "{bind}");
+    }
+    // The refusals match `development-loopback` for every bind and exposure.
+    for bind in [
+        "127.0.0.1:1",
+        "[::1]:1",
+        "127.0.0.2:1",
+        "10.0.0.1:1",
+        "[fd00::1]:1",
+        "0.0.0.0:1",
+        "[::]:1",
+        "8.8.8.8:1",
+        "224.0.0.1:1",
+    ] {
+        for exposure in [PrivateAddress, ContainerPrivate] {
+            assert_eq!(
+                valid(bind, LoopbackPlaintext, exposure),
+                valid(bind, DevelopmentLoopback, exposure),
+                "{bind} {exposure:?}"
+            );
+        }
+    }
+    assert!(!valid("10.0.0.1:1", LoopbackPlaintext, PrivateAddress));
+    assert!(!valid("127.0.0.1:1", LoopbackPlaintext, ContainerPrivate));
+    assert_eq!(
+        serde_json::to_value(LoopbackPlaintext).unwrap(),
+        "loopback-plaintext"
+    );
+}
+
+#[test]
+fn test_issuer_reads_a_secret_reference_like_static_and_nothing_else() {
+    let source: JwksSource =
+        read_block("type: test-issuer\ndocumentRef: secret:env/TEST_JWKS").expect("decodes");
+    assert_eq!(
+        source,
+        JwksSource::TestIssuer {
+            document_ref: "secret:env/TEST_JWKS".to_owned()
+        }
+    );
+    assert_eq!(source.document_ref(), Some("secret:env/TEST_JWKS"));
+    source
+        .check("authentication.oidc", false)
+        .expect("a reference passes");
+    let empty = JwksSource::TestIssuer {
+        document_ref: String::new(),
+    };
+    assert_eq!(
+        empty
+            .check("authentication.oidc", false)
+            .expect_err("empty reference")
+            .field(),
+        "authentication.oidc.documentRef"
+    );
+    assert_eq!(
+        serde_json::to_value(&source).unwrap(),
+        serde_json::json!({"type": "test-issuer", "documentRef": "secret:env/TEST_JWKS"})
+    );
+    for text in [
+        "type: test-issuer",
+        "type: test-issuer\ndocumentRef: secret:env/X\nuri: https://x.example.test",
+        "type: test-issuer\ndocumentRef: secret:env/X\nunknown: 1",
+        "type: test-issuer\ndocumentRf: secret:env/X",
+    ] {
+        assert!(read_block::<JwksSource>(text).is_err(), "{text}");
+    }
 }
 
 #[test]
@@ -513,14 +634,14 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
         "urn:example:api",
         JwksSource::default(),
     )
-    .check(field, false)
+    .check_without_posture(field, false)
     .expect("https issuer");
     issuer("http://127.0.0.1:8082", "api", JwksSource::default())
-        .check(field, true)
+        .check_without_posture(field, true)
         .expect("supervised loopback issuer");
     for loopback in ["http://localhost:8082", "http://[::1]:8082"] {
         issuer(loopback, "api", JwksSource::default())
-            .check(field, true)
+            .check_without_posture(field, true)
             .expect("every loopback spelling is admitted");
     }
 
@@ -532,7 +653,7 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
     assert!(opted_in.issuer.allow_insecure_http);
     opted_in
         .issuer
-        .check(field, false)
+        .check_without_posture(field, false)
         .expect("explicit HTTP issuer opt-in validates");
 
     for (candidate, loopback, expected_field) in [
@@ -587,7 +708,7 @@ fn the_oidc_issuer_is_an_https_url_and_the_audience_is_bounded_text() {
         ),
     ] {
         let error = candidate
-            .check(field, loopback)
+            .check_without_posture(field, loopback)
             .expect_err("refused issuer");
         assert_eq!(error.field(), expected_field, "{error}");
         assert!(!error.to_string().contains("user:pass"), "{error}");
@@ -616,7 +737,7 @@ fn the_insecure_http_opt_in_also_admits_a_declared_http_jwks_uri() {
         },
     );
     let error = candidate
-        .check(field, false)
+        .check_without_posture(field, false)
         .expect_err("a plain HTTP key URI needs the opt-in");
     assert_eq!(error.field(), "authentication.oidc.jwksSource.uri");
     assert!(error.to_string().contains("allowInsecureHttp: true"));
@@ -624,7 +745,7 @@ fn the_insecure_http_opt_in_also_admits_a_declared_http_jwks_uri() {
 
     candidate.allow_insecure_http = true;
     candidate
-        .check(field, false)
+        .check_without_posture(field, false)
         .expect("the opt-in admits a declared HTTP key URI under an HTTPS issuer");
 }
 
@@ -636,14 +757,14 @@ fn an_oidc_issuer_with_a_query_is_refused_without_echoing_it() {
         "api",
         JwksSource::default(),
     )
-    .check(field, false)
+    .check_without_posture(field, false)
     .expect("an issuer with a path");
     for candidate in [
         "https://issuer.example.test/realms/pilot?tenant=query-canary",
         "https://issuer.example.test/?",
     ] {
         let error = issuer(candidate, "api", JwksSource::default())
-            .check(field, false)
+            .check_without_posture(field, false)
             .expect_err("an issuer with a query is refused");
         assert_eq!(error.field(), "authentication.oidc.issuer", "{error}");
         assert!(error.to_string().contains("query"), "{error}");
@@ -840,7 +961,7 @@ fn a_secret_failure_names_the_member_and_never_the_reference() {
         SecretError::ProviderDisabled,
         SecretError::InvalidProviderConfiguration,
         SecretError::Unavailable,
-        SecretError::UnsafeFile,
+        SecretError::UnsafeFile(crate::SecretFileCheck::WorldReadable),
         SecretError::Read,
         SecretError::InvalidValue,
     ] {
@@ -1067,6 +1188,48 @@ const URL_HOOK_DESTINATION: &str = "url: https://events.example.test/hooks\n\
 hmacSha256KeyRef: secret:file/hook-key\n";
 
 #[test]
+fn a_present_previous_hook_key_reference_cannot_be_null() {
+    let input = format!("{URL_HOOK_DESTINATION}previousHmacSha256KeyRef: null\n");
+    assert!(read_block::<UrlHookDestinationConfig>(&input).is_err());
+}
+
+#[test]
+fn a_url_hook_destination_accepts_a_previous_key_reference() {
+    let yaml =
+        format!("{URL_HOOK_DESTINATION}previousHmacSha256KeyRef: secret:file/old-hook-key\n");
+    let destination: UrlHookDestinationConfig = read_block(&yaml).unwrap();
+    assert_eq!(
+        destination
+            .previous_hmac_sha256_key_ref
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "secret:file/old-hook-key"
+    );
+    let serialized = serde_json::to_string(&destination).unwrap();
+    assert_eq!(
+        read_block::<UrlHookDestinationConfig>(&serialized).unwrap(),
+        destination
+    );
+}
+
+#[test]
+fn a_url_hook_destination_refuses_an_unknown_member_beside_the_previous_key_reference() {
+    let yaml = format!(
+        "{URL_HOOK_DESTINATION}previousHmacSha256KeyRef: secret:file/old-hook-key\nunknown: true\n"
+    );
+    assert!(read_block::<UrlHookDestinationConfig>(&yaml).is_err());
+}
+
+#[test]
+fn a_url_hook_destination_can_omit_the_previous_key_reference() {
+    let destination: UrlHookDestinationConfig = read_block(URL_HOOK_DESTINATION).unwrap();
+    assert!(destination.previous_hmac_sha256_key_ref.is_none());
+    let serialized = serde_json::to_value(&destination).unwrap();
+    assert!(serialized.get("previousHmacSha256KeyRef").is_none());
+}
+
+#[test]
 fn url_hook_destination_defaults_its_delivery_budget_and_never_prints_its_binding() {
     let defaults: UrlHookDestinationConfig = read_block(URL_HOOK_DESTINATION).unwrap();
     assert_eq!(defaults.url.as_str(), "https://events.example.test/hooks");
@@ -1139,6 +1302,98 @@ fn url_hook_destination_refuses_unknown_keys_and_inline_signing_keys() {
     assert!(read_block::<UrlHookDestinationConfig>("url: https://events.example.test\n").is_err());
 }
 
+const PRIVATE_URL_HOOK_DESTINATION: &str = "url: http://receiver:9000/hook\n\
+transport: private-network-plaintext\n\
+allowedPrivateCidrs: [10.42.0.0/16]\n\
+hmacSha256KeyRef: secret:file/hook-key\n";
+
+#[test]
+fn a_url_hook_destination_declares_its_transport_and_private_ranges() {
+    let destination: UrlHookDestinationConfig =
+        read_block(PRIVATE_URL_HOOK_DESTINATION).expect("the block reads both members");
+    let serialized = serde_json::to_value(&destination).unwrap();
+    assert_eq!(serialized["transport"], "private-network-plaintext");
+    assert_eq!(
+        serialized["allowedPrivateCidrs"],
+        serde_json::json!(["10.42.0.0/16"])
+    );
+    let text = serde_json::to_string(&destination).unwrap();
+    assert_eq!(
+        read_block::<UrlHookDestinationConfig>(&text).unwrap(),
+        destination
+    );
+
+    // A refused range decodes, so the check can name it, and never
+    // serialises back as a range.
+    let refused: UrlHookDestinationConfig =
+        read_block(&PRIVATE_URL_HOOK_DESTINATION.replace("10.42.0.0/16", "169.254.0.0/16"))
+            .expect("a refused range is reported by the check, not at decode");
+    assert!(serde_json::to_string(&refused).is_err());
+}
+
+#[test]
+fn a_url_hook_destination_without_a_transport_serialises_as_before() {
+    let destination: UrlHookDestinationConfig = read_block(URL_HOOK_DESTINATION).unwrap();
+    let serialized = serde_json::to_value(&destination).unwrap();
+    assert!(serialized.get("transport").is_none(), "{serialized}");
+    assert!(
+        serialized.get("allowedPrivateCidrs").is_none(),
+        "{serialized}"
+    );
+}
+
+#[test]
+fn a_url_hook_destination_refuses_a_null_or_unknown_transport_and_a_null_range_list() {
+    for (member, value) in [("transport", "null"), ("allowedPrivateCidrs", "null")] {
+        let report = read_block::<UrlHookDestinationConfig>(&format!(
+            "{URL_HOOK_DESTINATION}{member}: {value}\n"
+        ))
+        .unwrap_err();
+        assert_eq!(codes(&report), ["config.null-value"], "{member}: {report}");
+    }
+    for value in ["private", "private-service-http", "any-private"] {
+        let report = read_block::<UrlHookDestinationConfig>(&format!(
+            "{URL_HOOK_DESTINATION}transport: {value}\n"
+        ))
+        .unwrap_err();
+        assert!(
+            !codes(&report).contains(&"config.unknown-key"),
+            "{value}: {report}"
+        );
+    }
+}
+
+#[test]
+fn a_hook_destination_records_private_plain_text_as_an_explicit_setting_at_its_pointer() {
+    let hooks = |transport: &str, url: &str| {
+        format!(
+            "hooks:\n  events:\n    url: {url}\n    transport: {transport}\n    \
+             allowedPrivateCidrs: [10.42.0.0/16]\n    hmacSha256KeyRef: secret:file/hook-key\n"
+        )
+    };
+    let (read, collected) = crate::collect_posture_settings(|| {
+        read_block::<HookDestinationsHost>(&hooks(
+            "private-network-plaintext",
+            "http://receiver:9000/hook",
+        ))
+    });
+    read.expect("an explicit setting never refuses");
+    assert_eq!(collected.explicit.len(), 1);
+    let found = &collected.explicit[0];
+    assert_eq!(
+        found.setting.code,
+        "platform.posture.destination-private-plaintext"
+    );
+    assert_eq!(found.pointer.as_deref(), Some("/hooks/events/transport"));
+    assert!(collected.development.is_empty());
+
+    let (read, collected) = crate::collect_posture_settings(|| {
+        read_block::<HookDestinationsHost>(&hooks("verified-tls", "https://receiver/hook"))
+    });
+    read.expect("verified TLS reads");
+    assert!(collected.explicit.is_empty());
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HookDestinationsHost {
@@ -1173,4 +1428,140 @@ fn url_hook_destinations_are_keyed_by_local_identifiers_and_bounded() {
             "{id}"
         );
     }
+}
+
+fn package_clients(yaml: &str) -> OidcPackageClientsConfig {
+    read_block(yaml).expect("package clients parse")
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+#[test]
+fn from_package_keyword_parses() {
+    let block = package_clients("allowedClients: from-package");
+    assert_eq!(block.allowed_clients, PackageClients::FromPackage);
+    assert_eq!(
+        serde_json::to_value(&block).expect("serialize"),
+        serde_json::json!({"allowedClients": "from-package"})
+    );
+}
+
+#[test]
+fn unrestricted_parses() {
+    let block = package_clients("allowedClients: unrestricted");
+    assert_eq!(block.allowed_clients, PackageClients::Unrestricted);
+    assert_eq!(
+        serde_json::to_value(&block).expect("serialize"),
+        serde_json::json!({"allowedClients": "unrestricted"})
+    );
+}
+
+#[test]
+fn list_parses() {
+    let block = package_clients(
+        "allowedClients: [portal, kiosk]\nassertionIssuers: {portal: [https://assert.example.test]}",
+    );
+    assert_eq!(
+        block.allowed_clients,
+        PackageClients::Listed(strings(&["portal", "kiosk"]))
+    );
+    assert_eq!(
+        block.assertion_issuers["portal"],
+        ["https://assert.example.test"]
+    );
+    block.check("authentication.oidc").expect("within bounds");
+    assert_eq!(
+        serde_json::to_value(&block).expect("serialize"),
+        serde_json::json!({
+            "allowedClients": ["portal", "kiosk"],
+            "assertionIssuers": {"portal": ["https://assert.example.test"]},
+        })
+    );
+}
+
+#[test]
+fn empty_list_is_refused() {
+    let report = read_block::<OidcPackageClientsConfig>("allowedClients: []")
+        .expect_err("an empty list is refused");
+    assert_eq!(report.diagnostics()[0].path, "/allowedClients");
+}
+
+#[test]
+fn unknown_keyword_is_refused() {
+    for refused in [
+        "allowedClients: portal",
+        "allowedClients: From-Package",
+        "allowedClients: from_package",
+        "allowedClients: 7",
+    ] {
+        let report = read_block::<OidcPackageClientsConfig>(refused).expect_err(refused);
+        assert_eq!(report.diagnostics()[0].path, "/allowedClients", "{refused}");
+    }
+}
+
+#[test]
+fn absent_member_is_refused() {
+    let report = read_block::<OidcPackageClientsConfig>("{}").expect_err("omission is refused");
+    assert!(
+        report.diagnostics()[0].message.contains("allowedClients"),
+        "{:?}",
+        report.diagnostics()
+    );
+}
+
+#[test]
+fn a_repeated_listed_client_is_refused() {
+    let report = read_block::<OidcPackageClientsConfig>("allowedClients: [portal, portal]")
+        .expect_err("repeat refused");
+    assert_eq!(report.diagnostics()[0].path, "/allowedClients/1");
+}
+
+#[test]
+fn resolve_from_package_returns_the_sorted_union() {
+    let admitted = PackageClients::FromPackage
+        .resolve(&strings(&["c3", "c1", "c2", "c3", "c1"]))
+        .expect("resolves");
+    assert_eq!(admitted.as_slice(), ["c1", "c2", "c3"]);
+}
+
+#[test]
+fn resolve_never_returns_an_empty_list() {
+    assert_eq!(
+        PackageClients::FromPackage
+            .resolve(&[])
+            .expect_err("empty package"),
+        PackageClientsError::Empty
+    );
+    assert_eq!(
+        PackageClients::Unrestricted
+            .resolve(&strings(&["c1"]))
+            .expect_err("unrestricted"),
+        PackageClientsError::Unrestricted
+    );
+    assert_eq!(
+        PackageClients::Listed(Vec::new())
+            .resolve(&strings(&["c1"]))
+            .expect_err("an unparsed empty list"),
+        PackageClientsError::Empty
+    );
+    assert!(AdmittedClients::new(Vec::new()).is_none());
+}
+
+#[test]
+fn resolve_listed_missing_a_package_client_names_the_client() {
+    let listed = PackageClients::Listed(strings(&["c1", "c2"]));
+    let error = listed
+        .resolve(&strings(&["c1", "c3", "c4"]))
+        .expect_err("c3 is missing");
+    assert_eq!(error, PackageClientsError::Missing("c3".to_owned()));
+    assert!(error.to_string().contains("c3"));
+}
+
+#[test]
+fn resolve_listed_covering_the_package_keeps_extra_clients() {
+    let listed = PackageClients::Listed(strings(&["c1", "c2", "extra"]));
+    let admitted = listed.resolve(&strings(&["c2", "c1"])).expect("covers");
+    assert_eq!(admitted.as_slice(), ["c1", "c2", "extra"]);
 }

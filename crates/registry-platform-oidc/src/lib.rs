@@ -7,18 +7,28 @@
 
 mod access_token_algorithm;
 mod authorization_claims;
+mod caller_issuer;
+mod caller_kind;
 mod diagnostics;
-pub use diagnostics::{AuthenticationDiagnostics, AuthenticationStage};
-#[doc(hidden)]
-pub use tracing as __tracing;
+mod issuer_set;
+mod static_jwks;
+pub use static_jwks::{public_jwks_document, StaticJwksError};
 pub mod task_grant;
+
+pub use registry_platform_httputil::PeerPolicy;
 
 pub use access_token_algorithm::AccessTokenAlgorithm;
 pub use authorization_claims::{
-    actor_kind, grant_claims, ActorKind, BregPermission, ClaimError, ClaimMember, ClaimNames,
-    GrantBounds, GrantClaims, GrantContextError, MatchedClientError, SchedulingPermission,
-    ASSERTION_ISSUER_CLAIM,
+    actor_kind, grant_claims, refuses_development_assertion, ActorKind, BregPermission, ClaimError,
+    ClaimMember, ClaimNames, GrantBounds, GrantClaims, GrantContextError, MatchedClientError,
+    SchedulingPermission, ASSERTION_ISSUER_CLAIM, DEVELOPMENT_ASSERTION_CODE, POSTURE_CLAIM,
 };
+pub use caller_issuer::{access_token_types, ActorKindTwice, UnresolvedClients};
+pub use caller_kind::{
+    caller_kind, refuse_identity_only, CallerKind, CallerKindError, DeclaredKinds,
+    OPENID_CONNECT_SCOPES,
+};
+pub use issuer_set::{CallerRefusal, IssuerEntry, IssuerSet, IssuerSetError, VerifiedCaller};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -90,14 +100,10 @@ impl IssuerNetworkPolicy {
         {
             return Err(OidcError::InvalidUrl);
         }
-        let loopback = issuer.host_str().is_some_and(|host| {
-            host.eq_ignore_ascii_case("localhost")
-                || host
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|address| address.is_loopback())
-        });
+        let loopback = issuer
+            .host_str()
+            .and_then(registry_platform_httputil::loopback::loopback_host)
+            .is_some();
         if issuer.scheme() == "http" && !loopback && !allow_insecure_http {
             return Err(OidcError::InsecureHttpRequiresOptIn);
         }
@@ -470,26 +476,40 @@ impl fmt::Debug for JwksFetcher {
 
 /// Parse an operator-supplied static JWKS document for
 /// [`JwksFetcher::new_static`]: a non-empty key set of RSA or elliptic-curve
-/// keys, each with a non-empty `kid` no other key in the set repeats. A
-/// symmetric key or an unnamed key is refused here, at startup, rather than
-/// when a token first selects it.
+/// public keys, each with a non-empty `kid` no other key in the set repeats.
+/// A symmetric key, a private-key member or an unnamed key is refused here,
+/// at startup, rather than when a token first selects it. The rule on members
+/// is [`public_jwks_document`]. An OKP key passes that rule and is refused
+/// here with [`StaticJwksError::OctetKeyPair`], which names its position, `kid`
+/// and `crv`. A key with a member of the wrong shape is refused with
+/// [`StaticJwksError::KeyShape`], which names its position.
 pub fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, OidcError> {
-    let jwks: JwkSet = serde_json::from_slice(bytes).map_err(|_| OidcError::Parse)?;
-    if jwks.keys.is_empty() {
-        return Err(OidcError::EmptyKeySet);
+    let document = public_jwks_document(bytes)?;
+    let keys = document["keys"].as_array().into_iter().flatten();
+    for (key, member) in keys.enumerate() {
+        if member["kty"] == "OKP" {
+            let label = |name: &str| member[name].as_str().map(str::to_owned);
+            return Err(StaticJwksError::OctetKeyPair {
+                key,
+                kid: label("kid"),
+                crv: label("crv"),
+            }
+            .into());
+        }
+        // Parsing each key alone names the one a member of the wrong shape
+        // broke, which the whole-set parse below cannot.
+        if serde_json::from_value::<Jwk>(member.clone()).is_err() {
+            return Err(StaticJwksError::KeyShape { key }.into());
+        }
     }
-    let mut kids = BTreeSet::new();
-    let all_named_asymmetric = jwks.keys.iter().all(|key| {
+    let jwks: JwkSet = serde_json::from_value(document).map_err(|_| OidcError::Parse)?;
+    let all_asymmetric = jwks.keys.iter().all(|key| {
         matches!(
             key.algorithm,
             AlgorithmParameters::RSA(_) | AlgorithmParameters::EllipticCurve(_)
-        ) && key
-            .common
-            .key_id
-            .as_deref()
-            .is_some_and(|kid| !kid.is_empty() && kids.insert(kid))
+        )
     });
-    if all_named_asymmetric {
+    if all_asymmetric {
         Ok(jwks)
     } else {
         Err(OidcError::InvalidJwk)
@@ -955,14 +975,19 @@ fn validate_jwk(jwk: &Jwk) -> Result<(), OidcError> {
     Ok(())
 }
 
+/// Check that the key a token's `kid` names can serve the token's header
+/// `alg`. A key the source should not publish stays [`OidcError::InvalidJwk`],
+/// a key-source fault. A header the key cannot serve, including a `kid` that
+/// names an encryption key, is [`OidcError::AlgorithmNotAllowed`]: the caller
+/// chose that header, so it is a token fault.
 fn validate_jwk_for_header(jwk: &Jwk, header_alg: Algorithm) -> Result<(), OidcError> {
     validate_jwk(jwk)?;
     if jwk_family(jwk) != algorithm_family(header_alg) {
-        return Err(OidcError::InvalidJwk);
+        return Err(OidcError::AlgorithmNotAllowed);
     }
     if let Some(jwk_alg) = explicit_or_inferred_jwk_algorithm(jwk)? {
         if jwk_alg != header_alg {
-            return Err(OidcError::InvalidJwk);
+            return Err(OidcError::AlgorithmNotAllowed);
         }
     }
     Ok(())
@@ -1024,6 +1049,8 @@ fn explicit_or_inferred_jwk_algorithm(jwk: &Jwk) -> Result<Option<Algorithm>, Oi
     }
 }
 
+/// A key whose declared `alg` is not a signing algorithm cannot verify any
+/// token, so a header that names it fails as [`OidcError::AlgorithmNotAllowed`].
 fn key_algorithm_to_jwt_algorithm(algorithm: KeyAlgorithm) -> Result<Algorithm, OidcError> {
     match algorithm {
         KeyAlgorithm::HS256 => Ok(Algorithm::HS256),
@@ -1041,7 +1068,7 @@ fn key_algorithm_to_jwt_algorithm(algorithm: KeyAlgorithm) -> Result<Algorithm, 
         KeyAlgorithm::RSA1_5
         | KeyAlgorithm::RSA_OAEP
         | KeyAlgorithm::RSA_OAEP_256
-        | KeyAlgorithm::UNKNOWN_ALGORITHM => Err(OidcError::InvalidJwk),
+        | KeyAlgorithm::UNKNOWN_ALGORITHM => Err(OidcError::AlgorithmNotAllowed),
     }
 }
 
@@ -1137,6 +1164,17 @@ impl TokenVerifierConfig {
             max_token_lifetime: None,
             leeway: Duration::ZERO,
         }
+    }
+
+    /// True when the access-token type set holds `JWT`, in any casing. Then
+    /// the verifier refuses a token that carries an ID-token marker: a `nonce`,
+    /// `at_hash`, `c_hash` or `s_hash` claim, or a `typ` claim equal to `ID`.
+    /// There is no setting to turn it off.
+    #[must_use]
+    pub fn refuses_id_token_markers(&self) -> bool {
+        self.allowed_typ
+            .iter()
+            .any(|typ| typ.eq_ignore_ascii_case("jwt"))
     }
 
     #[must_use]
@@ -1279,7 +1317,6 @@ impl VerifiedToken {
 
 #[derive(Debug)]
 pub struct TokenVerifier {
-    diagnostics: AuthenticationDiagnostics,
     config: TokenVerifierConfig,
     fetcher: Arc<JwksFetcher>,
     allowed_clients: HashSet<String>,
@@ -1287,6 +1324,7 @@ pub struct TokenVerifier {
     allowed_access_typ: HashSet<String>,
     allowed_id_typ: HashSet<String>,
     allowed_userinfo_typ: HashSet<String>,
+    refuse_id_token_markers: bool,
 }
 
 impl TokenVerifier {
@@ -1302,8 +1340,8 @@ impl TokenVerifier {
         let allowed_access_typ = normalize_typ_set(&config.allowed_typ);
         let allowed_id_typ = normalize_typ_set(&config.allowed_id_typ);
         let allowed_userinfo_typ = normalize_typ_set(&config.allowed_userinfo_typ);
+        let refuse_id_token_markers = config.refuses_id_token_markers();
         Self {
-            diagnostics: AuthenticationDiagnostics::default(),
             config,
             fetcher,
             allowed_clients,
@@ -1311,7 +1349,20 @@ impl TokenVerifier {
             allowed_access_typ,
             allowed_id_typ,
             allowed_userinfo_typ,
+            refuse_id_token_markers,
         }
+    }
+
+    /// The issuer this verifier accepts tokens from.
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.config.issuer
+    }
+
+    /// True when the verifier admits access tokens typed `JWT`, and so refuses
+    /// a token that carries an ID-token claim.
+    pub(crate) fn admits_jwt_type(&self) -> bool {
+        self.refuse_id_token_markers
     }
 
     /// The key source this verifier resolves signing keys through.
@@ -1326,12 +1377,6 @@ impl TokenVerifier {
 
     pub async fn verify(&self, token: &str) -> Result<VerifiedToken, OidcError> {
         self.verify_access_token(token, true).await
-    }
-
-    /// One fixed category, at most once per stage per minute. No values from
-    /// the error, token, claims, or operator configuration are returned.
-    pub fn authentication_diagnostic(&self, stage: AuthenticationStage) -> Option<&'static str> {
-        self.diagnostics.admit(stage).then_some(stage.label())
     }
 
     pub async fn verify_related_token(&self, token: &str) -> Result<VerifiedToken, OidcError> {
@@ -1366,6 +1411,9 @@ impl TokenVerifier {
             .collect();
         let data = decode::<Claims>(token, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, token))?;
+        if self.refuse_id_token_markers && carries_id_token_marker(&data.claims) {
+            return Err(OidcError::IdTokenPresented);
+        }
         self.enforce_max_token_lifetime(&data.claims)?;
         self.enforce_assertion_issuer(&data.claims)?;
         let matched_client = if enforce_client {
@@ -1489,10 +1537,10 @@ impl TokenVerifier {
             return Err(OidcError::AudienceMismatch);
         }
         let Some(access_sub) = access_token.claims.sub.as_deref() else {
-            return Err(OidcError::InvalidToken);
+            return Err(OidcError::SubjectMismatch);
         };
         if data.claims.sub.as_deref() != Some(access_sub) {
-            return Err(OidcError::InvalidToken);
+            return Err(OidcError::SubjectMismatch);
         }
         Ok(data.claims)
     }
@@ -1690,6 +1738,19 @@ fn audience_intersects(audience: &Audience, accepted: &[String]) -> bool {
     }
 }
 
+/// Claims only an ID token carries: a nonce, a hash of the access token,
+/// authorization code or state, or a `typ` claim naming an ID token.
+fn carries_id_token_marker(claims: &Claims) -> bool {
+    ["nonce", "at_hash", "c_hash", "s_hash"]
+        .iter()
+        .any(|name| claims.extra.contains_key(*name))
+        || claims
+            .extra
+            .get("typ")
+            .and_then(Value::as_str)
+            .is_some_and(|typ| typ.eq_ignore_ascii_case("ID"))
+}
+
 fn normalize_typ_set(values: &[String]) -> HashSet<String> {
     values.iter().map(|typ| typ.to_ascii_lowercase()).collect()
 }
@@ -1736,25 +1797,69 @@ fn map_jwt_error(
     expected_issuer: &str,
     token: &str,
 ) -> OidcError {
+    let issuer_mismatch = || OidcError::IssuerMismatch {
+        expected: expected_issuer.to_string(),
+        actual: issuer_from_untrusted_payload(token).unwrap_or_default(),
+    };
     match error.kind() {
         JwtErrorKind::ExpiredSignature => OidcError::TokenExpired,
         JwtErrorKind::ImmatureSignature => OidcError::TokenNotYetValid,
-        JwtErrorKind::InvalidIssuer => OidcError::IssuerMismatch {
-            expected: expected_issuer.to_string(),
-            actual: issuer_from_untrusted_payload(token).unwrap_or_default(),
-        },
+        JwtErrorKind::InvalidIssuer => issuer_mismatch(),
         JwtErrorKind::InvalidAudience => OidcError::AudienceMismatch,
-        JwtErrorKind::MissingRequiredClaim(claim) if claim == "exp" => OidcError::InvalidTimeClaims,
+        JwtErrorKind::MissingRequiredClaim(claim) => match claim.as_str() {
+            "aud" => OidcError::AudienceMismatch,
+            "iss" => issuer_mismatch(),
+            "exp" | "nbf" => OidcError::InvalidTimeClaims,
+            _ => OidcError::InvalidToken,
+        },
+        JwtErrorKind::InvalidClaimFormat(_) => OidcError::InvalidTimeClaims,
+        JwtErrorKind::Json(_) if time_claim_is_malformed(token) => OidcError::InvalidTimeClaims,
         JwtErrorKind::InvalidSignature => OidcError::SignatureInvalid,
         _ => OidcError::InvalidToken,
     }
 }
 
-fn issuer_from_untrusted_payload(token: &str) -> Option<String> {
+/// True when a time claim is present but is not a whole number of seconds
+/// [`Claims`] can hold. [`decode`] reports such a claim as a JSON error,
+/// after the signature has been verified.
+fn time_claim_is_malformed(token: &str) -> bool {
+    let Some(payload) = token.split('.').nth(1) else {
+        return false;
+    };
+    let Ok(decoded) = URL_SAFE_NO_PAD.decode(payload) else {
+        return false;
+    };
+    let Ok(claims) = serde_json::from_slice::<Map<String, Value>>(&decoded) else {
+        return false;
+    };
+    ["exp", "nbf", "iat"].iter().any(|name| {
+        claims
+            .get(*name)
+            .is_some_and(|value| !value.is_null() && value.as_i64().is_none())
+    })
+}
+
+/// The claims of a token, read without verifying it. `None` when the second
+/// segment is not a base64url JSON object.
+fn untrusted_payload(token: &str) -> Option<Map<String, Value>> {
     let payload = token.split('.').nth(1)?;
     let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
-    let claims: Claims = serde_json::from_slice(&decoded).ok()?;
-    claims.iss.filter(|issuer| !issuer.is_empty())
+    serde_json::from_slice(&decoded).ok()
+}
+
+/// The `iss` of a token, read without verifying it. Only `iss` is read, so a
+/// wrongly typed claim elsewhere does not hide the issuer.
+fn issuer_from_untrusted_payload(token: &str) -> Option<String> {
+    issuer_claim(&untrusted_payload(token)?)
+}
+
+/// The `iss` claim when it is a non-empty string.
+fn issuer_claim(claims: &Map<String, Value>) -> Option<String> {
+    claims
+        .get("iss")
+        .and_then(Value::as_str)
+        .filter(|issuer| !issuer.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn matched_client_audience(access_token: &VerifiedToken) -> Result<String, OidcError> {
@@ -1788,6 +1893,10 @@ pub enum OidcError {
     AlgorithmNotAllowed,
     #[error("token type is not allowed")]
     TokenTypeNotAllowed,
+    /// The token carries an ID-token marker where only an access token is
+    /// admitted.
+    #[error("token is an ID token")]
+    IdTokenPresented,
     #[error("token header is missing kid")]
     MissingKid,
     #[error("token header kid is too long")]
@@ -1798,12 +1907,18 @@ pub enum OidcError {
     InvalidJwk,
     #[error("key set contains no usable keys")]
     EmptyKeySet,
+    #[error("static key set refused: {0}")]
+    StaticKeySet(#[from] StaticJwksError),
     #[error("token is expired")]
     TokenExpired,
     #[error("token is not yet valid")]
     TokenNotYetValid,
     #[error("token audience does not match")]
     AudienceMismatch,
+    /// A UserInfo response names another subject than the access token, or
+    /// the access token names none.
+    #[error("token subject does not match the access token")]
+    SubjectMismatch,
     #[error("token signature is invalid")]
     SignatureInvalid,
     #[error("token is invalid")]
@@ -1814,6 +1929,20 @@ pub enum OidcError {
     ClientNotAllowed,
     #[error("client may not exchange this assertion authority")]
     AssertionIssuerNotAllowed,
+    /// No issuer entry names the token's issuer.
+    #[error("token issuer is not configured")]
+    IssuerNotConfigured,
+    /// The token's actor kind claim contradicts the kind the operator
+    /// declared for its issuer or client.
+    #[error("token actor kind contradicts the declared kind")]
+    ActorKindConflict,
+    /// The token's actor kind claim is not a kind the service reads.
+    #[error("token actor kind claim cannot be read")]
+    ActorKindMalformed,
+    /// The token grants no scope beyond OpenID Connect scopes, and the
+    /// operator declared no actor kind for its client or issuer.
+    #[error("token grants no scope and its actor kind is not declared")]
+    IdentityOnly,
     #[error("issuer must not be empty when an endpoint override is configured")]
     MissingIssuer,
     #[error("OIDC discovery and JWKS endpoint overrides are mutually exclusive")]
@@ -1840,10 +1969,12 @@ impl OidcEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::static_jwks::tests::{keycloak_realm_jwks, KEYCLOAK_ENC_KID, KEYCLOAK_SIG_KID};
     use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use jsonwebtoken::{encode, EncodingKey, Header};
+    use registry_platform_authcommon::FailedCheck;
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::net::TcpListener;
@@ -1925,6 +2056,33 @@ mod tests {
                 &Url::parse("http://[::1]:8080/.well-known/openid-configuration").unwrap(),
             )
             .expect("IPv6 loopback keeps the same development behavior");
+    }
+
+    #[test]
+    fn issuer_loopback_follows_the_shared_definition() {
+        for issuer in [
+            "http://127.0.0.1:8080",
+            "http://127.0.0.2:8080",
+            "http://[::1]:8080",
+            "http://[::ffff:127.0.0.1]:8080",
+            "http://localhost:8080",
+            "http://LOCALHOST:8080",
+        ] {
+            IssuerNetworkPolicy::new(issuer, false)
+                .unwrap_or_else(|error| panic!("{issuer}: {error:?}"));
+        }
+        for issuer in [
+            "http://localhost.:8080",
+            "http://issuer.localhost:8080",
+            "http://0.0.0.0:8080",
+            "http://[::ffff:10.0.0.1]:8080",
+        ] {
+            let error = IssuerNetworkPolicy::new(issuer, false).expect_err(issuer);
+            assert!(
+                matches!(error, OidcError::InsecureHttpRequiresOptIn),
+                "{issuer}"
+            );
+        }
     }
 
     #[test]
@@ -2409,7 +2567,7 @@ mod tests {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
         TokenVerifier::new(
             TokenVerifierConfig {
@@ -2484,8 +2642,35 @@ mod tests {
         validate_jwk_for_header(&rsa, Algorithm::RS256).expect("matching alg accepts");
         assert!(matches!(
             validate_jwk_for_header(&rsa, Algorithm::RS384),
-            Err(OidcError::InvalidJwk)
+            Err(OidcError::AlgorithmNotAllowed)
         ));
+        assert!(matches!(
+            validate_jwk_for_header(&rsa, Algorithm::ES256),
+            Err(OidcError::AlgorithmNotAllowed)
+        ));
+
+        let rsa_oaep: Jwk = serde_json::from_value(json!({
+            "kty": "RSA",
+            "kid": "enc",
+            "alg": "RSA-OAEP",
+            "use": "enc",
+            "n": URL_SAFE_NO_PAD.encode(vec![0xff; 256]),
+            "e": "AQAB",
+        }))
+        .expect("RSA-OAEP JWK parses");
+        assert!(matches!(
+            validate_jwk_for_header(&rsa_oaep, Algorithm::RS256),
+            Err(OidcError::AlgorithmNotAllowed)
+        ));
+
+        let short = rsa_jwk_with_modulus_bytes("short", 128);
+        assert!(
+            matches!(
+                validate_jwk_for_header(&short, Algorithm::RS256),
+                Err(OidcError::InvalidJwk)
+            ),
+            "a key the source should not publish stays a key-source fault"
+        );
 
         let oct: Jwk = serde_json::from_value(json!({
             "kty": "oct",
@@ -2497,7 +2682,7 @@ mod tests {
         validate_jwk_for_header(&oct, Algorithm::HS256).expect("matching alg accepts");
         assert!(matches!(
             validate_jwk_for_header(&oct, Algorithm::EdDSA),
-            Err(OidcError::InvalidJwk)
+            Err(OidcError::AlgorithmNotAllowed)
         ));
 
         let p256: Jwk = serde_json::from_value(json!({
@@ -2510,8 +2695,152 @@ mod tests {
         validate_jwk_for_header(&p256, Algorithm::ES256).expect("matching curve accepts");
         assert!(matches!(
             validate_jwk_for_header(&p256, Algorithm::ES384),
-            Err(OidcError::InvalidJwk)
+            Err(OidcError::AlgorithmNotAllowed)
         ));
+    }
+
+    fn keycloak_realm_verifier() -> TokenVerifier {
+        let keys = parse_static_jwks(&keycloak_realm_jwks()).expect("a realm key set loads");
+        TokenVerifier::new(
+            TokenVerifierConfig::access_token_profile(
+                "https://keycloak.example/realms/registry",
+                vec!["registry-api".to_string()],
+                vec![Algorithm::RS256, Algorithm::ES256],
+                vec!["at+jwt".to_string()],
+            ),
+            Arc::new(JwksFetcher::new_static(keys, jwks_test_config())),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_header_the_named_key_cannot_serve_is_a_token_fault() {
+        let verifier = keycloak_realm_verifier();
+        let claims = json!({
+            "iss": "https://keycloak.example/realms/registry",
+            "aud": "registry-api",
+            "sub": "subject-1",
+            "exp": 4_102_444_800_i64,
+        });
+        for (reason, alg, kid) in [
+            (
+                "an ES256 header naming the RSA signing key",
+                "ES256",
+                KEYCLOAK_SIG_KID,
+            ),
+            (
+                "an RS256 header naming the RSA-OAEP encryption key",
+                "RS256",
+                KEYCLOAK_ENC_KID,
+            ),
+        ] {
+            let header = json!({"alg": alg, "typ": "at+jwt", "kid": kid});
+            let token = unsigned_token(header, claims.clone());
+            let error = verifier.verify(&token).await.expect_err(reason);
+            assert_eq!(
+                error.failed_check(),
+                FailedCheck::TokenAlgorithm,
+                "{reason}: {error:?}"
+            );
+            assert!(!error.is_key_source_unavailable(), "{reason}");
+        }
+
+        let header = json!({"alg": "RS256", "typ": "at+jwt", "kid": KEYCLOAK_SIG_KID});
+        let error = verifier
+            .verify(&unsigned_token(header, claims))
+            .await
+            .expect_err("an unsigned token is refused");
+        assert!(
+            matches!(error, OidcError::SignatureInvalid),
+            "the signing key reaches the signature check: {error:?}"
+        );
+    }
+
+    fn signed_hs256_value(kid: &str, claims: &Value, secret: &[u8]) -> String {
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some(kid.to_string());
+        header.typ = Some("at+jwt".to_string());
+        encode(&header, claims, &EncodingKey::from_secret(secret)).expect("sign HS256 test token")
+    }
+
+    #[tokio::test]
+    async fn a_missing_or_malformed_claim_names_the_check_it_failed() {
+        let secret = b"registry-platform-oidc-claim-check-secret";
+        let verifier = hs256_test_verifier(
+            "https://issuer.example",
+            vec!["registry-api".to_string()],
+            Vec::new(),
+            "kid",
+            secret,
+        )
+        .await;
+        let base = json!({
+            "iss": "https://issuer.example",
+            "aud": "registry-api",
+            "sub": "subject-1",
+            "exp": 4_102_444_800_i64,
+        });
+        let without = |name: &str| {
+            let mut claims = base.clone();
+            claims
+                .as_object_mut()
+                .expect("claims are an object")
+                .remove(name);
+            claims
+        };
+        let with = |name: &str, value: Value| {
+            let mut claims = base.clone();
+            claims[name] = value;
+            claims
+        };
+        verifier
+            .verify(&signed_hs256_value("kid", &base, secret))
+            .await
+            .expect("the base token verifies");
+
+        for (reason, claims, expected) in [
+            ("no aud", without("aud"), FailedCheck::TokenAudience),
+            ("no iss", without("iss"), FailedCheck::TokenIssuer),
+            ("no exp", without("exp"), FailedCheck::TokenTime),
+            (
+                "a string exp",
+                with("exp", json!("soon")),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a fractional exp",
+                with("exp", json!(4_102_444_800.5_f64)),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a negative exp",
+                with("exp", json!(-1)),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a string nbf",
+                with("nbf", json!("now")),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a negative nbf",
+                with("nbf", json!(-1)),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a string iat",
+                with("iat", json!("now")),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a numeric sub",
+                with("sub", json!(7)),
+                FailedCheck::CredentialMalformed,
+            ),
+        ] {
+            let token = signed_hs256_value("kid", &claims, secret);
+            let error = verifier.verify(&token).await.expect_err(reason);
+            assert_eq!(error.failed_check(), expected, "{reason}: {error:?}");
+        }
     }
 
     fn verifier_for_header_tests() -> TokenVerifier {
@@ -3271,7 +3600,13 @@ mod tests {
                 .extra
                 .insert("scope".to_string(), json!("record:read"));
             // Preserve the selected claim's explicit null; the generic test
-            // signer omits nulls to represent absent registered claims.
+            // signer omits nulls to represent absent registered claims. A
+            // null `nbf` is itself a malformed time claim, so it is omitted
+            // here and the refusal comes from the selected claim.
+            let mut claims = serde_json::to_value(claims).expect("claims serialize");
+            if let Value::Object(map) = &mut claims {
+                map.retain(|name, value| name == "permissions" || !value.is_null());
+            }
             let mut header = Header::new(Algorithm::HS256);
             header.kid = Some("kid".to_string());
             header.typ = Some("at+jwt".to_string());
@@ -3325,7 +3660,7 @@ mod tests {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
         let verifier = TokenVerifier::new(
             TokenVerifierConfig::access_token_profile(
@@ -3364,7 +3699,7 @@ mod tests {
             .verify(&missing_iat)
             .await
             .expect_err("invalid time bounds are refused");
-        assert_eq!(error.authentication_stage().label(), "time");
+        assert_eq!(error.failed_check(), FailedCheck::TokenTime);
 
         let mut missing_exp_claims = test_claims(
             Some("https://issuer.example"),
@@ -3378,7 +3713,7 @@ mod tests {
             .verify(&missing_exp)
             .await
             .expect_err("invalid time bounds are refused");
-        assert_eq!(error.authentication_stage().label(), "time");
+        assert_eq!(error.failed_check(), FailedCheck::TokenTime);
 
         let mut non_positive_claims = test_claims(
             Some("https://issuer.example"),
@@ -3392,7 +3727,7 @@ mod tests {
             .verify(&non_positive)
             .await
             .expect_err("invalid time bounds are refused");
-        assert_eq!(error.authentication_stage().label(), "time");
+        assert_eq!(error.failed_check(), FailedCheck::TokenTime);
 
         let mut overlong_claims = test_claims(
             Some("https://issuer.example"),
@@ -3406,7 +3741,7 @@ mod tests {
             .verify(&overlong)
             .await
             .expect_err("invalid time bounds are refused");
-        assert_eq!(error.authentication_stage().label(), "time");
+        assert_eq!(error.failed_check(), FailedCheck::TokenTime);
     }
 
     fn test_claims(issuer: Option<&str>, audience: Option<&str>, subject: Option<&str>) -> Claims {
@@ -3625,17 +3960,31 @@ mod tests {
             secret,
             Some("JWT"),
         );
-        assert!(matches!(
-            verifier
-                .verify_userinfo_jwt_with_claims_policy(
-                    &wrong_subject,
-                    &access,
-                    &accepted_issuers,
-                    &accepted_audiences,
-                )
-                .await,
-            Err(OidcError::InvalidToken)
-        ));
+        let error = verifier
+            .verify_userinfo_jwt_with_claims_policy(
+                &wrong_subject,
+                &access,
+                &accepted_issuers,
+                &accepted_audiences,
+            )
+            .await
+            .expect_err("a UserInfo response about another subject is refused");
+        assert!(matches!(error, OidcError::SubjectMismatch), "{error:?}");
+        assert_eq!(error.failed_check(), FailedCheck::TokenClaims, "{error:?}");
+
+        let mut access_without_subject = access.clone();
+        access_without_subject.claims.sub = None;
+        let error = verifier
+            .verify_userinfo_jwt_with_claims_policy(
+                &valid,
+                &access_without_subject,
+                &accepted_issuers,
+                &accepted_audiences,
+            )
+            .await
+            .expect_err("an access token without a subject matches no UserInfo response");
+        assert!(matches!(error, OidcError::SubjectMismatch), "{error:?}");
+        assert_eq!(error.failed_check(), FailedCheck::TokenClaims, "{error:?}");
     }
 
     #[tokio::test]
@@ -3954,7 +4303,7 @@ mod tests {
             OidcError::FetchUrl(FetchUrlError::SchemeDenied { .. })
         ));
 
-        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::https_or_loopback())
             .await
             .expect("dev policy accepts loopback override");
         assert_eq!(document.issuer, cfg.issuer);
@@ -3978,7 +4327,7 @@ mod tests {
             OidcError::FetchUrl(FetchUrlError::SchemeDenied { .. })
         ));
 
-        let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+        let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::https_or_loopback())
             .await
             .expect_err("dev policy rejects returned private jwks_uri");
         assert!(matches!(
@@ -3998,17 +4347,22 @@ mod tests {
             max_doc_bytes: DEFAULT_DOC_BYTES,
         };
 
-        let document = fetch_discovery_at_with_policy(&cfg, &transport, &FetchUrlPolicy::dev())
-            .await
-            .expect("distinct discovery transport accepts exact issuer metadata");
+        let document =
+            fetch_discovery_at_with_policy(&cfg, &transport, &FetchUrlPolicy::https_or_loopback())
+                .await
+                .expect("distinct discovery transport accepts exact issuer metadata");
         assert_eq!(document.issuer, canonical_issuer);
         assert_eq!(document.jwks_uri, jwks_uri);
 
         let (mismatched_transport, _) =
             serve_discovery_document("https://other-issuer.example").await;
         assert!(matches!(
-            fetch_discovery_at_with_policy(&cfg, &mismatched_transport, &FetchUrlPolicy::dev())
-                .await,
+            fetch_discovery_at_with_policy(
+                &cfg,
+                &mismatched_transport,
+                &FetchUrlPolicy::https_or_loopback()
+            )
+            .await,
             Err(OidcError::IssuerMismatch { .. })
         ));
     }
@@ -4025,7 +4379,7 @@ mod tests {
             fetch_discovery_at_with_policy(
                 &cfg,
                 "http://127.0.0.1/metadata",
-                &FetchUrlPolicy::dev()
+                &FetchUrlPolicy::https_or_loopback()
             )
             .await,
             Err(OidcError::ConflictingEndpointConfiguration)
@@ -4041,7 +4395,7 @@ mod tests {
             fetch_discovery_at_with_policy(
                 &empty_issuer,
                 "http://127.0.0.1/metadata",
-                &FetchUrlPolicy::dev()
+                &FetchUrlPolicy::https_or_loopback()
             )
             .await,
             Err(OidcError::MissingIssuer)
@@ -4054,7 +4408,8 @@ mod tests {
             max_doc_bytes: DEFAULT_DOC_BYTES,
         };
         assert!(matches!(
-            fetch_discovery_at_with_policy(&cfg, "not a URL", &FetchUrlPolicy::dev()).await,
+            fetch_discovery_at_with_policy(&cfg, "not a URL", &FetchUrlPolicy::https_or_loopback())
+                .await,
             Err(OidcError::InvalidUrl)
         ));
     }
@@ -4110,7 +4465,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         // A readiness probe repeated every few seconds must not become an
@@ -4131,7 +4486,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             "http://127.0.0.1:1/jwks".to_owned(),
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         let error = fetcher
@@ -4151,7 +4506,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         let error = fetcher
@@ -4190,8 +4545,11 @@ mod tests {
         let mut config = jwks_test_config();
         config.cache_ttl = Duration::from_millis(50);
         config.outage_tolerance = Duration::from_secs(3600);
-        let fetcher =
-            JwksFetcher::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::dev());
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            config,
+            FetchUrlPolicy::https_or_loopback(),
+        );
 
         fetcher
             .key_for_kid("held-kid")
@@ -4242,8 +4600,11 @@ mod tests {
         let mut config = jwks_test_config();
         config.cache_ttl = Duration::from_millis(20);
         config.outage_tolerance = Duration::from_millis(30);
-        let fetcher =
-            JwksFetcher::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::dev());
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            config,
+            FetchUrlPolicy::https_or_loopback(),
+        );
 
         fetcher
             .key_for_kid("expiring-kid")
@@ -4272,7 +4633,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         fetcher
@@ -4297,7 +4658,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         fetcher
@@ -4329,7 +4690,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         fetcher
@@ -4361,7 +4722,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         let overlong_kid = "x".repeat(DEFAULT_MAX_KID_BYTES + 1);
@@ -4409,7 +4770,7 @@ mod tests {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
 
         let mut tasks = Vec::new();
@@ -4439,7 +4800,7 @@ mod tests {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             config,
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         ));
 
         fetcher
@@ -4474,7 +4835,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             jwks_uri,
             jwks_test_config(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         fetcher
@@ -4499,8 +4860,11 @@ mod tests {
         let mut config = jwks_test_config();
         config.refresh_cooldown = Duration::from_millis(50);
         config.negative_cache_ttl = Duration::from_secs(3600);
-        let fetcher =
-            JwksFetcher::new_with_fetch_url_policy(jwks_uri, config, FetchUrlPolicy::dev());
+        let fetcher = JwksFetcher::new_with_fetch_url_policy(
+            jwks_uri,
+            config,
+            FetchUrlPolicy::https_or_loopback(),
+        );
 
         fetcher
             .key_for_kid("old-kid")
@@ -4536,7 +4900,7 @@ mod tests {
         let fetcher = JwksFetcher::new_with_fetch_url_policy(
             "http://10.0.0.1/jwks".to_string(),
             JwksFetcherConfig::defaults(),
-            FetchUrlPolicy::dev(),
+            FetchUrlPolicy::https_or_loopback(),
         );
 
         let err = fetcher
@@ -4560,7 +4924,7 @@ mod tests {
                 discovery_timeout: Duration::from_secs(1),
                 max_doc_bytes: DEFAULT_DOC_BYTES,
             };
-            let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+            let err = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::https_or_loopback())
                 .await
                 .expect_err("empty issuer with override must be rejected");
             assert!(
@@ -4580,11 +4944,20 @@ mod tests {
             discovery_timeout: Duration::from_secs(1),
             max_doc_bytes: DEFAULT_DOC_BYTES,
         };
-        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::dev())
+        let document = fetch_discovery_with_policy(&cfg, &FetchUrlPolicy::https_or_loopback())
             .await
             .expect("non-empty issuer with override succeeds under dev policy");
         assert_eq!(document.issuer, "https://issuer.example");
         assert_eq!(document.jwks_uri, "http://127.0.0.1/jwks");
+    }
+
+    #[test]
+    fn a_static_key_set_with_unknown_public_members_loads() {
+        let keys = parse_static_jwks(
+            br#"{"issuer":"x","keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB","ext":true,"x5c":["AA"],"x5t":"a","x5t#S256":"b","x5u":"https://x.example/c","use":"enc","future":1}]}"#,
+        )
+        .expect("unknown public members are ignored");
+        assert_eq!(keys.keys.len(), 1);
     }
 
     #[test]
@@ -4596,38 +4969,113 @@ mod tests {
         assert_eq!(keys.keys.len(), 2);
 
         for (reason, invalid, expected) in [
-            ("no keys member", br#"{}"#.as_slice(), "parse"),
-            ("not JSON", b"not-json", "parse"),
-            ("an empty key set", br#"{"keys":[]}"#, "empty"),
+            ("no keys member", br#"{}"#.as_slice(), "static"),
+            ("not JSON", b"not-json", "static"),
+            ("an empty key set", br#"{"keys":[]}"#, "static"),
             (
                 "a symmetric key",
                 br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#,
-                "jwk",
+                "static",
             ),
             (
                 "a key without kid",
                 br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB"}]}"#,
-                "jwk",
+                "static",
             ),
             (
                 "an empty kid",
                 br#"{"keys":[{"kty":"RSA","kid":"","n":"AQAB","e":"AQAB"}]}"#,
-                "jwk",
+                "static",
             ),
             (
                 "a repeated kid",
                 br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
-                "jwk",
+                "static",
+            ),
+            (
+                "a private member",
+                br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB","d":"AA"}]}"#,
+                "static",
+            ),
+            (
+                "an OKP key",
+                br#"{"keys":[{"kty":"OKP","kid":"one","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#,
+                "static",
             ),
         ] {
             let error = parse_static_jwks(invalid).expect_err(reason);
             let kind = match error {
-                OidcError::Parse => "parse",
-                OidcError::EmptyKeySet => "empty",
+                OidcError::StaticKeySet(_) => "static",
                 OidcError::InvalidJwk => "jwk",
                 other => panic!("{reason}: unexpected {other:?}"),
             };
             assert_eq!(kind, expected, "{reason}");
         }
+    }
+
+    #[test]
+    fn an_okp_key_is_refused_with_its_position_and_the_remedy() {
+        let error = parse_static_jwks(
+            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"OKP","kid":"two","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#,
+        )
+        .expect_err("an OKP key is refused");
+        assert!(
+            matches!(
+                error,
+                OidcError::StaticKeySet(StaticJwksError::OctetKeyPair { key: 1, .. })
+            ),
+            "{error:?}"
+        );
+        let text = error.to_string();
+        assert!(
+            text.contains(r#"key 1 (kid "two", crv "Ed25519") is an OKP key"#),
+            "{text}"
+        );
+        assert!(text.contains("use an RSA or EC key"), "{text}");
+        assert!(error.is_key_source_unavailable());
+    }
+
+    #[test]
+    fn an_okp_key_without_a_crv_is_named_by_kid_alone() {
+        let text = parse_static_jwks(br#"{"keys":[{"kty":"OKP","kid":"only","x":"AA"}]}"#)
+            .expect_err("an OKP key is refused")
+            .to_string();
+        assert!(
+            text.contains(r#"key 0 (kid "only") is an OKP key"#),
+            "{text}"
+        );
+        assert!(!text.contains("crv"), "{text}");
+    }
+
+    #[test]
+    fn an_okp_key_names_are_bounded_and_quoted() {
+        let long = "k".repeat(500);
+        let document =
+            format!(r#"{{"keys":[{{"kty":"OKP","kid":"{long}","crv":"a\nb","x":"AA"}}]}}"#);
+        let text = parse_static_jwks(document.as_bytes())
+            .expect_err("an OKP key is refused")
+            .to_string();
+        assert!(!text.contains(&long), "{text}");
+        assert!(text.contains(r#"crv "a\nb""#), "{text}");
+        assert!(text.len() < 400, "{}", text.len());
+    }
+
+    #[test]
+    fn a_key_of_the_wrong_shape_is_named_by_position() {
+        let error = parse_static_jwks(
+            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"two","n":5,"e":"AQAB"}]}"#,
+        )
+        .expect_err("a key with a numeric modulus is refused");
+        assert!(
+            matches!(
+                error,
+                OidcError::StaticKeySet(StaticJwksError::KeyShape { key: 1 })
+            ),
+            "{error:?}"
+        );
+        let text = error.to_string();
+        assert!(text.contains("key 1 "), "{text}");
+        assert!(!text.contains("two"), "{text}");
+        assert!(error.is_key_source_unavailable());
     }
 }

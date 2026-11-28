@@ -1,0 +1,56 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "thunderid-user-access-attribute-claims",
+  "class": "positive",
+  "provider": "thunderid",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "ThunderID 1.1.0",
+    "note": "Observed from a ThunderID 1.1.0 issuer on 27 November 2026. Header members and claim names are the observed ones. Claim values are synthetic. Signed by the corpus test key. Shape with every authority-bearing claim present."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "at+jwt",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "aci": "synthetic-aci",
+    "aud": {
+      "bind": "audience"
+    },
+    "client_id": "journey-app",
+    "exp": {
+      "offsetSeconds": 900
+    },
+    "grant_type": "authorization_code",
+    "holder_ref": "holder-0001",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "iss": {
+      "bind": "issuer"
+    },
+    "jti": "synthetic-jti-0061",
+    "jurisdiction": "north-synthetic",
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "registry_actor_kind": "human",
+    "registry_scope": "records:get records:write",
+    "role": "authenticated",
+    "scope": "openid email profile",
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "tfid": "synthetic-tfid"
+  },
+  "omits": [
+    "azp"
+  ],
+  "notes": "A ThunderID person access token whose authority-bearing claims (registry_scope, registry_actor_kind, jurisdiction, holder_ref, role) are carried as user-attribute claims rather than in scope. scope holds the OpenID Connect scopes only."
+}

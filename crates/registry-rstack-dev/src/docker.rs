@@ -3,6 +3,8 @@
 //! published on loopback only, serving verified TLS from a CA the run draws,
 //! and removed by its run label when the run stops, expires or is recovered.
 
+use registry_platform_provision::sql::{quote_identifier, quote_literal};
+
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::{
@@ -18,6 +20,12 @@ use super::{database, operational, write_private};
 
 /// The label every managed run's container carries, valued with the run ID.
 pub(super) const LABEL: &str = "org.registrystack.rstack.dev-run";
+const PROJECT_LABEL: &str = "org.registrystack.rstack.development-project";
+const PG_VOLUME_PATH: &str = "/var/lib/postgresql";
+
+pub(super) fn volume_name(key: &str) -> String {
+    format!("rstack-development-project-{key}")
+}
 
 /// The official multi-arch PostgreSQL image.
 const DEFAULT_IMAGE: &str =
@@ -47,8 +55,8 @@ const PULL_DEADLINE: Duration = Duration::from_secs(600);
 const MAXIMUM_OUTPUT_BYTES: u64 = 1024 * 1024;
 const MAXIMUM_ERROR_CHARACTERS: usize = 400;
 
-/// Where the server's certificate and key live inside the container: the
-/// image's volume, so removing the container with its volumes removes them.
+/// The server reopens its data volume using these PostgreSQL TLS paths.
+/// Each start installs a fresh certificate and key there.
 const SERVER_CERTIFICATE: &str = "/var/lib/postgresql/rstack-dev-server.crt";
 const SERVER_KEY: &str = "/var/lib/postgresql/rstack-dev-server.key";
 /// Local connections inside the container stay trusted for the image's own
@@ -110,6 +118,11 @@ pub(super) struct Server {
     pub(super) ca_pem: Vec<u8>,
 }
 
+pub(super) enum RehearsalCleanup {
+    Dropped(Vec<String>),
+    NotDropped(Vec<String>),
+}
+
 pub(super) struct Docker {
     program: PathBuf,
     ready_deadline: Duration,
@@ -158,15 +171,170 @@ impl Docker {
         Ok(())
     }
 
-    /// Start the run's PostgreSQL container and turn on verified TLS. A
-    /// failure leaves any container started under the run's label, for the
-    /// run's cleanup to remove.
-    pub(super) fn start_server(&self, root: &Path, run_id: &str, image: Image) -> Result<Server> {
-        self.start_labelled(root, run_id, image)
+    pub(super) fn require_free_volume(&self, key: &str) -> Result<()> {
+        let filter = format!("volume={}", volume_name(key));
+        let held = self.run(
+            &[
+                "ps",
+                "--all",
+                "--format",
+                &format!("{{{{.Label \"{LABEL}\"}}}} {{{{.Names}}}}"),
+                "--filter",
+                &filter,
+            ],
+            None,
+            COMMAND_DEADLINE,
+        )?;
+        if let Some(holder) = held.lines().next() {
+            let (run_id, name) = holder.rsplit_once(' ').unwrap_or(("", holder));
+            if super::run_dir_name(run_id) {
+                anyhow::bail!("run {run_id} still holds this project's volume. Run rstack dev stop {run_id} --recover");
+            }
+            anyhow::bail!("container {name} holds this project's volume. Stop and remove it before starting this project");
+        }
+        Ok(())
+    }
+
+    fn project_volumes(&self, key: &str) -> Result<String> {
+        self.run(
+            &[
+                "volume",
+                "ls",
+                "--quiet",
+                "--filter",
+                &format!("label={PROJECT_LABEL}={key}"),
+            ],
+            None,
+            COMMAND_DEADLINE,
+        )
+    }
+
+    pub(super) fn has_project_volume(&self, key: &str) -> Result<bool> {
+        let volume = volume_name(key);
+        if self
+            .project_volumes(key)?
+            .lines()
+            .any(|line| line == volume)
+        {
+            return Ok(true);
+        }
+        let named = self.run(
+            &[
+                "volume",
+                "ls",
+                "--quiet",
+                "--filter",
+                &format!("name={volume}"),
+            ],
+            None,
+            COMMAND_DEADLINE,
+        )?;
+        ensure!(
+            !named.lines().any(|line| line == volume),
+            "volume {volume} has no development project label. Remove the unrelated volume before starting this project"
+        );
+        Ok(false)
+    }
+
+    pub(super) fn daemon_id(&self) -> Result<String> {
+        let output = self.run(&["info", "--format", "{{.ID}}"], None, COMMAND_DEADLINE)?;
+        let id = output.trim();
+        ensure!(
+            id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_:".contains(&byte)),
+            "Docker did not report a usable daemon ID. Check the active Docker context"
+        );
+        Ok(id.to_owned())
+    }
+
+    pub(super) fn volume_generation(&self, key: &str) -> Result<String> {
+        let output = self.run(
+            &[
+                "volume",
+                "inspect",
+                "--format",
+                "{{or (index .Labels \"org.registrystack.rstack.generation\") (index .Labels \"org.registrystack.dev.generation\")}}",
+                &volume_name(key),
+            ],
+            None,
+            COMMAND_DEADLINE,
+        )?;
+        Ok(output.trim().to_owned())
+    }
+
+    pub(super) fn remove_project_volume(&self, key: &str) -> Result<()> {
+        let volume = volume_name(key);
+        if self.has_project_volume(key)? {
+            self.run(&["volume", "rm", &volume], None, COMMAND_DEADLINE)?;
+        }
+        Ok(())
+    }
+
+    /// Start the run's PostgreSQL server on its project's labelled volume.
+    /// Leave any started container under the run's label for cleanup.
+    pub(super) fn start_server(
+        &self,
+        root: &Path,
+        project: &Path,
+        run_id: &str,
+        image: Image,
+        key: &str,
+        generation: &str,
+    ) -> Result<Server> {
+        self.start_labelled(root, project, run_id, image, key, generation)
             .map_err(operational)
     }
 
-    fn start_labelled(&self, root: &Path, run_id: &str, image: Image) -> Result<Server> {
+    fn start_labelled(
+        &self,
+        root: &Path,
+        project: &Path,
+        run_id: &str,
+        image: Image,
+        key: &str,
+        generation: &str,
+    ) -> Result<Server> {
+        let state = root.with_file_name(format!("development-project-{key}"));
+        let volume = volume_name(key);
+        self.run(
+            &[
+                "volume",
+                "create",
+                "--label",
+                &format!("{PROJECT_LABEL}={key}"),
+                "--label",
+                &format!("org.registrystack.rstack.generation={generation}"),
+                "--label",
+                &format!(
+                    "org.registrystack.rstack.project-path={}",
+                    project.display()
+                ),
+                "--label",
+                &format!(
+                    "org.registrystack.rstack.state-root={}",
+                    root.parent()
+                        .context("missing development state root")?
+                        .display()
+                ),
+                &volume,
+            ],
+            None,
+            COMMAND_DEADLINE,
+        )?;
+        ensure!(
+            self.project_volumes(key)?
+                .lines()
+                .any(|line| line == volume),
+            "the PostgreSQL volume {volume} is missing the development project label"
+        );
+        ensure!(
+            self.volume_generation(key)? == generation,
+            "volume {volume} and development state directory {} have different generations. Start with --clean",
+            state.display()
+        );
+        let mount = format!("{volume}:{PG_VOLUME_PATH}");
         let name = container_name(run_id);
         let label = format!("{LABEL}={run_id}");
         // The password reaches Docker in an owner-only file, never in an
@@ -192,6 +360,8 @@ impl Docker {
             "127.0.0.1::5432",
             "--env-file",
             env_file,
+            "-v",
+            &mount,
         ];
         if let Some(platform) = image.platform {
             arguments.extend(["--platform", platform]);
@@ -204,6 +374,14 @@ impl Docker {
         ensure!(
             id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()),
             "docker run did not report the ID of container {name}"
+        );
+
+        let attached_generation = self.volume_generation(key).with_context(|| {
+            format!("Cannot inspect the attached PostgreSQL volume {volume}. Start with --clean")
+        })?;
+        ensure!(
+            attached_generation == generation,
+            "Attached PostgreSQL volume {volume} lacks the expected generation. Start with --clean"
         );
 
         let published = self.run(&["port", &id, "5432/tcp"], None, COMMAND_DEADLINE)?;
@@ -219,6 +397,17 @@ impl Docker {
             })?;
 
         self.await_ready(&id, &name, &label)?;
+        let verifier = Zeroizing::new(postgres_protocol::password::scram_sha_256(
+            password.as_bytes(),
+        ));
+        self.sql(
+            &id,
+            &format!(
+                "ALTER ROLE {} PASSWORD {};",
+                quote_identifier("postgres"),
+                quote_literal(verifier.as_str())
+            ),
+        )?;
         let tls = RunTls::generate()?;
         let hba_file = self.sql(&id, "SHOW hba_file;")?;
         let hba_file = hba_file.trim();
@@ -254,13 +443,20 @@ impl Docker {
             arguments.extend(installed);
             self.run(&arguments, None, COMMAND_DEADLINE)?;
         }
+        // The new pg_hba.conf only allows TLS over TCP. Confirm the old
+        // TLS configuration has been disabled before enabling the new one.
+        self.sql(
+            &id,
+            "ALTER SYSTEM SET ssl = 'off';\nSELECT pg_reload_conf();\n",
+        )?;
+        self.await_tls(&id, &name, &label, "off")?;
         self.sql(
             &id,
             &format!(
                 "ALTER SYSTEM SET ssl_cert_file = '{SERVER_CERTIFICATE}';\nALTER SYSTEM SET ssl_key_file = '{SERVER_KEY}';\nALTER SYSTEM SET ssl = 'on';\nSELECT pg_reload_conf();\n"
             ),
         )?;
-        self.await_tls(&id, &name, &label)?;
+        self.await_tls(&id, &name, &label, "on")?;
 
         Ok(Server {
             admin_url: Zeroizing::new(format!(
@@ -386,18 +582,17 @@ impl Docker {
         }
     }
 
-    /// Wait until the reloaded server reports TLS on. A certificate it cannot
-    /// load leaves TLS off, so this fails rather than serving without it.
-    fn await_tls(&self, id: &str, name: &str, label: &str) -> Result<()> {
+    /// Wait until the reloaded server reports the expected TLS setting.
+    fn await_tls(&self, id: &str, name: &str, label: &str, expected: &str) -> Result<()> {
         let deadline = Instant::now() + self.ready_deadline;
         loop {
             let answer = self.sql(id, "SHOW ssl;")?;
-            if answer.trim() == "on" {
+            if answer.trim() == expected {
                 return Ok(());
             }
             if Instant::now() >= deadline {
                 bail!(
-                    "the PostgreSQL server in container {name} (label {label}) did not turn on TLS within {} s; its log has the reason",
+                    "the PostgreSQL server in container {name} (label {label}) did not report TLS {expected} within {} s. Inspect its log",
                     self.ready_deadline.as_secs()
                 );
             }
@@ -428,6 +623,61 @@ impl Docker {
             Some(statements.as_bytes()),
             COMMAND_DEADLINE,
         )
+    }
+
+    pub(super) fn drop_rehearsals(
+        &self,
+        run_id: &str,
+        groups: Vec<Vec<String>>,
+    ) -> Result<RehearsalCleanup> {
+        if groups.is_empty() {
+            return Ok(RehearsalCleanup::Dropped(Vec::new()));
+        }
+        let name = container_name(run_id);
+        let name_filter = format!("name=^/{name}$");
+        let label = format!("{LABEL}={run_id}");
+        let label_filter = format!("label={label}");
+        let listing = [
+            "ps",
+            "--quiet",
+            "--filter",
+            &name_filter,
+            "--filter",
+            &label_filter,
+        ];
+        let running = self.run(&listing, None, COMMAND_DEADLINE)?;
+        if running.trim().is_empty() {
+            let mut stopped = listing.to_vec();
+            stopped.push("--all");
+            let existing = self.run(&stopped, None, COMMAND_DEADLINE)?;
+            if existing.trim().is_empty() {
+                return Ok(RehearsalCleanup::NotDropped(
+                    groups.into_iter().flatten().collect(),
+                ));
+            }
+            // The data volume is retained even after Docker stopped the
+            // container. Reopen it locally long enough to release the test database.
+            self.run(&["start", &name], None, COMMAND_DEADLINE)?;
+            self.await_ready(&name, &name, &label)?;
+        }
+        let mut dropped = Vec::new();
+        let mut sql = String::new();
+        use std::fmt::Write as _;
+        for mut names in groups {
+            let database = names.pop().context("missing rehearsal database name")?;
+            writeln!(
+                sql,
+                "DROP DATABASE IF EXISTS {} WITH (FORCE);",
+                quote_identifier(&database)
+            )?;
+            dropped.push(database);
+            for role in names {
+                writeln!(sql, "DROP ROLE IF EXISTS {};", quote_identifier(&role))?;
+                dropped.push(role);
+            }
+        }
+        self.sql(&name, &sql)?;
+        Ok(RehearsalCleanup::Dropped(dropped))
     }
 
     /// Remove every container labelled with this run, with its anonymous
@@ -461,6 +711,7 @@ impl Docker {
     fn run(&self, arguments: &[&str], input: Option<&[u8]>, deadline: Duration) -> Result<String> {
         let verb = arguments.first().copied().unwrap_or_default();
         let mut child = Command::new(&self.program)
+            .env(super::POSTURE_ENV, super::DEVELOPMENT)
             .args(arguments)
             .stdin(if input.is_some() {
                 Stdio::piped()
@@ -659,8 +910,94 @@ mod tests {
         }
 
         fn start(&self, image: Image) -> Result<Server> {
-            self.docker.start_server(&self.root(), RUN_ID, image)
+            let root = self.root();
+            super::super::ensure_private(
+                &root.with_file_name(format!("development-project-{RUN_ID}")),
+                true,
+            )?;
+            self.docker
+                .start_server(&root, self.scratch.path(), RUN_ID, image, RUN_ID, RUN_ID)
         }
+    }
+
+    #[test]
+    fn daemon_identity_reads_the_connected_docker_engine() {
+        let fake = Fake::new();
+        fs::write(fake.state().join("daemon-id"), "fixture-daemon-2").unwrap();
+        assert_eq!(fake.docker.daemon_id().unwrap(), "fixture-daemon-2");
+    }
+
+    #[test]
+    fn an_engine_can_report_an_unknown_daemon_id() {
+        let fake = Fake::new();
+        fs::write(fake.state().join("daemon-id"), "\n").unwrap();
+        assert!(fake.docker.daemon_id().unwrap().is_empty());
+    }
+
+    #[test]
+    fn held_volume_names_the_run_and_recovery_command() {
+        let fake = Fake::new();
+        fake.start(Image::for_plan(false)).unwrap();
+        fs::write(
+            fake.state().join("volume-holder"),
+            format!("{RUN_ID} rstack-dev-{RUN_ID}"),
+        )
+        .unwrap();
+        let error = fake
+            .docker
+            .require_free_volume(RUN_ID)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&format!("rstack dev stop {RUN_ID} --recover")));
+    }
+
+    #[test]
+    fn recovery_reports_rehearsal_cleanup_when_the_container_is_gone() {
+        let fake = Fake::new();
+        let result = fake.docker.drop_rehearsals(
+            RUN_ID,
+            vec![vec!["role".to_owned(), "rehearsal".to_owned()]],
+        );
+        match result.unwrap() {
+            RehearsalCleanup::NotDropped(names) => assert_eq!(names, ["role", "rehearsal"]),
+            RehearsalCleanup::Dropped(_) => panic!("the container is gone"),
+        }
+    }
+
+    #[test]
+    fn a_volume_replaced_during_attach_is_refused_before_sql() {
+        let fake = Fake::new();
+        fs::write(fake.state().join("replace-volume-on-run"), "").unwrap();
+        let error = fake
+            .start(Image::for_plan(false))
+            .err()
+            .expect("the replacement volume must be refused")
+            .to_string();
+        assert!(error.contains("--clean"), "{error}");
+        assert!(!fake.state().join("psql.log").exists());
+    }
+
+    #[test]
+    fn managed_volume_labels_bind_project_path_and_state_root() {
+        let fake = Fake::new();
+        fake.start(Image::for_plan(false)).unwrap();
+        let create = &fake.invocations("volume")[0];
+        assert!(create.contains("org.registrystack.rstack.generation="));
+        assert!(create.contains("org.registrystack.rstack.project-path="));
+        assert!(create.contains("org.registrystack.rstack.state-root="));
+    }
+
+    #[test]
+    fn managed_container_mounts_project_data() {
+        let fake = Fake::new();
+        fake.start(Image::for_plan(false)).unwrap();
+        let runs = fake.invocations("run");
+        assert!(runs[0].contains(" -v "), "{runs:?}");
+        fake.docker.remove(RUN_ID).unwrap();
+        let volume = volume_name(RUN_ID);
+        assert!(fake.state().join("volumes").join(&volume).exists());
+        fake.docker.remove_project_volume(RUN_ID).unwrap();
+        assert!(!fake.state().join("volumes").join(&volume).exists());
     }
 
     #[test]
@@ -804,6 +1141,9 @@ mod tests {
             "{exec:?}"
         );
         let psql = fs::read_to_string(fake.state().join("psql.log")).unwrap();
+        let disabled = psql.find("ALTER SYSTEM SET ssl = 'off'").unwrap();
+        let enabled = psql.find("ALTER SYSTEM SET ssl = 'on'").unwrap();
+        assert!(disabled < enabled && psql[disabled..enabled].contains("SHOW ssl"));
         assert!(psql.contains("ALTER SYSTEM SET ssl = 'on'"), "{psql}");
         assert!(psql.contains("SELECT pg_reload_conf()"), "{psql}");
         assert!(psql.contains("SHOW ssl"), "{psql}");

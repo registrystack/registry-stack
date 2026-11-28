@@ -18,10 +18,13 @@ pub(crate) enum InstanceClaimCliError {
     Claim(InstanceClaimError),
 }
 
-pub(crate) fn status(runtime_config: &Path) -> Result<InstanceClaimStatus, InstanceClaimCliError> {
+pub(crate) fn status(
+    posture: registry_platform_config::DeclaredPosture,
+    runtime_config: &Path,
+) -> Result<InstanceClaimStatus, InstanceClaimCliError> {
     runtime_config_path(runtime_config)?;
     block_on(async {
-        service(runtime_config)
+        service(posture, runtime_config)
             .await?
             .status()
             .await
@@ -29,10 +32,13 @@ pub(crate) fn status(runtime_config: &Path) -> Result<InstanceClaimStatus, Insta
     })
 }
 
-pub(crate) fn adopt(runtime_config: &Path) -> Result<InstanceClaimAdoption, InstanceClaimCliError> {
+pub(crate) fn adopt(
+    posture: registry_platform_config::DeclaredPosture,
+    runtime_config: &Path,
+) -> Result<InstanceClaimAdoption, InstanceClaimCliError> {
     runtime_config_path(runtime_config)?;
     block_on(async {
-        service(runtime_config)
+        service(posture, runtime_config)
             .await?
             .adopt()
             .await
@@ -48,8 +54,11 @@ fn runtime_config_path(path: &Path) -> Result<(), InstanceClaimCliError> {
     }
 }
 
-async fn service(runtime_config: &Path) -> Result<InstanceClaimService, InstanceClaimCliError> {
-    InstanceClaimService::from_runtime_config(runtime_config)
+async fn service(
+    posture: registry_platform_config::DeclaredPosture,
+    runtime_config: &Path,
+) -> Result<InstanceClaimService, InstanceClaimCliError> {
+    InstanceClaimService::from_runtime_config(runtime_config, posture)
         .await
         .map_err(InstanceClaimCliError::Claim)
 }

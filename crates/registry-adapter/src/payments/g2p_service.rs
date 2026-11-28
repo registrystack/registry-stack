@@ -22,7 +22,9 @@ use registry_platform_crypto::transit_rsa_no_oid::{
     TransitRsaNoOidKeyConfig, TransitRsaNoOidSigner, TransitRsaNoOidVerifier,
 };
 use registry_platform_httputil::client::BearerToken;
-use registry_platform_httputil::{read_bounded, validate_response_headers, ServiceBaseUrl};
+use registry_platform_httputil::{
+    read_bounded, validate_response_headers, PeerPolicy, ServiceBaseUrl,
+};
 use serde::Serialize;
 use serde_json::Value;
 use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc, time::Duration};
@@ -152,6 +154,7 @@ enum ProviderResponseTrust {
 /// Provider-neutral HTTP host. It injects only host-owned authentication and
 /// correlation headers around the exact retained request bytes.
 pub struct HttpG2pProvider {
+    peer_policy: PeerPolicy,
     resolver: Arc<SecretResolver>,
     signature_runtimes: BTreeMap<String, Arc<LegacySignatureRuntime>>,
 }
@@ -161,7 +164,13 @@ impl HttpG2pProvider {
         Self {
             resolver,
             signature_runtimes: BTreeMap::new(),
+            peer_policy: PeerPolicy::RefuseDevelopmentPeer,
         }
+    }
+
+    pub fn with_peer_policy(mut self, peer_policy: PeerPolicy) -> Self {
+        self.peer_policy = peer_policy;
+        self
     }
 
     pub async fn initialize(
@@ -322,7 +331,8 @@ impl HttpG2pProvider {
             .send()
             .await
             .map_err(|_| G2pProviderError::Unavailable)?;
-        validate_response_headers(response.headers()).map_err(|_| G2pProviderError::Unavailable)?;
+        validate_response_headers(response.headers(), self.peer_policy)
+            .map_err(|_| G2pProviderError::Unavailable)?;
         let status = response.status().as_u16();
         let body = read_bounded(response, 131_072)
             .await
@@ -412,12 +422,13 @@ impl G2pProviderPort for HttpG2pProvider {
             .body(body.clone())
             .build()
             .map_err(|_| G2pProviderError::Unavailable)?;
+        let peer_policy = self.peer_policy;
         Ok(PreparedG2pSend::new(async move {
             let response = client
                 .execute(prepared)
                 .await
                 .map_err(|_| G2pProviderError::OutcomeUnknown)?;
-            validate_response_headers(response.headers())
+            validate_response_headers(response.headers(), peer_policy)
                 .map_err(|_| G2pProviderError::OutcomeUnknown)?;
             let status = response.status().as_u16();
             let signature = match &response_trust {

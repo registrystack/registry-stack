@@ -153,10 +153,11 @@ async fn client_with_maximum_response_bytes(
         .await
         .unwrap();
     });
-    let config =
-        BaseRegistryClientConfig::new(Url::parse(&format!("http://{address}/prefix")).unwrap())
-            .with_token_provider(provider)
-            .with_maximum_response_bytes(maximum);
+    let config = BaseRegistryClientConfig::new_without_peer_policy(
+        Url::parse(&format!("http://{address}/prefix")).unwrap(),
+    )
+    .with_token_provider(provider)
+    .with_maximum_response_bytes(maximum);
     (BaseRegistryClient::new(config).unwrap(), captured)
 }
 
@@ -420,10 +421,11 @@ async fn plain_reads_refuse_non_200_success_in_one_exchange() {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-            let client = BaseRegistryClient::new(BaseRegistryClientConfig::new(
-                Url::parse(&format!("http://{address}/prefix")).unwrap(),
-            ))
-            .unwrap();
+            let client =
+                BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
+                    Url::parse(&format!("http://{address}/prefix")).unwrap(),
+                ))
+                .unwrap();
             let error = if list {
                 client
                     .list_records(

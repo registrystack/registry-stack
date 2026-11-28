@@ -23,6 +23,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
+use registry_platform_authcommon::{DeclaredScope, FailedCheck, RefusalNote, RefusalRecorder};
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit, security_headers, CspBuilder,
@@ -39,7 +40,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     audit::{AuditFailure, Pending, SessionAudit},
-    auth::{AuthError, TokenAuthenticator},
+    auth::{AuthError, AuthSetupError, TokenAuthenticator},
     client_identifier::RequestIdentity,
     config::{Oid4vpConfig, PolicyConfig},
     metrics::{metrics_app, Event, Metrics},
@@ -95,7 +96,7 @@ impl StartupError {
     fn new(
         code: &'static str,
         pointer: &'static str,
-        message: &'static str,
+        message: impl Into<String>,
         action: &'static str,
     ) -> Self {
         Self {
@@ -202,13 +203,20 @@ impl VerifierService {
             .filter_map(RequestIdentity::jwks_entry)
             .collect();
         let jwks = (!keys.is_empty()).then(|| json!({ "keys": keys }).to_string());
-        let applicants = TokenAuthenticator::build(&config.applicant_tokens, &resolver)
-            .await
-            .map_err(|_| issuer_unavailable("/applicantTokens"))?;
-        let evidence_credentials =
-            TokenAuthenticator::build(&config.evidence_credentials, &resolver)
-                .await
-                .map_err(|_| issuer_unavailable("/evidenceCredentials"))?;
+        let applicants = TokenAuthenticator::build(
+            &config.applicant_tokens,
+            &resolver,
+            config.posture.posture(),
+        )
+        .await
+        .map_err(|error| issuer_unavailable("/applicantTokens", &error))?;
+        let evidence_credentials = TokenAuthenticator::build(
+            &config.evidence_credentials,
+            &resolver,
+            config.posture.posture(),
+        )
+        .await
+        .map_err(|error| issuer_unavailable("/evidenceCredentials", &error))?;
 
         let audit_key = resolver
             .resolve_binary_reference(&config.audit.key.hash_key_ref)
@@ -231,6 +239,7 @@ impl VerifierService {
         let audit = SessionAudit::initialize(
             destination,
             Zeroizing::new(audit_key.expose_secret().to_vec()),
+            config.posture.posture(),
         )
         .await
         .map_err(|_: AuditFailure| {
@@ -375,12 +384,24 @@ impl VerifierService {
     }
 }
 
-fn issuer_unavailable(pointer: &'static str) -> StartupError {
+fn issuer_unavailable(pointer: &'static str, error: &AuthSetupError) -> StartupError {
+    // A static key set the validator refused says which rule it broke, so the
+    // fix starts at the document rather than at the issuer's reachability.
+    let (message, action) = match error {
+        AuthSetupError::StaticKeySet(refusal) => (
+            refusal.clone(),
+            "Replace the document behind jwksSource.documentRef with a public key set that follows the rule named here.",
+        ),
+        _ => (
+            "the token issuer or its key source could not be set up".to_owned(),
+            "Check the issuer, its key source, and that the service can reach it.",
+        ),
+    };
     StartupError::new(
         "evidence.oid4vp.issuer-unavailable",
         pointer,
-        "the token issuer or its key source could not be set up",
-        "Check the issuer, its key source, and that the service can reach it.",
+        message,
+        action,
     )
 }
 
@@ -412,6 +433,8 @@ pub fn build_app(service: Arc<VerifierService>) -> Router {
         .route(RESPONSE_PATH, post(receive_response))
         .layer(DefaultBodyLimit::max(response::MAX_BODY_BYTES))
         .layer(request_body_limit(response::MAX_BODY_BYTES));
+    let refusals = Arc::clone(service.metrics.refusal_recorder());
+    let posture = service.config.posture.posture();
     general
         .merge(responses)
         .fallback(unknown_route)
@@ -419,8 +442,9 @@ pub fn build_app(service: Arc<VerifierService>) -> Router {
         .with_state(service)
         .layer(from_fn_with_state(timeout, bound_request_time))
         .layer(from_fn(normalize_rejections))
-        .layer(security_headers(CspBuilder::deny_by_default()))
+        .layer(security_headers(CspBuilder::deny_by_default(), posture))
         .layer(from_fn(apply_trace_context))
+        .layer(from_fn_with_state(refusals, record_refusals))
 }
 
 /// The outermost layer: every response, whichever layer or handler produced
@@ -485,7 +509,30 @@ async fn normalize_rejections(request: Request, next: Next) -> Response {
     response
 }
 
+/// Whether the answer to this problem is an authentication or authorization
+/// refusal, which names the check that failed.
+fn is_refusal(status: StatusCode) -> bool {
+    matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
+
+/// A problem answer that is not an authentication or authorization refusal.
+/// Those are built by [`unauthorized`], which takes the failed check.
 fn problem(code: ProblemCode, detail: &str) -> Response {
+    let response = problem_answer(code, detail);
+    if is_refusal(response.status()) {
+        tracing::error!(
+            target: "registry_evidence_oid4vp::service",
+            "a refusal was built without naming its failed check"
+        );
+        debug_assert!(
+            false,
+            "a refusal is built with `unauthorized`, which names its check"
+        );
+    }
+    response
+}
+
+fn problem_answer(code: ProblemCode, detail: &str) -> Response {
     let status =
         StatusCode::from_u16(code.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     Problem::new(&code.type_uri(), code.title(), status)
@@ -497,6 +544,78 @@ fn retry_after(mut response: Response, seconds: u64) -> Response {
     response
         .headers_mut()
         .insert(RETRY_AFTER, HeaderValue::from(seconds.max(1)));
+    response
+}
+
+/// The answer carrying the check that refused the caller in its response
+/// extensions, which are never serialized. The recording layer reads it.
+fn refused(mut response: Response, check: FailedCheck) -> Response {
+    response.extensions_mut().insert(RefusalNote::new(check));
+    response
+}
+
+/// The 401 a caller without an acceptable bearer credential receives.
+fn unauthorized(check: FailedCheck) -> Response {
+    let mut response = problem_answer(
+        ProblemCode::Unauthorized,
+        "a valid bearer token is required",
+    );
+    response
+        .headers_mut()
+        .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    refused(response, check)
+}
+
+/// The 401 for a caller the authenticator refused. A scope refusal also
+/// carries the gate's configured values for the operator's log line.
+fn refused_by(check: FailedCheck, authenticator: &TokenAuthenticator) -> Response {
+    let mut response = unauthorized(check);
+    if check == FailedCheck::Scope {
+        response
+            .extensions_mut()
+            .insert(authenticator.declared_scope());
+    }
+    response
+}
+
+/// The 503 a caller receives when the issuer's key set cannot be used.
+fn issuer_unavailable_answer() -> Response {
+    refused(
+        retry_after(
+            problem(
+                ProblemCode::IssuerUnavailable,
+                "the token issuer is unavailable",
+            ),
+            5,
+        ),
+        FailedCheck::KeySourceUnavailable,
+    )
+}
+
+/// Count each refusal answer under its check and write the admitted log line.
+/// The trace id is the one the answer carries.
+async fn record_refusals(
+    State(refusals): State<Arc<RefusalRecorder>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let response = next.run(request).await;
+    if let Some(note) = response.extensions().get::<RefusalNote>() {
+        let declared = response.extensions().get::<DeclaredScope>();
+        match registry_platform_httpsec::response_trace_id(response.headers()) {
+            Ok(trace) => {
+                registry_platform_authcommon::record_refusal!(
+                    refusals,
+                    *note,
+                    trace_id = trace,
+                    declared = declared
+                );
+            }
+            Err(_) => {
+                registry_platform_authcommon::record_refusal!(refusals, *note, declared = declared);
+            }
+        }
+    }
     response
 }
 
@@ -552,7 +671,9 @@ async fn health() -> Response {
 /// certificate past its `notAfter`, which wallets refuse the request objects of.
 async fn ready(State(service): State<Arc<VerifierService>>) -> Response {
     if service.audit.ready().await && !service.certificate_expired() {
-        Json(json!({"status": "ready"})).into_response()
+        let mut body = service.config.posture.ready_member();
+        body.insert("status".to_owned(), json!("ready"));
+        Json(body).into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -562,33 +683,27 @@ async fn ready(State(service): State<Arc<VerifierService>>) -> Response {
     }
 }
 
+/// The `Authorization` header as text. A header that is present but not
+/// readable as text reads as an empty value, which the authenticator refuses as
+/// a malformed credential rather than counting it as absent.
+fn authorization_header(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)
+        .map(|value| value.to_str().unwrap_or_default())
+}
+
 /// Authenticate the applicant, or return the response that refuses them.
 async fn applicant(service: &VerifierService, headers: &HeaderMap) -> Result<Principal, Response> {
-    let authorization = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
+    let authorization = authorization_header(headers);
     match service.applicants.authenticate(authorization).await {
         Ok(principal) => Ok(principal),
         Err(AuthError::KeySource) => {
             service.metrics.record(Event::SessionRefusedUnavailable);
-            Err(retry_after(
-                problem(
-                    ProblemCode::IssuerUnavailable,
-                    "the token issuer is unavailable",
-                ),
-                5,
-            ))
+            Err(issuer_unavailable_answer())
         }
-        Err(AuthError::Missing | AuthError::Refused) => {
+        Err(AuthError::Refused(check)) => {
             service.metrics.record(Event::SessionRefusedAuthentication);
-            let mut response = problem(
-                ProblemCode::Unauthorized,
-                "a valid bearer token is required",
-            );
-            response
-                .headers_mut()
-                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-            Err(response)
+            Err(refused_by(check, &service.applicants))
         }
     }
 }
@@ -769,7 +884,10 @@ async fn session_status(
         }
         None => {
             service.metrics.record(Event::StatusNotFound);
-            problem(ProblemCode::SessionNotFound, "no such session")
+            refused(
+                problem(ProblemCode::SessionNotFound, "no such session"),
+                FailedCheck::Visibility,
+            )
         }
     }
 }
@@ -869,9 +987,12 @@ fn response_unavailable(wait_seconds: u64) -> Response {
 async fn admit_response(limiter: &TokenBucketLimiter, key: &str) -> Result<(), Response> {
     match limiter.check(key, 1).await {
         Ok(()) => Ok(()),
-        Err(TokenBucketError::Exceeded { retry_after: wait }) => Err(retry_after(
-            oauth_error(StatusCode::TOO_MANY_REQUESTS, "temporarily_unavailable"),
-            wait.as_secs() + 1,
+        Err(TokenBucketError::Exceeded { retry_after: wait }) => Err(refused(
+            retry_after(
+                oauth_error(StatusCode::TOO_MANY_REQUESTS, "temporarily_unavailable"),
+                wait.as_secs() + 1,
+            ),
+            FailedCheck::RateLimit,
         )),
         Err(_) => Err(response_unavailable(CAPACITY_RETRY_SECONDS)),
     }
@@ -1143,9 +1264,7 @@ async fn read_presentation(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let authorization = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
+    let authorization = authorization_header(&headers);
     let reader = match service
         .evidence_credentials
         .authenticate(authorization)
@@ -1154,24 +1273,11 @@ async fn read_presentation(
         Ok(reader) => reader,
         Err(AuthError::KeySource) => {
             service.metrics.record(Event::ReadUnavailable);
-            return retry_after(
-                problem(
-                    ProblemCode::IssuerUnavailable,
-                    "the token issuer is unavailable",
-                ),
-                5,
-            );
+            return issuer_unavailable_answer();
         }
-        Err(AuthError::Missing | AuthError::Refused) => {
+        Err(AuthError::Refused(check)) => {
             service.metrics.record(Event::ReadRefusedAuthentication);
-            let mut response = problem(
-                ProblemCode::Unauthorized,
-                "a valid bearer token is required",
-            );
-            response
-                .headers_mut()
-                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-            return response;
+            return refused_by(check, &service.evidence_credentials);
         }
     };
     if let Err(response) = admit(
@@ -1251,9 +1357,16 @@ async fn read_presentation(
     match verdict {
         // A principal that is not the creator reads exactly as an unknown
         // reference.
-        ReadVerdict::NotFound | ReadVerdict::PrincipalMismatch => {
+        ReadVerdict::NotFound => {
             service.metrics.record(Event::ReadNotFound);
             problem(ProblemCode::SessionNotFound, "no such session")
+        }
+        ReadVerdict::PrincipalMismatch => {
+            service.metrics.record(Event::ReadNotFound);
+            refused(
+                problem(ProblemCode::SessionNotFound, "no such session"),
+                FailedCheck::Ownership,
+            )
         }
         ReadVerdict::Pending => {
             service.metrics.record(Event::ReadPending);
@@ -1331,19 +1444,22 @@ async fn admit(
     limiter: &TokenBucketLimiter,
     key: &str,
     metrics: &Metrics,
-    refused: Event,
+    event: Event,
 ) -> Result<(), Response> {
     match limiter.check(key, 1).await {
         Ok(()) => Ok(()),
         Err(TokenBucketError::Exceeded { retry_after: wait }) => {
-            metrics.record(refused);
-            Err(retry_after(
-                problem(ProblemCode::RateLimited, "too many requests; retry later"),
-                wait.as_secs() + 1,
+            metrics.record(event);
+            Err(refused(
+                retry_after(
+                    problem(ProblemCode::RateLimited, "too many requests; retry later"),
+                    wait.as_secs() + 1,
+                ),
+                FailedCheck::RateLimit,
             ))
         }
         Err(_) => {
-            metrics.record(refused);
+            metrics.record(event);
             Err(retry_after(
                 problem(ProblemCode::Capacity, "the service is at capacity"),
                 CAPACITY_RETRY_SECONDS,
@@ -1385,7 +1501,11 @@ where
     tracing::info!(target: "registry_evidence_oid4vp::service", "verifier service listening");
     let cleanup = spawn_cleanup(&service.store, CLEANUP_INTERVAL);
     let app = build_app(Arc::clone(&service));
-    let metrics_router = metrics_app(Arc::clone(&service.metrics), Arc::clone(&service.store));
+    let metrics_router = metrics_app(
+        Arc::clone(&service.metrics),
+        Arc::clone(&service.store),
+        service.config.posture.posture(),
+    );
     let (stop, stopped) = watch::channel(false);
     let public_stopped = stopped.clone();
     let metrics_stopped = stopped;
@@ -1437,5 +1557,39 @@ async fn wait_for_stop(mut stopped: watch::Receiver<bool>) {
         if stopped.changed().await.is_err() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unauthorized_answer_carries_its_failed_check() {
+        let response = unauthorized(FailedCheck::CredentialMissing);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.extensions().get::<RefusalNote>().is_some());
+    }
+
+    #[test]
+    fn every_problem_code_answered_as_a_refusal_is_built_by_unauthorized() {
+        for &code in ProblemCode::ALL {
+            let status = problem_answer(code, "detail").status();
+            assert_eq!(
+                is_refusal(status),
+                code == ProblemCode::Unauthorized,
+                "{code:?} answers {status}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a refusal is built with `unauthorized`")]
+    fn a_refusal_built_without_a_failed_check_is_caught() {
+        let _ = problem(
+            ProblemCode::Unauthorized,
+            "a valid bearer token is required",
+        );
     }
 }

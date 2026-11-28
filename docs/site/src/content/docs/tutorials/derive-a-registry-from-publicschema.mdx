@@ -70,11 +70,13 @@ rstack breg init household-registry --from publicschema --starter household
 ```
 
 ```text test-excerpt
-Initialized a registry project. 6 artifacts written.
+Initialized a registry project. 8 artifacts written.
   revision  sha256:<digest>
 
   README.md
   dev-clients.yaml
+  dev.yaml
+  dev/scenarios.yaml
   model/selection.yaml
   registry.yaml
   runtime.example.yaml
@@ -104,11 +106,12 @@ Next:
   2. review the generated access profiles; their required scopes and purposes bound
      whole-collection access, and household-registry/README.md says where to add row
      boundaries when callers need row-level separation
-  3. run 'bregctl dev household-registry' to start the registry locally and replay
-     household-registry/tests/journeys.yaml
+  3. review household-registry/dev.yaml and run 'rstack dev start household-registry' to
+     serve the registry locally
   4. replace canonicalBaseIri in household-registry/registry.yaml before you build a
-     production package; the derived value is a reserved .invalid name that never
-     resolves
+     production package. The derived value is a reserved .invalid name. Package the
+     unchanged project with 'bregctl package --posture development', or set
+     REGISTRY_STACK_POSTURE=development. Serve it locally with 'rstack dev start'
   5. keep household-registry/model/selection.yaml beside the project: edit it and pass
      it back with --selection to derive a fresh project
 ```
@@ -216,7 +219,8 @@ you continue.
 
 The derivation wrote an `operator` and a `reader` access profile. `rstack dev` runs the project from
 a development plan that names the synthetic people who call it. Each person's test token carries
-the scope and purpose their access profile requires. Create `household-registry/dev.yaml`:
+the scope and purpose their access profile requires. Replace the generated
+`household-registry/dev.yaml` with this plan:
 
 ```yaml title="household-registry/dev.yaml" test-file
 apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
@@ -248,11 +252,11 @@ people:
 scenarioFile: dev/scenarios.yaml
 ```
 
-The plan names a scenario file, requests that `rstack dev` sends once the registry runs. This one
-lists the people as `reader`:
+The plan names a scenario file that `rstack dev` runs after the registry starts. Use the generated
+directory and replace its scenario file with a request that lists people as `reader`:
 
 ```sh
-mkdir household-registry/dev
+mkdir -p household-registry/dev
 ```
 
 ```yaml title="household-registry/dev/scenarios.yaml" test-file
@@ -277,7 +281,10 @@ rstack dev start household-registry --ttl 4h | tee household-registry/dev-run.tx
 
 ```text test-expect
 Run <run-id> ready
+  Development data is kept after stop in <data-directory>; start this project with --clean to clear it.
   breg http://127.0.0.1:<port>
+  Created kept key <data-directory>/breg-audit-key
+  Created kept key <data-directory>/breg-cursor-key
   Runtime config breg <runtime-config>
   Scenario reader-lists-people passed
   Logs <logs-directory>
@@ -286,9 +293,9 @@ Run <run-id> ready
 ```
 
 The first start downloads PostgreSQL's image, so allow a few minutes. Before it reports `ready`,
-`rstack dev` replays the scenarios in `tests/journeys.yaml` against a throwaway database, then
-starts your registry on an empty one, at the `breg` address. Each run gets a free port of its own,
-so your address differs. The run ends after four hours, or when you stop it.
+`rstack dev` runs the read-only scenario in `dev/scenarios.yaml` against your local registry.
+Each run gets a free port of its own, so your address differs. The run ends after four hours,
+or when you stop it.
 [Run a project with rstack dev](../../configure/run-a-project-with-rstack-dev/) describes the rest
 of the report, token expiry and recovery.
 
@@ -421,12 +428,13 @@ warning[breg.access.profile-higher-classification] recordTypes[id=group-membersh
 
 Check the generated candidate, then compare its compiled result with the package the run's runtime
 configuration binds. The run keeps that file, `breg-runtime.yaml`, in the directory that holds its
-`logs` directory:
+`logs` directory. Declare development so the command can read the run's generated audit key
+configuration and synthetic issuer.
 
 ```sh
 rstack breg check household-registry-2
 RUN_DIR="$(dirname "$(awk '$1 == "Logs" {print $2}' household-registry/dev-run.txt)")"
-rstack breg diff household-registry-2 --runtime-config "$RUN_DIR/breg-runtime.yaml"
+rstack breg diff household-registry-2 --runtime-config "$RUN_DIR/breg-runtime.yaml" --posture development
 ```
 
 ```text test-excerpt
@@ -528,7 +536,7 @@ with another source directory. Use the run's runtime file so the report verifies
 runtime configuration and its exact package digest binding:
 
 ```sh
-rstack breg diff household-registry-2 --runtime-config "$RUN_DIR/breg-runtime.yaml"
+rstack breg diff household-registry-2 --runtime-config "$RUN_DIR/breg-runtime.yaml" --posture development
 ```
 
 ```text test-excerpt
@@ -569,8 +577,9 @@ correct the candidate, then run `check`, the explanations, and `diff` again.
 
 ## Stop the registry
 
-Stopping a run deletes its database with the person you created. A development run keeps nothing for
-a later start. Records you want to keep belong in a registry served with `breg serve`:
+Stopping the run keeps the local development data, including the person you created. To start
+again with an empty database, pass `--clean` on the next start. For operated data, use a registry
+served with `breg serve`.
 
 ```sh
 rstack dev stop "$RUN"

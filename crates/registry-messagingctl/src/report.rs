@@ -163,23 +163,32 @@ fn envelope(report: &Value) -> io::Result<Value> {
 }
 
 /// Write one report, envelope members first, and its trailing newline.
+#[cfg(test)]
 pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    let value = envelope(report)?;
-    let report =
-        registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
-            .map_err(io::Error::other)?;
-    serde_json::to_writer_pretty(&mut *stdout, &report).map_err(io::Error::other)?;
-    writeln!(stdout)
+    write_with_posture(report, stdout, None, None)
 }
 
-/// Write one report on a single line, envelope members first, so a caller
-/// can read it while the command keeps running.
-pub(crate) fn write_line(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+pub(crate) fn write_with_posture(
+    report: &Value,
+    stdout: &mut dyn io::Write,
+    posture: Option<registry_platform_config::DeclaredPosture>,
+    explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
+) -> io::Result<()> {
     let value = envelope(report)?;
     let report =
         registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
             .map_err(io::Error::other)?;
-    serde_json::to_writer(&mut *stdout, &report).map_err(io::Error::other)?;
+    let report = if let Some(declared) = posture {
+        report.with_posture(declared)
+    } else {
+        report
+    };
+    let report = if let Some(settings) = explicit_settings {
+        report.explicit_settings(settings)
+    } else {
+        report
+    };
+    serde_json::to_writer_pretty(&mut *stdout, &report).map_err(io::Error::other)?;
     writeln!(stdout)
 }
 
@@ -261,22 +270,6 @@ mod tests {
         );
         assert_eq!(report["diagnostics"], json!([]));
         assert_eq!(report["alpha"], 1);
-    }
-
-    #[test]
-    fn a_one_line_report_keeps_the_result_class_and_names_its_outcome() {
-        let mut out = Vec::new();
-        write_line(
-            &json!({"alpha":1,"status":"ready","command":"dev","ok":true}),
-            &mut out,
-        )
-        .unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert_eq!(text.lines().count(), 1);
-        assert!(text.starts_with("{\"ok\":true,\"command\":\"dev\",\"status\":\"complete\","));
-        let report: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(report["outcome"], "ready");
-        assert_eq!(report["diagnostics"], json!([]));
     }
 
     #[test]

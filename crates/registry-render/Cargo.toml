@@ -9,18 +9,20 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+registry-rstack-dev.workspace = true
 registry-platform-audit = { workspace = true }
-registry-platform-authcommon = { workspace = true }
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo = { workspace = true }
 registry-platform-canonical-json = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-oidc = { workspace = true }
 jsonwebtoken = { workspace = true }
 registry-platform-crypto = { workspace = true, features = ["cms-signing", "transit"] }
-registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httpsec = { workspace = true, features = ["refusal-trace-id", "server"] }
 registry-platform-httputil = { workspace = true }
 registry-platform-metrics = { workspace = true }
 registry-platform-yaml = { workspace = true }
+registry-thunderid-tooling.workspace = true
 typst = { workspace = true }
 typst-pdf = { workspace = true }
 typst-assets = { workspace = true }
@@ -55,6 +57,7 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+registry-platform-testing = { workspace = true, features = ["token-fixtures"] }
 registry-platform-crypto = { workspace = true, features = ["cms-signing", "test-support", "transit"] }
 registry-render-client.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

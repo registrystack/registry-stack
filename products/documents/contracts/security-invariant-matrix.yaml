@@ -67,24 +67,37 @@ invariants:
       others, so later versions could release bytes no verifier inspected.
     enforcementPoint: >-
       The runtime configuration accepts contentVerification type disabled only
-      when the listener declares development-loopback TLS termination.
+      when the process declares development.
     refusal: >-
-      Refuse with documents.runtime.content-verification-disabled at
-      /contentVerification/type.
+      Refuse with documents.posture.content-verification-disabled at
+      /contentVerification.
     negativeTest:
       path: crates/registry-documents/src/config.rs
-      name: disabled_content_verification_requires_development_loopback
+      name: disabled_content_verification_requires_declared_development
   - id: DOCUMENTS-SEC-05
     state: enforced
     threat: >-
       Any client the issuer knows can call the Document Store because the
       operator never named the clients the deployment serves.
     enforcementPoint: >-
-      The runtime configuration requires an explicit allowedClients list; the
+      Each issuer entry of the runtime configuration requires allowedClients:
+      an explicit list, or from-package, which admits exactly the requester
+      clients the package names. Together the entries cover every requester
+      client the package names, and a client belongs to one entry. The
       unrestricted form is refused.
     refusal: >-
       Refuse with documents.runtime.allowed-clients-required at
-      /authentication/oidc/allowedClients.
+      /authentication/oidc/issuers/ISSUER_ID/allowedClients. Entries whose
+      lists together omit a requester client a package profile names are
+      refused with documents.runtime.profile-client-not-allowed, held by
+      explicit_list_missing_a_package_client_is_refused and
+      from_package_admits_exactly_the_package_clients in
+      crates/registry-documents/src/config.rs (DOCUMENTS-DEC-36). A client
+      listed by two entries, or by an entry beside one that reads its clients
+      from the package, is refused with platform.oidc.client-in-two-issuers,
+      held by a_client_listed_by_two_issuers_is_refused_and_the_check_names_the_other_entry
+      and every_conflict_of_a_package_client_beside_from_package_is_reported in
+      crates/registry-documents/src/config.rs.
     negativeTest:
       path: crates/registry-documents/src/config.rs
       name: unrestricted_clients_are_refused
@@ -120,18 +133,17 @@ invariants:
   - id: DOCUMENTS-SEC-08
     state: enforced
     threat: >-
-      A hook or verifier destination uses plaintext HTTP outside development,
+      A hook or verifier destination uses plaintext HTTP beyond loopback,
       sending document events or verifier credentials over the network
       unprotected.
     enforcementPoint: >-
       The runtime configuration reads every outbound URL through the shared
-      checked URL type and refuses http outside a development-loopback
-      deployment.
+      checked URL type and refuses HTTP beyond loopback in both postures.
     refusal: >-
       Refuse with documents.runtime.insecure-url at the destination's url.
     negativeTest:
       path: crates/registry-documents/src/config.rs
-      name: a_plaintext_hook_destination_is_refused_outside_development
+      name: a_non_loopback_plaintext_hook_destination_is_refused_in_both_postures
   - id: DOCUMENTS-SEC-09
     state: enforced
     threat: >-
@@ -356,10 +368,12 @@ invariants:
       reserves into another person's custody.
     enforcementPoint: >-
       Reservation requires the caller's access profile among the policy's
-      custodyProfiles. A service may name any custodian; a human caller may name
-      only itself, compared by issuer, subject, and kind.
+      custodyProfiles. A service must name a custodian and may name any; a
+      human caller may name only itself, compared by issuer, subject, and kind,
+      and a human body that omits the custodian places custody in the caller.
     refusal: >-
-      Answer 403 custody.not-permitted and reserve nothing.
+      Answer 403 custody.not-permitted, or 422 request.unprocessable when a
+      service names no custodian, and reserve nothing.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_own
@@ -940,14 +954,18 @@ invariants:
       reference, the timeout, and the attempt budget come from
       destinations.hooks in the operator's runtime configuration, through
       the shared URL hook destination block. Activation requires every named
-      destination to be bound and every signing key to resolve, and retained
-      deliveries must match their current binding before the worker starts.
+      destination to be bound and every signing key to resolve to 32 to 64
+      exact bytes without trimming or decoding. No two destinations may share
+      signing key bytes. Retained deliveries must match their current binding
+      before the worker starts.
     refusal: >-
-      Refuse startup naming the unbound destination or the unresolved key,
-      or a retained delivery whose binding is no longer configured.
+      Refuse startup for an unbound destination, an unresolved or invalid
+      signing key, signing keys with identical bytes, or a retained delivery
+      whose binding is no longer configured. Name the configuration paths
+      involved in a signing key refusal.
     negativeTest:
-      path: crates/registry-documents/tests/postgres_hooks.rs
-      name: startup_refuses_a_project_hook_whose_destination_is_not_bound
+      path: crates/registry-documents/src/config.rs
+      name: hook_signing_keys_report_both_destinations_when_their_keys_match
   - id: DOCUMENTS-SEC-54
     state: enforced
     threat: >-
@@ -957,9 +975,10 @@ invariants:
       ownership, and grants, which are matched by issuer, subject, and kind
       alone.
     enforcementPoint: >-
-      Project check. Every profile accepts the deployment's one issuer, so
-      the project is refused when two profiles of one actorKind name
-      different principalClaim values.
+      Project check. Custody, ownership, and grants are matched by issuer,
+      subject, and kind, so the same subject at two issuers is two principals.
+      The project is refused when two profiles of one actorKind name
+      different principalClaim values, whatever issuer admits their clients.
     refusal: >-
       Refuse the project with documents.project.mixed-principal-claim at the
       later profile's principalClaim.

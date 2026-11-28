@@ -220,7 +220,6 @@ identity:
   environment: acceptance
   instanceId: asset-site-placement-acceptance
   databaseId: asset-site-placement-adopter-db
-  databaseInitializationEnvironment: acceptance
 secretProviders:
   file:
     root: $temporary_root/secrets
@@ -239,25 +238,28 @@ package:
   root: $package_root
 authentication:
   oidc:
-    issuer: https://issuer.example/adopter
-    audience: urn:breg:adopter
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [registry-adopter-client]
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
+    issuers:
+      primary:
+        issuer: https://issuer.example/adopter
+        audience: urn:breg:adopter
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        actorKind: service
+        allowedClients: [registry-adopter-client]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
+        jwksSource:
+          type: static
+          documentRef: secret:file/oidc-jwks
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
@@ -757,7 +759,6 @@ run_json "$temporary_root/schema-test-v2.json" test "$temporary_root/project-v2"
   --baseline-package "$temporary_root/build-v1/package" \
   --output "$temporary_root/schema-test-receipt-v2.json"
 assert_json_ok "$temporary_root/schema-test-v2.json" test
-schema_fingerprint_v2=$(json_field "$temporary_root/schema-test-v2.json" schemaFingerprint)
 
 run_json "$temporary_root/package-v2.json" package "$temporary_root/project-v2" \
   --baseline-package "$temporary_root/build-v1/package" \
@@ -1039,48 +1040,35 @@ run_json "$temporary_root/measure-v3.json" test "$temporary_root/project-v3" --f
   --runtime-config "$temporary_root/runtime-test-v3.yaml"
 assert_json_ok "$temporary_root/measure-v3.json" test
 schema_fingerprint_v3=$(json_field "$temporary_root/measure-v3.json" schemaFingerprint)
-postgres_major=$(psql "$adopter_production_admin_url" -Atqc 'SELECT current_setting('\''server_version_num'\'')::integer / 10000')
-
-# Test-fixture evidence only, for a metadata-only review with no authored SQL.
-# The target fingerprint and lock-timeout refusal above were measured, not guessed.
-python3 - "$temporary_root" "$package_digest_v2" "$schema_fingerprint_v2" "$schema_fingerprint_v3" "$postgres_major" <<'PY'
-import hashlib
+# A change that needs no SQL is reviewed with a drafted migration: the command
+# covers the access changes against the verified predecessor and measures the
+# target on the disposable database, so no evidence is written by hand. The
+# measured fingerprint is the one the independent measurement above reported.
+run_json "$temporary_root/draft-v3.json" migration draft "$temporary_root/project-v3" \
+  --baseline-package "$temporary_root/build-v2/package" \
+  --runtime-config "$temporary_root/runtime-test-v3.yaml" \
+  --output "$temporary_root/review-v3" --module asset-site-placement-core --id read-maintenance-note
+assert_json_ok "$temporary_root/draft-v3.json" "migration draft"
+python3 - "$temporary_root/draft-v3.json" "$package_digest_v2" "$schema_fingerprint_v3" <<'PY'
 import json
 import sys
-from pathlib import Path
-root = Path(sys.argv[1])
-changes = json.loads((root / "diff-v3.json").read_text())["changes"]
-if any(change["classification"] == "unsupported" for change in changes):
-    raise SystemExit("reviewed successor was incorrectly classified as unsupported")
-covers = [{"code": item["change"]["code"], "target": item["change"]["target"]}
-          for item in changes if item["change"]["class"] != "compatible-additive"]
-if {cover["code"] for cover in covers} != {"access-profile-changed", "query-inventory-changed"}:
-    raise SystemExit("reviewed successor did not have the expected permission changes")
-base = "modules/asset-site-placement-core/migrations/read-maintenance-note"
-descriptor = {
-    "apiVersion": "id.registrystack.org/formats/breg/migration-descriptor/v1alpha1",
-    "kind": "BRegMigrationDescriptor",
-    "id": "read-maintenance-note", "changeClass": "access-or-disclosure-change",
-    "covers": covers, "recovery": "exact-target-resume", "lockTimeoutMilliseconds": 1000,
-    "statementTimeoutMilliseconds": 60000, "steps": [], "preAssertions": [], "postAssertions": [],
-    "rehearsalReceiptPath": f"{base}/rehearsal.json",
-}
-def canonical(document):
-    return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
-descriptor_bytes = canonical(descriptor)
-receipt = {
-    "apiVersion": "id.registrystack.org/formats/breg/migration-rehearsal-receipt/v1alpha1",
-    "kind": "BRegMigrationRehearsalReceipt",
-    "priorPackageDigest": sys.argv[2], "priorSchemaFingerprint": sys.argv[3],
-    "planDigest": "sha256:" + hashlib.sha256(descriptor_bytes).hexdigest(),
-    "sqlDigests": [], "assertionDigests": [], "fixtureInventory": [], "postgresMajor": int(sys.argv[5]),
-    "rowAssertions": [], "finalSchemaFingerprint": sys.argv[4],
-}
-directory = root / "review-v3" / base
-directory.mkdir(parents=True)
-(directory / "descriptor.json").write_bytes(descriptor_bytes)
-(directory / "rehearsal.json").write_bytes(canonical(receipt))
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+if {cover["code"] for cover in report["covers"]} != {"access-profile-changed", "query-inventory-changed"}:
+    raise SystemExit("the drafted migration did not cover the expected permission changes")
+if report["priorPackageDigest"] != sys.argv[2]:
+    raise SystemExit("the drafted receipt does not bind the verified predecessor")
+if report["finalSchemaFingerprint"] != sys.argv[3]:
+    raise SystemExit("the drafted receipt does not carry the measured target fingerprint")
 PY
+# A draft never overwrites a migration it already wrote.
+if run_json "$temporary_root/draft-v3-again.json" migration draft "$temporary_root/project-v3" \
+  --baseline-package "$temporary_root/build-v2/package" \
+  --runtime-config "$temporary_root/runtime-test-v3.yaml" \
+  --output "$temporary_root/review-v3" --module asset-site-placement-core --id read-maintenance-note; then
+  printf '%s\n' 'a second draft unexpectedly overwrote the first.' >&2
+  exit 1
+fi
+assert_json_failure "$temporary_root/draft-v3-again.json" migration.draft.output-exists
 reviewed_candidate_args+=(--reviewed-migrations "$temporary_root/review-v3")
 review_receipt="$temporary_root/review-v3/modules/asset-site-placement-core/migrations/read-maintenance-note/rehearsal.json"
 cp "$review_receipt" "$temporary_root/review-receipt-v3.original.json"

@@ -10,22 +10,35 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+const PRODUCTION_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Default,
+    };
+
+const DEVELOPMENT_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::event_destination::EventDestinationActivationError;
 use registry_breg::runtime_config::{
-    check_runtime_config, load_runtime_config, load_runtime_config_with_env, parse_runtime_config,
-    parse_runtime_config_with_env, RuntimeConfigError, RUNTIME_CONFIG_API_VERSION,
-    RUNTIME_CONFIG_KIND,
+    check_runtime_config, load_runtime_config, load_runtime_config_with_env,
+    load_runtime_config_without_package_root, parse_runtime_config, parse_runtime_config_with_env,
+    RuntimeConfigError, RUNTIME_CONFIG_API_VERSION, RUNTIME_CONFIG_KIND,
 };
 use registry_platform_config::package::{write_sum_file, PackageLimits};
 use registry_platform_config::MetricsBindError;
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::destination::{
-    DestinationDnsFamily, DestinationSendError, EventDeliveryHeaders,
+    DestinationDnsFamily, DestinationSendError, SignedEventHeaders,
 };
+use registry_platform_oidc::StaticJwksError;
 use serde_json::{json, Value};
 
 const DATABASE_URL_CANARY: &str =
@@ -110,6 +123,12 @@ fn public_origin_accepts_only_explicit_web_origins_and_redacts_debug() {
         ("http://127.0.0.1:8080", "http://127.0.0.1:8080"),
         ("http://[::1]:8080/", "http://[::1]:8080"),
         ("http://localhost:8080", "http://localhost:8080"),
+        ("http://LOCALHOST:8080", "http://LOCALHOST:8080"),
+        ("http://127.0.0.2:8080", "http://127.0.0.2:8080"),
+        (
+            "http://[::ffff:127.0.0.1]:8080",
+            "http://[::ffff:127.0.0.1]:8080",
+        ),
     ] {
         let origin = PublicOrigin::parse(input).expect("explicit HTTPS or loopback origin");
         assert_eq!(origin.as_str(), expected);
@@ -122,6 +141,9 @@ fn public_origin_accepts_only_explicit_web_origins_and_redacts_debug() {
         "ftp://registry.example",
         "http://registry.example",
         "http://127.0.0.1.attacker.example",
+        "http://localhost.:8080",
+        "http://app.localhost:8080",
+        "http://[::ffff:10.0.0.1]:8080",
         "https://user:secret@registry.example",
         "https://registry.example/a//b",
         "https://registry.example/a/../b",
@@ -158,7 +180,6 @@ identity:
   environment: production
   instanceId: registry-primary
   databaseId: registry-db
-  databaseInitializationEnvironment: production
 secretProviders:
   environment: {{}}
   file:
@@ -178,23 +199,25 @@ package:
   root: {package_root}
 authentication:
   oidc:
-    issuer: https://issuer.example
-    audience: urn:breg:test
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [registry-client]
-    revokedKeyIds: [denied-kid]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 900
+    issuers:
+      primary:
+        issuer: https://issuer.example
+        audience: urn:breg:test
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [registry-client]
+        revokedKeyIds: [denied-kid]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 900
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose
@@ -225,8 +248,8 @@ fn runtime_log_level_defaults_to_info_and_accepts_the_closed_vocabulary() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
 
-    let defaulted =
-        parse_runtime_config_with_env(&base, env_lookup).expect("the default log level loads");
+    let defaulted = parse_runtime_config_with_env(&base, env_lookup, PRODUCTION_POSTURE)
+        .expect("the default log level loads");
     assert_eq!(defaulted.log_level().as_str(), "info");
 
     for accepted in ["error", "warn", "info"] {
@@ -235,7 +258,7 @@ fn runtime_log_level_defaults_to_info_and_accepts_the_closed_vocabulary() {
             &format!("kind: {RUNTIME_CONFIG_KIND}\nlogLevel: {accepted}\n"),
             1,
         );
-        let loaded = parse_runtime_config_with_env(&configured, env_lookup)
+        let loaded = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
             .unwrap_or_else(|error| panic!("{accepted:?} loads: {error}"));
         assert_eq!(loaded.log_level().as_str(), accepted);
     }
@@ -259,14 +282,10 @@ fn access_token_algorithm_accepts_exactly_the_asymmetric_roster() {
             &format!("allowedAlgorithm: {spelling}"),
             1,
         );
-        let loaded = parse_runtime_config_with_env(&configured, env_lookup)
+        let loaded = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
             .unwrap_or_else(|error| panic!("{spelling} loads: {error}"));
         assert_eq!(
-            loaded
-                .authentication()
-                .oidc()
-                .token_verifier_config()
-                .allowed_algorithms,
+            primary(&loaded).token_verifier_config().allowed_algorithms,
             vec![algorithm],
             "{spelling}"
         );
@@ -281,17 +300,247 @@ fn access_token_algorithm_accepts_exactly_the_asymmetric_roster() {
             &format!("allowedAlgorithm: {refused}"),
             1,
         );
-        let error = parse_runtime_config_with_env(&configured, env_lookup)
+        let error = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
             .expect_err("an algorithm outside the roster is refused");
         assert_eq!(
             reader_refusal(&error),
             (
                 "config.unknown-variant",
-                "/authentication/oidc/allowedAlgorithm"
+                "/authentication/oidc/issuers/primary/allowedAlgorithm"
             ),
             "{refused}"
         );
     }
+}
+
+/// The one issuer entry `valid_runtime` declares.
+fn primary(
+    config: &registry_breg::runtime_config::RuntimeConfig,
+) -> &registry_breg::runtime_config::OidcVerifierConfig {
+    config
+        .authentication()
+        .oidc()
+        .issuer("primary")
+        .expect("the primary issuer entry loads")
+}
+
+/// The key source of the one issuer entry `valid_runtime` declares.
+async fn primary_key_source(
+    config: &registry_breg::runtime_config::RuntimeConfig,
+) -> Result<std::sync::Arc<registry_platform_oidc::JwksFetcher>, RuntimeConfigError> {
+    let issuers = config.authenticator_issuers().await?;
+    let [issuer] = issuers.as_slice() else {
+        panic!("valid_runtime declares one issuer entry");
+    };
+    Ok(std::sync::Arc::clone(issuer.key_source()))
+}
+
+/// A second issuer entry with rules of its own, written before
+/// `authorityClaims`.
+const PARTNER_ENTRY: &str = "      partners:
+        issuer: https://login.partner.example/v2.0
+        audience: api://registry
+        allowedAlgorithm: ES256
+        scopeClaim: scp
+        scopeSeparator: \",\"
+        allowedClients: [partner-batch]
+        maximumTokenLifetimeSeconds: 600
+        leewayMilliseconds: 0
+";
+
+fn with_partner_entry(base: &str, entry: &str) -> String {
+    let runtime = base.replacen(
+        "  authorityClaims:\n",
+        &format!("{entry}  authorityClaims:\n"),
+        1,
+    );
+    assert_ne!(runtime, base, "the partner entry is written");
+    runtime
+}
+
+#[test]
+fn an_issuer_entry_without_access_token_type_or_scope_claim_loads_as_at_jwt_and_scope() {
+    let fixture = RuntimeFixture::new();
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("        accessTokenType: JWT\n", "")
+        .replace("        scopeClaim: scope\n", "");
+    assert!(!raw.contains("accessTokenType") && !raw.contains("scopeClaim"));
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect("an entry without accessTokenType or scopeClaim loads");
+    let verifier = primary(&config).token_verifier_config();
+    assert_eq!(
+        verifier.allowed_typ,
+        registry_platform_oidc::access_token_typ_set("at+jwt")
+    );
+    assert_eq!(verifier.scope_claim, "scope");
+    // The defaults are not explicit production settings.
+    assert!(
+        config.posture_report().explicit_settings().is_empty(),
+        "{:?}",
+        config.posture_report().explicit_settings()
+    );
+}
+
+#[test]
+fn each_issuer_entry_keeps_its_own_verification_rules() {
+    let fixture = RuntimeFixture::new();
+    let raw = with_partner_entry(
+        &valid_runtime(&fixture.secret_root, &fixture.package_root),
+        PARTNER_ENTRY,
+    );
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect("two issuer entries load");
+    let oidc = config.authentication().oidc();
+    assert_eq!(
+        oidc.issuers().map(|entry| entry.id()).collect::<Vec<_>>(),
+        ["partners", "primary"],
+        "entries are read in issuer id order"
+    );
+
+    let partners = oidc.issuer("partners").expect("the partner entry loads");
+    assert_eq!(partners.issuer(), "https://login.partner.example/v2.0");
+    let verifier = partners.token_verifier_config();
+    assert_eq!(verifier.issuer, "https://login.partner.example/v2.0");
+    assert_eq!(verifier.audiences, vec!["api://registry"]);
+    assert_eq!(
+        verifier.allowed_algorithms,
+        vec![jsonwebtoken::Algorithm::ES256]
+    );
+    assert_eq!(
+        verifier.allowed_typ,
+        registry_platform_oidc::access_token_typ_set("at+jwt")
+    );
+    assert_eq!(verifier.scope_claim, "scp");
+    assert_eq!(verifier.scope_separator, ',');
+    assert_eq!(verifier.allowed_clients, vec!["partner-batch"]);
+    assert!(verifier.denied_kids.is_empty());
+    assert_eq!(verifier.max_token_lifetime, Some(Duration::from_secs(600)));
+    assert_eq!(verifier.leeway, Duration::ZERO);
+
+    let verifier = primary(&config).token_verifier_config();
+    assert_eq!(verifier.issuer, "https://issuer.example");
+    assert_eq!(verifier.audiences, vec!["urn:breg:test"]);
+    assert_eq!(
+        verifier.allowed_algorithms,
+        vec![jsonwebtoken::Algorithm::EdDSA]
+    );
+    assert_eq!(verifier.allowed_typ, vec!["JWT"]);
+    assert_eq!(verifier.scope_claim, "scope");
+    assert_eq!(verifier.scope_separator, ' ');
+    assert_eq!(verifier.allowed_clients, vec!["registry-client"]);
+    assert!(verifier.denied_kids.contains("denied-kid"));
+    assert_eq!(verifier.max_token_lifetime, Some(Duration::from_secs(300)));
+    assert_eq!(verifier.leeway, Duration::from_secs(60));
+}
+
+#[test]
+fn two_issuers_with_the_same_iss_refuse_at_startup() {
+    let fixture = RuntimeFixture::new();
+    let raw = with_partner_entry(
+        &valid_runtime(&fixture.secret_root, &fixture.package_root),
+        &PARTNER_ENTRY.replace(
+            "https://login.partner.example/v2.0",
+            "https://issuer.example",
+        ),
+    );
+    let path = Path::new("runtime.yaml");
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect_err("two entries naming one issuer refuse at startup");
+    let diagnostics = error.diagnostics(None);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect::<Vec<_>>(),
+        [(
+            "platform.oidc.duplicate-issuer",
+            "/authentication/oidc/issuers/primary/issuer"
+        )],
+        "the second entry in issuer id order is the one refused"
+    );
+    let rendered = error.render_human(Some(path));
+    assert!(rendered.contains("partners"), "{rendered}");
+    assert!(!rendered.contains("issuer.example"), "{rendered}");
+}
+
+/// `valid_runtime` written in the shape that held one issuer's members
+/// directly under `authentication.oidc`, with the members the base leaves
+/// out added.
+fn single_issuer_shape(base: &str) -> String {
+    let flattened = base
+        .replacen("    issuers:\n      primary:\n", "", 1)
+        .replace("\n        ", "\n    ")
+        .replacen(
+            "    jwksCache:\n",
+            "    allowInsecureHttp: false\n    jwksSource:\n      type: discovery\n    assertionIssuers:\n      registry-client: [https://issuer-a.example]\n    jwksCache:\n",
+            1,
+        );
+    assert!(flattened.contains("\n  oidc:\n    issuer: https://issuer.example\n"));
+    flattened
+}
+
+#[test]
+fn each_member_that_moved_into_the_issuer_entry_is_refused_naming_its_place() {
+    let fixture = RuntimeFixture::new();
+    let raw = single_issuer_shape(&valid_runtime(&fixture.secret_root, &fixture.package_root));
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect_err("the single-issuer shape is refused");
+    let diagnostics = error.diagnostics(None);
+    for key in [
+        "issuer",
+        "audience",
+        "jwksSource",
+        "allowInsecureHttp",
+        "allowedAlgorithm",
+        "accessTokenType",
+        "scopeClaim",
+        "scopeSeparator",
+        "allowedClients",
+        "revokedKeyIds",
+        "assertionIssuers",
+        "maximumTokenLifetimeSeconds",
+        "leewayMilliseconds",
+        "jwksCache",
+    ] {
+        let pointer = format!("/authentication/oidc/{key}");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == pointer)
+            .unwrap_or_else(|| panic!("{key} is refused: {diagnostics:?}"));
+        assert_eq!(diagnostic.code, "config.removed-key", "{key}");
+        assert!(
+            diagnostic
+                .suggested_action
+                .contains(&format!("authentication.oidc.issuers.ISSUER_ID.{key}")),
+            "{key}: {}",
+            diagnostic.suggested_action
+        );
+    }
+}
+
+#[test]
+fn a_jwt_entry_is_listed_as_an_explicit_setting_and_ready_does_not_show_it() {
+    let fixture = RuntimeFixture::new();
+    let config = parse_runtime_config_with_env(
+        &valid_runtime(&fixture.secret_root, &fixture.package_root),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect("an entry stating accessTokenType: JWT loads in production");
+    let explicit = config.posture_report().explicit_settings();
+    assert_eq!(
+        explicit
+            .iter()
+            .map(|found| (found.setting.code, found.pointer.as_deref()))
+            .collect::<Vec<_>>(),
+        [(
+            "platform.posture.jwt-access-token",
+            Some("/authentication/oidc/issuers/primary/accessTokenType")
+        )]
+    );
+    let ready = serde_json::Value::Object(config.posture_report().ready_member()).to_string();
+    assert!(!ready.contains("jwt-access-token"), "{ready}");
+    assert!(!ready.contains("accessTokenType"), "{ready}");
 }
 
 #[test]
@@ -306,7 +555,7 @@ fn runtime_log_level_refuses_values_outside_the_closed_vocabulary() {
             &format!("kind: {RUNTIME_CONFIG_KIND}\nlogLevel: {yaml_value}\n"),
             1,
         );
-        let error = parse_runtime_config_with_env(&configured, env_lookup)
+        let error = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
             .expect_err("an unknown log level is refused");
         assert_eq!(
             reader_refusal(&error),
@@ -326,22 +575,126 @@ fn runtime_with_event_destinations(fixture: &RuntimeFixture, bindings: &str) -> 
 fn runtime_reads_the_explicit_http_issuer_opt_in() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-        "    issuer: https://issuer.example",
-        "    issuer: http://issuer.example\n    allowInsecureHttp: true",
+        "        issuer: https://issuer.example",
+        "        issuer: http://issuer.example\n        allowInsecureHttp: true",
     );
-    let config =
-        parse_runtime_config_with_env(&raw, |_| None).expect("explicit HTTP issuer opt-in");
-    assert_eq!(
-        config.authentication().oidc().issuer(),
-        "http://issuer.example"
-    );
+    let error = parse_runtime_config_with_env(&raw, |_| None, PRODUCTION_POSTURE)
+        .expect_err("production refuses the HTTP issuer opt-in");
+    assert_eq!(code_of(&error), "platform.posture.insecure-issuer-http");
+    let config = parse_runtime_config_with_env(
+        &raw,
+        |_| None,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("development accepts the HTTP issuer opt-in");
+    assert_eq!(primary(&config).issuer(), "http://issuer.example");
     assert_eq!(
         config
             .authentication()
             .oidc()
             .insecure_http_startup_diagnostic(),
-        Some("authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
+        Some("an authentication.oidc.issuers entry sets allowInsecureHttp, which permits plain HTTP to its issuer and to a JWKS URI declared in configuration")
     );
+}
+
+#[test]
+fn local_key_custody_is_gated_even_without_encrypted_fields() {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let raw = format!(
+        "{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/data-key\n"
+    );
+    for posture in [
+        PRODUCTION_POSTURE,
+        DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Flag,
+        },
+    ] {
+        let error = parse_runtime_config_with_env(&raw, env_lookup, posture).unwrap_err();
+        let diagnostics = error.diagnostics(None);
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.posture.local-key-custody")
+            .unwrap();
+        assert_eq!(diagnostic.path, "/fieldEncryption/provider");
+        for remedy in [
+            "rstack dev",
+            "REGISTRY_STACK_POSTURE=development",
+            "--posture development",
+        ] {
+            assert!(diagnostic.suggested_action.contains(remedy));
+        }
+    }
+
+    let development = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+    let config = parse_runtime_config_with_env(&raw, env_lookup, development).unwrap();
+    assert_eq!(
+        config.posture_report().ready_member()["developmentSettings"],
+        serde_json::json!([
+            {"code": "breg.posture.local-key-custody", "pointer": "/fieldEncryption/provider"}
+        ])
+    );
+
+    let transit = format!(
+        "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit.sock\n    mount: transit\n    keyName: breg\n"
+    );
+    for posture in [PRODUCTION_POSTURE, development] {
+        let config = parse_runtime_config_with_env(&transit, env_lookup, posture).unwrap();
+        assert!(config.posture_report().settings().is_empty());
+    }
+}
+
+#[test]
+fn undeclared_laptop_configuration_lists_every_development_setting() {
+    let fixture = RuntimeFixture::new();
+    let base = runtime_with_database_members(&fixture, "  transport: private-network-plaintext\n")
+        .replace(
+            "        issuer: https://issuer.example",
+            "        issuer: http://issuer.example\n        allowInsecureHttp: true",
+        );
+    let raw = format!(
+        "{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/data-key\n"
+    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).unwrap_err();
+    let diagnostics = error.diagnostics(None);
+    let expected = [
+        (
+            "platform.posture.database-private-plaintext",
+            "/database/transport",
+        ),
+        (
+            "platform.posture.insecure-issuer-http",
+            "/authentication/oidc/issuers/primary/allowInsecureHttp",
+        ),
+        (
+            "breg.posture.local-key-custody",
+            "/fieldEncryption/provider",
+        ),
+    ];
+    assert_eq!(diagnostics.len(), expected.len(), "{diagnostics:?}");
+    for (code, pointer) in expected {
+        let diagnostic = diagnostics
+            .iter()
+            .find(|finding| finding.code == code)
+            .unwrap();
+        assert_eq!(diagnostic.path, pointer);
+        for remedy in [
+            "rstack dev",
+            "REGISTRY_STACK_POSTURE=development",
+            "--posture development",
+        ] {
+            assert!(diagnostic.suggested_action.contains(remedy));
+        }
+    }
 }
 
 #[test]
@@ -349,11 +702,15 @@ fn non_loopback_http_issuer_refusal_names_the_opt_in() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
         .replace("https://issuer.example", "http://issuer.example");
-    let error = parse_runtime_config_with_env(&raw, |_| None)
+    let error = parse_runtime_config_with_env(&raw, |_| None, PRODUCTION_POSTURE)
         .expect_err("plain HTTP beyond loopback needs an explicit opt-in");
     assert_eq!(error, RuntimeConfigError::InvalidOidc);
     let rendered = error.render_human(Some(Path::new("runtime.yaml")));
-    assert!(rendered.contains("authentication.oidc.allowInsecureHttp: true"));
+    assert!(
+        rendered.contains("authentication.oidc.issuers entry"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("allowInsecureHttp: true"), "{rendered}");
     assert!(!rendered.contains("issuer.example"));
 }
 
@@ -377,7 +734,8 @@ fn shared_package_envelope_and_pin_are_checked_before_startup() {
             written.digest()
         ),
     );
-    let config = parse_runtime_config(&raw).expect("runtime with matching pin parses");
+    let config =
+        parse_runtime_config(&raw, PRODUCTION_POSTURE).expect("runtime with matching pin parses");
     assert_eq!(
         config
             .verify_package_envelope()
@@ -413,7 +771,7 @@ fn shared_package_envelope_and_pin_are_checked_before_startup() {
     fs::write(&governed, b"governed-package\n").expect("governed package restores again");
     let wrong = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
     let wrong_pin = raw.replace(written.digest(), wrong);
-    let mismatch = parse_runtime_config(&wrong_pin)
+    let mismatch = parse_runtime_config(&wrong_pin, PRODUCTION_POSTURE)
         .expect("runtime with a well-formed wrong pin parses")
         .verify_package_envelope()
         .expect_err("wrong package pin is refused")
@@ -451,7 +809,8 @@ fn the_active_package_loaders_name_both_digests_of_a_package_pin_mismatch() {
             fixture.package_root.display()
         ),
     );
-    let config = parse_runtime_config(&raw).expect("runtime with a well-formed wrong pin parses");
+    let config = parse_runtime_config(&raw, PRODUCTION_POSTURE)
+        .expect("runtime with a well-formed wrong pin parses");
     let expected = format!(
         "package.expectedDigest is {wrong} but the package at package.root is {}; \
          deploy the pinned package or update package.expectedDigest",
@@ -577,14 +936,14 @@ fn runtime_definition_ids_refuse_separator_collisions_at_both_authored_keys() {
         ),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&source, env_lookup)
+            parse_runtime_config_with_env(&source, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("startup refuses separator-colliding definition ids"),
             expected_error
         );
 
         let path = fixture.path("runtime-collision.yaml");
         fs::write(&path, &source).expect("runtime fixture writes");
-        let check = check_runtime_config(&path, true, None);
+        let check = check_runtime_config(&path, true, None, PRODUCTION_POSTURE);
         let [diagnostic] = check.diagnostics.as_slice() else {
             panic!("one collision is reported: {:?}", check.diagnostics);
         };
@@ -634,7 +993,7 @@ fn runtime_definition_collision_findings_share_the_runtime_file_budget() {
     let path = fixture.path("runtime-collision-overflow.yaml");
     fs::write(&path, source).expect("runtime fixture writes");
 
-    let check = check_runtime_config(&path, true, None);
+    let check = check_runtime_config(&path, true, None, PRODUCTION_POSTURE);
     assert_eq!(check.diagnostics.len(), 101);
     assert_eq!(
         check
@@ -709,18 +1068,11 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
     compile_project(&parsed, &[], CompileProfile::Authoring).expect("hooks compile")
 }
 
-fn event_headers() -> EventDeliveryHeaders<'static> {
-    EventDeliveryHeaders {
-        id: b"event-id",
-        source: b"urn:registrystack:registry:example:instance:primary",
-        event_type: b"case.created",
-        time: b"2026-08-30T00:00:00Z",
-        dataschema: b"urn:registrystack:registry:example:event:case.created:schema:sha256:aaa",
-        generation: b"1",
-        attempt: b"1",
-        delivery_time: b"2026-08-30T00:00:01Z",
-        idempotency_key: b"delivery-key",
-        signature: b"v1=signature",
+fn event_headers() -> SignedEventHeaders<'static> {
+    SignedEventHeaders {
+        id: b"event",
+        timestamp: b"1000",
+        signature: b"v1,caller-owned-signature",
     }
 }
 
@@ -737,7 +1089,8 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
     std::env::remove_var("BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL");
 
-    let config = load_runtime_config(&config_path).expect("runtime config loads");
+    let config =
+        load_runtime_config(&config_path, PRODUCTION_POSTURE).expect("runtime config loads");
 
     assert_eq!(config.listener().bind().to_string(), "127.0.0.1:8080");
     assert_eq!(config.identity().environment(), "production");
@@ -755,13 +1108,11 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     );
     assert_eq!(config.identity().database_id(), "registry-db");
     assert_eq!(
-        config
-            .package_load_context()
-            .database_initialization_environment,
-        "production"
+        config.package_load_context().posture,
+        registry_platform_config::Posture::Production
     );
 
-    let verifier = config.authentication().oidc().token_verifier_config();
+    let verifier = primary(&config).token_verifier_config();
     assert_eq!(verifier.issuer, "https://issuer.example");
     assert_eq!(verifier.audiences, vec!["urn:breg:test"]);
     assert_eq!(
@@ -772,14 +1123,10 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     assert!(verifier.denied_kids.contains("denied-kid"));
     assert!(verifier.assertion_issuers.is_empty());
 
-    let discovery = config.authentication().oidc().discovery_config();
+    let discovery = primary(&config).discovery_config();
     assert!(discovery.jwks_uri_override.is_none());
     assert_eq!(
-        config
-            .authentication()
-            .oidc()
-            .jwks_fetcher_config()
-            .request_timeout,
+        primary(&config).jwks_fetcher_config().request_timeout,
         Duration::from_secs(5)
     );
     let _claims = config.authentication().authority_claim_config();
@@ -818,6 +1165,106 @@ fn runtime_with_database_members(fixture: &RuntimeFixture, members: &str) -> Str
 }
 
 #[test]
+fn production_loopback_database_transport_refuses_non_loopback_endpoints() {
+    let fixture = RuntimeFixture::new();
+    let raw = runtime_with_database_members(&fixture, "  transport: loopback-plaintext\n")
+        .replace(
+            "secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL",
+            "secret:file/runtime-db",
+        )
+        .replace(
+            "secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+            "secret:file/migration-db",
+        );
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).unwrap();
+    for uri in [
+        "postgresql://registry_runtime@127.0.0.1/registry",
+        "host=/run/postgresql user=registry_runtime dbname=registry",
+    ] {
+        fixture.write_secret("runtime-db", uri.as_bytes());
+        assert!(config.runtime_database_connection_config().is_ok());
+    }
+    for uri in [
+        "postgresql://registry_runtime@10.0.0.5/registry",
+        "host=localhost hostaddr=10.0.0.5 user=registry_runtime dbname=registry",
+    ] {
+        fixture.write_secret("runtime-db", uri.as_bytes());
+        let error = config.runtime_database_connection_config().unwrap_err();
+        assert_eq!(code_of(&error), "platform.database.transport-host-mismatch");
+        assert_eq!(path_of(&error), "/database/transport");
+    }
+}
+
+#[cfg(feature = "postgres-test")]
+#[tokio::test]
+async fn production_loopback_database_transport_connects_to_postgres() {
+    let url = std::env::var("BREG_TEST_DATABASE_URL").expect("disposable PostgreSQL URL is set");
+    let postgres: tokio_postgres::Config = url.parse().unwrap();
+    let role = postgres.get_user().unwrap();
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("database", url.as_bytes());
+    let raw = runtime_with_database_members(&fixture, "  transport: loopback-plaintext\n")
+        .replace(
+            "secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL",
+            "secret:file/database",
+        )
+        .replace(
+            "secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
+            "secret:file/database",
+        )
+        .replace(
+            "migration: registry_migration",
+            &format!("migration: {role}"),
+        )
+        .replace("runtime: registry_runtime", &format!("runtime: {role}"));
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).unwrap();
+    config
+        .runtime_database_connection_config()
+        .unwrap()
+        .build_pool()
+        .unwrap()
+        .startup_probe()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn companion_audit_records_the_runtime_posture() {
+    use registry_breg::audit::RegistryAudit;
+    use registry_platform_audit::AuditEntry;
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("audit-key", &[0x51; 32]);
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for posture in [Posture::Production, Posture::Development] {
+        let raw = base.replace("audit.jsonl", &format!("{}.jsonl", posture.as_str()));
+        let config = parse_runtime_config_with_env(
+            &raw,
+            env_lookup,
+            DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            },
+        )
+        .unwrap();
+        let writer = RegistryAudit::open_companion(&config).await.unwrap();
+        let path = writer.writer().path().unwrap().to_path_buf();
+        writer
+            .append(AuditEntry::request(
+                "breg-test/v1",
+                "posture-check",
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let line = fs::read_to_string(path).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(entry["posture"], posture.as_str());
+    }
+}
+
+#[test]
 fn database_trusted_root_applies_to_the_runtime_and_migration_connections() {
     let _guard = environment_lock();
     let fixture = RuntimeFixture::new();
@@ -841,7 +1288,8 @@ fn database_trusted_root_applies_to_the_runtime_and_migration_connections() {
         MIGRATION_DATABASE_URL_CANARY,
     );
 
-    let config = load_runtime_config(&config_path).expect("runtime config loads");
+    let config =
+        load_runtime_config(&config_path, PRODUCTION_POSTURE).expect("runtime config loads");
 
     assert!(config.database().ca_bundle_ref().is_some());
     for connection in [
@@ -870,7 +1318,8 @@ fn database_trusted_root_refuses_a_secret_holding_no_pem_certificate() {
         MIGRATION_DATABASE_URL_CANARY,
     );
 
-    let config = load_runtime_config(&config_path).expect("runtime config loads");
+    let config =
+        load_runtime_config(&config_path, PRODUCTION_POSTURE).expect("runtime config loads");
 
     assert_eq!(
         config.runtime_database_connection_config().err(),
@@ -891,7 +1340,8 @@ fn database_without_a_trusted_root_reads_as_absent() {
     std::env::set_var("BREG_RUNTIME_CONFIG_DATABASE_URL", DATABASE_URL_CANARY);
     std::env::remove_var("BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL");
 
-    let config = load_runtime_config(&config_path).expect("runtime config loads");
+    let config =
+        load_runtime_config(&config_path, PRODUCTION_POSTURE).expect("runtime config loads");
 
     assert!(config.database().ca_bundle_ref().is_none());
 }
@@ -908,19 +1358,26 @@ fn database_test_only_plaintext_is_refused_outside_test_builds_with_its_fix() {
     )
     .expect("runtime config writes");
 
-    let error = load_runtime_config(&config_path).expect_err("plaintext is refused");
+    let error =
+        load_runtime_config(&config_path, PRODUCTION_POSTURE).expect_err("plaintext is refused");
 
-    assert_eq!(error, RuntimeConfigError::PlaintextDatabase);
+    assert_eq!(
+        error,
+        RuntimeConfigError::DatabaseTransport(
+            registry_platform_config::DatabaseTransportError::TestOnlyPlaintext
+        )
+    );
     let [diagnostic] =
         <[_; 1]>::try_from(error.diagnostics(None)).expect("the refusal reports one diagnostic");
-    assert_eq!(diagnostic.code, "breg.runtime.plaintext-database");
+    assert_eq!(diagnostic.code, "platform.database.test-only-plaintext");
     assert_eq!(diagnostic.path, "/database/testOnlyPlaintext");
     assert!(
-        diagnostic.suggested_action.contains("testOnlyPlaintext"),
+        diagnostic.suggested_action.contains("database.transport"),
         "the refusal names the fix"
     );
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_breg"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--runtime-config")
         .arg(&config_path)
         .env_remove("RUST_LOG")
@@ -929,7 +1386,7 @@ fn database_test_only_plaintext_is_refused_outside_test_builds_with_its_fix() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("breg.runtime.plaintext-database"),
+        stderr.contains("platform.database.test-only-plaintext"),
         "{stderr}"
     );
     assert!(stderr.contains("testOnlyPlaintext"), "{stderr}");
@@ -952,7 +1409,8 @@ fn database_test_only_plaintext_connects_without_tls_in_test_builds() {
         MIGRATION_DATABASE_URL_CANARY,
     );
 
-    let config = load_runtime_config(&config_path).expect("runtime config loads");
+    let config =
+        load_runtime_config(&config_path, PRODUCTION_POSTURE).expect("runtime config loads");
 
     for connection in [
         config.runtime_database_connection_config(),
@@ -974,6 +1432,7 @@ fn runtime_document_identity_is_required_and_exact() {
             "id.registrystack.org/formats/breg/runtime/v2",
         ),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect_err("unsupported apiVersion refused");
     assert_eq!(
@@ -990,6 +1449,7 @@ fn runtime_document_identity_is_required_and_exact() {
             "registry.registrystack.org/breg-runtime/v1alpha1",
         ),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect_err("the retired apiVersion is refused");
     assert_eq!(
@@ -1010,6 +1470,7 @@ fn runtime_document_identity_is_required_and_exact() {
     let wrong_kind = parse_runtime_config_with_env(
         &base.replace(RUNTIME_CONFIG_KIND, "RegistryProject"),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect_err("unsupported kind refused");
     assert_eq!(reader_refusal(&wrong_kind), ("config.wrong-kind", "/kind"));
@@ -1020,8 +1481,9 @@ fn runtime_document_identity_is_required_and_exact() {
         ),
         ("kind", format!("kind: {RUNTIME_CONFIG_KIND}\n")),
     ] {
-        let missing = parse_runtime_config_with_env(&base.replace(&line, ""), env_lookup)
-            .expect_err("a missing envelope member is refused");
+        let missing =
+            parse_runtime_config_with_env(&base.replace(&line, ""), env_lookup, PRODUCTION_POSTURE)
+                .expect_err("a missing envelope member is refused");
         assert_eq!(
             reader_refusal(&missing),
             ("config.missing-envelope", ""),
@@ -1046,7 +1508,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
     let path_line = format!("  path: {}\n", audit_path.display());
     assert!(base.contains(&path_line));
 
-    let config = parse_runtime_config_with_env(&base, env_lookup)
+    let config = parse_runtime_config_with_env(&base, env_lookup, PRODUCTION_POSTURE)
         .expect("a file destination with only a path validates");
     let AuditDestination::File(file) = config.audit().destination() else {
         panic!("the audit destination defaults to a file");
@@ -1059,7 +1521,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
         &path_line,
         &format!("{path_line}  rotateBytes: 2097152\n  retentionDays: 7\n"),
     );
-    let config = parse_runtime_config_with_env(&tuned, env_lookup)
+    let config = parse_runtime_config_with_env(&tuned, env_lookup, PRODUCTION_POSTURE)
         .expect("explicit rotation and retention validate");
     let AuditDestination::File(file) = config.audit().destination() else {
         panic!("an explicit file destination stays a file");
@@ -1069,7 +1531,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
 
     let stdout = base.replace(&path_line, "  destination: stdout\n");
     assert_eq!(
-        parse_runtime_config_with_env(&stdout, env_lookup)
+        parse_runtime_config_with_env(&stdout, env_lookup, PRODUCTION_POSTURE)
             .expect("stdout needs no path")
             .audit()
             .destination()
@@ -1096,7 +1558,8 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
         ),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&document, env_lookup).expect_err(reason),
+            parse_runtime_config_with_env(&document, env_lookup, PRODUCTION_POSTURE)
+                .expect_err(reason),
             RuntimeConfigError::InvalidAudit,
             "{reason}"
         );
@@ -1111,7 +1574,7 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
             "/audit/retentionDays",
         ),
     ] {
-        let error = parse_runtime_config_with_env(&document, env_lookup)
+        let error = parse_runtime_config_with_env(&document, env_lookup, PRODUCTION_POSTURE)
             .expect_err("an audit bound is refused at decode");
         assert_eq!(reader_refusal(&error), ("config.out-of-range", pointer));
     }
@@ -1119,7 +1582,8 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
         refusal(
             parse_runtime_config_with_env(
                 &base.replace(&path_line, "  destination: syslog\n"),
-                env_lookup
+                env_lookup,
+                PRODUCTION_POSTURE
             )
             .expect_err("the destination set is closed")
         ),
@@ -1134,7 +1598,8 @@ fn audit_destination_defaults_to_a_rotated_file_and_refuses_incomplete_settings(
             refusal(
                 parse_runtime_config_with_env(
                     &base.replace(&path_line, &format!("{path_line}  {retired}\n")),
-                    env_lookup
+                    env_lookup,
+                    PRODUCTION_POSTURE
                 )
                 .expect_err("the audit block beside the flattened key is closed")
             ),
@@ -1155,7 +1620,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
         "",
     )
     .replace(
-        "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maximumDocumentBytes: 65536\n      attemptTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
+        "        jwksCache:\n          cacheTtlSeconds: 600\n          negativeCacheTtlSeconds: 60\n          refreshCooldownSeconds: 30\n          maximumDocumentBytes: 65536\n          attemptTimeoutMilliseconds: 5000\n          outageToleranceSeconds: 900\n",
         "",
     )
     .replace("  maximumAgeSeconds: 300\n", "")
@@ -1164,7 +1629,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
         "",
     );
 
-    let config = parse_runtime_config_with_env(&raw, env_lookup)
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
         .expect("safe operational defaults materialize");
 
     assert_eq!(config.database().pool_bounds().max_size, 4);
@@ -1180,7 +1645,7 @@ fn operational_defaults_materialize_without_defaulting_authority() {
         config.database().pool_bounds().recycle_timeout,
         Duration::from_secs(2)
     );
-    let jwks = config.authentication().oidc().jwks_fetcher_config();
+    let jwks = primary(&config).jwks_fetcher_config();
     assert_eq!(jwks.cache_ttl, Duration::from_secs(600));
     assert_eq!(jwks.negative_cache_ttl, Duration::from_secs(60));
     assert_eq!(jwks.refresh_cooldown, Duration::from_secs(30));
@@ -1215,16 +1680,16 @@ fn operational_defaults_materialize_without_defaulting_authority() {
 
     let partial_raw = base
         .replace(
-            "    jwksCache:\n      cacheTtlSeconds: 600\n      negativeCacheTtlSeconds: 60\n      refreshCooldownSeconds: 30\n      maximumDocumentBytes: 65536\n      attemptTimeoutMilliseconds: 5000\n      outageToleranceSeconds: 900\n",
-            "    jwksCache:\n      attemptTimeoutMilliseconds: 5000\n",
+            "        jwksCache:\n          cacheTtlSeconds: 600\n          negativeCacheTtlSeconds: 60\n          refreshCooldownSeconds: 30\n          maximumDocumentBytes: 65536\n          attemptTimeoutMilliseconds: 5000\n          outageToleranceSeconds: 900\n",
+            "        jwksCache:\n          attemptTimeoutMilliseconds: 5000\n",
         )
         .replace(
             "operationalTimeouts:\n  httpRequestMilliseconds: 10000\n  shutdownGraceMilliseconds: 30000\n  recordLockMilliseconds: 5000\n  migrationLockMilliseconds: 30000\n  migrationStatementMilliseconds: 60000\n",
             "operationalTimeouts:\n  httpRequestMilliseconds: 10000\n",
         );
-    let partial = parse_runtime_config_with_env(&partial_raw, env_lookup)
+    let partial = parse_runtime_config_with_env(&partial_raw, env_lookup, PRODUCTION_POSTURE)
         .expect("partial operational sections receive safe field defaults");
-    let jwks = partial.authentication().oidc().jwks_fetcher_config();
+    let jwks = primary(&partial).jwks_fetcher_config();
     assert_eq!(jwks.cache_ttl, Duration::from_secs(600));
     assert_eq!(jwks.negative_cache_ttl, Duration::from_secs(60));
     assert_eq!(jwks.refresh_cooldown, Duration::from_secs(30));
@@ -1265,15 +1730,19 @@ fn operational_defaults_materialize_without_defaulting_authority() {
             READER,
         ),
         ("  roles:\n", READER),
-        ("    issuer: https://issuer.example\n", READER),
+        ("        issuer: https://issuer.example\n", READER),
         ("  hashKeyRef: secret:file/audit-key\n", READER),
         ("  secretRef: secret:file/cursor-key\n", READER),
     ] {
         let (line, expected) = required_authority;
         assert_eq!(
             refusal(
-                parse_runtime_config_with_env(&raw.replace(line, ""), env_lookup)
-                    .expect_err("authority-bearing runtime member is never defaulted")
+                parse_runtime_config_with_env(
+                    &raw.replace(line, ""),
+                    env_lookup,
+                    PRODUCTION_POSTURE
+                )
+                .expect_err("authority-bearing runtime member is never defaulted")
             ),
             expected,
             "removing {line:?}"
@@ -1301,14 +1770,18 @@ fn pool_acquisition_budget_must_finish_before_the_http_deadline() {
             )
         };
 
-    parse_runtime_config_with_env(&with_pool_budget(2000, 1500, 3001), env_lookup)
-        .expect("pool wait plus connection work finishes strictly before HTTP timeout");
+    parse_runtime_config_with_env(
+        &with_pool_budget(2000, 1500, 3001),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect("pool wait plus connection work finishes strictly before HTTP timeout");
 
     for (raw, milliseconds, relation) in [
         (with_pool_budget(2000, 1500, 3000), 3000, "equal to"),
         (with_pool_budget(1500, 2000, 2999), 2999, "longer than"),
     ] {
-        let error = parse_runtime_config_with_env(&raw, env_lookup)
+        let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
             .expect_err("an HTTP deadline that cannot contain pool acquisition is refused");
         assert_eq!(code_of(&error), "breg.runtime.pool-budget-exceeded");
         assert_eq!(path_of(&error), "/database/pool");
@@ -1338,7 +1811,7 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
         (
             RuntimeConfigError::InvalidOidc,
             "breg.runtime.invalid-oidc",
-            "/authentication/oidc",
+            "/authentication/oidc/issuers",
         ),
         (
             RuntimeConfigError::InvalidEventDestination,
@@ -1346,8 +1819,10 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
             "/destinations/hooks",
         ),
         (
-            RuntimeConfigError::PlaintextDatabase,
-            "breg.runtime.plaintext-database",
+            RuntimeConfigError::DatabaseTransport(
+                registry_platform_config::DatabaseTransportError::TestOnlyPlaintext,
+            ),
+            "platform.database.test-only-plaintext",
             "/database/testOnlyPlaintext",
         ),
         (RuntimeConfigError::Secret, "breg.runtime.secret", ""),
@@ -1372,9 +1847,11 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
             "/secretProviders/file/root",
         ),
         (
-            RuntimeConfigError::InvalidOidcLeeway,
+            RuntimeConfigError::InvalidOidcLeeway {
+                pointer: "/authentication/oidc/issuers/primary/leewayMilliseconds".to_owned(),
+            },
             "breg.runtime.invalid-oidc-leeway",
-            "/authentication/oidc/leewayMilliseconds",
+            "/authentication/oidc/issuers/primary/leewayMilliseconds",
         ),
     ];
 
@@ -1409,9 +1886,10 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for days in [1_u8, 30_u8] {
-        let config = parse_runtime_config(&format!(
-            "{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"
-        ))
+        let config = parse_runtime_config(
+            &format!("{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"),
+            PRODUCTION_POSTURE,
+        )
         .expect("bounded deployment retention parses");
         assert_eq!(
             config.retention().payload_retention(),
@@ -1419,17 +1897,21 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
         );
     }
     for days in [0_u8, 31_u8] {
-        let error = parse_runtime_config(&format!(
-            "{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"
-        ))
+        let error = parse_runtime_config(
+            &format!("{base}\nretention:\n  hookPayloadRetentionDays: {days}\n"),
+            PRODUCTION_POSTURE,
+        )
         .expect_err("the horizon is bounded at decode");
         assert_eq!(
             reader_refusal(&error),
             ("config.out-of-range", "/retention/hookPayloadRetentionDays")
         );
     }
-    let error = parse_runtime_config(&format!("{base}\nretention:\n  payloadRetentionDays: 7\n"))
-        .expect_err("the hook payload window has one name");
+    let error = parse_runtime_config(
+        &format!("{base}\nretention:\n  payloadRetentionDays: 7\n"),
+        PRODUCTION_POSTURE,
+    )
+    .expect_err("the hook payload window has one name");
     assert_eq!(
         reader_refusal(&error),
         ("config.unknown-key", "/retention/payloadRetentionDays")
@@ -1440,27 +1922,27 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
 fn idempotency_receipt_horizon_defaults_to_seven_days_and_is_capped_at_a_year() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let config = parse_runtime_config(&base).expect("the retention section is optional");
+    let config =
+        parse_runtime_config(&base, PRODUCTION_POSTURE).expect("the retention section is optional");
     assert_eq!(config.retention().receipt_retention_days(), 7);
     let policy = config
         .idempotency_policy()
         .expect("the configured issuer scopes caller keys");
-    assert_eq!(
-        policy.caller_issuer(),
-        config.authentication().oidc().issuer()
-    );
+    assert_eq!(policy.caller_issuer(), primary(&config).issuer());
     assert_eq!(policy.receipt_retention_days(), 7);
     for days in [1_u16, 365_u16] {
-        let config = parse_runtime_config(&format!(
-            "{base}\nretention:\n  receiptRetentionDays: {days}\n"
-        ))
+        let config = parse_runtime_config(
+            &format!("{base}\nretention:\n  receiptRetentionDays: {days}\n"),
+            PRODUCTION_POSTURE,
+        )
         .expect("a bounded receipt horizon parses");
         assert_eq!(config.retention().receipt_retention_days(), days);
     }
     for days in [0_u16, 366_u16] {
-        let error = parse_runtime_config(&format!(
-            "{base}\nretention:\n  receiptRetentionDays: {days}\n"
-        ))
+        let error = parse_runtime_config(
+            &format!("{base}\nretention:\n  receiptRetentionDays: {days}\n"),
+            PRODUCTION_POSTURE,
+        )
         .expect_err("the horizon is bounded at decode");
         assert_eq!(
             reader_refusal(&error),
@@ -1495,7 +1977,7 @@ fn retention_windows_outside_the_retention_block_are_refused_naming_the_new_path
             "retention.receiptRetentionDays",
         ),
     ] {
-        let error = parse_runtime_config(&format!("{base}\n{document}"))
+        let error = parse_runtime_config(&format!("{base}\n{document}"), PRODUCTION_POSTURE)
             .expect_err("the old retention location is refused");
         let (code, path) = reader_refusal(&error);
         assert_eq!(code, "config.removed-key", "{document}");
@@ -1513,7 +1995,7 @@ fn hook_destinations_outside_the_destinations_block_are_refused_naming_the_new_p
         "eventDestinations: {}\n",
         "eventDestinations:\n  notify-main:\n    origin: https://events.example/\n",
     ] {
-        let error = parse_runtime_config(&format!("{base}\n{document}"))
+        let error = parse_runtime_config(&format!("{base}\n{document}"), PRODUCTION_POSTURE)
             .expect_err("the old hook destination location is refused");
         let (code, path) = reader_refusal(&error);
         assert_eq!(code, "config.removed-key", "{document}");
@@ -1527,8 +2009,8 @@ fn hook_destinations_outside_the_destinations_block_are_refused_naming_the_new_p
 fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let config =
-        parse_runtime_config(&base).expect("the WASM execution section is optional in every build");
+    let config = parse_runtime_config(&base, PRODUCTION_POSTURE)
+        .expect("the WASM execution section is optional in every build");
     // The default module ceiling is the authored admission default, so a
     // module an ordinary build admitted always fits execution defaults; the
     // structural ceiling stays strictly above it and is operator-reachable,
@@ -1547,8 +2029,8 @@ fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
         "{base}wasmExecution:\n  maximumModuleBytes: {}\n  maximumGuestMemoryBytes: 536870912\n",
         registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES
     );
-    let config =
-        parse_runtime_config(&configured).expect("the structural ceiling itself configures");
+    let config = parse_runtime_config(&configured, PRODUCTION_POSTURE)
+        .expect("the structural ceiling itself configures");
     assert_eq!(
         config.wasm_execution().max_module_bytes(),
         registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64
@@ -1576,7 +2058,7 @@ fn wasm_execution_budgets_refuse_out_of_range_values() {
         let configured = format!(
             "{base}wasmExecution:\n  maximumModuleBytes: {module_bytes}\n  maximumGuestMemoryBytes: {memory_bytes}\n"
         );
-        let error = parse_runtime_config(&configured)
+        let error = parse_runtime_config(&configured, PRODUCTION_POSTURE)
             .expect_err("out-of-range WASM execution budget is refused");
         assert_eq!(reader_refusal(&error), ("config.out-of-range", pointer));
     }
@@ -1587,14 +2069,15 @@ fn wasm_execution_backend_defaults_to_pulley_and_accepts_native() {
     use registry_breg::wasm_handler::WasmExecutionBackend;
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let config =
-        parse_runtime_config(&base).expect("the WASM execution section is optional in every build");
+    let config = parse_runtime_config(&base, PRODUCTION_POSTURE)
+        .expect("the WASM execution section is optional in every build");
     assert_eq!(
         config.wasm_execution().backend(),
         WasmExecutionBackend::Pulley
     );
     let configured = format!("{base}wasmExecution:\n  backend: native\n");
-    let config = parse_runtime_config(&configured).expect("native is an operator choice");
+    let config = parse_runtime_config(&configured, PRODUCTION_POSTURE)
+        .expect("native is an operator choice");
     assert_eq!(
         config.wasm_execution().backend(),
         WasmExecutionBackend::Native
@@ -1607,7 +2090,7 @@ fn wasm_execution_backend_refuses_unknown_values() {
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for backend in ["warp", "Pulley", "\"\""] {
         let configured = format!("{base}wasmExecution:\n  backend: {backend}\n");
-        let error = parse_runtime_config(&configured)
+        let error = parse_runtime_config(&configured, PRODUCTION_POSTURE)
             .expect_err("an unknown WASM execution backend is refused");
         let diagnostics = error.diagnostics(None);
         assert_eq!(diagnostics.len(), 1);
@@ -1624,7 +2107,7 @@ fn wasm_execution_section_refuses_unknown_members() {
         format!("{base}wasmExecution:\n  maximumModuleBytes: 2097152\n  engine: native\n");
     assert_eq!(
         refusal(
-            parse_runtime_config(&configured)
+            parse_runtime_config(&configured, PRODUCTION_POSTURE)
                 .expect_err("unknown WASM execution member is refused")
         ),
         READER
@@ -1645,7 +2128,7 @@ fn unknown_package_keys_are_refused_as_document_errors_without_their_value() {
             &format!("  root: {}\n", fixture.package_root.display()),
             &format!("  root: {}\n{line}", fixture.package_root.display()),
         );
-        let error = parse_runtime_config_with_env(&raw, env_lookup)
+        let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
             .expect_err("an unknown package key is refused");
         let key = line.trim().split(':').next().expect("line names a key");
         assert_eq!(
@@ -1674,14 +2157,14 @@ fn two_unknown_keys_inside_each_shared_block_are_all_reported_with_positions() {
             ),
         )
         .replace(
-            "    issuer: https://issuer.example\n",
-            "    issuer: https://issuer.example\n    issuers: canary-c\n    audiences: canary-d\n",
+            "        issuer: https://issuer.example\n",
+            "        issuer: https://issuer.example\n        issuers: canary-c\n        audiences: canary-d\n",
         )
         .replace(
             "  hashKeyRef: secret:file/audit-key\n",
             "  hashKeyRef: secret:file/audit-key\n  hashKey: canary-e\n  paths: canary-f\n",
         );
-    let error = parse_runtime_config_with_env(&raw, env_lookup)
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
         .expect_err("unknown keys inside the shared blocks are refused");
     reader_refusal(&error);
     let line_of = |key: &str| {
@@ -1701,8 +2184,12 @@ fn two_unknown_keys_inside_each_shared_block_are_all_reported_with_positions() {
     for (path, key, column) in [
         ("/package/rots", "rots", 3),
         ("/package/expectedDigst", "expectedDigst", 3),
-        ("/authentication/oidc/issuers", "issuers", 5),
-        ("/authentication/oidc/audiences", "audiences", 5),
+        ("/authentication/oidc/issuers/primary/issuers", "issuers", 9),
+        (
+            "/authentication/oidc/issuers/primary/audiences",
+            "audiences",
+            9,
+        ),
         ("/audit/hashKey", "hashKey", 3),
         ("/audit/paths", "paths", 3),
     ] {
@@ -1736,7 +2223,7 @@ fn unknown_keys_inside_a_task_grant_status_entry_are_reported_with_positions() {
          scopes: canary-b\n",
         valid_runtime(&fixture.secret_root, &fixture.package_root)
     );
-    let error = parse_runtime_config_with_env(&raw, env_lookup)
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
         .expect_err("unknown keys inside a status entry are refused");
     reader_refusal(&error);
     let line_of = |key: &str| {
@@ -1786,7 +2273,7 @@ fn an_unknown_package_key_holding_a_set_variable_is_refused_without_the_substitu
             fixture.package_root.display()
         ),
     );
-    let error = parse_runtime_config_with_env(&raw, lookup)
+    let error = parse_runtime_config_with_env(&raw, lookup, PRODUCTION_POSTURE)
         .expect_err("an unknown package key is refused after substitution");
     assert_eq!(
         reader_refusal(&error),
@@ -1809,7 +2296,7 @@ fn an_unknown_package_key_holding_an_unset_variable_is_refused_as_an_expansion_e
             fixture.package_root.display()
         ),
     );
-    let error = parse_runtime_config_with_env(&raw, env_lookup)
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
         .expect_err("an unset variable in an unknown package key is refused");
     assert_eq!(
         reader_refusal(&error),
@@ -1871,7 +2358,7 @@ fn a_document_refusal_names_its_field_and_never_echoes_the_refused_value() {
     ] {
         assert!(base.contains(&from), "fixture holds {from}");
         let raw = base.replace(&from, &to);
-        let error = parse_runtime_config_with_env(&raw, lookup)
+        let error = parse_runtime_config_with_env(&raw, lookup, PRODUCTION_POSTURE)
             .expect_err("a document the runtime cannot read is refused");
         assert_eq!(reader_refusal(&error), (code, path), "{error:?}");
         let rendered = format!("{error:?} {error} {}", error.render_human(None));
@@ -1886,7 +2373,7 @@ fn a_runtime_file_that_is_not_utf8_is_refused_naming_the_encoding() {
     let mut bytes = valid_runtime(&fixture.secret_root, &fixture.package_root).into_bytes();
     bytes.extend_from_slice(b"# \xff\xfe\n");
     fs::write(&config_path, bytes).expect("runtime config writes");
-    let error = load_runtime_config_with_env(&config_path, env_lookup)
+    let error = load_runtime_config_with_env(&config_path, env_lookup, PRODUCTION_POSTURE)
         .expect_err("a runtime file that is not UTF-8 is refused");
     assert_eq!(reader_refusal(&error), ("yaml.not-utf8", ""));
     assert!(error.to_string().contains("UTF-8"), "{error}");
@@ -1906,7 +2393,7 @@ fn an_instance_id_outside_the_event_source_grammar_is_refused_naming_the_key() {
             "instanceId: registry-primary",
             &format!("instanceId: \"{instance_id}\""),
         );
-        let error = parse_runtime_config_with_env(&raw, env_lookup)
+        let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
             .expect_err("an instance id outside the grammar is refused");
         assert_eq!(
             error,
@@ -1925,36 +2412,37 @@ fn an_instance_id_outside_the_event_source_grammar_is_refused_naming_the_key() {
             &format!("instanceId: {longest}"),
         ),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("an instance id at the grammar bound is accepted");
     assert_eq!(config.identity().instance_id(), longest);
 }
 
 #[test]
-fn disagreeing_environment_identity_keys_are_refused_naming_both_keys() {
+fn retired_database_initialization_environment_names_the_replacement() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let raw = base.replace(
-        "databaseInitializationEnvironment: production",
-        "databaseInitializationEnvironment: local",
+    let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
+        .replace("  environment: production\n", "  environment: local\n");
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect("an environment label does not declare posture");
+    assert_eq!(config.identity().environment(), "local");
+
+    let old = raw.replace(
+        "  environment: local\n",
+        concat!(
+            "  environment: local\n",
+            "  databaseInitializationEnvironment: local\n"
+        ),
     );
-    let error = parse_runtime_config_with_env(&raw, env_lookup)
-        .expect_err("disagreeing environment keys are refused");
-    assert_eq!(error, RuntimeConfigError::EnvironmentIdentityConflict);
-    assert_eq!(
-        code_of(&error),
-        "breg.runtime.environment-identity-conflict"
-    );
-    assert_eq!(
-        path_of(&error),
-        "/identity/databaseInitializationEnvironment"
-    );
-    let message = error.to_string();
-    assert!(message.contains("identity.environment"), "{message}");
-    assert!(
-        message.contains("identity.databaseInitializationEnvironment"),
-        "{message}"
-    );
+    let error = parse_runtime_config_with_env(&old, env_lookup, PRODUCTION_POSTURE)
+        .expect_err("the retired key is refused");
+    let diagnostics = error.diagnostics(None);
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "/identity/databaseInitializationEnvironment"
+            && diagnostic.suggested_action.contains(
+                "Delete identity.databaseInitializationEnvironment. If it said local, recreate the development database and apply the package with development declared.",
+            )
+    }), "{diagnostics:?}");
 }
 
 #[test]
@@ -1962,7 +2450,8 @@ fn governed_unknown_keys_are_refused_before_they_become_runtime() {
     let fixture = RuntimeFixture::new();
     let mut raw = valid_runtime(&fixture.secret_root, &fixture.package_root);
     raw.push_str("entities: []\n");
-    let error = parse_runtime_config_with_env(&raw, env_lookup).expect_err("governed key refused");
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect_err("governed key refused");
     assert_eq!(reader_refusal(&error), ("config.unknown-key", "/entities"));
 }
 
@@ -1973,13 +2462,13 @@ fn review_authorities_accept_one_refreshing_or_static_credential() {
     let refreshing = format!(
         "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: 7\n    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientIdRef: secret:file/review-producer-client-id\n      clientAssertionKeyRef: secret:file/review-producer-private-jwk\n      assertionAudience: https://issuer.example\n      resource: urn:casework:primary\n      scopes: [casework:reviews:request]\n"
     );
-    parse_runtime_config_with_env(&refreshing, env_lookup)
+    parse_runtime_config_with_env(&refreshing, env_lookup, PRODUCTION_POSTURE)
         .expect("a refreshing review producer credential is accepted");
     let opaque = refreshing.replace(
         "    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientIdRef: secret:file/review-producer-client-id\n      clientAssertionKeyRef: secret:file/review-producer-private-jwk\n      assertionAudience: https://issuer.example\n      resource: urn:casework:primary\n      scopes: [casework:reviews:request]\n",
         "    tokenRef: secret:file/opaque-review-token\n",
     );
-    parse_runtime_config_with_env(&opaque, env_lookup)
+    parse_runtime_config_with_env(&opaque, env_lookup, PRODUCTION_POSTURE)
         .expect("an explicitly supplied opaque token remains supported");
 
     assert_eq!(
@@ -1987,6 +2476,7 @@ fn review_authorities_accept_one_refreshing_or_static_credential() {
             parse_runtime_config_with_env(
                 &refreshing.replace("    profile: producer\n", ""),
                 env_lookup,
+                PRODUCTION_POSTURE
             )
             .expect_err("a missing Casework profile is refused")
         ),
@@ -2000,7 +2490,7 @@ fn review_authorities_accept_one_refreshing_or_static_credential() {
         ),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&invalid, env_lookup)
+            parse_runtime_config_with_env(&invalid, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("a missing or invalid Casework profile is refused"),
             RuntimeConfigError::InvalidBinding
         );
@@ -2025,7 +2515,7 @@ fn review_authorities_accept_one_refreshing_or_static_credential() {
         ),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&invalid, env_lookup)
+            parse_runtime_config_with_env(&invalid, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("ambiguous or incomplete authority credentials are refused"),
             RuntimeConfigError::InvalidBinding
         );
@@ -2042,13 +2532,17 @@ fn review_authority_recovery_days_match_the_casework_bound() {
         )
     };
 
-    parse_runtime_config_with_env(&authority(91), env_lookup)
+    parse_runtime_config_with_env(&authority(91), env_lookup, PRODUCTION_POSTURE)
         .expect("a recovery window above the former local ceiling is accepted");
-    parse_runtime_config_with_env(&authority(3_650), env_lookup)
+    parse_runtime_config_with_env(&authority(3_650), env_lookup, PRODUCTION_POSTURE)
         .expect("the Casework recovery ceiling is accepted");
     for recovery_days in [0, 3_651] {
-        let error = parse_runtime_config_with_env(&authority(recovery_days), env_lookup)
-            .expect_err("a recovery window outside the Casework bound is refused");
+        let error = parse_runtime_config_with_env(
+            &authority(recovery_days),
+            env_lookup,
+            PRODUCTION_POSTURE,
+        )
+        .expect_err("a recovery window outside the Casework bound is refused");
         assert_eq!(
             reader_refusal(&error),
             (
@@ -2065,21 +2559,21 @@ fn review_authority_completion_recipient_accepts_the_shared_byte_bound() {
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let recipient = "x".repeat(256);
     let valid = format!(
-        "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: 7\n    tokenRef: secret:file/opaque-review-token\n    completionTokenRef: secret:file/review-completion-token\n    completionRecipient: {recipient}\n"
+        "{base}reviewAuthorities:\n  casework-a:\n    endpoint: https://casework.example/reviews/\n    profile: producer\n    producerId: registry-producer\n    recoveryDays: 7\n    tokenRef: secret:file/opaque-review-token\n    completion:\n      hmacSha256KeyRef: secret:file/review-completion-key\n      recipientBinding: {recipient}\n"
     );
-    parse_runtime_config_with_env(&valid, env_lookup)
+    parse_runtime_config_with_env(&valid, env_lookup, PRODUCTION_POSTURE)
         .expect("a completion recipient at the shared byte bound is accepted");
 
     let over_bound = valid.replace(&recipient, &"x".repeat(257));
     assert_eq!(
-        parse_runtime_config_with_env(&over_bound, env_lookup)
+        parse_runtime_config_with_env(&over_bound, env_lookup, PRODUCTION_POSTURE)
             .expect_err("a completion recipient over the shared byte bound is refused"),
         RuntimeConfigError::InvalidBinding
     );
 
     let non_ascii = valid.replace(&recipient, "récepteur");
     assert_eq!(
-        parse_runtime_config_with_env(&non_ascii, env_lookup)
+        parse_runtime_config_with_env(&non_ascii, env_lookup, PRODUCTION_POSTURE)
             .expect_err("a completion recipient outside visible ASCII is refused"),
         RuntimeConfigError::InvalidBinding
     );
@@ -2089,15 +2583,16 @@ fn review_authority_completion_recipient_accepts_the_shared_byte_bound() {
 fn metrics_listener_is_absent_by_default_and_optional() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let config = parse_runtime_config_with_env(&base, env_lookup).expect("baseline runtime parses");
+    let config = parse_runtime_config_with_env(&base, env_lookup, PRODUCTION_POSTURE)
+        .expect("baseline runtime parses");
     assert!(
         config.metrics_listener().is_none(),
         "no metrics surface exists unless the operator names one"
     );
 
     let configured = format!("{base}metricsListener:\n  bind: 127.0.0.1:9100\n");
-    let config =
-        parse_runtime_config_with_env(&configured, env_lookup).expect("private metrics listener");
+    let config = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
+        .expect("private metrics listener");
     let listener = config.metrics_listener().expect("listener is configured");
     assert_eq!(listener.bind(), "127.0.0.1:9100".parse().unwrap());
     assert!(
@@ -2112,7 +2607,7 @@ fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     for bind in ["localhost:9100", "127.0.0.1"] {
         let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
-        let error = parse_runtime_config_with_env(&configured, env_lookup)
+        let error = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
             .expect_err("a metrics binding that is not a numeric socket address is refused");
         assert_eq!(
             reader_refusal(&error),
@@ -2127,7 +2622,7 @@ fn metrics_listener_refuses_public_unspecified_and_ephemeral_bindings() {
         ("127.0.0.1:0", MetricsBindError::PortZero),
     ] {
         let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
-        let error = parse_runtime_config_with_env(&configured, env_lookup)
+        let error = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
             .expect_err("non-private metrics binding is refused");
         assert_eq!(
             error,
@@ -2146,7 +2641,7 @@ fn metrics_listener_container_private_permits_the_wildcard_only_when_declared() 
     let configured = format!(
         "{base}metricsListener:\n  bind: 0.0.0.0:9100\n  networkExposure: container-private\n"
     );
-    let config = parse_runtime_config_with_env(&configured, env_lookup)
+    let config = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
         .expect("container-private permits the wildcard");
     assert_eq!(
         config.metrics_listener().expect("configured").bind(),
@@ -2155,7 +2650,7 @@ fn metrics_listener_container_private_permits_the_wildcard_only_when_declared() 
     for exposure in ["", "  networkExposure: private-address\n"] {
         let configured = format!("{base}metricsListener:\n  bind: 0.0.0.0:9100\n{exposure}");
         assert_eq!(
-            parse_runtime_config_with_env(&configured, env_lookup)
+            parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("the wildcard needs the declaration"),
             RuntimeConfigError::InvalidMetricsListener(MetricsBindError::Unspecified)
         );
@@ -2174,7 +2669,7 @@ fn metrics_listener_container_private_permits_the_wildcard_only_when_declared() 
             "{base}metricsListener:\n  bind: {bind}\n  networkExposure: container-private\n"
         );
         assert_eq!(
-            parse_runtime_config_with_env(&configured, env_lookup)
+            parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("still refused under container-private"),
             RuntimeConfigError::InvalidMetricsListener(cause),
             "{bind}"
@@ -2198,7 +2693,7 @@ fn metrics_listener_refuses_shared_registry_binding() {
     ] {
         let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
         assert_eq!(
-            parse_runtime_config_with_env(&configured, env_lookup)
+            parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("shared binding is refused"),
             RuntimeConfigError::InvalidMetricsListener(cause)
         );
@@ -2208,7 +2703,7 @@ fn metrics_listener_refuses_shared_registry_binding() {
     let wildcard = base.replace("bind: 127.0.0.1:8080", "bind: \"[::]:8080\"");
     let configured = format!("{wildcard}metricsListener:\n  bind: 127.0.0.1:8080\n");
     assert_eq!(
-        parse_runtime_config_with_env(&configured, env_lookup)
+        parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
             .expect_err("dual-stack overlap is refused"),
         RuntimeConfigError::InvalidMetricsListener(MetricsBindError::OverlapsServedSocket(
             "listener"
@@ -2222,7 +2717,7 @@ fn metrics_listener_refusal_names_its_cause_and_remedy() {
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let refusal = |bind: &str| {
         let configured = format!("{base}metricsListener:\n  bind: {bind}\n");
-        let error = parse_runtime_config_with_env(&configured, env_lookup)
+        let error = parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
             .expect_err("the metrics binding is refused");
         error.diagnostics(None).remove(0)
     };
@@ -2268,7 +2763,7 @@ fn metrics_listener_refuses_unknown_members() {
     let configured = format!("{base}metricsListener:\n  bind: 127.0.0.1:9100\n  labels: none\n");
     assert_eq!(
         refusal(
-            parse_runtime_config_with_env(&configured, env_lookup)
+            parse_runtime_config_with_env(&configured, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("unknown metrics member is refused")
         ),
         READER
@@ -2286,7 +2781,7 @@ fn check_metrics_listener_file(
         .replace("bind: 127.0.0.1:8080", &format!("bind: {listener_bind}"));
     let path = fixture.path("runtime-metrics.yaml");
     fs::write(&path, format!("{base}metricsListener:\n{metrics}")).expect("runtime fixture writes");
-    check_runtime_config(&path, false, None).diagnostics
+    check_runtime_config(&path, false, None, PRODUCTION_POSTURE).diagnostics
 }
 
 #[test]
@@ -2356,7 +2851,8 @@ fn bounds_timeouts_and_retention_are_read_under_the_shared_spellings() {
          attachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 5003\n\
          attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: 5004\n"
     );
-    parse_runtime_config_with_env(&current, env_lookup).expect("the shared spellings are read");
+    parse_runtime_config_with_env(&current, env_lookup, PRODUCTION_POSTURE)
+        .expect("the shared spellings are read");
 
     for (current_line, retired_line, pointer, replacement) in [
         (
@@ -2368,20 +2864,20 @@ fn bounds_timeouts_and_retention_are_read_under_the_shared_spellings() {
         (
             "maximumTokenLifetimeSeconds: 300",
             "maxTokenLifetimeSeconds: 300",
-            "/authentication/oidc/maxTokenLifetimeSeconds",
-            "authentication.oidc.maximumTokenLifetimeSeconds",
+            "/authentication/oidc/issuers/primary/maxTokenLifetimeSeconds",
+            "authentication.oidc.issuers.ISSUER_ID.maximumTokenLifetimeSeconds",
         ),
         (
             "maximumDocumentBytes: 65536",
             "maxDocumentBytes: 65536",
-            "/authentication/oidc/jwksCache/maxDocumentBytes",
-            "authentication.oidc.jwksCache.maximumDocumentBytes",
+            "/authentication/oidc/issuers/primary/jwksCache/maxDocumentBytes",
+            "authentication.oidc.issuers.ISSUER_ID.jwksCache.maximumDocumentBytes",
         ),
         (
             "attemptTimeoutMilliseconds: 5001",
             "requestTimeoutMilliseconds: 5001",
-            "/authentication/oidc/jwksCache/requestTimeoutMilliseconds",
-            "authentication.oidc.jwksCache.attemptTimeoutMilliseconds",
+            "/authentication/oidc/issuers/primary/jwksCache/requestTimeoutMilliseconds",
+            "authentication.oidc.issuers.ISSUER_ID.jwksCache.attemptTimeoutMilliseconds",
         ),
         (
             "retentionDays: 7",
@@ -2428,7 +2924,7 @@ fn bounds_timeouts_and_retention_are_read_under_the_shared_spellings() {
     ] {
         assert_eq!(current.matches(current_line).count(), 1, "{current_line}");
         let retired = current.replace(current_line, retired_line);
-        let error = parse_runtime_config_with_env(&retired, env_lookup)
+        let error = parse_runtime_config_with_env(&retired, env_lookup, PRODUCTION_POSTURE)
             .expect_err("the replaced spelling is refused");
         assert_eq!(
             reader_refusal(&error),
@@ -2458,7 +2954,7 @@ fn a_map_key_is_read_as_the_identifier_its_member_names() {
         base.replace(
             "revokedKeyIds: [denied-kid]",
             &format!(
-                "revokedKeyIds: [denied-kid]\n    assertionIssuers:\n      {key}:\n        - https://issuer-a.example"
+                "revokedKeyIds: [denied-kid]\n        assertionIssuers:\n          {key}:\n            - https://issuer-a.example"
             ),
         )
     };
@@ -2484,13 +2980,14 @@ fn a_map_key_is_read_as_the_identifier_its_member_names() {
         with_issuers(urn),
         with_destination("case_operations-2"),
     ] {
-        parse_runtime_config_with_env(&raw, env_lookup).expect("the keys read");
+        parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).expect("the keys read");
     }
 
     // An event destination is named by a local identifier this file defines.
     for key in ["Case-operations", "2nd", "case.operations", &"c".repeat(65)] {
-        let error = parse_runtime_config_with_env(&with_destination(key), env_lookup)
-            .expect_err("a destination key that is not a local identifier is refused");
+        let error =
+            parse_runtime_config_with_env(&with_destination(key), env_lookup, PRODUCTION_POSTURE)
+                .expect_err("a destination key that is not a local identifier is refused");
         let (code, pointer) = reader_refusal(&error);
         assert_eq!(code, "config.invalid-value", "{key}");
         assert!(pointer.starts_with("/destinations/hooks"), "{pointer}");
@@ -2509,9 +3006,12 @@ fn a_map_key_is_read_as_the_identifier_its_member_names() {
                 with_actors(key),
                 "/authentication/authorityClaims/trustedActors",
             ),
-            (with_issuers(key), "/authentication/oidc/assertionIssuers"),
+            (
+                with_issuers(key),
+                "/authentication/oidc/issuers/primary/assertionIssuers",
+            ),
         ] {
-            let error = parse_runtime_config_with_env(&raw, env_lookup)
+            let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("a client key that is not an external identifier is refused");
             let (code, pointer) = reader_refusal(&error);
             assert_eq!(code, refusal, "{member}");
@@ -2524,19 +3024,23 @@ fn a_map_key_is_read_as_the_identifier_its_member_names() {
 fn the_issuer_key_source_names_its_variant_in_a_type_member() {
     let fixture = RuntimeFixture::new();
     let current = runtime_with_discovery_source(&fixture);
-    parse_runtime_config_with_env(&current, env_lookup).expect("the type member is read");
+    parse_runtime_config_with_env(&current, env_lookup, PRODUCTION_POSTURE)
+        .expect("the type member is read");
 
     let retired = current.replace("      type: discovery\n", "      kind: discovery\n");
     assert_ne!(retired, current);
-    let error = parse_runtime_config_with_env(&retired, env_lookup)
+    let error = parse_runtime_config_with_env(&retired, env_lookup, PRODUCTION_POSTURE)
         .expect_err("the kind member is refused");
     assert_eq!(
         reader_refusal(&error),
-        ("config.removed-key", "/authentication/oidc/jwksSource/kind")
+        (
+            "config.removed-key",
+            "/authentication/oidc/issuers/primary/jwksSource/kind"
+        )
     );
     let rendered = format!("{error} {}", error.render_human(None));
     assert!(
-        rendered.contains("authentication.oidc.jwksSource.type"),
+        rendered.contains("authentication.oidc.issuers.ISSUER_ID.jwksSource.type"),
         "{rendered}"
     );
 }
@@ -2549,7 +3053,8 @@ fn attachment_destinations_are_named_url_and_the_endpoint_key_is_refused() {
         "{base}\nattachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n\
          attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
     );
-    parse_runtime_config_with_env(&current, env_lookup).expect("the url member is read");
+    parse_runtime_config_with_env(&current, env_lookup, PRODUCTION_POSTURE)
+        .expect("the url member is read");
 
     for (current_line, retired_line, pointer, replacement) in [
         (
@@ -2567,7 +3072,7 @@ fn attachment_destinations_are_named_url_and_the_endpoint_key_is_refused() {
     ] {
         assert_eq!(current.matches(current_line).count(), 1, "{current_line}");
         let retired = current.replace(current_line, retired_line);
-        let error = parse_runtime_config_with_env(&retired, env_lookup)
+        let error = parse_runtime_config_with_env(&retired, env_lookup, PRODUCTION_POSTURE)
             .expect_err("the endpoint member is refused");
         assert_eq!(
             reader_refusal(&error),
@@ -2593,7 +3098,7 @@ fn the_endpoint_key_is_an_ordinary_unknown_key_under_variants_without_a_url() {
             "/attachmentVerification/endpoint",
         ),
     ] {
-        let error = parse_runtime_config_with_env(&format!("{base}\n{block}"), env_lookup)
+        let error = parse_runtime_config_with_env(&format!("{base}\n{block}"), env_lookup, PRODUCTION_POSTURE)
             .expect_err("the endpoint member is refused");
         assert_eq!(
             reader_refusal(&error),
@@ -2614,7 +3119,8 @@ fn a_runtime_union_names_its_variant_in_a_type_member() {
          attachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n\
          attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
     );
-    parse_runtime_config_with_env(&current, env_lookup).expect("the type member is read");
+    parse_runtime_config_with_env(&current, env_lookup, PRODUCTION_POSTURE)
+        .expect("the type member is read");
 
     for (current_line, retired_line, pointer, replacement) in [
         (
@@ -2638,7 +3144,7 @@ fn a_runtime_union_names_its_variant_in_a_type_member() {
     ] {
         assert_eq!(current.matches(current_line).count(), 1, "{current_line}");
         let retired = current.replace(current_line, retired_line);
-        let error = parse_runtime_config_with_env(&retired, env_lookup)
+        let error = parse_runtime_config_with_env(&retired, env_lookup, PRODUCTION_POSTURE)
             .expect_err("the kind member is refused");
         assert_eq!(
             reader_refusal(&error),
@@ -2649,13 +3155,15 @@ fn a_runtime_union_names_its_variant_in_a_type_member() {
         assert!(rendered.contains(replacement), "{rendered}");
     }
 
-    // The variants with no members read the same way.
-    for block in [
-        "attachmentStorage: {type: database}\n",
-        "attachmentVerification: {type: disabled}\n",
-        "fieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/breg-field-dek\n",
+    for (block, posture) in [
+        ("attachmentStorage: {type: database}\n", PRODUCTION_POSTURE),
+        ("attachmentVerification: {type: disabled}\n", PRODUCTION_POSTURE),
+        (
+            "fieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/breg-field-dek\n",
+            DEVELOPMENT_POSTURE,
+        ),
     ] {
-        parse_runtime_config_with_env(&format!("{base}\n{block}"), env_lookup)
+        parse_runtime_config_with_env(&format!("{base}\n{block}"), env_lookup, posture)
             .unwrap_or_else(|error| panic!("{block}: {error:?}"));
     }
 
@@ -2663,7 +3171,7 @@ fn a_runtime_union_names_its_variant_in_a_type_member() {
     let camel = format!(
         "{base}\nfieldEncryption:\n  provider:\n    type: localFile\n    dekRef: secret:file/breg-field-dek\n"
     );
-    let error = parse_runtime_config_with_env(&camel, env_lookup)
+    let error = parse_runtime_config_with_env(&camel, env_lookup, PRODUCTION_POSTURE)
         .expect_err("the camelCase variant word is refused");
     assert_eq!(
         reader_refusal(&error),
@@ -2688,7 +3196,7 @@ fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
                 "runtimeUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL\n  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  pool:",
                 &replacement,
             );
-        let error = parse_runtime_config_with_env(&raw, env_lookup)
+        let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
             .expect_err("unsafe database material refused");
         assert_eq!(error, RuntimeConfigError::InvalidDatabase);
         let rendered = format!("{error:?} {error} {}", error.render_human(None));
@@ -2709,7 +3217,7 @@ fn raw_database_urls_inline_secrets_and_plaintext_posture_are_refused() {
                 "  migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL\n  {line}\n  pool:"
             ),
         );
-        let error = parse_runtime_config_with_env(&raw, env_lookup)
+        let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
             .expect_err("a removed database member is refused");
         assert_eq!(
             reader_refusal(&error),
@@ -2733,7 +3241,7 @@ fn old_single_database_url_ref_is_refused_by_strict_schema() {
 
     assert_eq!(
         refusal(
-            parse_runtime_config_with_env(&raw, env_lookup)
+            parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("legacy single database URL ref is refused")
         ),
         READER
@@ -2747,6 +3255,7 @@ fn database_role_specific_resolvers_refuse_wrong_role_without_leaking_values() {
     let config = parse_runtime_config_with_env(
         &valid_runtime(&fixture.secret_root, &fixture.package_root),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("runtime parses");
 
@@ -2784,6 +3293,7 @@ fn migration_database_resolver_uses_only_the_migration_reference() {
     let config = parse_runtime_config_with_env(
         &valid_runtime(&fixture.secret_root, &fixture.package_root),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("runtime parses");
 
@@ -2809,7 +3319,7 @@ fn split_roles_need_structurally_distinct_database_references() {
         "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL",
     );
 
-    let error = parse_runtime_config_with_env(&raw, env_lookup)
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
         .expect_err("one database reference for two roles is refused");
     assert_eq!(error, RuntimeConfigError::InvalidDatabase);
     let rendered = format!("{error:?} {error}");
@@ -2821,7 +3331,7 @@ fn one_role_may_serve_as_runtime_and_migration_role() {
     let fixture = RuntimeFixture::new();
     let single_role = valid_runtime(&fixture.secret_root, &fixture.package_root)
         .replace("runtime: registry_runtime", "runtime: registry_migration");
-    let config = parse_runtime_config_with_env(&single_role, env_lookup)
+    let config = parse_runtime_config_with_env(&single_role, env_lookup, PRODUCTION_POSTURE)
         .expect("one role with two database references parses");
     assert_eq!(
         config.database().roles().runtime(),
@@ -2832,7 +3342,7 @@ fn one_role_may_serve_as_runtime_and_migration_role() {
         "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_MIGRATION_DATABASE_URL",
         "migrationUrlRef: secret:env/BREG_RUNTIME_CONFIG_DATABASE_URL",
     );
-    parse_runtime_config_with_env(&single_reference, env_lookup)
+    parse_runtime_config_with_env(&single_reference, env_lookup, PRODUCTION_POSTURE)
         .expect("one role with one database reference parses");
 }
 
@@ -2841,7 +3351,7 @@ fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
     let fixture = RuntimeFixture::new();
     let oversized_pool = valid_runtime(&fixture.secret_root, &fixture.package_root)
         .replace("maximumConnections: 4", "maximumConnections: 129");
-    let error = parse_runtime_config_with_env(&oversized_pool, env_lookup)
+    let error = parse_runtime_config_with_env(&oversized_pool, env_lookup, PRODUCTION_POSTURE)
         .expect_err("the pool size is bounded");
     assert_eq!(
         reader_refusal(&error),
@@ -2870,7 +3380,7 @@ fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
     ] {
         assert_eq!(
             refusal(
-                parse_runtime_config_with_env(&raw, env_lookup)
+                parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
                     .expect_err("invalid runtime refused")
             ),
             expected
@@ -2883,27 +3393,24 @@ fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_clien
     let fixture = RuntimeFixture::new();
     let baseline = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let written = |member: &str| {
-        let raw = baseline.replace("    allowedClients: [registry-client]\n", member);
+        let raw = baseline.replace("        allowedClients: [registry-client]\n", member);
         assert_ne!(raw, baseline);
         raw
     };
     let clients = |raw: &str| {
-        parse_runtime_config_with_env(raw, env_lookup)
+        parse_runtime_config_with_env(raw, env_lookup, PRODUCTION_POSTURE)
+            .map(|config| primary(&config).token_verifier_config().allowed_clients)
             .expect("the client decision is written")
-            .authentication()
-            .oidc()
-            .token_verifier_config()
-            .allowed_clients
     };
 
     assert_eq!(clients(&baseline), vec!["registry-client"]);
-    assert!(clients(&written("    allowedClients: unrestricted\n")).is_empty());
+    assert!(clients(&written("        allowedClients: unrestricted\n")).is_empty());
 
-    let error = parse_runtime_config_with_env(&written(""), env_lookup)
+    let error = parse_runtime_config_with_env(&written(""), env_lookup, PRODUCTION_POSTURE)
         .expect_err("leaving the client decision out is refused");
     assert_eq!(
         reader_refusal(&error),
-        ("config.missing-key", "/authentication/oidc")
+        ("config.missing-key", "/authentication/oidc/issuers/primary")
     );
     let RuntimeConfigError::Reader(reader) = &error else {
         unreachable!("the shared reader decided this refusal");
@@ -2911,17 +3418,18 @@ fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_clien
     assert!(reader.to_string().contains("allowedClients"), "{reader}");
 
     for refused in [
-        "    allowedClients: []\n",
-        "    allowedClients: every-client\n",
-        "    allowedClients: \"*\"\n",
+        "        allowedClients: []\n",
+        "        allowedClients: every-client\n",
+        "        allowedClients: \"*\"\n",
     ] {
-        let error = parse_runtime_config_with_env(&written(refused), env_lookup)
-            .expect_err("an empty list or another word is not a client decision");
+        let error =
+            parse_runtime_config_with_env(&written(refused), env_lookup, PRODUCTION_POSTURE)
+                .expect_err("an empty list or another word is not a client decision");
         assert_eq!(
             reader_refusal(&error),
             (
                 "config.invalid-value",
-                "/authentication/oidc/allowedClients"
+                "/authentication/oidc/issuers/primary/allowedClients"
             ),
             "{refused}"
         );
@@ -2931,7 +3439,7 @@ fn allowed_clients_is_written_as_unrestricted_or_as_a_list_of_at_least_one_clien
         let message = reader.to_string();
         assert!(
             message.contains("unrestricted, or a list of at least one OAuth client")
-                && message.contains("write unrestricted to accept every client"),
+                && message.contains("write unrestricted to admit every client"),
             "{message}"
         );
         assert!(!message.contains("every-client"), "{message}");
@@ -2945,14 +3453,15 @@ fn assertion_issuers_reach_the_verifier_and_stay_out_of_redacted_debug_output() 
         "revokedKeyIds: [denied-kid]",
         concat!(
             "revokedKeyIds: [denied-kid]\n",
-            "    assertionIssuers:\n",
-            "      registry-client:\n",
-            "        - https://assertion-issuer.example\n",
+            "        assertionIssuers:\n",
+            "          registry-client:\n",
+            "            - https://assertion-issuer.example\n",
         ),
     );
 
-    let config = parse_runtime_config_with_env(&raw, env_lookup).expect("assertion issuers parse");
-    let oidc = config.authentication().oidc();
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect("assertion issuers parse");
+    let oidc = primary(&config);
     let verifier = oidc.token_verifier_config();
     assert_eq!(
         verifier
@@ -2979,18 +3488,18 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         )
     };
     let too_many_clients = {
-        let mut block = "    assertionIssuers:\n".to_owned();
+        let mut block = "        assertionIssuers:\n".to_owned();
         for index in 0..=128 {
             block.push_str(&format!(
-                "      registry-client-{index}:\n        - https://issuer.example\n"
+                "          registry-client-{index}:\n            - https://issuer.example\n"
             ));
         }
         block
     };
     let too_many_issuers = {
-        let mut block = "    assertionIssuers:\n      registry-client:\n".to_owned();
+        let mut block = "        assertionIssuers:\n          registry-client:\n".to_owned();
         for index in 0..=128 {
-            block.push_str(&format!("        - https://issuer-{index}.example\n"));
+            block.push_str(&format!("            - https://issuer-{index}.example\n"));
         }
         block
     };
@@ -2998,46 +3507,46 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         (
             "duplicate client key",
             insert(concat!(
-                "    assertionIssuers:\n",
-                "      registry-client:\n",
-                "        - https://issuer-a.example\n",
-                "      registry-client:\n",
-                "        - https://issuer-b.example\n",
+                "        assertionIssuers:\n",
+                "          registry-client:\n",
+                "            - https://issuer-a.example\n",
+                "          registry-client:\n",
+                "            - https://issuer-b.example\n",
             )),
             READER,
         ),
         (
             "duplicate issuer inside one client's list",
             insert(concat!(
-                "    assertionIssuers:\n",
-                "      registry-client:\n",
-                "        - https://issuer-a.example\n",
-                "        - https://issuer-a.example\n",
+                "        assertionIssuers:\n",
+                "          registry-client:\n",
+                "            - https://issuer-a.example\n",
+                "            - https://issuer-a.example\n",
             )),
             Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "empty issuer string",
             insert(concat!(
-                "    assertionIssuers:\n",
-                "      registry-client:\n",
-                "        - \"\"\n",
+                "        assertionIssuers:\n",
+                "          registry-client:\n",
+                "            - \"\"\n",
             )),
             Refusal::Runtime(RuntimeConfigError::InvalidOidc),
         ),
         (
             "empty client key",
             insert(concat!(
-                "    assertionIssuers:\n",
-                "      \"\":\n",
-                "        - https://issuer-a.example\n",
+                "        assertionIssuers:\n",
+                "          \"\":\n",
+                "            - https://issuer-a.example\n",
             )),
             READER,
         ),
         (
             "over-long client key",
             insert(&format!(
-                "    assertionIssuers:\n      {}:\n        - https://issuer-a.example\n",
+                "        assertionIssuers:\n          {}:\n            - https://issuer-a.example\n",
                 "c".repeat(513)
             )),
             READER,
@@ -3045,7 +3554,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
         (
             "over-long issuer value",
             insert(&format!(
-                "    assertionIssuers:\n      registry-client:\n        - https://{}.example\n",
+                "        assertionIssuers:\n          registry-client:\n            - https://{}.example\n",
                 "i".repeat(513)
             )),
             Refusal::Runtime(RuntimeConfigError::InvalidOidc),
@@ -3063,7 +3572,7 @@ fn invalid_assertion_issuer_shapes_are_refused() {
     ] {
         assert_eq!(
             refusal(
-                parse_runtime_config_with_env(&raw, env_lookup)
+                parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
                     .expect_err("invalid runtime refused")
             ),
             expected,
@@ -3074,13 +3583,17 @@ fn invalid_assertion_issuer_shapes_are_refused() {
     // CFG-EMPTY-2: assertionIssuers restricts which authority each client
     // may exchange from, so an empty mapping is refused; omitting the member
     // is how a file applies no assertion-issuer rule.
-    let error = parse_runtime_config_with_env(&insert("    assertionIssuers: {}\n"), env_lookup)
-        .expect_err("an empty assertion-issuer mapping is refused");
+    let error = parse_runtime_config_with_env(
+        &insert("        assertionIssuers: {}\n"),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect_err("an empty assertion-issuer mapping is refused");
     assert_eq!(
         reader_refusal(&error),
         (
             "config.invalid-value",
-            "/authentication/oidc/assertionIssuers"
+            "/authentication/oidc/issuers/primary/assertionIssuers"
         )
     );
     assert!(
@@ -3093,19 +3606,20 @@ fn invalid_assertion_issuer_shapes_are_refused() {
     // client rather than read as a second way to write that.
     let error = parse_runtime_config_with_env(
         &insert(concat!(
-            "    assertionIssuers:\n",
-            "      registry-client: []\n",
-            "      other-client:\n",
-            "        - https://issuer-a.example\n",
+            "        assertionIssuers:\n",
+            "          registry-client: []\n",
+            "          other-client:\n",
+            "            - https://issuer-a.example\n",
         )),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect_err("an empty per-client list is refused");
     assert_eq!(
         reader_refusal(&error),
         (
             "config.invalid-value",
-            "/authentication/oidc/assertionIssuers/registry-client"
+            "/authentication/oidc/issuers/primary/assertionIssuers/registry-client"
         )
     );
     let rendered = error.render_human(None);
@@ -3125,22 +3639,26 @@ fn revoked_key_ids_are_canonical_and_an_empty_list_is_refused() {
     let error = parse_runtime_config_with_env(
         &baseline.replace("revokedKeyIds: [denied-kid]", "revokedKeyIds: []"),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect_err("an empty denied key list is refused");
     assert_eq!(
         reader_refusal(&error),
-        ("config.invalid-value", "/authentication/oidc/revokedKeyIds")
+        (
+            "config.invalid-value",
+            "/authentication/oidc/issuers/primary/revokedKeyIds"
+        )
     );
     assert!(
         error.render_human(None).contains("delete revokedKeyIds"),
         "the refusal names its fix"
     );
 
-    let omitted = baseline.replace("    revokedKeyIds: [denied-kid]\n", "");
+    let omitted = baseline.replace("        revokedKeyIds: [denied-kid]\n", "");
     assert!(!omitted.contains("revokedKeyIds"));
-    let config = parse_runtime_config_with_env(&omitted, env_lookup)
+    let config = parse_runtime_config_with_env(&omitted, env_lookup, PRODUCTION_POSTURE)
         .expect("a runtime file with no revokedKeyIds member is accepted");
-    let verifier = config.authentication().oidc().token_verifier_config();
+    let verifier = primary(&config).token_verifier_config();
     assert!(verifier.denied_kids.is_empty());
 }
 
@@ -3151,17 +3669,20 @@ fn denied_kids_is_a_value_free_removed_key_with_the_canonical_replacement() {
         "revokedKeyIds: [denied-kid]",
         "deniedKids: [retired-key-canary]",
     );
-    let error = parse_runtime_config_with_env(&retired, env_lookup)
+    let error = parse_runtime_config_with_env(&retired, env_lookup, PRODUCTION_POSTURE)
         .expect_err("the retired OIDC key-list spelling is refused");
     let RuntimeConfigError::Reader(refusal) = &error else {
         panic!("the shared reader decides a removed key: {error:?}");
     };
     let diagnostic = refusal.deciding_diagnostic();
     assert_eq!(diagnostic.code, "config.removed-key");
-    assert_eq!(diagnostic.path, "/authentication/oidc/deniedKids");
+    assert_eq!(
+        diagnostic.path,
+        "/authentication/oidc/issuers/primary/deniedKids"
+    );
     assert_eq!(
         diagnostic.suggested_action,
-        "Rename `authentication.oidc.deniedKids` to `authentication.oidc.revokedKeyIds`; the values stay as they are."
+        "Rename `authentication.oidc.issuers.ISSUER_ID.deniedKids` to `authentication.oidc.issuers.ISSUER_ID.revokedKeyIds`; the values stay as they are."
     );
     assert!(!error.render_human(None).contains("retired-key-canary"));
 }
@@ -3177,14 +3698,10 @@ fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted(
                 "maximumTokenLifetimeSeconds: 300",
                 &format!("maximumTokenLifetimeSeconds: {seconds}"),
             );
-        let config =
-            parse_runtime_config_with_env(&raw, env_lookup).expect("explicit issuer contract");
+        let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+            .expect("explicit issuer contract");
         assert_eq!(
-            config
-                .authentication()
-                .oidc()
-                .token_verifier_config()
-                .max_token_lifetime,
+            primary(&config).token_verifier_config().max_token_lifetime,
             Some(Duration::from_secs(seconds))
         );
     }
@@ -3193,7 +3710,7 @@ fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted(
             "maximumTokenLifetimeSeconds: 300",
             &format!("maximumTokenLifetimeSeconds: {seconds}"),
         );
-        assert!(parse_runtime_config_with_env(&raw, env_lookup).is_err());
+        assert!(parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).is_err());
     }
     for (before, after) in [
         ("principal: registry_principal", "principal: client_id"),
@@ -3201,8 +3718,12 @@ fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted(
         ("purpose: registry_purpose", "purpose: sub"),
     ] {
         assert_eq!(
-            parse_runtime_config_with_env(&baseline.replace(before, after), env_lookup)
-                .expect_err("registered claims do not become fallback authority"),
+            parse_runtime_config_with_env(
+                &baseline.replace(before, after),
+                env_lookup,
+                PRODUCTION_POSTURE
+            )
+            .expect_err("registered claims do not become fallback authority"),
             RuntimeConfigError::InvalidOidc
         );
     }
@@ -3212,12 +3733,13 @@ fn explicit_subject_principal_and_operator_selected_token_lifetime_are_admitted(
 fn authored_jwks_uri_override_is_refused() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-        "    audience: urn:breg:test\n",
-        "    audience: urn:breg:test\n    jwksUri: https://attacker.example/jwks.json\n",
+        "        audience: urn:breg:test\n",
+        "        audience: urn:breg:test\n        jwksUri: https://attacker.example/jwks.json\n",
     );
     assert_eq!(
         refusal(
-            parse_runtime_config_with_env(&raw, env_lookup).expect_err("JWKS override refused")
+            parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+                .expect_err("JWKS override refused")
         ),
         READER
     );
@@ -3227,17 +3749,24 @@ fn authored_jwks_uri_override_is_refused() {
 fn jwks_source_is_a_strict_tagged_oidc_member() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    parse_runtime_config_with_env(&raw, env_lookup).expect("omitted source keeps discovery");
-    parse_runtime_config_with_env(&runtime_with_discovery_source(&fixture), env_lookup)
-        .expect("explicit discovery source parses");
+    parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect("omitted source keeps discovery");
+    parse_runtime_config_with_env(
+        &runtime_with_discovery_source(&fixture),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect("explicit discovery source parses");
     parse_runtime_config_with_env(
         &runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks"),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("static file source parses without resolving the secret");
     parse_runtime_config_with_env(
         &runtime_with_static_jwks_ref(&fixture, "secret:env/BREG_RUNTIME_CONFIG_JWKS"),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("static env source parses without resolving the secret");
 
@@ -3256,7 +3785,7 @@ fn jwks_source_is_a_strict_tagged_oidc_member() {
             .replace("type: static", "type: remote"),
     ] {
         assert!(
-            parse_runtime_config_with_env(&raw, env_lookup).is_err(),
+            parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).is_err(),
             "invalid JWKS source shape refused"
         );
     }
@@ -3271,10 +3800,10 @@ async fn static_jwks_file_and_env_refs_build_a_ready_key_source() {
     let file_config = parse_runtime_config_with_env(
         &runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks"),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("file-pinned runtime parses");
-    let file_source = file_config
-        .oidc_key_source()
+    let file_source = primary_key_source(&file_config)
         .await
         .expect("file-pinned static JWKS constructs");
     file_source
@@ -3291,10 +3820,10 @@ async fn static_jwks_file_and_env_refs_build_a_ready_key_source() {
     let env_config = parse_runtime_config_with_env(
         &runtime_with_static_jwks_ref(&fixture, &format!("secret:env/{STATIC_JWKS_ENV}")),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("env-pinned runtime parses");
-    let env_source = env_config
-        .oidc_key_source()
+    let env_source = primary_key_source(&env_config)
         .await
         .expect("env-pinned static JWKS constructs");
     std::env::remove_var(STATIC_JWKS_ENV);
@@ -3325,12 +3854,6 @@ async fn static_jwks_validation_refuses_unsafe_documents_value_free() {
     };
     let cases = [
         ("top-level-missing", "{}".to_owned(), "EdDSA"),
-        (
-            "top-level-unknown",
-            serde_json::to_string(&json!({"keys":[valid.clone()],"issuer":"issuer-canary"}))
-                .expect("JWKS serializes"),
-            "EdDSA",
-        ),
         ("empty-keys", r#"{"keys":[]}"#.to_owned(), "EdDSA"),
         (
             "keys-not-array",
@@ -3340,11 +3863,6 @@ async fn static_jwks_validation_refuses_unsafe_documents_value_free() {
         (
             "private-member",
             static_jwks_document(&[with_member(valid.clone(), "d", json!("private-canary"))]),
-            "EdDSA",
-        ),
-        (
-            "unknown-member",
-            static_jwks_document(&[with_member(valid.clone(), "x5c", json!(["cert-canary"]))]),
             "EdDSA",
         ),
         (
@@ -3457,12 +3975,37 @@ async fn static_jwks_validation_refuses_unsafe_documents_value_free() {
             "allowedAlgorithm: EdDSA",
             &format!("allowedAlgorithm: {algorithm}"),
         );
-        let config = parse_runtime_config_with_env(&raw, env_lookup).expect("runtime shell parses");
-        let error = config
-            .oidc_key_source()
+        let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+            .expect("runtime shell parses");
+        let error = primary_key_source(&config)
             .await
             .expect_err("invalid static JWKS refused");
-        assert_eq!(error, RuntimeConfigError::InvalidOidc, "{name}");
+        let expected = match name {
+            "top-level-missing" | "keys-not-array" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::NotAKeySet)
+            }
+            "empty-keys" => RuntimeConfigError::InvalidStaticJwks(StaticJwksError::Empty),
+            "private-member" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::PrivateKeyMember {
+                    key: 0,
+                    member: "d",
+                })
+            }
+            "duplicate-json-field" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::NotJson)
+            }
+            "oct-key" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::SymmetricKey { key: 0 })
+            }
+            "missing-kid" | "empty-kid" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::MissingKeyId { key: 0 })
+            }
+            "duplicate-kid" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::RepeatedKeyId { key: 1 })
+            }
+            _ => RuntimeConfigError::InvalidOidc,
+        };
+        assert_eq!(error, expected, "{name}");
         let rendered = format!("{error:?} {error} {config:?}");
         for canary in [
             "oidc-jwks",
@@ -3483,6 +4026,86 @@ async fn static_jwks_validation_refuses_unsafe_documents_value_free() {
 }
 
 #[tokio::test]
+async fn a_static_key_set_with_unknown_public_members_loads() {
+    let fixture = RuntimeFixture::new();
+    let kid = "static-ed25519";
+    let key = static_ed25519_jwk(kid);
+    let documents = [
+        (
+            "x5c",
+            static_jwks_document(&[with_member(key.clone(), "x5c", json!(["cert-canary"]))]),
+        ),
+        (
+            "ext",
+            static_jwks_document(&[with_member(key.clone(), "ext", json!(true))]),
+        ),
+        (
+            "top-level",
+            serde_json::to_string(&json!({"keys":[key.clone()],"issuer":"issuer-canary"}))
+                .expect("JWKS serializes"),
+        ),
+    ];
+    for (name, document) in documents {
+        fixture.write_secret("oidc-jwks", document.as_bytes());
+        let config = parse_runtime_config_with_env(
+            &runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks"),
+            env_lookup,
+            PRODUCTION_POSTURE,
+        )
+        .expect("runtime shell parses");
+        let source = primary_key_source(&config)
+            .await
+            .unwrap_or_else(|error| panic!("{name} key set refused: {error}"));
+        source
+            .key_for_kid(kid)
+            .await
+            .unwrap_or_else(|_| panic!("{name} key set key is selectable by kid"));
+    }
+}
+
+#[tokio::test]
+async fn a_private_member_in_a_static_key_set_is_named_in_the_startup_refusal() {
+    let fixture = RuntimeFixture::new();
+    let document = static_jwks_document(&[with_member(
+        static_ed25519_jwk("static-ed25519"),
+        "d",
+        json!("private-canary"),
+    )]);
+    fixture.write_secret("oidc-jwks", document.as_bytes());
+    let config = parse_runtime_config_with_env(
+        &runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks"),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect("runtime shell parses");
+    let error = primary_key_source(&config)
+        .await
+        .expect_err("private member refused");
+    let rendered = error.render_human(None);
+    assert!(rendered.contains("breg.runtime.invalid-oidc"), "{rendered}");
+    assert!(rendered.contains("/authentication/oidc"), "{rendered}");
+    assert!(rendered.contains("private-key member \"d\""), "{rendered}");
+    assert!(!rendered.contains("private-canary"), "{rendered}");
+    assert_eq!(
+        rendered.matches("private-key member").count(),
+        1,
+        "the cause appears once: {rendered}"
+    );
+
+    // The startup surfaces keep the key-source class and carry the rule.
+    let startup = registry_breg::startup::map_runtime_config_error(error);
+    let registry_breg::startup::StartupError::StaticKeySet(cause) = &startup else {
+        panic!("a refused static key set is a key-source startup refusal: {startup:?}");
+    };
+    assert!(cause.to_string().contains("private-key member \"d\""));
+    let record = registry_breg::startup::OperationalEvent::StoppedWithError(startup).record();
+    assert_eq!(
+        record.error(),
+        Some("the Registry OIDC key source was refused")
+    );
+}
+
+#[tokio::test]
 async fn static_jwks_resolves_once_and_rotates_only_on_reconstruction() {
     let fixture = RuntimeFixture::new();
     let first_kid = "static-ed25519-first";
@@ -3494,10 +4117,10 @@ async fn static_jwks_resolves_once_and_rotates_only_on_reconstruction() {
     let config = parse_runtime_config_with_env(
         &runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks"),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("static runtime parses");
-    let first_source = config
-        .oidc_key_source()
+    let first_source = primary_key_source(&config)
         .await
         .expect("first static source constructs");
     first_source
@@ -3517,8 +4140,7 @@ async fn static_jwks_resolves_once_and_rotates_only_on_reconstruction() {
         first_source.key_for_kid(second_kid).await.is_err(),
         "already constructed source does not reload the rotated file"
     );
-    let second_source = config
-        .oidc_key_source()
+    let second_source = primary_key_source(&config)
         .await
         .expect("reconstructed source reads the rotated document");
     second_source
@@ -3540,10 +4162,14 @@ fn debug_and_errors_do_not_render_secret_or_expanded_canaries() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
         .replace("production", "${ENVIRONMENT_CANARY}");
-    let config = parse_runtime_config_with_env(&raw, |name| match name {
-        "ENVIRONMENT_CANARY" => Some(EXPANDED_CANARY.to_owned()),
-        _ => env_lookup(name),
-    })
+    let config = parse_runtime_config_with_env(
+        &raw,
+        |name| match name {
+            "ENVIRONMENT_CANARY" => Some(EXPANDED_CANARY.to_owned()),
+            _ => env_lookup(name),
+        },
+        PRODUCTION_POSTURE,
+    )
     .expect("runtime config with env expansion parses");
 
     let debug = format!("{config:?}");
@@ -3560,10 +4186,14 @@ fn debug_and_errors_do_not_render_secret_or_expanded_canaries() {
     }
 
     let unsafe_raw = raw.replace("registry_purpose", "purpose canary\nextra: true");
-    let error = parse_runtime_config_with_env(&unsafe_raw, |name| match name {
-        "ENVIRONMENT_CANARY" => Some(EXPANDED_CANARY.to_owned()),
-        _ => env_lookup(name),
-    })
+    let error = parse_runtime_config_with_env(
+        &unsafe_raw,
+        |name| match name {
+            "ENVIRONMENT_CANARY" => Some(EXPANDED_CANARY.to_owned()),
+            _ => env_lookup(name),
+        },
+        PRODUCTION_POSTURE,
+    )
     .expect_err("invalid document refused");
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains(EXPANDED_CANARY));
@@ -3575,14 +4205,21 @@ fn a_substituted_value_cannot_inject_document_structure() {
     let fixture = RuntimeFixture::new();
     let raw = valid_runtime(&fixture.secret_root, &fixture.package_root)
         .replace("https://issuer.example", "https://${OIDC_HOST}");
-    let error = parse_runtime_config_with_env(&raw, |name| match name {
-        "OIDC_HOST" => Some("issuer.example\nentities: []".to_owned()),
-        _ => env_lookup(name),
-    })
+    let error = parse_runtime_config_with_env(
+        &raw,
+        |name| match name {
+            "OIDC_HOST" => Some("issuer.example\nentities: []".to_owned()),
+            _ => env_lookup(name),
+        },
+        PRODUCTION_POSTURE,
+    )
     .expect_err("a substituted newline stays inside the issuer string");
     assert_eq!(
         reader_refusal(&error),
-        ("config.invalid-value", "/authentication/oidc/issuer")
+        (
+            "config.invalid-value",
+            "/authentication/oidc/issuers/primary/issuer"
+        )
     );
     let rendered = format!("{error:?} {error}");
     assert!(!rendered.contains("issuer.example"));
@@ -3598,10 +4235,14 @@ fn an_oversized_substituted_value_is_refused_by_its_member_without_echo() {
         "instanceId: registry-primary",
         "instanceId: ${OVERSIZED_RUNTIME_VALUE}",
     );
-    let error = parse_runtime_config_with_env(&raw, |name| match name {
-        "OVERSIZED_RUNTIME_VALUE" => Some("runtime-bound-canary".repeat(4096)),
-        _ => env_lookup(name),
-    })
+    let error = parse_runtime_config_with_env(
+        &raw,
+        |name| match name {
+            "OVERSIZED_RUNTIME_VALUE" => Some("runtime-bound-canary".repeat(4096)),
+            _ => env_lookup(name),
+        },
+        PRODUCTION_POSTURE,
+    )
     .expect_err("oversized substitution refused");
 
     assert_eq!(error, RuntimeConfigError::InvalidBinding);
@@ -3632,7 +4273,7 @@ fn a_substitution_inside_a_secret_reference_is_refused() {
             "root: ${SECRET_ROOT}",
         ),
     ] {
-        let error = parse_runtime_config_with_env(&raw, lookup)
+        let error = parse_runtime_config_with_env(&raw, lookup, PRODUCTION_POSTURE)
             .expect_err("a secret reference or provider takes no substitution");
         assert_eq!(code_of(&error), "config.substitution-not-allowed");
         assert!(
@@ -3655,6 +4296,7 @@ fn substituted_values_stay_strings() {
     let config = parse_runtime_config_with_env(
         &base.replace("databaseId: registry-db", "databaseId: ${DATABASE_ID}"),
         lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("a numeric-looking substitution is the string it was written as");
     assert_eq!(config.identity().database_id(), "12345");
@@ -3663,7 +4305,8 @@ fn substituted_values_stay_strings() {
         refusal(
             parse_runtime_config_with_env(
                 &base.replace("maximumConnections: 4", "maximumConnections: ${POOL_SIZE}"),
-                lookup
+                lookup,
+                PRODUCTION_POSTURE
             )
             .expect_err("a substitution never becomes a number")
         ),
@@ -3678,6 +4321,7 @@ fn oidc_issuer_and_audience_follow_the_shared_issuer_block() {
     parse_runtime_config_with_env(
         &base.replace("https://issuer.example", "http://127.0.0.1:8095"),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("a loopback http issuer serves local development");
     for (issuer, typed_refusal) in [
@@ -3689,12 +4333,16 @@ fn oidc_issuer_and_audience_follow_the_shared_issuer_block() {
         let error = parse_runtime_config_with_env(
             &base.replace("https://issuer.example", issuer),
             env_lookup,
+            PRODUCTION_POSTURE,
         )
         .expect_err("issuer outside the shared block refused");
         if typed_refusal {
             assert_eq!(
                 reader_refusal(&error),
-                ("config.invalid-value", "/authentication/oidc/issuer"),
+                (
+                    "config.invalid-value",
+                    "/authentication/oidc/issuers/primary/issuer"
+                ),
                 "{issuer}"
             );
         } else {
@@ -3703,8 +4351,12 @@ fn oidc_issuer_and_audience_follow_the_shared_issuer_block() {
     }
     let long_audience = "a".repeat(513);
     assert_eq!(
-        parse_runtime_config_with_env(&base.replace("urn:breg:test", &long_audience), env_lookup)
-            .expect_err("audience above 512 characters refused"),
+        parse_runtime_config_with_env(
+            &base.replace("urn:breg:test", &long_audience),
+            env_lookup,
+            PRODUCTION_POSTURE
+        )
+        .expect_err("audience above 512 characters refused"),
         RuntimeConfigError::InvalidOidc
     );
 }
@@ -3714,31 +4366,38 @@ fn jwks_source_uri_kind_skips_discovery_under_the_shared_rules() {
     let fixture = RuntimeFixture::new();
     let with_uri = |uri: &str| {
         valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-            "    jwksCache:\n",
-            &format!("    jwksSource:\n      type: uri\n      uri: {uri}\n    jwksCache:\n"),
+            "        jwksCache:\n",
+            &format!("        jwksSource:\n          type: uri\n          uri: {uri}\n        jwksCache:\n"),
         )
     };
-    let config =
-        parse_runtime_config_with_env(&with_uri("https://issuer.example/jwks"), env_lookup)
-            .expect("uri source parses");
+    let config = parse_runtime_config_with_env(
+        &with_uri("https://issuer.example/jwks"),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect("uri source parses");
     let debug = format!("{config:?}");
     assert!(debug.contains("Uri"));
     assert!(!debug.contains("https://issuer.example/jwks"));
-    parse_runtime_config_with_env(&with_uri("http://127.0.0.1:8095/jwks"), env_lookup)
-        .expect("loopback http uri source parses");
+    parse_runtime_config_with_env(
+        &with_uri("http://127.0.0.1:8095/jwks"),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect("loopback http uri source parses");
     for (uri, typed_refusal) in [
         ("http://issuer.example/jwks", false),
         ("https://user:secret@issuer.example/jwks", true),
         ("file:///etc/jwks.json", true),
     ] {
-        let error = parse_runtime_config_with_env(&with_uri(uri), env_lookup)
+        let error = parse_runtime_config_with_env(&with_uri(uri), env_lookup, PRODUCTION_POSTURE)
             .expect_err("uri outside the shared rules refused");
         if typed_refusal {
             assert_eq!(
                 reader_refusal(&error),
                 (
                     "config.invalid-value",
-                    "/authentication/oidc/jwksSource/uri"
+                    "/authentication/oidc/issuers/primary/jwksSource/uri"
                 ),
                 "{uri}"
             );
@@ -3763,8 +4422,8 @@ fn runtime_config_file_must_not_be_a_symlink() {
     let link = fixture.path("runtime-link.yaml");
     symlink(&target, &link).expect("runtime config symlink creates");
 
-    let error =
-        load_runtime_config_with_env(&link, env_lookup).expect_err("symlinked runtime refused");
+    let error = load_runtime_config_with_env(&link, env_lookup, PRODUCTION_POSTURE)
+        .expect_err("symlinked runtime refused");
     assert_eq!(
         reader_refusal(&error),
         ("platform.runtime-config.unsafe-file", "")
@@ -3789,7 +4448,7 @@ fn runtime_config_path_components_must_not_be_symlinks() {
     symlink(&real_dir, &linked_dir).expect("runtime config ancestor symlink creates");
     let linked_config = linked_dir.join("runtime.yaml");
 
-    let error = load_runtime_config_with_env(&linked_config, env_lookup)
+    let error = load_runtime_config_with_env(&linked_config, env_lookup, PRODUCTION_POSTURE)
         .expect_err("symlinked runtime ancestor refused");
     assert_eq!(
         reader_refusal(&error),
@@ -3804,29 +4463,27 @@ fn runtime_config_file_and_ancestors_require_trusted_ownership_and_modes() {
 
     let fixture = RuntimeFixture::new();
     let runtime = valid_runtime(&fixture.secret_root, &fixture.package_root)
-        .replace("    revokedKeyIds: [denied-kid]\n", "");
+        .replace("        revokedKeyIds: [denied-kid]\n", "");
     let config_path = fixture.path("runtime.yaml");
     fs::write(&config_path, &runtime).expect("runtime config writes");
     fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
         .expect("owner-only mode sets");
-    load_runtime_config_with_env(&config_path, env_lookup)
+    load_runtime_config_with_env(&config_path, env_lookup, PRODUCTION_POSTURE)
         .expect("an owner-controlled development runtime file loads");
 
-    for mode in [0o620, 0o602] {
+    let quoted_path = config_path.display().to_string().replace('\'', "'\\''");
+    for (mode, permission) in [(0o620, "g-w"), (0o602, "o-w")] {
         fs::set_permissions(&config_path, fs::Permissions::from_mode(mode))
             .expect("unsafe runtime mode sets");
-        let error = load_runtime_config_with_env(&config_path, env_lookup)
+        let error = load_runtime_config_with_env(&config_path, env_lookup, PRODUCTION_POSTURE)
             .expect_err("a runtime file writable outside its owner is refused");
         assert_eq!(
             reader_refusal(&error),
             ("platform.runtime-config.unsafe-file", "")
         );
         let rendered = error.render_human(None);
-        assert!(rendered.contains("runtime user"), "{rendered}");
-        assert!(
-            rendered.contains("remove group and other write permission"),
-            "{rendered}"
-        );
+        let repair = format!("next: Run `chmod {permission} -- '{quoted_path}'`.");
+        assert!(rendered.contains(&repair), "{rendered}");
     }
 
     fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
@@ -3839,7 +4496,7 @@ fn runtime_config_file_and_ancestors_require_trusted_ownership_and_modes() {
     fs::write(&nested_config, runtime).expect("nested runtime config writes");
     fs::set_permissions(&nested_config, fs::Permissions::from_mode(0o600))
         .expect("nested runtime file mode sets");
-    let error = load_runtime_config_with_env(&nested_config, env_lookup)
+    let error = load_runtime_config_with_env(&nested_config, env_lookup, PRODUCTION_POSTURE)
         .expect_err("a runtime file below a group-writable directory is refused");
     assert_eq!(
         reader_refusal(&error),
@@ -3860,7 +4517,7 @@ fn loaded_paths_must_not_be_symlinks() {
     fs::write(&config_path, raw).expect("runtime config writes");
 
     assert_eq!(
-        load_runtime_config(&config_path).expect_err("symlink path refused"),
+        load_runtime_config(&config_path, PRODUCTION_POSTURE).expect_err("symlink path refused"),
         RuntimeConfigError::UnsafePackageRoot
     );
 
@@ -3871,7 +4528,7 @@ fn loaded_paths_must_not_be_symlinks() {
     fs::write(&secret_config_path, raw).expect("runtime config writes");
 
     assert_eq!(
-        load_runtime_config(&secret_config_path)
+        load_runtime_config(&secret_config_path, PRODUCTION_POSTURE)
             .expect_err("symlinked secret provider root refused"),
         RuntimeConfigError::UnsafeSecretProviderRoot
     );
@@ -3886,7 +4543,7 @@ fn a_missing_runtime_config_file_is_unavailable_rather_than_unsafe() {
         fixture.path("runtme.yaml"),
         fixture.path("absent-directory").join("runtime.yaml"),
     ] {
-        let error = load_runtime_config_with_env(&missing, env_lookup)
+        let error = load_runtime_config_with_env(&missing, env_lookup, PRODUCTION_POSTURE)
             .expect_err("a missing runtime configuration file is refused");
         assert_eq!(
             reader_refusal(&error),
@@ -3915,7 +4572,7 @@ fn an_unreadable_runtime_config_directory_is_unavailable_rather_than_unsafe() {
     fs::set_permissions(&closed, fs::Permissions::from_mode(0o000))
         .expect("config directory permissions close");
     let privileged = fs::read_dir(&closed).is_ok();
-    let result = load_runtime_config_with_env(&config_path, env_lookup);
+    let result = load_runtime_config_with_env(&config_path, env_lookup, PRODUCTION_POSTURE);
     fs::set_permissions(&closed, fs::Permissions::from_mode(0o700))
         .expect("config directory permissions restore");
 
@@ -3949,9 +4606,9 @@ fn missing_package_root_and_secret_root_are_reported_at_their_own_paths() {
     )
     .expect("runtime config writes");
 
-    let root_error =
-        load_runtime_config(&missing_root_path).expect_err("a missing package root is refused");
-    let secret_error = load_runtime_config(&missing_secret_root_path)
+    let root_error = load_runtime_config(&missing_root_path, PRODUCTION_POSTURE)
+        .expect_err("a missing package root is refused");
+    let secret_error = load_runtime_config(&missing_secret_root_path, PRODUCTION_POSTURE)
         .expect_err("a missing file secret provider root is refused");
 
     assert_eq!(root_error, RuntimeConfigError::PackageRootUnavailable);
@@ -3967,6 +4624,51 @@ fn missing_package_root_and_secret_root_are_reported_at_their_own_paths() {
     assert_eq!(path_of(&secret_error), "/secretProviders/file/root");
 }
 
+#[test]
+fn load_without_package_root_allows_absent_package_but_still_checks_secrets_and_syntax() {
+    let fixture = RuntimeFixture::new();
+    let missing_root_path = fixture.path("runtime-missing-package-root.yaml");
+    fs::write(
+        &missing_root_path,
+        valid_runtime(&fixture.secret_root, &fixture.path("absent-package")),
+    )
+    .expect("runtime config writes");
+    let missing_secret_root_path = fixture.path("runtime-missing-secret-root.yaml");
+    fs::write(
+        &missing_secret_root_path,
+        valid_runtime(
+            &fixture.path("absent-secrets"),
+            &fixture.path("absent-package"),
+        ),
+    )
+    .expect("runtime config writes");
+    let relative_package_root_path = fixture.path("runtime-relative-package-root.yaml");
+    fs::write(
+        &relative_package_root_path,
+        valid_runtime(&fixture.secret_root, Path::new("relative/package")),
+    )
+    .expect("runtime config writes");
+
+    let loaded = load_runtime_config_without_package_root(&missing_root_path, PRODUCTION_POSTURE)
+        .expect("loading without package root accepts a missing package directory");
+    assert_eq!(loaded.package().root(), fixture.path("absent-package"));
+    assert_eq!(
+        load_runtime_config(&missing_root_path, PRODUCTION_POSTURE)
+            .expect_err("the full loader still refuses a missing package root"),
+        RuntimeConfigError::PackageRootUnavailable
+    );
+    assert_eq!(
+        load_runtime_config_without_package_root(&missing_secret_root_path, PRODUCTION_POSTURE)
+            .expect_err("a missing file secret provider root is still refused"),
+        RuntimeConfigError::SecretProviderRootUnavailable
+    );
+    assert_eq!(
+        load_runtime_config_without_package_root(&relative_package_root_path, PRODUCTION_POSTURE)
+            .expect_err("an invalid package root path is still refused"),
+        RuntimeConfigError::InvalidPackage
+    );
+}
+
 /// The verifier applies leeway in whole seconds, so a sub-second value would be
 /// silently truncated. Refuse it at load time instead.
 #[test]
@@ -3980,27 +4682,25 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
                 &format!("leewayMilliseconds: {accepted}"),
             ),
             env_lookup,
+            PRODUCTION_POSTURE,
         )
         .expect("a whole-second leeway is accepted");
         assert_eq!(
-            config
-                .authentication()
-                .oidc()
-                .token_verifier_config()
-                .leeway,
+            primary(&config).token_verifier_config().leeway,
             Duration::from_millis(accepted)
         );
     }
     let error = parse_runtime_config_with_env(
         &base.replace("leewayMilliseconds: 60000", "leewayMilliseconds: 301000"),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect_err("a leeway above the documented range is refused at decode");
     assert_eq!(
         reader_refusal(&error),
         (
             "config.out-of-range",
-            "/authentication/oidc/leewayMilliseconds"
+            "/authentication/oidc/issuers/primary/leewayMilliseconds"
         )
     );
     for refused in [1_u64, 500, 999, 1_500] {
@@ -4010,10 +4710,17 @@ fn oidc_leeway_must_be_whole_seconds_within_its_documented_range() {
                 &format!("leewayMilliseconds: {refused}"),
             ),
             env_lookup,
+            PRODUCTION_POSTURE,
         )
         .expect_err("a leeway the verifier cannot apply exactly is refused");
-        assert_eq!(error, RuntimeConfigError::InvalidOidcLeeway, "{refused}");
-        assert_eq!(path_of(&error), "/authentication/oidc/leewayMilliseconds");
+        assert!(
+            matches!(error, RuntimeConfigError::InvalidOidcLeeway { .. }),
+            "{refused}"
+        );
+        assert_eq!(
+            path_of(&error),
+            "/authentication/oidc/issuers/primary/leewayMilliseconds"
+        );
         assert_eq!(code_of(&error), "breg.runtime.invalid-oidc-leeway");
         let message = error.to_string();
         assert!(
@@ -4039,7 +4746,7 @@ fn listener_trusted_proxy_is_refused_as_an_unknown_field() {
 
     assert_eq!(
         refusal(
-            parse_runtime_config_with_env(&with_trusted_proxy, env_lookup)
+            parse_runtime_config_with_env(&with_trusted_proxy, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("listener.trustedProxy is refused as an unknown field")
         ),
         READER
@@ -4058,10 +4765,12 @@ fn event_destination_shape_is_strict_and_governed_webhooks_remain_refused() {
         4,
     );
     let valid = runtime_with_event_destinations(&fixture, &binding);
-    parse_runtime_config_with_env(&valid, env_lookup).expect("strict event binding parses");
+    parse_runtime_config_with_env(&valid, env_lookup, PRODUCTION_POSTURE)
+        .expect("strict event binding parses");
     parse_runtime_config_with_env(
         &valid.replace("    case-operations:\n", "    events:\n"),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("a compiler-valid logical id is not mistaken for a governed member");
 
@@ -4080,7 +4789,7 @@ fn event_destination_shape_is_strict_and_governed_webhooks_remain_refused() {
         ),
     ] {
         assert_eq!(
-            refusal(parse_runtime_config_with_env(&raw, env_lookup)
+            refusal(parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("unknown event destination key refused")),
             READER
         );
@@ -4088,7 +4797,7 @@ fn event_destination_shape_is_strict_and_governed_webhooks_remain_refused() {
 
     let mut governed = valid;
     governed.push_str("webhooks: []\n");
-    let error = parse_runtime_config_with_env(&governed, env_lookup)
+    let error = parse_runtime_config_with_env(&governed, env_lookup, PRODUCTION_POSTURE)
         .expect_err("governed webhooks refused");
     assert_eq!(reader_refusal(&error), ("config.unknown-key", "/webhooks"));
 }
@@ -4110,7 +4819,7 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
     trustedJwksRef: secret:file/evidence-jwks-canary
 "#;
     let valid = format!("{base}{bindings}");
-    let config = parse_runtime_config_with_env(&valid, env_lookup)
+    let config = parse_runtime_config_with_env(&valid, env_lookup, PRODUCTION_POSTURE)
         .expect("compiler-valid provider ids may match governed field names");
     assert!(!format!("{config:?}").contains("canary"));
 
@@ -4127,14 +4836,14 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
         format!("{base}evidenceProviders:\n  hooks: []\n"),
         format!("{base}evidenceProviders:\n  entities: {{}}\n"),
     ] {
-        let error = parse_runtime_config_with_env(&raw, env_lookup)
+        let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
             .expect_err("malformed or undeployed provider binding member is refused");
         assert_eq!(refusal(error.clone()), READER);
         assert!(!format!("{error:?}: {error}").contains("canary"));
     }
     for member in ["hooks", "entities"] {
         let raw = format!("{valid}{member}: []\n");
-        let error = parse_runtime_config_with_env(&raw, env_lookup)
+        let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
             .expect_err("actual top-level governed members remain refused");
         assert_eq!(
             reader_refusal(&error),
@@ -4155,11 +4864,15 @@ fn evidence_provider_private_key_jwt_states_its_client_assertion_audience() {
     let stated = format!(
         "{base}evidenceProviders:\n  verify-main:\n    baseUrl: https://evidence.example/\n    trustBindingId: civil\n    trustedJwksRef: secret:file/evidence-jwks\n    privateKeyJwt:\n      tokenEndpoint: https://issuer.example/oauth2/token\n      clientId: action-client\n      privateKeyRef: secret:file/evidence-client-key\n{audience}      resource: urn:example:evidence\n      scopes: [evidence:invoke]\n"
     );
-    parse_runtime_config_with_env(&stated, env_lookup)
+    parse_runtime_config_with_env(&stated, env_lookup, PRODUCTION_POSTURE)
         .expect("a private-key JWT binding that states its assertion audience is accepted");
 
-    let error = parse_runtime_config_with_env(&stated.replace(audience, ""), env_lookup)
-        .expect_err("a private-key JWT binding without its assertion audience is refused");
+    let error = parse_runtime_config_with_env(
+        &stated.replace(audience, ""),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect_err("a private-key JWT binding without its assertion audience is refused");
     assert_eq!(
         reader_refusal(&error),
         (
@@ -4223,7 +4936,7 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
     ];
     for raw in invalid_bindings {
         assert_eq!(
-            parse_runtime_config_with_env(&raw, env_lookup)
+            parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("invalid event binding refused"),
             RuntimeConfigError::InvalidEventDestination
         );
@@ -4253,8 +4966,9 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
             "maximumAttempts",
         ),
     ] {
-        let error = parse_runtime_config_with_env(&valid.replace(from, to), env_lookup)
-            .expect_err("an out-of-range delivery ceiling is refused");
+        let error =
+            parse_runtime_config_with_env(&valid.replace(from, to), env_lookup, PRODUCTION_POSTURE)
+                .expect_err("an out-of-range delivery ceiling is refused");
         let pointer = format!("{ceilings}/{member}");
         assert_eq!(
             reader_refusal(&error),
@@ -4270,6 +4984,7 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
             "secret:file/../event-hmac-key",
         ),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect_err("a traversing key reference is refused");
     assert_eq!(
@@ -4288,7 +5003,7 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
     ] {
         assert_eq!(
             refusal(
-                parse_runtime_config_with_env(&raw, env_lookup)
+                parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
                     .expect_err("non-closed event profile refused")
             ),
             READER
@@ -4315,7 +5030,7 @@ fn pinned_loopback_https_event_profile_is_absent_without_postgres_test() {
 
     assert_eq!(
         refusal(
-            parse_runtime_config_with_env(&raw, env_lookup)
+            parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
                 .expect_err("test-only network profile is absent from production parsing")
         ),
         READER
@@ -4341,7 +5056,7 @@ async fn pinned_loopback_https_event_profile_activates_with_exact_test_tls_and_c
     let compiled = compiled_webhooks(&[(DESTINATION, 5_000, 5)]);
 
     let activate = |runtime: &str| {
-        parse_runtime_config_with_env(runtime, env_lookup)
+        parse_runtime_config_with_env(runtime, env_lookup, PRODUCTION_POSTURE)
             .expect("test-only loopback HTTPS binding parses")
             .activate_event_destinations(&compiled)
             .expect("test-only loopback HTTPS binding activates")
@@ -4379,7 +5094,7 @@ async fn pinned_loopback_https_event_profile_activates_with_exact_test_tls_and_c
 
     let request = destination
         .request_template()
-        .render_event(event_headers(), br#"{"label":"value"}"#.to_vec())
+        .render_signed_event(event_headers(), br#"{"label":"value"}"#.to_vec())
         .expect("closed event request renders");
     assert_eq!(
         destination
@@ -4394,7 +5109,8 @@ async fn pinned_loopback_https_event_profile_activates_with_exact_test_tls_and_c
     assert_eq!(
         parse_runtime_config_with_env(
             &raw.replace("https://127.0.0.1:1/", "http://127.0.0.1:1/"),
-            env_lookup
+            env_lookup,
+            PRODUCTION_POSTURE
         )
         .expect_err("the test profile never weakens HTTPS"),
         RuntimeConfigError::InvalidEventDestination
@@ -4422,7 +5138,8 @@ fn activation_constructs_the_exact_platform_policy_template_and_signing_material
             4,
         ),
     );
-    let config = parse_runtime_config_with_env(&raw, env_lookup).expect("runtime parses");
+    let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .expect("runtime parses");
     let compiled = compiled_webhooks(&[(DESTINATION_CANARY, 5_000, 5)]);
     let activated = config
         .activate_event_destinations(&compiled)
@@ -4444,10 +5161,41 @@ fn activation_constructs_the_exact_platform_policy_template_and_signing_material
     assert!(destination.binding_digest().starts_with("sha256:"));
     assert_eq!(destination.binding_digest().len(), 71);
     let destination_binding_digest = destination.binding_digest().to_owned();
-    destination.with_hmac_sha256_key(|key| assert_eq!(key, KEY_CANARY));
+    use registry_platform_crypto::delivery_signature::{
+        verify_authenticity, DeliveryKey, DeliveryKeys, SignedContent,
+    };
+    use registry_platform_hooks::delivery::{
+        DeliverySignatureFields, HookDestination, SharedUrlDestination,
+    };
+    let shared = SharedUrlDestination(
+        activated
+            .lookup_shared(DESTINATION_CANARY)
+            .expect("active destination"),
+    );
+    let body = br#"{"label":"value"}"#;
+    let signature = shared
+        .sign_delivery(DeliverySignatureFields {
+            id: "event",
+            timestamp: 1000,
+            body,
+        })
+        .unwrap();
+    let keys = DeliveryKeys::new(DeliveryKey::new(KEY_CANARY).unwrap(), None).unwrap();
+    assert_eq!(
+        verify_authenticity(
+            &keys,
+            SignedContent {
+                id: "event",
+                timestamp: "1000",
+                signature: &signature,
+                body
+            }
+        ),
+        Ok(1000)
+    );
     let request = destination
         .request_template()
-        .render_event(event_headers(), br#"{"label":"value"}"#.to_vec())
+        .render_signed_event(event_headers(), br#"{"label":"value"}"#.to_vec())
         .expect("closed event request renders");
 
     let diagnostic = format!("{config:?} {activated:?} {destination:?} {request:?}");
@@ -4484,6 +5232,7 @@ fn activation_requires_exact_compiled_and_runtime_destination_sets() {
     let missing = parse_runtime_config_with_env(
         &valid_runtime(&fixture.secret_root, &fixture.package_root),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("empty runtime parses");
     assert_eq!(
@@ -4525,6 +5274,7 @@ fn activation_requires_exact_compiled_and_runtime_destination_sets() {
         let config = parse_runtime_config_with_env(
             &runtime_with_event_destinations(&fixture, &bindings),
             env_lookup,
+            PRODUCTION_POSTURE,
         )
         .expect("binding set parses");
         assert_eq!(
@@ -4558,6 +5308,7 @@ fn runtime_destination_classification_ceiling_cannot_widen_compiled_event_disclo
             ),
         ),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("compatible shared binding parses");
     let activated = compatible
@@ -4586,9 +5337,12 @@ fn runtime_destination_classification_ceiling_cannot_widen_compiled_event_disclo
         "classificationCeiling: restricted",
         "classificationCeiling: public",
     );
-    let below_compiled_classification =
-        parse_runtime_config_with_env(&below_compiled_classification, env_lookup)
-            .expect("lower classification ceiling parses");
+    let below_compiled_classification = parse_runtime_config_with_env(
+        &below_compiled_classification,
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect("lower classification ceiling parses");
     assert_eq!(
         below_compiled_classification
             .activate_event_destinations(&compiled)
@@ -4619,9 +5373,9 @@ fn event_destination_profiles_are_written_in_kebab_case_and_keep_their_binding_d
         2_500,
         3,
     )
-    .replace("production-https", "loopback-development-http")
+    .replace("production-https", "loopback-http")
     .replace("dual-stack-strict", "ipv4-only");
-    assert!(loopback.contains("networkProfile: loopback-development-http"));
+    assert!(loopback.contains("networkProfile: loopback-http"));
     assert!(loopback.contains("dnsFamily: ipv4-only"));
 
     // The digest of a binding is stored with every delivery it queued, so
@@ -4639,6 +5393,7 @@ fn event_destination_profiles_are_written_in_kebab_case_and_keep_their_binding_d
         let activated = parse_runtime_config_with_env(
             &runtime_with_event_destinations(&fixture, binding),
             env_lookup,
+            PRODUCTION_POSTURE,
         )
         .expect("kebab-case event profiles parse")
         .activate_event_destinations(&compiled)
@@ -4652,18 +5407,29 @@ fn event_destination_profiles_are_written_in_kebab_case_and_keep_their_binding_d
         );
     }
 
+    let retired = production.replace(
+        "networkProfile: production-https",
+        "networkProfile: loopback-development-http",
+    );
+    let error = parse_runtime_config_with_env(
+        &runtime_with_event_destinations(&fixture, &retired),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect_err("the retired profile is refused");
+    let diagnostic = &error.diagnostics(None)[0];
+    assert_eq!(
+        diagnostic.path,
+        format!("/destinations/hooks/{DESTINATION}/networkProfile")
+    );
+    assert!(diagnostic.suggested_action.contains("Write loopback-http"));
+
     for (current, retired, member, spellings) in [
         (
             "networkProfile: production-https",
             "networkProfile: productionHttps",
             "networkProfile",
-            ["production-https", "loopback-development-http"],
-        ),
-        (
-            "networkProfile: production-https",
-            "networkProfile: loopbackDevelopmentHttp",
-            "networkProfile",
-            ["production-https", "loopback-development-http"],
+            ["production-https", "loopback-http"],
         ),
         (
             "dnsFamily: dual-stack-strict",
@@ -4680,8 +5446,8 @@ fn event_destination_profiles_are_written_in_kebab_case_and_keep_their_binding_d
     ] {
         assert!(production.contains(current), "{current}");
         let raw = runtime_with_event_destinations(&fixture, &production.replace(current, retired));
-        let error = parse_runtime_config_with_env(&raw, env_lookup)
-            .expect_err("a camelCase event profile word is refused");
+        let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+            .expect_err("a retired event profile word is refused");
         let pointer = format!("/destinations/hooks/{DESTINATION}/{member}");
         assert_eq!(
             reader_refusal(&error),
@@ -4727,6 +5493,7 @@ fn event_destination_digest_is_deterministic_across_yaml_map_order() {
         parse_runtime_config_with_env(
             &runtime_with_event_destinations(&fixture, &bindings),
             env_lookup,
+            PRODUCTION_POSTURE,
         )
         .expect("ordered runtime parses")
         .activate_event_destinations(&compiled)
@@ -4780,6 +5547,362 @@ fn event_destination_digest_is_deterministic_across_yaml_map_order() {
 }
 
 #[test]
+fn a_destination_key_of_31_bytes_names_its_path_and_length() {
+    assert_destination_key_error(&[b'a'; 31], "31 bytes");
+}
+
+#[test]
+fn a_65_byte_destination_key_ending_in_a_newline_names_the_newline() {
+    let mut key = [b'a'; 65];
+    key[64] = b'\n';
+    assert_destination_key_error(&key, "65 bytes (trailing newline: true)");
+}
+
+fn assert_destination_key_error(key: &[u8], expected: &str) {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", key);
+    let binding = event_destination_binding(
+        "case-operations",
+        "https://events.example/",
+        "/hooks/registry",
+        "secret:file/event-hmac-key",
+        4_000,
+        4,
+    );
+    let runtime = parse_runtime_config_with_env(
+        &runtime_with_event_destinations(&fixture, &binding),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .expect("valid destination configuration");
+    let error = runtime
+        .activate_event_destinations(&compiled_webhooks(&[("case-operations", 5_000, 5)]))
+        .expect_err("invalid key length")
+        .to_string();
+    assert!(
+        error.contains("destinations.hooks.case-operations.hmacSha256KeyRef"),
+        "{error}"
+    );
+    assert!(error.contains(expected), "{error}");
+}
+
+fn destination_key_config(id: &str) -> String {
+    event_destination_binding(
+        id,
+        "https://events.example/",
+        "/hooks/registry",
+        "secret:file/event-hmac-key",
+        4_000,
+        4,
+    )
+}
+
+fn previous_destination_key(binding: &str, reference: &str) -> String {
+    binding.replace(
+        "      deliveryCeilings:",
+        &format!("      previousHmacSha256KeyRef: {reference}\n      deliveryCeilings:"),
+    )
+}
+
+#[test]
+fn two_destinations_sharing_key_bytes_are_refused_naming_both_paths() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", &[1; 32]);
+    fixture.write_secret("second-key", &[1; 32]);
+    let config = format!(
+        "{}{}",
+        destination_key_config("alpha"),
+        destination_key_config("bravo")
+            .replace("secret:file/event-hmac-key", "secret:file/second-key")
+    );
+    let runtime = parse_runtime_config_with_env(
+        &runtime_with_event_destinations(&fixture, &config),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .unwrap();
+    let error = runtime
+        .activate_event_destinations(&compiled_webhooks(&[
+            ("alpha", 5000, 5),
+            ("bravo", 5000, 5),
+        ]))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "destinations.hooks.alpha.hmacSha256KeyRef and destinations.hooks.bravo.hmacSha256KeyRef resolve to the same key bytes. Give destinations.hooks.bravo.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there.");
+}
+
+#[test]
+fn a_previous_destination_key_equal_to_the_current_key_is_refused() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", &[1; 32]);
+    fixture.write_secret("previous", &[1; 32]);
+    let config = previous_destination_key(&destination_key_config("alpha"), "secret:file/previous");
+    let runtime = parse_runtime_config_with_env(
+        &runtime_with_event_destinations(&fixture, &config),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .unwrap();
+    let error = runtime
+        .activate_event_destinations(&compiled_webhooks(&[("alpha", 5000, 5)]))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "destinations.hooks.alpha.previousHmacSha256KeyRef holds the same bytes as destinations.hooks.alpha.hmacSha256KeyRef. To rotate, write 32 new random bytes to the secret destinations.hooks.alpha.hmacSha256KeyRef references and keep the old bytes behind destinations.hooks.alpha.previousHmacSha256KeyRef.");
+}
+
+#[test]
+fn an_explicit_null_previous_destination_key_is_refused() {
+    let fixture = RuntimeFixture::new();
+    let config = previous_destination_key(&destination_key_config("alpha"), "null");
+    assert!(parse_runtime_config_with_env(
+        &runtime_with_event_destinations(&fixture, &config),
+        env_lookup,
+        PRODUCTION_POSTURE,
+    )
+    .is_err());
+}
+
+#[test]
+fn a_previous_destination_key_leaves_the_binding_digest_unchanged() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", &[1; 32]);
+    fixture.write_secret("previous", &[2; 32]);
+    let compiled = compiled_webhooks(&[("alpha", 5000, 5)]);
+    let binding = destination_key_config("alpha");
+    let activate = |config: &str| {
+        parse_runtime_config_with_env(
+            &runtime_with_event_destinations(&fixture, config),
+            env_lookup,
+            PRODUCTION_POSTURE,
+        )
+        .unwrap()
+        .activate_event_destinations(&compiled)
+        .unwrap()
+    };
+    let first = activate(&binding);
+    let second = activate(&previous_destination_key(&binding, "secret:file/previous"));
+    assert_eq!(first.binding_digest(), second.binding_digest());
+    assert_eq!(
+        first.lookup("alpha").unwrap().binding_digest(),
+        second.lookup("alpha").unwrap().binding_digest()
+    );
+}
+
+fn completion_binding(id: &str, recipient: &str) -> String {
+    format!("{}    completion:\n      recipientBinding: {recipient}\n      hmacSha256KeyRef: secret:file/review-key\n", review_authority_binding(id))
+}
+
+#[test]
+fn a_completion_token_names_its_replacement() {
+    let fixture = RuntimeFixture::new();
+    let raw = format!(
+        "{}reviewAuthorities:\n{}    completionTokenRef: secret:file/old-token\n",
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+        review_authority_binding("casework")
+    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .unwrap_err()
+        .render_human(None);
+    assert!(
+        error.contains("Replace completionTokenRef with completion.hmacSha256KeyRef."),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_completion_recipient_names_its_replacement() {
+    let fixture = RuntimeFixture::new();
+    let raw = format!(
+        "{}reviewAuthorities:\n{}    completionRecipient: registry\n",
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+        review_authority_binding("casework")
+    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .unwrap_err()
+        .render_human(None);
+    assert!(
+        error.contains("Move completionRecipient to completion.recipientBinding."),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_completion_block_without_a_key_is_refused() {
+    let fixture = RuntimeFixture::new();
+    let raw = format!(
+        "{}reviewAuthorities:\n{}    completion:\n      recipientBinding: registry\n",
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+        review_authority_binding("casework")
+    );
+    let error = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE)
+        .unwrap_err()
+        .render_human(None);
+    assert!(error.contains("hmacSha256KeyRef"), "{error}");
+}
+
+#[test]
+fn a_completion_key_equal_to_a_destination_key_is_refused_naming_both_paths() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("event-hmac-key", &[1; 32]);
+    fixture.write_secret("review-key", &[1; 32]);
+    fixture.write_secret("review-token", b"outgoing-review-token");
+    let raw = format!(
+        "{}reviewAuthorities:\n{}",
+        runtime_with_event_destinations(&fixture, &destination_key_config("alpha")),
+        completion_binding("casework", "registry")
+    );
+    let compiled = compiled_webhooks(&[("alpha", 5000, 5)]);
+    let runtime = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).unwrap();
+    let error = runtime.activate_event_destinations(&compiled).unwrap_err();
+    assert_eq!(error.to_string(), "destinations.hooks.alpha.hmacSha256KeyRef and reviewAuthorities.casework.completion.hmacSha256KeyRef resolve to the same key bytes. Give reviewAuthorities.casework.completion.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there.");
+}
+
+#[tokio::test]
+async fn a_runtime_file_activates_a_previous_completion_key() {
+    use registry_breg::postgres::{ConnectionConfig, PoolBounds};
+    use registry_breg::review_store::ReviewCompletionReceiver;
+    use registry_platform_crypto::delivery_signature::{
+        self, DeliveryKey, DeliveryKeys, SignedContent,
+    };
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let fixture = RuntimeFixture::new();
+    let previous = [
+        uuid::Uuid::new_v4().as_bytes().as_slice(),
+        uuid::Uuid::new_v4().as_bytes(),
+    ]
+    .concat();
+    fixture.write_secret("review-key", &[1; 32]);
+    fixture.write_secret("previous", &previous);
+    fixture.write_secret("review-token", b"outgoing-review-token");
+    let path = fixture.path("runtime.yaml");
+    fs::write(
+        &path,
+        format!(
+            "{}reviewAuthorities:\n{}      previousHmacSha256KeyRef: secret:file/previous\n",
+            valid_runtime(&fixture.secret_root, &fixture.package_root),
+            completion_binding("casework", "registry"),
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let config = load_runtime_config_with_env(&path, env_lookup, PRODUCTION_POSTURE).unwrap();
+    let authorities = config
+        .activate_review_authorities(&compiled_webhooks(&[]))
+        .unwrap()
+        .unwrap();
+    let timeout = Duration::from_millis(50);
+    let ca = rcgen::generate_simple_self_signed(vec!["db.example.invalid".to_owned()]).unwrap();
+    let pool = ConnectionConfig::require_tls_with_custom_ca(
+        "postgresql://registry_runtime@db.example.invalid/registry",
+        ca.cert.der(),
+        PoolBounds::new(1, timeout, timeout, timeout).unwrap(),
+    )
+    .unwrap()
+    .build_pool()
+    .unwrap();
+    let receiver = ReviewCompletionReceiver::new(pool, authorities);
+    let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    let id = uuid::Uuid::new_v4().to_string();
+    let body = b"{}";
+    let keys = DeliveryKeys::new(DeliveryKey::new(&previous).unwrap(), None).unwrap();
+    let signature = delivery_signature::sign(&keys, &id, 1_800_000_000, body).unwrap();
+    assert_eq!(
+        receiver
+            .verify_completion(
+                "registry",
+                SignedContent {
+                    id: &id,
+                    timestamp: "1800000000",
+                    signature: &signature,
+                    body,
+                },
+                now
+            )
+            .unwrap(),
+        ("casework", 7),
+    );
+}
+
+#[test]
+fn completion_key_refusals_render_each_sentence_once() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("review-token", b"outgoing-review-token");
+    fixture.write_secret("review-key", &[1; 32]);
+    fixture.write_secret("short", &[2; 31]);
+    fixture.write_secret("previous", &[1; 32]);
+    let current = "reviewAuthorities.casework.completion.hmacSha256KeyRef";
+    let previous = "reviewAuthorities.casework.completion.previousHmacSha256KeyRef";
+    for (binding, field, reason, action) in [
+        (
+            completion_binding("casework", "registry").replace("file/review-key", "file/short"),
+            "hmacSha256KeyRef",
+            format!("{current} has 31 bytes (trailing newline: false)."),
+            "Supply 32 to 64 exact key bytes.".to_owned(),
+        ),
+        (
+            completion_binding("casework", "registry").replace("file/review-key", "file/missing"),
+            "hmacSha256KeyRef",
+            format!("{current} could not be resolved: the referenced secret is unavailable."),
+            "Create the secret under the configured provider, or correct the name.".to_owned(),
+        ),
+        (
+            format!("{}      previousHmacSha256KeyRef: secret:file/previous\n", completion_binding("casework", "registry")),
+            "previousHmacSha256KeyRef",
+            format!("{previous} holds the same bytes as {current}."),
+            format!("To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}."),
+        ),
+    ] {
+        let raw = format!("{}reviewAuthorities:\n{binding}", valid_runtime(&fixture.secret_root, &fixture.package_root));
+        let config = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).unwrap();
+        let error = config.activate_review_authorities(&compiled_webhooks(&[])).err().expect("key is refused");
+        assert_eq!(error.to_string(), format!("{reason} {action}"));
+        assert_eq!(
+            error.render_human(None),
+            format!("error[breg.runtime.invalid-delivery-key] /reviewAuthorities/casework/completion/{field}\n  {reason}\n  next: {action}\n1 error, 0 warnings in 1 file\n"),
+        );
+    }
+}
+
+#[test]
+fn completion_authorities_with_distinct_references_to_equal_keys_are_refused() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("review-key", &[1; 32]);
+    fixture.write_secret("second-key", &[1; 32]);
+    let raw = format!(
+        "{}reviewAuthorities:\n{}{}",
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+        completion_binding("casework-a", "registry-a"),
+        completion_binding("casework-b", "registry-b")
+            .replace("secret:file/review-key", "secret:file/second-key"),
+    );
+    let runtime = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).unwrap();
+    let error = runtime
+        .activate_event_destinations(&compiled_webhooks(&[]))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "reviewAuthorities.casework-a.completion.hmacSha256KeyRef and reviewAuthorities.casework-b.completion.hmacSha256KeyRef resolve to the same key bytes. Give reviewAuthorities.casework-b.completion.hmacSha256KeyRef its own key by writing 32 new random bytes to another secret and referencing it there.");
+}
+
+#[test]
+fn two_authorities_sharing_a_recipient_binding_are_refused() {
+    let fixture = RuntimeFixture::new();
+    fixture.write_secret("review-token", b"outgoing-review-token");
+    fixture.write_secret("review-key", &[1; 32]);
+    let raw = format!(
+        "{}reviewAuthorities:\n{}{}",
+        valid_runtime(&fixture.secret_root, &fixture.package_root),
+        completion_binding("casework-a", "registry"),
+        completion_binding("casework-b", "registry")
+    );
+    let compiled = compiled_webhooks(&[]);
+    let runtime = parse_runtime_config_with_env(&raw, env_lookup, PRODUCTION_POSTURE).unwrap();
+    let error = runtime
+        .activate_review_authorities(&compiled)
+        .err()
+        .expect("duplicate recipient refused")
+        .to_string();
+    assert!(error.contains("reviewAuthorities.casework-a.completion.recipientBinding and reviewAuthorities.casework-b.completion.recipientBinding"), "{error}");
+}
+
+#[test]
 fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
     const SECRET_CANARY: &str = "event-secret-reference-canary";
 
@@ -4810,12 +5933,20 @@ fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
         let config = parse_runtime_config_with_env(
             &runtime_with_event_destinations(&fixture, &binding),
             env_lookup,
+            PRODUCTION_POSTURE,
         )
         .expect("secret-ref runtime parses");
         let error = config
             .activate_event_destinations(&compiled)
             .expect_err("missing secret refused");
-        assert_eq!(error, EventDestinationActivationError::Secret);
+        if tls.is_empty() {
+            assert!(matches!(
+                error,
+                EventDestinationActivationError::SigningKeyUnavailable { .. }
+            ));
+        } else {
+            assert_eq!(error, EventDestinationActivationError::Secret);
+        }
         assert!(!format!("{error:?} {error}").contains(SECRET_CANARY));
     }
 
@@ -4834,14 +5965,15 @@ fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
             ),
         ),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect("oversized secret ref parses");
-    assert_eq!(
+    assert!(matches!(
         oversized
             .activate_event_destinations(&compiled)
             .expect_err("oversized secret refused by the shared loader"),
-        EventDestinationActivationError::Secret
-    );
+        EventDestinationActivationError::SigningKeyUnavailable { .. }
+    ));
 
     #[cfg(unix)]
     {
@@ -4866,14 +5998,15 @@ fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
                 ),
             ),
             env_lookup,
+            PRODUCTION_POSTURE,
         )
         .expect("unsafe secret ref parses");
-        assert_eq!(
+        assert!(matches!(
             unsafe_file
                 .activate_event_destinations(&compiled)
                 .expect_err("unsafe secret file refused by the shared loader"),
-            EventDestinationActivationError::Secret
-        );
+            EventDestinationActivationError::SigningKeyUnavailable { .. }
+        ));
     }
 }
 
@@ -4906,6 +6039,7 @@ async fn production_event_policy_refuses_literal_metadata_and_unallowed_private_
                 ),
             ),
             env_lookup,
+            PRODUCTION_POSTURE,
         )
         .expect("literal HTTPS binding parses");
         let activated = config
@@ -4916,7 +6050,7 @@ async fn production_event_policy_refuses_literal_metadata_and_unallowed_private_
             .expect("compiled destination is active");
         let request = destination
             .request_template()
-            .render_event(event_headers(), br#"{"label":"value"}"#.to_vec())
+            .render_signed_event(event_headers(), br#"{"label":"value"}"#.to_vec())
             .expect("event request renders");
         let error = destination
             .policy()
@@ -4941,16 +6075,16 @@ fn env_lookup(name: &str) -> Option<String> {
 
 fn runtime_with_discovery_source(fixture: &RuntimeFixture) -> String {
     valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-        "    jwksCache:\n",
-        "    jwksSource:\n      type: discovery\n    jwksCache:\n",
+        "        jwksCache:\n",
+        "        jwksSource:\n          type: discovery\n        jwksCache:\n",
     )
 }
 
 fn runtime_with_static_jwks_ref(fixture: &RuntimeFixture, document_ref: &str) -> String {
     valid_runtime(&fixture.secret_root, &fixture.package_root)
     .replace(
-        "    jwksCache:\n",
-        &format!("    jwksSource:\n      type: static\n      documentRef: {document_ref}\n    jwksCache:\n"),
+        "        jwksCache:\n",
+        &format!("        jwksSource:\n          type: static\n          documentRef: {document_ref}\n        jwksCache:\n"),
     )
 }
 
@@ -5094,7 +6228,7 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
     use registry_breg::attachment_storage::AttachmentStorage;
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let default = parse_runtime_config(&base).unwrap();
+    let default = parse_runtime_config(&base, PRODUCTION_POSTURE).unwrap();
     assert!(matches!(
         default
             .activate_attachment_storage("registry")
@@ -5102,8 +6236,11 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
             .unwrap(),
         AttachmentStorage::Database
     ));
-    let explicit =
-        parse_runtime_config(&format!("{base}\nattachmentStorage: {{type: database}}\n")).unwrap();
+    let explicit = parse_runtime_config(
+        &format!("{base}\nattachmentStorage: {{type: database}}\n"),
+        PRODUCTION_POSTURE,
+    )
+    .unwrap();
     assert!(matches!(
         explicit
             .activate_attachment_storage("registry")
@@ -5114,12 +6251,12 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
     let invalid = format!(
         "{base}\nattachmentStorage:\n  type: s3\n  url: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n"
     );
-    let error = parse_runtime_config(&invalid).unwrap_err();
+    let error = parse_runtime_config(&invalid, PRODUCTION_POSTURE).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentStorage);
     assert_eq!(path_of(&error), "/attachmentStorage");
     assert_eq!(code_of(&error), "breg.runtime.invalid-attachment-storage");
     let valid = invalid.replace("http://public.example", "https://storage-canary.example");
-    let config = parse_runtime_config(&valid).unwrap();
+    let config = parse_runtime_config(&valid, PRODUCTION_POSTURE).unwrap();
     assert!(!format!("{config:?}").contains("storage-canary"));
 }
 
@@ -5129,16 +6266,17 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     assert!(matches!(
-        parse_runtime_config(&base)
+        parse_runtime_config(&base, PRODUCTION_POSTURE)
             .unwrap()
             .activate_attachment_verification()
             .unwrap(),
         AttachmentVerification::Disabled
     ));
     assert!(matches!(
-        parse_runtime_config(&format!(
-            "{base}\nattachmentVerification: {{type: disabled}}\n"
-        ))
+        parse_runtime_config(
+            &format!("{base}\nattachmentVerification: {{type: disabled}}\n"),
+            PRODUCTION_POSTURE
+        )
         .unwrap()
         .activate_attachment_verification()
         .unwrap(),
@@ -5147,7 +6285,7 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
     let invalid = format!(
         "{base}\nattachmentVerification:\n  type: http\n  url: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
     );
-    let error = parse_runtime_config(&invalid).unwrap_err();
+    let error = parse_runtime_config(&invalid, PRODUCTION_POSTURE).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentVerification);
     assert_eq!(path_of(&error), "/attachmentVerification");
     assert_eq!(
@@ -5156,7 +6294,7 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
     );
     fixture.write_secret("verifier-token", b"verifier-token-canary");
     let valid = invalid.replace("http://public.example", "https://verifier-canary.example");
-    let config = parse_runtime_config(&valid).unwrap();
+    let config = parse_runtime_config(&valid, PRODUCTION_POSTURE).unwrap();
     assert!(!format!("{config:?}").contains("verifier-canary"));
     assert!(matches!(
         config.activate_attachment_verification().unwrap(),
@@ -5174,9 +6312,10 @@ fn one_attempt_budget_covers_the_storage_read_and_the_verifier_call() {
              attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: {verifier}\n"
         )
     };
-    parse_runtime_config(&both(30_000, 25_000)).expect("the largest pair the budget holds");
+    parse_runtime_config(&both(30_000, 25_000), PRODUCTION_POSTURE)
+        .expect("the largest pair the budget holds");
 
-    let error = parse_runtime_config(&both(30_000, 25_001)).unwrap_err();
+    let error = parse_runtime_config(&both(30_000, 25_001), PRODUCTION_POSTURE).unwrap_err();
     assert_eq!(error, RuntimeConfigError::AttachmentAttemptBudgetExceeded);
     assert_eq!(
         code_of(&error),
@@ -5205,11 +6344,12 @@ fn one_attempt_budget_covers_the_storage_read_and_the_verifier_call() {
     let database_storage = format!(
         "{base}\nattachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: 55000\n"
     );
-    parse_runtime_config(&database_storage).expect("a database read takes no storage budget");
+    parse_runtime_config(&database_storage, PRODUCTION_POSTURE)
+        .expect("a database read takes no storage budget");
     let disabled_verification = format!(
         "{base}\nattachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 60000\n"
     );
-    parse_runtime_config(&disabled_verification)
+    parse_runtime_config(&disabled_verification, PRODUCTION_POSTURE)
         .expect("storage alone serves requests, not verification attempts");
 }
 
@@ -5218,7 +6358,7 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     use registry_breg::field_encryption::FieldEncryptionProvider;
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
-    let default = parse_runtime_config(&base).unwrap();
+    let default = parse_runtime_config(&base, PRODUCTION_POSTURE).unwrap();
     assert!(
         default.field_encryption().provider().is_none(),
         "field encryption is unconfigured by default"
@@ -5227,7 +6367,7 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     let transit = format!(
         "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n"
     );
-    let config = parse_runtime_config(&transit).unwrap();
+    let config = parse_runtime_config(&transit, PRODUCTION_POSTURE).unwrap();
     assert!(matches!(
         config.field_encryption().provider(),
         Some(FieldEncryptionProvider::Transit(_))
@@ -5242,7 +6382,7 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     let local = format!(
         "{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/breg-field-dek\n"
     );
-    let config = parse_runtime_config(&local).unwrap();
+    let config = parse_runtime_config(&local, DEVELOPMENT_POSTURE).unwrap();
     assert!(matches!(
         config.field_encryption().provider(),
         Some(FieldEncryptionProvider::LocalFile { .. })
@@ -5258,7 +6398,7 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
             "{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:env/BREG_FIELD_DEK\n"
         ),
     ] {
-        let error = parse_runtime_config(&invalid).unwrap_err();
+        let error = parse_runtime_config(&invalid, DEVELOPMENT_POSTURE).unwrap_err();
         assert_eq!(error, RuntimeConfigError::InvalidFieldEncryption);
         assert_eq!(path_of(&error), "/fieldEncryption");
         assert_eq!(code_of(&error), "breg.runtime.invalid-field-encryption");
@@ -5269,7 +6409,7 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
         let invalid = format!(
             "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: {timeout}\n"
         );
-        let error = parse_runtime_config(&invalid).unwrap_err();
+        let error = parse_runtime_config(&invalid, PRODUCTION_POSTURE).unwrap_err();
         assert_eq!(
             reader_refusal(&error),
             (
@@ -5282,7 +6422,7 @@ fn field_encryption_is_absent_by_default_and_validates_operator_binding() {
     // refused before field-encryption validation runs.
     let unknown_type = format!("{base}\nfieldEncryption:\n  provider:\n    type: kms\n");
     assert_eq!(
-        refusal(parse_runtime_config(&unknown_type).unwrap_err()),
+        refusal(parse_runtime_config(&unknown_type, PRODUCTION_POSTURE).unwrap_err()),
         READER
     );
 }
@@ -5296,7 +6436,7 @@ fn an_audit_key_that_is_not_a_secret_reference_is_refused_at_the_reference() {
             "  hashKeyRef: secret:file/audit-key\n",
             &format!("  hashKeyRef: {reference}\n"),
         );
-        let error = parse_runtime_config(&configured)
+        let error = parse_runtime_config(&configured, PRODUCTION_POSTURE)
             .expect_err("an audit key that is not a secret reference is refused");
         assert_eq!(
             reader_refusal(&error),
@@ -5324,6 +6464,7 @@ fn a_task_status_casework_resource_is_refused_naming_status_resource() {
     let error = parse_runtime_config_with_env(
         &format!("{base}\ntaskGrantStatus: {}\n", json!([status])),
         env_lookup,
+        PRODUCTION_POSTURE,
     )
     .expect_err("the Casework-named spelling is refused");
     assert_eq!(
@@ -5348,10 +6489,10 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
         "statusResource":"urn:casework:test",
         "caBundleRef":"secret:file/missing-task-status-ca"
     });
-    parse_runtime_config(&format!(
-        "{base}\ntaskGrantStatus: {}\n",
-        json!([status.clone()])
-    ))
+    parse_runtime_config(
+        &format!("{base}\ntaskGrantStatus: {}\n", json!([status.clone()])),
+        PRODUCTION_POSTURE,
+    )
     .expect("nonsecret structural checking performs no secret/network I/O");
     for (field, value) in [
         ("sourceIssuer", "not-an-absolute-issuer"),
@@ -5365,9 +6506,11 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
     ] {
         let mut invalid = status.clone();
         invalid[field] = json!(value);
-        let error =
-            parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", json!([invalid])))
-                .unwrap_err();
+        let error = parse_runtime_config(
+            &format!("{base}\ntaskGrantStatus: {}\n", json!([invalid])),
+            PRODUCTION_POSTURE,
+        )
+        .unwrap_err();
         if field == "tokenEndpoint" || field == "clientId" || field == "clientAssertionAudience" {
             let diagnostic = &error.diagnostics(None)[0];
             assert_eq!(diagnostic.path, format!("/taskGrantStatus/0/{field}"));
@@ -5387,15 +6530,21 @@ fn task_status_structural_bindings_are_refused_before_runtime_activation() {
             })
             .collect();
         assert_eq!(
-            parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", json!(entries)))
-                .unwrap_err(),
+            parse_runtime_config(
+                &format!("{base}\ntaskGrantStatus: {}\n", json!(entries)),
+                PRODUCTION_POSTURE
+            )
+            .unwrap_err(),
             RuntimeConfigError::InvalidTaskGrantStatus
         );
     }
     let mut invalid = status.clone();
     invalid["statusResource"] = json!("not-an-absolute-resource");
-    let error = parse_runtime_config(&format!("{base}\ntaskGrantStatus: {}\n", json!([invalid])))
-        .unwrap_err();
+    let error = parse_runtime_config(
+        &format!("{base}\ntaskGrantStatus: {}\n", json!([invalid])),
+        PRODUCTION_POSTURE,
+    )
+    .unwrap_err();
     let diagnostic = &error.diagnostics(None)[0];
     assert_eq!(diagnostic.path, "/taskGrantStatus");
     assert_eq!(diagnostic.code, "breg.runtime.invalid-task-grant-status");
@@ -5441,10 +6590,10 @@ fn an_external_source_entry_is_keyed_by_its_projection_and_errors_name_its_membe
     let ca = fixture.path("source-ca.pem");
     fs::write(&ca, "").expect("ca fixture writes");
     let entry = external_source_entry("sha256:not-a-digest", &ca);
-    let error = parse_runtime_config(&external_sources_runtime(
-        &fixture,
-        json!({"person-indexed": entry}),
-    ))
+    let error = parse_runtime_config(
+        &external_sources_runtime(&fixture, json!({"person-indexed": entry})),
+        PRODUCTION_POSTURE,
+    )
     .unwrap_err();
     assert_eq!(
         path_of(&error),
@@ -5463,7 +6612,7 @@ fn retired_refresh_members_are_unknown_to_the_runtime_reader() {
             "refreshLabels",
         ),
     ] {
-        let error = parse_runtime_config(&format!("{base}{block}\n")).unwrap_err();
+        let error = parse_runtime_config(&format!("{base}{block}\n"), PRODUCTION_POSTURE).unwrap_err();
         assert!(
             path_of(&error).ends_with(member) || error.to_string().contains(member),
             "{member}: {} {error}",
@@ -5492,7 +6641,7 @@ fn the_offline_check_binds_an_external_source_against_the_package() {
             registry_breg::contract::parse_project_yaml(text.as_bytes()).expect("example parses");
         compile_project(&project, &[], CompileProfile::Authoring).expect("example compiles")
     };
-    let matching = check_runtime_config(&path, true, Some(&compile(example)));
+    let matching = check_runtime_config(&path, true, Some(&compile(example)), PRODUCTION_POSTURE);
     assert!(
         matching
             .diagnostics
@@ -5507,6 +6656,7 @@ fn the_offline_check_binds_an_external_source_against_the_package() {
         Some(&compile(
             &example.replace("scope: licensing-holders", "scope: another-scope"),
         )),
+        PRODUCTION_POSTURE,
     );
     let diagnostic = mismatched
         .diagnostics
@@ -5586,7 +6736,7 @@ fn a_refresh_worker_profile_with_a_consent_boundary_is_refused() {
     );
     let path = fixture.path("runtime-refresh-consent.yaml");
     fs::write(&path, &runtime).expect("runtime fixture writes");
-    let check = check_runtime_config(&path, true, Some(&registry));
+    let check = check_runtime_config(&path, true, Some(&registry), PRODUCTION_POSTURE);
     let diagnostic = check
         .diagnostics
         .iter()
@@ -5597,4 +6747,111 @@ fn a_refresh_worker_profile_with_a_consent_boundary_is_refused() {
         "/externalRefresh/plans/people/worker/accessProfile"
     );
     assert!(diagnostic.message.contains("consent boundary"));
+}
+
+#[test]
+fn http_public_origin_requires_development_posture() {
+    let fixture = RuntimeFixture::new();
+    let configured = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+        "  bind: 127.0.0.1:8080",
+        "  bind: 127.0.0.1:8080\n  publicOrigin: http://127.0.0.1:8080",
+    );
+    let refusal = parse_runtime_config(&configured, PRODUCTION_POSTURE).unwrap_err();
+    let diagnostics = refusal.diagnostics(None);
+    let diagnostic = diagnostics
+        .iter()
+        .find(|item| item.code == "breg.posture.http-public-origin")
+        .unwrap();
+    assert_eq!(diagnostic.path, "/listener/publicOrigin");
+    assert!(diagnostic.suggested_action.contains("HTTPS origin"));
+    assert!(diagnostic
+        .suggested_action
+        .contains("--posture development"));
+    let config = parse_runtime_config(&configured, DEVELOPMENT_POSTURE).unwrap();
+    assert!(config.posture_report().settings().iter().any(|item| {
+        item.setting.code == "breg.posture.http-public-origin"
+            && item.pointer.as_deref() == Some("/listener/publicOrigin")
+    }));
+    let non_loopback = configured.replace(
+        "publicOrigin: http://127.0.0.1:8080",
+        "publicOrigin: http://registry.example.test",
+    );
+    for posture in [PRODUCTION_POSTURE, DEVELOPMENT_POSTURE] {
+        let error = parse_runtime_config(&non_loopback, posture).unwrap_err();
+        assert_eq!(error, RuntimeConfigError::InvalidListener);
+        assert!(error.diagnostics(None)[0]
+            .suggested_action
+            .contains("HTTPS"));
+    }
+}
+
+#[test]
+fn malformed_loopback_public_origins_get_listener_diagnostics_in_both_postures() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for origin in [
+        "http://user@127.0.0.1:8080",
+        "http://127.0.0.1:8080?query",
+        "http://127.0.0.1:8080#fragment",
+        "http://127.0.0.1:8080/path",
+    ] {
+        let configured = base.replace(
+            "  bind: 127.0.0.1:8080",
+            &format!("  bind: 127.0.0.1:8080\n  publicOrigin: '{origin}'"),
+        );
+        for posture in [PRODUCTION_POSTURE, DEVELOPMENT_POSTURE] {
+            let error = parse_runtime_config(&configured, posture).unwrap_err();
+            assert_eq!(
+                error,
+                RuntimeConfigError::InvalidListener,
+                "{origin} {posture:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn offline_check_reports_invalid_field_encryption_alongside_custody_refusal() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+        "  bind: 127.0.0.1:8080",
+        "  bind: 127.0.0.1:8080\n  publicOrigin: http://127.0.0.1:8080",
+    );
+    let path = fixture.package_root.join("invalid-custody.yaml");
+    fs::write(
+        &path,
+        format!("{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:env/FIELD_DEK\n"),
+    )
+    .unwrap();
+    let check = check_runtime_config(&path, true, None, PRODUCTION_POSTURE);
+    for code in [
+        "breg.posture.http-public-origin",
+        "breg.posture.local-key-custody",
+        "breg.runtime.invalid-field-encryption",
+    ] {
+        assert!(
+            check.diagnostics.iter().any(|item| item.code == code),
+            "{code}"
+        );
+    }
+}
+
+#[test]
+fn offline_check_reports_valid_local_file_custody_only_once() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let path = fixture.package_root.join("local-custody.yaml");
+    fs::write(
+        &path,
+        format!("{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/dek\n"),
+    )
+    .unwrap();
+    let check = check_runtime_config(&path, true, None, PRODUCTION_POSTURE);
+    let errors = check
+        .diagnostics
+        .iter()
+        .filter(|item| item.severity == registry_platform_yaml::Severity::Error)
+        .map(|item| item.code.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(errors, ["breg.posture.local-key-custody"]);
 }

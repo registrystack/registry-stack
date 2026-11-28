@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deadpool_postgres::{GenericClient, Manager, ManagerConfig, Pool, RecyclingMethod};
 use registry_adapter::journal::{self, JournalError, JournalEvent};
+use registry_platform_config::Posture;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config as PgConfig, NoTls};
 
@@ -272,12 +273,22 @@ async fn append_stamps_occurred_at_from_the_runtime_clock() {
         .expect("apply the journal baseline");
 
     let append_began = SystemTime::now();
-    journal::append(&client, event("exchangeCreated"), SystemTime::now())
-        .await
-        .expect("append the first journal event");
-    journal::append(&client, event("exchangeCompleted"), SystemTime::now())
-        .await
-        .expect("append the second journal event");
+    journal::append_in_posture(
+        &client,
+        event("exchangeCreated"),
+        SystemTime::now(),
+        Posture::Production,
+    )
+    .await
+    .expect("append the first journal event");
+    journal::append_in_posture(
+        &client,
+        event("exchangeCompleted"),
+        SystemTime::now(),
+        Posture::Production,
+    )
+    .await
+    .expect("append the second journal event");
     let append_ended = SystemTime::now();
 
     let rows = client
@@ -318,8 +329,8 @@ async fn occurred_at_has_no_database_default_to_fall_back_on() {
     let error = client
         .execute(
             "INSERT INTO adapter_journal_events \
-             (event_kind, exchange_id, operation, caller_ref, route_id, detail) \
-             VALUES ('exchangeCreated', 'e1', 'listRecords', 'caller', 'route', '{}'::jsonb)",
+             (event_kind, exchange_id, operation, caller_ref, route_id, detail, posture) \
+             VALUES ('exchangeCreated', 'e1', 'listRecords', 'caller', 'route', '{}'::jsonb, 'production')",
             &[],
         )
         .await
@@ -341,20 +352,30 @@ async fn retention_deletes_by_occurred_at_read_the_occurrence_index() {
         .await
         .expect("apply the journal baseline");
 
-    journal::append(&client, event("exchangeCreated"), SystemTime::now())
-        .await
-        .expect("append a current journal event");
-    journal::append(&client, event("exchangeCompleted"), SystemTime::now())
-        .await
-        .expect("append a second current journal event");
+    journal::append_in_posture(
+        &client,
+        event("exchangeCreated"),
+        SystemTime::now(),
+        Posture::Production,
+    )
+    .await
+    .expect("append a current journal event");
+    journal::append_in_posture(
+        &client,
+        event("exchangeCompleted"),
+        SystemTime::now(),
+        Posture::Production,
+    )
+    .await
+    .expect("append a second current journal event");
     let backdated = SystemTime::now()
         .checked_sub(30 * DAY)
         .expect("the backdated stamp is after the Unix epoch");
     client
         .execute(
             "INSERT INTO adapter_journal_events \
-             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at) \
-             VALUES ('exchangeSent', 'e0', 'listRecords', 'caller', 'route', $1)",
+             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at, posture) \
+             VALUES ('exchangeSent', 'e0', 'listRecords', 'caller', 'route', $1, 'production')",
             &[&backdated],
         )
         .await
@@ -435,17 +456,22 @@ async fn retention_deletes_expired_rows_in_bounded_oldest_first_batches() {
     client
         .execute(
             "INSERT INTO adapter_journal_events \
-             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at) \
+             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at, posture) \
              SELECT 'exchangeSent', 'e' || n, 'listRecords', 'caller', 'route', \
-                    $1::timestamptz + n * interval '1 millisecond' \
+                    $1::timestamptz + n * interval '1 millisecond', 'production' \
              FROM generate_series(1, $2::bigint + 1) AS n",
             &[&expired_at, &batch],
         )
         .await
         .expect("seed one more expired row than a batch holds");
-    journal::append(&client, event("exchangeCreated"), kept_at)
-        .await
-        .expect("append a row inside the retention window");
+    journal::append_in_posture(
+        &client,
+        event("exchangeCreated"),
+        kept_at,
+        Posture::Production,
+    )
+    .await
+    .expect("append a row inside the retention window");
     let cutoff = now.checked_sub(DAY).expect("the cutoff is representable");
 
     let first = journal::delete_expired(&client, cutoff)
@@ -543,11 +569,12 @@ async fn the_runtime_role_needs_insert_select_and_delete_on_the_journal() {
         .await
         .expect("the ledger is readable"));
     let now = SystemTime::now();
-    journal::append(
+    journal::append_in_posture(
         &client,
         event("exchangeCreated"),
         now.checked_sub(2 * DAY)
             .expect("the stamp is representable"),
+        Posture::Production,
     )
     .await
     .expect("INSERT lets the runtime role append");
@@ -572,9 +599,14 @@ async fn journal_rows_refuse_updates_and_delete_only_whole_for_retention() {
     journal::migrate(&mut client)
         .await
         .expect("apply the journal baseline");
-    journal::append(&client, event("exchangeCreated"), SystemTime::now())
-        .await
-        .expect("append the journal event");
+    journal::append_in_posture(
+        &client,
+        event("exchangeCreated"),
+        SystemTime::now(),
+        Posture::Production,
+    )
+    .await
+    .expect("append the journal event");
 
     let error = client
         .execute(
@@ -619,8 +651,8 @@ async fn the_journal_refuses_unknown_kinds_and_oversized_details() {
     let error = client
         .execute(
             "INSERT INTO adapter_journal_events \
-             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at) \
-             VALUES ('exchangeUnknown', 'e1', 'listRecords', 'caller', 'route', $1)",
+             (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at, posture) \
+             VALUES ('exchangeUnknown', 'e1', 'listRecords', 'caller', 'route', $1, 'production')",
             &[&SystemTime::now()],
         )
         .await
@@ -632,13 +664,14 @@ async fn the_journal_refuses_unknown_kinds_and_oversized_details() {
     );
 
     let oversized = format!("{{\"reason\": \"{}\"}}", "x".repeat(20000));
-    let error = journal::append(
+    let error = journal::append_in_posture(
         &client,
         JournalEvent {
             detail: Some(oversized),
             ..event("exchangeSent")
         },
         SystemTime::now(),
+        Posture::Production,
     )
     .await
     .expect_err("a journal row's detail is bounded");
@@ -668,18 +701,29 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_new_event_ki
         )
         .await
         .expect("record version 100");
-    journal::append(&client, event("exchangeCreated"), SystemTime::now())
+    async fn append_legacy(
+        client: &tokio_postgres::Client,
+        kind: &str,
+    ) -> Result<(), JournalError> {
+        client.execute(
+            "INSERT INTO adapter_journal_events (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at)
+             VALUES ($1, 'legacy-exchange', 'legacy-operation', 'legacy-caller', 'legacy-route', now())",
+            &[&kind],
+        ).await?;
+        Ok(())
+    }
+    append_legacy(&client, "exchangeCreated")
         .await
         .expect("a version 100 journal takes its own kinds");
-    let error = journal::append(&client, event("callRefused"), SystemTime::now())
+    let error = append_legacy(&client, "callRefused")
         .await
         .expect_err("version 100 does not know callRefused");
     expect_check_violation(error, "callRefused before the upgrade");
-    let error = journal::append(&client, event("breakerFallback"), SystemTime::now())
+    let error = append_legacy(&client, "breakerFallback")
         .await
         .expect_err("version 100 does not know breakerFallback");
     expect_check_violation(error, "breakerFallback before the upgrade");
-    let error = journal::append(&client, event("breakerRefused"), SystemTime::now())
+    let error = append_legacy(&client, "breakerRefused")
         .await
         .expect_err("version 100 does not know breakerRefused");
     expect_check_violation(error, "breakerRefused before the upgrade");
@@ -690,7 +734,7 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_new_event_ki
         "resumeStepStarted",
         "resumeStepCheckpointed",
     ] {
-        let error = journal::append(&client, event(kind), SystemTime::now())
+        let error = append_legacy(&client, kind)
             .await
             .expect_err("version 100 does not know asynchronous recovery events");
         expect_check_violation(error, "an asynchronous kind before the upgrade");
@@ -700,17 +744,53 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_new_event_ki
         .await
         .expect("the upgrade applies over existing rows");
 
-    journal::append(&client, event("callRefused"), SystemTime::now())
+    let legacy_posture: Option<String> = client
+        .query_one(
+            "SELECT posture FROM adapter_journal_events WHERE exchange_id = 'legacy-exchange'",
+            &[],
+        )
         .await
-        .expect("version 200 accepts callRefused");
+        .unwrap()
+        .get(0);
+    assert_eq!(legacy_posture, None);
+    for sql in [
+        "INSERT INTO adapter_journal_events (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at)
+         VALUES ('exchangeCreated', 'no-posture', 'operation', 'caller', 'route', now())",
+        "INSERT INTO adapter_journal_events (event_kind, exchange_id, operation, caller_ref, route_id, occurred_at, posture)
+         VALUES ('exchangeCreated', 'bad-posture', 'operation', 'caller', 'route', now(), 'staging')",
+    ] {
+        let error = client.execute(sql, &[]).await.expect_err("new rows require a closed posture");
+        let error = error.as_db_error().unwrap();
+        assert_eq!(*error.code(), tokio_postgres::error::SqlState::CHECK_VIOLATION);
+        assert_eq!(error.constraint(), Some("adapter_journal_events_posture_check"));
+    }
+
+    journal::append_in_posture(
+        &client,
+        event("callRefused"),
+        SystemTime::now(),
+        Posture::Production,
+    )
+    .await
+    .expect("version 200 accepts callRefused");
     // An open-breaker facade exchange emits this pair in order. The journal
     // must admit the whole lifecycle, not just the fallback that answers it.
-    journal::append(&client, event("breakerRefused"), SystemTime::now())
-        .await
-        .expect("the current schema accepts breakerRefused");
-    journal::append(&client, event("breakerFallback"), SystemTime::now())
-        .await
-        .expect("the current schema accepts breakerFallback");
+    journal::append_in_posture(
+        &client,
+        event("breakerRefused"),
+        SystemTime::now(),
+        Posture::Production,
+    )
+    .await
+    .expect("the current schema accepts breakerRefused");
+    journal::append_in_posture(
+        &client,
+        event("breakerFallback"),
+        SystemTime::now(),
+        Posture::Production,
+    )
+    .await
+    .expect("the current schema accepts breakerFallback");
     for kind in [
         "exchangeAccepted",
         "recoveryChecked",
@@ -718,7 +798,7 @@ async fn upgrading_a_version_100_journal_keeps_its_rows_and_accepts_new_event_ki
         "resumeStepStarted",
         "resumeStepCheckpointed",
     ] {
-        journal::append(&client, event(kind), SystemTime::now())
+        journal::append_in_posture(&client, event(kind), SystemTime::now(), Posture::Production)
             .await
             .expect("the current schema accepts an asynchronous recovery event");
     }

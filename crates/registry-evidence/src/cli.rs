@@ -63,6 +63,12 @@ pub enum AuthorityCommand {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         /// Target authority document to validate and activate.
         #[arg(long, value_name = "FILE")]
         document: PathBuf,
@@ -75,6 +81,12 @@ pub enum AuthorityCommand {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
     },
 }
 
@@ -99,6 +111,12 @@ pub enum Command {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         /// Emit the selected command's report in this format.
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
@@ -116,6 +134,9 @@ pub enum Command {
         /// JWKS reachability.
         #[arg(long)]
         require_runtime_dependencies: bool,
+        /// Internal Evidencectl seam for safe local checks after a posture conflict.
+        #[arg(long, hide = true, requires = "require_runtime_dependencies")]
+        offline_dependencies_only: bool,
         /// Also prove the configured audit sink resolves inside this absolute
         /// directory, which the deployment declares persistent.
         ///
@@ -166,6 +187,12 @@ pub enum Command {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         /// Bundle-relative fixture path referenced by exactly one requirement.
         #[arg(long)]
         fixture: PathBuf,
@@ -198,6 +225,12 @@ pub enum Command {
         /// resolving target-host dependencies.
         #[arg(long = "runtime-config")]
         runtime_config: Option<PathBuf>,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         /// Validate compiled target grants offline, without activating them.
         #[arg(long)]
         authority_document: Option<PathBuf>,
@@ -208,6 +241,12 @@ pub enum Command {
     /// Internal Evidencectl seam for bundle-only fixture evaluation.
     #[command(hide = true)]
     BundleEvaluate {
+        #[arg(
+            long,
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         #[arg(long)]
         bundle: PathBuf,
         /// Validated compiled target grants used only for offline fixtures.
@@ -228,6 +267,12 @@ pub enum Command {
     /// Internal Evidencectl seam for recording final offline Adapter facts.
     #[command(hide = true)]
     BundleRecordFixtureFacts {
+        #[arg(
+            long,
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         #[arg(long)]
         bundle: PathBuf,
         /// Validated compiled target grants used only for offline fixtures.
@@ -247,6 +292,12 @@ pub enum Command {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
     },
     /// Re-verify one stored signed response offline against a pinned key set.
     ///
@@ -306,6 +357,12 @@ pub enum Command {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         /// Owner-only JSON draft containing the request shape and audience.
         #[arg(long)]
         input: PathBuf,
@@ -316,6 +373,12 @@ pub enum Command {
         /// Runtime configuration file.
         #[arg(long = "runtime-config", value_name = "FILE")]
         runtime_config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
     },
 }
 
@@ -370,6 +433,7 @@ mod tests {
             require_runtime_dependencies,
             require_audit_under,
             without_audit_lock,
+            ..
         } = parsed.command
         else {
             panic!("check parsed as another command");
@@ -438,6 +502,40 @@ mod tests {
             assert!(runtime.is_required_set(), "{subcommand}");
         }
         assert!(Cli::try_parse_from(["evidence", "serve"]).is_err());
+    }
+
+    #[test]
+    fn offline_fixture_commands_accept_a_posture() {
+        let cli = command();
+        for name in ["bundle-evaluate", "bundle-record-fixture-facts"] {
+            let subcommand = cli.find_subcommand(name).unwrap();
+            assert!(
+                subcommand
+                    .get_arguments()
+                    .any(|arg| arg.get_id() == "posture"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_runtime_command_accepts_a_posture() {
+        fn verify(command: &clap::Command) {
+            if command
+                .get_arguments()
+                .any(|arg| arg.get_id() == "runtime_config")
+            {
+                assert!(
+                    command.get_arguments().any(|arg| arg.get_id() == "posture"),
+                    "{}",
+                    command.get_name()
+                );
+            }
+            for subcommand in command.get_subcommands() {
+                verify(subcommand);
+            }
+        }
+        verify(&command());
     }
 
     #[test]

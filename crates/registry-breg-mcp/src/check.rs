@@ -43,6 +43,7 @@ pub struct CheckRequest<'a> {
     pub environment: bool,
     pub format: OutputFormat,
     pub deny_warnings: bool,
+    pub posture: registry_platform_config::DeclaredPosture,
 }
 
 /// The report `check --format json` writes: the envelope members every ctl
@@ -59,18 +60,23 @@ struct CtlReport {
     errors: usize,
     warnings: usize,
     diagnostics: serde_json::Value,
+    posture: serde_json::Value,
 }
 
 /// Run `breg-mcp check` and report every finding (CFG-DIAG-4): exit 0 when
 /// nothing was refused, 1 when something was or a warning was reported under
 /// `--deny-warnings`, and 3 when the file could not be read.
 pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
-    let (diagnostics, unavailable) = check_runtime_file(request.runtime, request.environment);
+    let (diagnostics, unavailable) =
+        check_runtime_file(request.runtime, request.environment, request.posture);
     let mut report = Report::new(diagnostics);
     report.set_files_checked(1);
     let exit = if unavailable {
         OPERATIONAL_FAILURE_EXIT
-    } else if report.has_errors() || (request.deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (request.deny_warnings
+            && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         DOMAIN_REFUSAL_EXIT
     } else {
         0
@@ -91,6 +97,10 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
                 errors: report.error_count(),
                 warnings: report.warning_count(),
                 diagnostics: report.to_json_value(),
+                posture: serde_json::json!({
+                    "value": request.posture.posture.as_str(),
+                    "source": request.posture.source.as_str(),
+                }),
             };
             let written = serde_json::to_writer_pretty(&mut *stdout, &document)
                 .map_err(std::io::Error::other)
@@ -121,7 +131,11 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
 /// Check the runtime file at `path` as given: the loader needs an absolute,
 /// lexically normal path, and every diagnostic names the file as given.
 /// Returns the findings and whether the file could not be read at all.
-fn check_runtime_file(path: &Path, environment: bool) -> (Vec<Diagnostic>, bool) {
+fn check_runtime_file(
+    path: &Path,
+    environment: bool,
+    posture: registry_platform_config::DeclaredPosture,
+) -> (Vec<Diagnostic>, bool) {
     let given = path.display().to_string();
     let Some(absolute) = absolute_lexical(path) else {
         let mut diagnostic = Diagnostic::error(
@@ -137,7 +151,7 @@ fn check_runtime_file(path: &Path, environment: bool) -> (Vec<Diagnostic>, bool)
         });
         return (vec![diagnostic], true);
     };
-    let checked = crate::config::check_runtime(&absolute, environment);
+    let checked = crate::config::check_runtime_with_posture(&absolute, environment, posture);
     let absolute = absolute.display().to_string();
     let diagnostics = checked
         .diagnostics

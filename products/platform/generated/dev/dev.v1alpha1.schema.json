@@ -153,6 +153,37 @@
       },
       "type": "string"
     },
+    "ExternalBreg": {
+      "additionalProperties": false,
+      "properties": {
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Hook"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "reviewAuthority": {
+          "$ref": "#/$defs/ReviewAuthority"
+        },
+        "schemaTestHeaders": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SecretReference"
+          },
+          "description": "Owner-only bearer header files for the named people in BReg schema rehearsals.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "taskGrant": {
+          "$ref": "#/$defs/TaskGrant"
+        }
+      },
+      "type": "object"
+    },
     "ExternalId": {
       "description": "An identifier another system issues, written exactly as its issuer gives it.",
       "maxLength": 512,
@@ -176,7 +207,7 @@
         },
         "profile": {
           "$ref": "#/$defs/LocalId",
-          "description": "Local identifier of the product profile this grant uses."
+          "description": "Local identifier of the product profile, the Coordinator caller policy, or a local label for a product without profiles."
         },
         "scopes": {
           "description": "Distinct scopes written into the token, at most 32, each an OAuth scope-token of 1 to 256 bytes: printable ASCII without spaces, double quotes or backslashes.",
@@ -194,6 +225,59 @@
       ],
       "type": "object"
     },
+    "GrantsDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "$ref": "#/$defs/Grant"
+        },
+        "breg": {
+          "$ref": "#/$defs/Grant"
+        },
+        "casework": {
+          "$ref": "#/$defs/Grant"
+        },
+        "coordinator": {
+          "$ref": "#/$defs/Grant"
+        },
+        "documents": {
+          "$ref": "#/$defs/Grant"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Grant"
+        },
+        "messaging": {
+          "$ref": "#/$defs/Grant"
+        },
+        "render": {
+          "$ref": "#/$defs/Grant"
+        },
+        "scheduling": {
+          "$ref": "#/$defs/Grant"
+        }
+      },
+      "type": "object"
+    },
+    "Hook": {
+      "additionalProperties": false,
+      "properties": {
+        "keyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "origin": {
+          "$ref": "#/$defs/Url"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "path",
+        "keyRef"
+      ],
+      "type": "object"
+    },
     "LocalId": {
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -205,7 +289,13 @@
         "breg",
         "casework",
         "evidence",
-        "messaging"
+        "messaging",
+        "scheduling",
+        "documents",
+        "coordinator",
+        "adapter",
+        "render",
+        "discovery"
       ],
       "type": "string"
     },
@@ -222,7 +312,7 @@
           "description": "Which product to start."
         },
         "project": {
-          "description": "Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain registry.yaml for BReg, casework.yaml for Casework, evidence.yaml for Evidence or messaging.yaml for Messaging.",
+          "description": "Relative path from the plan's directory to the product project, or `.` for the plan's own directory. It must contain the product’s project manifest.",
           "type": "string"
         }
       },
@@ -230,6 +320,60 @@
         "product",
         "project",
         "audience"
+      ],
+      "type": "object"
+    },
+    "ReviewAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "assertionKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "endpoint": {
+          "$ref": "#/$defs/Url"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "producerId": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "recoveryDays": {
+          "format": "uint32",
+          "maximum": 90,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "id",
+        "endpoint",
+        "profile",
+        "producerId",
+        "recoveryDays",
+        "tokenEndpoint",
+        "clientId",
+        "assertionKeyRef",
+        "resource",
+        "scopes"
       ],
       "type": "object"
     },
@@ -290,6 +434,47 @@
       ],
       "type": "object"
     },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "TaskGrant": {
+      "additionalProperties": false,
+      "properties": {
+        "assertionClient": {
+          "type": "string"
+        },
+        "sourceIssuer": {
+          "$ref": "#/$defs/Url"
+        },
+        "statusClient": {
+          "type": "string"
+        },
+        "statusKeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "statusResource": {
+          "type": "string"
+        },
+        "statusUrl": {
+          "$ref": "#/$defs/Url"
+        },
+        "tokenEndpoint": {
+          "$ref": "#/$defs/Url"
+        }
+      },
+      "required": [
+        "sourceIssuer",
+        "assertionClient",
+        "statusUrl",
+        "tokenEndpoint",
+        "statusClient",
+        "statusKeyRef",
+        "statusResource"
+      ],
+      "type": "object"
+    },
     "TestPerson": {
       "additionalProperties": false,
       "description": "A named test identity that signs in to the started products.",
@@ -315,23 +500,8 @@
           "type": "string"
         },
         "grants": {
-          "additionalProperties": false,
-          "description": "The authority this person holds in each product, keyed by `breg`, `casework`, `evidence` or `messaging`. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`.",
-          "properties": {
-            "breg": {
-              "$ref": "#/$defs/Grant"
-            },
-            "casework": {
-              "$ref": "#/$defs/Grant"
-            },
-            "evidence": {
-              "$ref": "#/$defs/Grant"
-            },
-            "messaging": {
-              "$ref": "#/$defs/Grant"
-            }
-          },
-          "type": "object"
+          "$ref": "#/$defs/GrantsDocument",
+          "description": "The authority this person holds in each product, keyed by its product identifier. An Evidence grant's profile is the requester tag the token carries. Give at least one grant, only for products listed in `products`."
         },
         "subject": {
           "$ref": "#/$defs/ExternalId",
@@ -372,6 +542,14 @@
       "default": {},
       "description": "Run-local connections between BReg and Casework. Leave empty when the products do not call each other. A `runIssuerBinding` replaces the producer's fixed issuer with the run's own, so it requires `issuer: run`."
     },
+    "externalBreg": {
+      "$ref": "#/$defs/ExternalBreg",
+      "description": "Explicit connections from a development BReg to external fixture services."
+    },
+    "externalJwksUri": {
+      "$ref": "#/$defs/Url",
+      "description": "JWKS endpoint for an externally managed issuer. When set, the runner\ndelegates authentication to that issuer and does not mint person tokens."
+    },
     "issuer": {
       "anyOf": [
         {
@@ -392,7 +570,7 @@
       "additionalProperties": {
         "$ref": "#/$defs/TestPerson"
       },
-      "description": "The test people, keyed by a lowercase local identifier. Define 1 to 256, and give at least one grant to every started product.",
+      "description": "The test people, keyed by a lowercase local identifier. Define up to 256, and give at least one grant to every started product that verifies tokens.",
       "propertyNames": {
         "$ref": "#/$defs/LocalId"
       },

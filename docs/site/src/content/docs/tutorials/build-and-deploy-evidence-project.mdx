@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -29,6 +29,13 @@ dependencies before it opens a listener.
   level="Operator handoff with synthetic data and a local signer"
   prerequisites={['The proved adult-status project', 'The Evidence component installed for rstack', 'Free loopback port 18090']}
 />
+
+For the local commands in this tutorial, declare development in your shell.
+`rstack dev` sets this value for the processes it starts.
+
+```sh
+export REGISTRY_STACK_POSTURE=development
+```
 
 ## Before you begin
 
@@ -147,10 +154,10 @@ Access profiles: 1
 
 ## Check and package
 
-Ask whether the target is fit for production:
+Run the production closure check with production declared for this command. The remaining commands run in development.
 
 ```sh test-exit="1"
-rstack evidence check adult-status --target deploy-target/target.yaml --production
+REGISTRY_STACK_POSTURE=production rstack evidence check adult-status --target deploy-target/target.yaml --production
 ```
 
 ```text test-expect
@@ -163,14 +170,17 @@ error[evidence.target.production-assurance-required] deploy-target/target.yaml:/
 1 error, 0 warnings in 1 file
 ```
 
-A local key file cannot meet a production `assuranceProfile`, so this target declares none and
-stays a rehearsal. Package it into a new directory outside the project:
+The omitted `assuranceProfile` defaults to `local`. This target uses a local signing key. Package it under development into a new directory outside the project.
 
 ```sh
 rstack evidence package adult-status --target deploy-target/target.yaml --output candidate
 ```
 
 ```text test-expect
+warning[evidence.posture.local-assurance] deploy-target/target.yaml:1:1 /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 Package digest: sha256:<digest>
 Package: candidate/bundle
 Runtime: candidate/runtime.yaml
@@ -251,7 +261,10 @@ rstack evidence runtime check --runtime-config candidate/runtime.yaml
 
 ```text test-expect
 Evidence package sha256:<digest> passed check (4 requirements)
-0 errors, 0 warnings in 23 files
+warning[evidence.posture.local-assurance] <package-document> /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 23 files
 ```
 
 The digest matches the one `package` printed. Then prove the startup dependencies: `doctor`
@@ -288,6 +301,8 @@ Route traffic through your TLS front only after the readiness request succeeds:
 ```sh test-skip="needs the running service"
 rstack evidence api /ready --url http://127.0.0.1:18090
 ```
+
+Read `posture: development` and the enabled settings under `developmentSettings` in the successful response.
 
 Create `deployment-check-client.json` by following
 [Create the client profile](../request-evidence-from-an-application/#create-the-client-profile).

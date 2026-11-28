@@ -16,6 +16,7 @@ use registry_mcp_edge::{
     ResolvedTool, VerifiedCaller,
 };
 use registry_platform_audit::AuditKeyHasher;
+use registry_platform_config::DevelopmentWitness;
 use registry_platform_crypto::PrivateJwk;
 use rmcp::model::Tool;
 use url::Url;
@@ -40,6 +41,7 @@ pub const BREG_TOOL_NAMES: [&str; 7] = TOOL_NAMES;
 #[derive(Clone, Debug)]
 struct BRegProviderOptions {
     base_url: Url,
+    peer_policy: registry_platform_httputil::PeerPolicy,
     attempt_timeout: Duration,
     access_profile: String,
     details_record_type: String,
@@ -52,10 +54,22 @@ struct BRegProviderOptions {
 }
 
 impl BRegProviderOptions {
-    #[must_use]
-    fn from_product_config(registry: &RegistryConfig, service: &ServiceConfig) -> Self {
-        Self {
+    fn from_product_config(
+        registry: &RegistryConfig,
+        service: &ServiceConfig,
+        development: Option<&DevelopmentWitness>,
+    ) -> Result<Self, BRegBindingError> {
+        let review_base_url = service
+            .review_base_url(development)
+            .map_err(|_| BRegBindingError::ReviewOrigin)?
+            .to_url();
+        Ok(Self {
             base_url: registry.base_url.to_url(),
+            peer_policy: if development.is_some() {
+                registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer
+            } else {
+                registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+            },
             attempt_timeout: Duration::from_millis(registry.attempt_timeout_milliseconds.get()),
             access_profile: registry.access_profile.to_string(),
             details_record_type: service.details.record_type.to_string(),
@@ -64,8 +78,8 @@ impl BRegProviderOptions {
             service_name: service.name.as_str().to_owned(),
             service_description: service.description.as_str().to_owned(),
             service_disclosure: service.disclosure.as_str().to_owned(),
-            review_base_url: service.review_base_url.to_url(),
-        }
+            review_base_url,
+        })
     }
 }
 
@@ -76,8 +90,12 @@ pub(crate) struct BRegProvider {
 
 impl BRegProvider {
     fn new(options: BRegProviderOptions, keys: AuditKeyHasher) -> Result<Self, BRegBindingError> {
-        let client = BRegClientFactory::new(options.base_url, options.attempt_timeout)
-            .map_err(|_| BRegBindingError::Client)?;
+        let client = BRegClientFactory::new(
+            options.base_url,
+            options.attempt_timeout,
+            options.peer_policy,
+        )
+        .map_err(|_| BRegBindingError::Client)?;
         Ok(Self {
             gateway: Gateway::new(
                 client,
@@ -107,10 +125,11 @@ impl BRegProvider {
 fn breg_provider(
     registry: &RegistryConfig,
     service: &ServiceConfig,
+    development: Option<&DevelopmentWitness>,
     keys: AuditKeyHasher,
 ) -> Result<Arc<BRegProvider>, BRegBindingError> {
     Ok(Arc::new(BRegProvider::new(
-        BRegProviderOptions::from_product_config(registry, service),
+        BRegProviderOptions::from_product_config(registry, service, development)?,
         keys,
     )?))
 }
@@ -147,6 +166,10 @@ pub enum BRegBindingError {
     Authorization,
     #[error("the BReg tool ceiling could not be configured")]
     Tools,
+    #[error(
+        "the BReg review base URL is plain http, which only a process that declares development may publish"
+    )]
+    ReviewOrigin,
 }
 
 /// Construct one BReg provider together with its only supported per-call delegation.
@@ -169,10 +192,15 @@ pub enum BRegBindingError {
 /// ```compile_fail
 /// use registry_breg_mcp::BRegProviderOptions;
 /// ```
+///
+/// `development` is the loader's witness. Without it a plain http
+/// `service.reviewBaseUrl` is refused.
+#[allow(clippy::too_many_arguments)]
 pub fn breg_binding<I>(
     registry: &RegistryConfig,
     exchange: &ExchangeConfig,
     service: &ServiceConfig,
+    development: Option<&DevelopmentWitness>,
     gateway_resource: &str,
     private_key: PrivateJwk,
     audit_hasher: AuditKeyHasher,
@@ -181,7 +209,7 @@ pub fn breg_binding<I>(
 where
     I: IntoIterator<Item = String>,
 {
-    let provider = breg_provider(registry, service, audit_hasher)?;
+    let provider = breg_provider(registry, service, development, audit_hasher)?;
     let authorization = breg_delegation(registry, exchange, gateway_resource, private_key)
         .map_err(|_| BRegBindingError::Authorization)?;
     let edge_provider: Arc<dyn Provider> = provider;
@@ -202,7 +230,7 @@ pub(crate) fn breg_binding_for_test<I>(
 where
     I: IntoIterator<Item = String>,
 {
-    let provider = breg_provider(registry, service, audit_hasher)?;
+    let provider = breg_provider(registry, service, None, audit_hasher)?;
     let authorization = breg_delegation(registry, exchange, gateway_resource, private_key)
         .map_err(|_| BRegBindingError::Authorization)?;
     let edge_provider: Arc<dyn Provider> = provider.clone();
@@ -291,6 +319,36 @@ fn provider_failure(error: ToolError) -> ProviderFailure {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provider_options_use_the_loaded_runtime_posture() {
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+        use registry_platform_httputil::PeerPolicy;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("runtime.yaml");
+        std::fs::write(&path, crate::config::tests::document()).unwrap();
+        for (posture, policy) in [
+            (Posture::Production, PeerPolicy::RefuseDevelopmentPeer),
+            (Posture::Development, PeerPolicy::AcceptDevelopmentPeer),
+        ] {
+            let loaded = crate::config::RuntimeConfig::load_with_posture(
+                &path,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let options = super::BRegProviderOptions::from_product_config(
+                &loaded.config.registry,
+                &loaded.config.service,
+                loaded.development.as_ref(),
+            )
+            .unwrap();
+            assert_eq!(options.peer_policy, policy);
+        }
+    }
+
     use std::{io::Write, sync::Mutex};
 
     use registry_mcp_edge::{EffectCertainty, Provider as _};
@@ -313,6 +371,7 @@ mod tests {
             BRegProviderOptions {
                 base_url: Url::parse("https://registry.example.test/").expect("registry URL"),
                 attempt_timeout: std::time::Duration::from_secs(10),
+                peer_policy: registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
                 access_profile: "citizen-agent".to_owned(),
                 details_record_type: "addresses".to_owned(),
                 action: "correct-address".to_owned(),
@@ -429,6 +488,7 @@ mod tests {
             &registry,
             &exchange,
             &service(),
+            None,
             "https://gateway.example.test/mcp",
             private_key,
             profile.key_hasher(),
@@ -438,5 +498,32 @@ mod tests {
         .expect("unsupported tool is refused");
 
         assert_eq!(error, BRegBindingError::Tools);
+    }
+
+    #[test]
+    fn binding_refuses_a_plain_http_review_origin_without_the_witness() {
+        let (registry, exchange) = outbound_sections(
+            "https://registry.example.test/",
+            "https://login.example.test/token",
+        );
+        let service = crate::config::tests::service_reviewed_at("http://127.0.0.1:8113/");
+        let private_key = generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("private key");
+        let profile = AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![8; 32]))
+            .expect("audit profile");
+
+        let error = breg_binding(
+            &registry,
+            &exchange,
+            &service,
+            None,
+            "https://gateway.example.test/mcp",
+            private_key,
+            profile.key_hasher(),
+            BREG_TOOL_NAMES.into_iter().map(str::to_owned),
+        )
+        .err()
+        .expect("a plain http review origin needs the witness");
+
+        assert_eq!(error, BRegBindingError::ReviewOrigin);
     }
 }

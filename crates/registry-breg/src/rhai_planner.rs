@@ -193,7 +193,10 @@ fn add_days(value: ImmutableString, days: INT) -> Result<ImmutableString, Box<Ev
         .ok_or_else(helper_error)
 }
 
-fn add_months(value: ImmutableString, months: INT) -> Result<ImmutableString, Box<EvalAltResult>> {
+pub(crate) fn add_months(
+    value: ImmutableString,
+    months: INT,
+) -> Result<ImmutableString, Box<EvalAltResult>> {
     if !(-12_000..=12_000).contains(&months) {
         return Err(helper_error());
     }

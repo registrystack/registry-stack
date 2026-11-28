@@ -44,8 +44,7 @@ pub enum OutboxError {
 /// The deployment identity and chain position every captured envelope carries.
 #[doc(hidden)]
 pub struct EnvelopeBinding<'a> {
-    /// The producing deployment, the same source the delivery worker renders
-    /// as the `ce-source` header.
+    /// The producing deployment in the envelope's `source` field.
     pub source: &'a str,
     /// The data contract id for each hook's `data`, by hook id.
     pub data_schemas: &'a BTreeMap<String, String>,
@@ -172,9 +171,7 @@ pub(crate) fn event_data_schemas(
 
 /// The commit instant every envelope of one transaction carries.
 ///
-/// Truncated to the millisecond the envelope's wire form spells, and written to
-/// the outbox row so the delivery worker's `ce-time` header repeats the
-/// envelope's own `time` byte for byte.
+/// Truncated to milliseconds for the envelope's `time` field and the outbox row.
 pub(crate) async fn capture_time(transaction: &Transaction<'_>) -> Result<SystemTime, OutboxError> {
     transaction
         .query_one(

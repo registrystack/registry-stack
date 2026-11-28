@@ -2,6 +2,196 @@
 
 ## Unreleased
 
+- `caseworkctl init`, `caseworkctl provider add`, and `products/casework/examples/canonical-review/runtime.example.yaml` list an explicit OAuth client (`allowedClients: [casework-client]`) instead of `allowedClients: unrestricted`, so the scaffolded `runtime.example.yaml` passes `caseworkctl check --runtime-config` under the default production posture.
+
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
+
+- The `casework` runtime accepts `--posture` before or after `serve` and refuses repeated declarations.
+
+- BREAKING: Rust client configurations take a peer policy in `CaseworkClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+- BREAKING: Rust client configurations take a peer policy in `ReviewClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, the database connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, a keyword connection string host written as an IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`, is skipped when the transport otherwise permits it and the driver would dial it, as the driver itself fails that entry and tries the next. When no other host is left, the connection is refused when it is configured, with `platform.database.bracketed-host` naming the address. Write `host=::1`. When a keyword host has an authored `hostaddr`, the connection still uses that `hostaddr`. A bracketed IPv6 address in a URL, such as `postgresql://app@[::1]/registry`, still works.
+
+- Every `caseworkctl init` template includes a development plan and scenario for reading a review policy.
+
+- BREAKING: `authentication.oidc.issuers` lists the issuers whose access tokens
+  Casework accepts, keyed by an issuer id you choose, with at least one entry.
+  An entry holds `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`,
+  `allowedClients`, `accessTokenType`, `scopeClaim`, `actorKind`,
+  `clientActorKinds`, `assertionIssuers`, `revokedKeyIds` and
+  `maximumTokenLifetimeSeconds`. A token is verified only by the entry whose
+  `issuer` it names, with that entry's keys and rules. `delegatedStaffReaders`
+  stays beside `issuers`. Startup refuses two entries with the same `issuer`, a
+  client that two entries list, and each moved member at its former place,
+  naming its place in an entry. Migration: move every member of
+  `authentication.oidc` other than `delegatedStaffReaders` under
+  `authentication.oidc.issuers.main`.
+- BREAKING: `scopeClaim` defaults to `scope`. Migration: an issuer that writes
+  scopes in `registry_scopes` needs `scopeClaim: registry_scopes` in its entry.
+- BREAKING: `humanIdentity` is removed, and startup refuses it with its
+  replacement. A person is a caller whose actor kind resolves to `human`: the
+  kind `actorKind` declares for the issuer, or `clientActorKinds` declares for
+  the token's client, else the token's `registry_actor_kind` claim. A kind claim
+  other than `human`, `agent` or `service`, a claimed kind that differs from the
+  declared kind, and a token that grants only OpenID Connect scopes without a
+  declared kind are refused with 401 `authentication.refused` on the
+  `actor-kind` check. A non-human kind on a profile only a person may use is
+  still 403 `profile.not-human`. An access profile whose `principalClaim`
+  is `registry_actor_kind` is refused. Migration: an issuer that does not write
+  `registry_actor_kind: human` for people needs `actorKind: human` in its entry,
+  or `clientActorKinds` for the clients people sign in with.
+- BREAKING: each `delegatedStaffReaders` binding requires `representedHuman`,
+  the claim and value that say the represented person is human, for example
+  `representedHuman: {claim: registry_subject_actor_kind, value: human}`. A
+  delegated staff read whose token does not carry that value is refused with
+  403 `profile.not-human`. The token's own actor kind is the gateway's and is
+  not read as the represented person's. Startup refuses a binding without
+  `representedHuman`, with an empty claim or value, or with a claim equal to
+  the scope claim of the issuer entry that lists the binding's client or to an
+  access profile's `principalClaim`. Migration: move the claim and value of
+  the removed `humanIdentity` into `representedHuman` on each binding.
+- `allowedClients: unrestricted` in an issuer entry is marked in the runtime
+  schema as the development-only setting
+  `casework.posture.unrestricted-clients`. Production refuses it in any entry,
+  on every listener.
+- Under `tlsTermination: operator-controlled-upstream`, an issuer entry with
+  `allowedClients: unrestricted` is refused in every posture, with
+  `casework.runtime.allowed-clients-required` at that entry's `allowedClients`.
+- An issuer entry may state `accessTokenType: JWT` to admit access tokens typed
+  `JWT` as well as `at+jwt`. An ID token is refused either way.
+- Startup logs the posture it runs under, production unless development is
+  declared, and one line for each explicit production setting the file
+  states (`accessTokenType: JWT`, a `scopeClaim` other than `scope`,
+  `actorKind`, `clientActorKinds`), with its code and pointer.
+  `caseworkctl check --runtime-config` lists the same settings in
+  `explicitProductionSettings`.
+- The `request refused` line for a `scope` or `profile` refusal names the issuer
+  entry's `scopeClaim`, `actorKind` and `clientActorKinds` in its remedy.
+- A human source pair refused for its actor kind names `clientActorKinds` and
+  `registry_actor_kind` on the refusal log line.
+- The runtime schema declares no empty default for an issuer entry's
+  `assertionIssuers`. Omitting the member still means no assertion-issuer rule
+  applies.
+
+- BREAKING: review completion wakes use Standard Webhooks. Casework signs
+  `webhook-id`, `webhook-timestamp` and the exact JSON bytes with
+  HMAC-SHA-256. `webhook-id` is the `eventId` and stays the same on every
+  retry, and each attempt carries its own timestamp. A wake carries `accept`,
+  `content-type`, `registry-recipient-binding`, `webhook-id`,
+  `webhook-timestamp` and `webhook-signature`. `Idempotency-Key`,
+  `Authorization` and named secret headers are no longer sent. A receiver
+  checks a 300-second window in either direction.
+- BREAKING: in `reviewCompletionDestinations.<id>`, set `hmacSha256KeyRef` in
+  place of `bearerTokenRef` or `auth`. The file holds 32 to 64 exact bytes.
+  Startup refuses `bearerTokenRef` and `auth` with the replacement, and refuses
+  a key that is unavailable, too long, starts with `whsec_`, or is shared with
+  another destination. Each refusal names the full paths and never a key byte.
+- To rotate, set `previousHmacSha256KeyRef` in the destination. Casework signs
+  with both keys, current first. It reads the key files at startup, so restart
+  the service after a change. Startup refuses a previous key equal to the
+  current key.
+
+- Activations record the declared posture, and `caseworkctl` activation
+  reports include it.
+- BREAKING: An undeclared posture is production. Runtime files that select
+  development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development
+  for laptop and test runs. `rstack dev` sets it for you.
+- BREAKING: `caseworkctl check` reports development settings as errors under
+  the default posture. Migration: Pass --posture development, or set
+  REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: `caseworkctl provider add` accepts `--posture` and validates
+  runtime examples under the resolved posture. Migration: Use `--posture development`
+  when an existing runtime example keeps development-only settings, or list explicit
+  clients for a production check.
+- Provider-add JSON reports include the resolved `posture` and its `source`.
+  Runtime configuration refusals exit 1 and include diagnostic codes and pointers.
+  This includes `casework.posture.unrestricted-clients` for production and
+  `casework.runtime.invalid-assertion-issuers` for an invalid assertion-issuer map.
+- `caseworkctl init`, `explain`, `test`, `types`, `package` and `provider pair`
+  accept `--posture` or `REGISTRY_STACK_POSTURE`. Their JSON reports include
+  `posture.value` and `posture.source`. An invalid declaration exits 2
+  with `platform.posture.invalid-value`. Conflicting declarations exit 2 with
+  `platform.posture.conflict`.
+- Production `caseworkctl provider add` refuses runtime check warnings,
+  including `platform.runtime-config.check-incomplete`, with exit 1.
+  A refusal for a staged runtime example names the destination in `source.file`.
+- The unrestricted OAuth client refusal points to the issuer entry's
+  `allowedClients`, `/authentication/oidc/issuers/ISSUER_ID/allowedClients`.
+- Casework's BReg context provider follows the deployment's peer policy.
+  Development accepts marked development BReg responses, and production refuses them.
+- BREAKING: `allowedClients: unrestricted` requires development on every
+  listener. Migration: List the OAuth clients your production deployment admits.
+- BREAKING: Write `tlsTermination: loopback-plaintext` in place of
+  `tlsTermination: development-loopback`. Both spellings restrict listener placement
+  to loopback. Settings that previously depended on the listener now follow the posture.
+- BREAKING: `caseworkctl plan`, `apply`, `status`, `doctor` and
+  `generate identity-facts` report all runtime loader diagnostics with JSON
+  pointers and source positions. Update scripts that match `runtime.yaml:<pointer>`.
+- BREAKING: `allowInsecureHttp: true` requires development. Migration: Delete
+  allowInsecureHttp where the issuer is on loopback: no setting is needed in
+  any posture.
+- BREAKING: Plaintext PostgreSQL on a private network requires development.
+  The `platform.database.test-only-plaintext` diagnostic replaces
+  `casework.runtime.plaintext-database`. Migration: Use database.transport:
+  private-network-plaintext for a database container beside the product.
+  Update scripts that match the old codes.
+- BREAKING: A database activated in the other posture refuses startup,
+  `plan` and `apply`. Existing activations read as production. Migration:
+  Recreate development databases: a fresh apply is the way.
+- BREAKING: `/ready` adds `posture` and `developmentSettings`. Migration:
+  No change for probes that read the status code.
+- BREAKING: Audit lines add `posture`. Migration: Audit readers with a closed
+  line parser accept the posture member.
+- BREAKING: Development HTTP responses carry `Registry-Posture: development`.
+  Migration: Point production runtimes at production peers.
+- BREAKING: Development task assertions carry `registry_posture`. Migration:
+  No change for development consumers.
+- `--posture` is available on `casework` and on `caseworkctl` commands that
+  read runtime files. JSON reports from `check`, `generate identity-facts`,
+  `provider add`, `doctor`, `plan`, `apply` and `status` carry the resolved
+  posture and its source.
+
+- Casework counts every refused request by the check that refused it, in
+  `casework_request_refusals_total{check}` on the metrics listener, published
+  at zero for every check. Each refusal writes one `request refused` line with
+  `failed_check` and the request's trace id, at most five lines per check per
+  minute. That line replaces the authentication refusal line that carried a
+  `stage` field. The count covers review, directory, clock and task-grant
+  refusals, each under the check its producer names. An absence that conceals
+  nothing, such as the task grant key set route when task grants are not
+  configured, is not counted. Refusal statuses, headers and production bodies
+  are unchanged.
+- A refusal on the `scope` check also names, in its `request refused` line,
+  the claim that carries scopes, the scope the operation needs and the access
+  profile, each as the configuration or package declares it. The line never
+  names a scope the token held. Refusal statuses, headers and production bodies
+  are unchanged.
+- A static key set with a private key member is refused at startup under
+  `casework.runtime.unreadable-jwks-secret`, with the rule it broke and the
+  key's position. Earlier releases loaded such a set, so remove private
+  members from the key set before upgrading.
+- A static key set with a repeated member name is refused at startup under
+  `casework.runtime.unreadable-jwks-secret`, without a key position, in place
+  of `casework.runtime-dependency.unavailable`.
+- A review completion destination may use any loopback literal in plain
+  `http`: `127.0.0.0/8`, `::1`, or an IPv4-mapped form of `127.0.0.0/8`. The
+  name `localhost` stays refused.
+- `caseworkctl provision` creates the migration role, the runtime role and the
+  database from the two URLs in the runtime file, so each credential is
+  written once. It connects with an administrator URL from
+  `--admin-url-file` or `--admin-url-env` over verified TLS, or prints the SQL
+  with `--print-sql` and connects to nothing. Run it again at any time: it
+  creates only what is missing and refuses a role that exists with different
+  attributes. It also grants the runtime role USAGE on the `public` schema,
+  and running it again restores that grant. It loads the whole runtime file
+  and verifies the package first.
+
+- `GET /health` answers `{"status":"ok"}` and `GET /ready` answers JSON with
+  `status: "ready"`, `posture` and `developmentSettings`, in place of an empty
+  200. Both still need no token, and a service that is not ready still answers
+  503.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: `caseworkctl provider add` prints the BReg project fragments it

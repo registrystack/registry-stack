@@ -1,6 +1,837 @@
 # Changelog
 
 ## Unreleased
+- The ThunderID journey example acquires task grants only through its own numeric loopback issuer and a numeric loopback Casework service.
+- Managed runs create and report new project keys on restart. If a recorded key is missing, the runner names the file and recommends a clean start. BReg reports also recommend a clean start for retention-related refusals.
+- Managed stop with `--clean` holds the project lock through cleanup and can use the ID of a stopped or expired run. Clean retries succeed when there is nothing left for the run ID. An early stop names when to retry, and a stalled supervisor names the recovery and clean commands.
+- Managed development runs treat an empty Docker daemon ID as unknown and keep checking volume generations.
+- Development state requires an absolute directory. Managed volumes record the canonical project path and state root.
+- Lost managed run recovery finishes when the PostgreSQL container is gone and reports any remaining rehearsal objects.
+- Managed development runs recheck the PostgreSQL volume generation after attaching it.
+- External developer issuers and BReg fixture endpoints require numeric loopback HTTP.
+
+- Quote paths in runtime configuration ownership and permission repair commands.
+- Runtime configuration ownership refusals name the runtime account when it resolves and explain that changing ownership may require `sudo`.
+- The TypeScript Registry delivery verifier refuses a signed top-level `posture` member. Use the Standard Webhooks entry points for generic payloads.
+- Runtime checks and startup logs report loopback HTTP issuer and JWKS endpoints as explicit production settings.
+- Development allows group-writable runtime configuration paths. Ownership and permission refusals identify the first failing path and how to fix it.
+- Loopback plaintext database transport reports a bracketed-host diagnostic when it refuses a bracketed IP literal.
+
+- Managed runs skip previously successful scenarios until the authored scenario changes. A restart reports skipped scenarios and names `--clean` when a changed scenario conflicts with kept data.
+- Managed development volumes are bound to a private per-user project state directory. A missing volume on the same Docker daemon moves the old state to a timestamped orphan directory and reports its path. Switching Docker daemons requires switching back or starting with `--clean`. Use `rstack dev stop RUN_ID --clean` to remove the managed volume and state after stopping.
+- Managed restarts validate retained files before opening them and refresh run-specific PostgreSQL TLS and Messaging gateway credentials. Only Coordinator projects with authenticated workflow connections retain their local issuer port.
+
+- BREAKING: `rstack dev` is the local development entry point for Registry Stack projects and supports an explicitly declared external issuer.
+
+- Managed Coordinator runs reuse their local connection issuer address so workflows already waiting can resume after a restart.
+
+- Scheduling restarts apply the authored package and retain the running environment's records unless the project's records.yaml changed.
+
+- Starting the standalone canonical-review Casework template identifies the missing facility-registry pair and gives the pairing command before PostgreSQL starts.
+
+- Managed `rstack dev` projects keep their PostgreSQL data, audit journals and keys across stops. Start with `--clean` to clear a stopped project's development data. Runs using a supplied PostgreSQL server still drop their databases and roles at stop.
+- The TypeScript client exposes the development response mark and accepts `refuseDevelopmentPeer: true` to refuse development peers.
+
+- CI checks which crates can link development and test tooling and selects development runner tests when any host changes.
+
+- `rstack dev` writes each product's run issuer as the one entry, `main`, of its issuer set, so BReg, Messaging, Scheduling, Documents, Coordinator, the Adapter and Render read the runtime files a run generates.
+- BREAKING: `ObjectStoreError` and `VerifierError` add `DevelopmentPeer` variants. Migration: Update exhaustive matches.
+- A peer policy that refuses development checks each comma-separated `Registry-Posture` value in every header field. An exact `development` value after trimming whitespace marks the response as a development peer.
+- Each product module of the Rust client facade re-exports `PeerPolicy`.
+
+- Checks with `--deny-warnings` still list development-only settings accepted under a development declaration.
+
+- `DatabaseConfig::permitted_transport` checks database hosts against the
+  declared transport and returns the numeric addresses each host was checked
+  as, looking up each host name once.
+  `DatabaseConfig::permitted_transport_with_resolver` and
+  `check_database_hosts` take the resolver as an argument. The new
+  `registry-platform-postgres` crate keeps `tokio-postgres` out of
+  `registry-platform-config`: its `postgres_connection` returns the
+  `tokio-postgres` configuration that dials only those addresses under a
+  plaintext transport, and `loopback_postgres_connection` does the same under
+  `loopback-plaintext` for a caller with no database block. A keyword host written as an IP address in
+  brackets, such as `host=[::1]`, that the transport otherwise permits and the
+  driver would dial is dropped from the pinned list, and when no other host is
+  left the connection is refused with `DatabaseTransportError::BracketedHost`.
+  With `load_balance_hosts=random`, the random choice is over each checked TCP
+  address and each Unix socket entry, not over the hosts as written.
+
+- The TypeScript client README gives the matching `bregctl` release requirement and shows the incompatible-version diagnostic.
+
+- Generated TypeScript services export a Proposal type for each register member, such as `FacilityProposal`, with that member's Action types.
+
+- `rstack client generate --help` explains that a selected release sets `RSTACK_BREGCTL_BIN` to its installed `bregctl`.
+- `rstack client generate` reports `rstack.client.bregctl-missing` when it cannot resolve `bregctl`.
+
+- `rstack client generate` reads the generator entry in the installed `@registrystack/client` package, including pnpm installations, and refuses entries outside that package.
+
+- Running the service generator from an unbuilt checkout now tells you to run `npm run build`.
+
+- The service generator checks the selected bregctl version against the client version before compiling a project.
+
+- A page whose signed-in caller is refused by the registry displays an account-specific access message.
+
+- Generated service imports resolve in standard TypeScript Node16, NodeNext, and Bundler projects.
+- The service generator reports that it requires Node.js 24 or later when run with an older version.
+- The generator requires an application-local `@registrystack/client` installation and prints installation guidance when it cannot resolve the package.
+
+- The Rust-backed Node package moved to `@registrystack/client-node`.
+  For Node services and tools, run `npm install @registrystack/client-node` and change imports to `@registrystack/client-node`.
+  `@registrystack/client` is now the Fetch-based browser and edge client.
+- `rstack client generate` runs the application’s local `registry-generate` with the BReg CLI resolved by `rstack`.
+- Signed deliveries have the same form in both postures.
+
+- The shared `provision` command reports every runtime loader diagnostic in text and JSON and exits 1 on refusal.
+
+- Fetch-based TypeScript clients, generated from each registry's contract, are
+  in `clients/typescript/`. They use Fetch and WebCrypto and have no runtime
+  dependencies. Their tests run on Node 24 and Deno, and the browser build has
+  a manual smoke page. Every
+  generated module exports a `Client` typed to that registry's operations. A base URL is HTTPS, or plain HTTP to a
+  loopback host. With `allowInsecureHttp` it may also be plain HTTP to a
+  private or link-local address or to a host name without a dot. Operations
+  that declare `Idempotency-Key` send the caller's key or a generated one.
+  The Messaging and Scheduling
+  receipt lookups, listed by contract and route, require the original key.
+  A dispatched write whose outcome could not be established
+  is marked `outcomeUnknown`. `describeError` returns a fixed sentence chosen by
+  reason and status, never text from the answer, and shows a refused guard's
+  label only from the caller's `guardLabels`. Operations authenticated by a
+  Standard Webhooks signature send the caller's exact signed bytes and no
+  bearer credential. Page methods exist only for read operations.
+  `verifyDelivery` and `verifyRequest` in `webhook.ts` check a Standard
+  Webhooks delivery from raw headers and body, or from a Fetch request. They
+  require one `application/json` content type, refuse a body over 1 MiB, and
+  `verifyRequest` checks the headers before it reads the body.
+
+- The TypeScript clients have a page mode. `token` is optional, and without
+  it a client sends no `Authorization` and sends cookies with
+  `credentials: 'same-origin'`. With a token it sends `'omit'`. The client
+  sends `Registry-Client: page` on every call, from the exported
+  `registryClientHeader` constant. A client with a token does not send it. Page mode works only on the
+  page's own origin, because no registry answers a cross-origin page call. In page mode
+  any 401 is reason `sign-in-expired` with `outcomeUnknown: false`. A 412 is
+  reason `stale` in
+  both modes. Every call, page method, Action and byte transfer takes
+  `{ signal }`.
+
+- TypeScript clients have one factory pair for each service, in a generated
+  file under `clients/typescript/generated/services/`. `createRegistryClient`
+  is for a page and takes no `token`. It sends no `Authorization`, uses
+  `credentials: 'same-origin'`, sends `Registry-Client: page`, and offers no
+  Coordinator and no Messaging. `createRegistryServerClient` requires a
+  `token`, omits cookies, does not send `Registry-Client`, offers every
+  installed product, and refuses to construct where `globalThis.document`
+  exists. The register's methods are at the top level and each installed
+  product's client is at `registry.<product>`, all over one transport. Product
+  modules export their `Client` class, built from a `Transport`, and no
+  factory. `node generate-service.ts` generates a service file.
+
+- TypeScript client uploads accept a `Blob` or `File` and send it as given.
+  A byte transfer, an upload or a download, treats `timeoutMs` as an idle
+  deadline that restarts while bytes move, and waits one second more for each
+  16 KiB it sends. It reads the whole answer unless the call sets
+  `maxResponseBytes`. JSON and text calls keep the 10-second deadline and the
+  8 MiB cap.
+
+- Generated BReg TypeScript clients have a `list` method typed from each list
+  operation's query profiles, read from `x-registry-queryProfiles` or
+  `x-registry-queryProfile`. `where`, `orderBy`, `select`, `count` and `top`
+  accept only what the chosen profile allows, and a profile's optional
+  `requiredFilters` makes one of its equality-filter alternatives required. The
+  client checks the same rules before sending and refuses with a `TypeError`
+  that names the property and profile, never a filter value.
+
+- Registry MCP and MCP Edge refuse HTTP issuers in production.
+  Migration: Configure an HTTPS issuer, or declare development for a test deployment that needs HTTP.
+- MCP Edge's Rust resource and issuer accessors return a result and take an optional development witness.
+  Migration: Pass the witness returned by the runtime loader and handle the refusal. For production callers, pass `None`.
+- Registry MCP's Casework and BReg bindings refuse development-marked peers in production and accept them in development.
+  Migration: Use production peers with a production gateway, or declare development for the gateway in a test deployment.
+- Coordinator uses the shared OIDC issuer set and caller-kind checks. Each
+  issuer entry declares its own audience, key source and client rule.
+
+- Coordinator checks report explicit production settings per issuer.
+  Development refusal bodies include the shared `failedCheck` member.
+
+- BREAKING: in Coordinator, a token that grants only OpenID Connect scopes
+  and lacks a declared caller kind fails authentication with 401
+  (`IdentityOnly`). A request that failed the policy scope check with 403
+  now receives 401 at authentication. The check also applies when the
+  caller's policy requires only OpenID Connect scopes. Declare an actor kind
+  for the issuer or client, or have the issuer grant a scope beyond the
+  OpenID Connect scopes.
+
+- BREAKING: in Coordinator, a token whose actor-kind claim contradicts the
+  configured kind fails authentication with 401 (`ActorKindConflict`).
+  Development responses name `actor-kind` in `failedCheck` for both
+  refusals. The operator log gives the corresponding remedy.
+- BREAKING: Registry Adapter uses the shared caller issuer set, access token
+  type, scope claim and caller-kind checks. The facade and payment runtime
+  read named issuer entries under `oidc.issuers`. Each entry has its own
+  signing keys and client list, and all entries share the one audience the
+  effective contract publishes. Startup, `adapterctl check`, provisioning and
+  engine load refuse the top-level `oidc.issuer`, `oidc.audience`,
+  `oidc.jwksSource`, `oidc.allowInsecureHttp` and `allowedClients` keys and
+  name the issuer entry where each now belongs.
+
+- Every Adapter payment 401 carries a `WWW-Authenticate: Bearer` challenge,
+  as the facade's 401 already did. Adapter development refusal bodies include
+  the shared `failedCheck` member.
+
+- `adapterctl generate identity-facts` writes the caller requirements of one
+  Adapter issuer entry. `--payments-config` adds the payment connections'
+  clients and scopes, and `--issuer` selects the entry when the runtime has
+  more than one.
+
+- With one issuer entry, the Adapter journal keeps the caller's subject as
+  its caller reference. With two or more entries, the reference is a SHA-256
+  digest of the verified issuer and subject, so equal subjects from different
+  issuers stay distinct.
+
+- Hook activation refuses a URL, transport or private range with the code
+  and member `check_url_hook_destination` reports for the same destination.
+  Before, a URL the fixed destination policy refused (a name under
+  `localhost`, `localhost.`, or port zero) and a URL with a query or a
+  fragment were refused as `InvalidDestination` with no code or member.
+  BREAKING (Rust API): `UrlHookActivationError::DestinationRefused` is a
+  struct variant with `destination`, `code`, `member`, `message` and
+  `suggested_action`, `UrlHookActivationError::code` returns
+  `Option<&str>`, and the new `pointer_under(block)` gives the member's
+  JSON pointer. `InvalidDestination` now names only an internal
+  inconsistency.
+
+- A URL hook destination over https to a loopback address literal
+  (`127.0.0.0/8`, `[::1]`, or an IPv4-mapped loopback such as
+  `[::ffff:127.0.0.1]`) or the exact name `localhost` is admitted in
+  every posture, as the object store admits it. Before, `https://localhost`
+  was refused at activation and an https loopback literal was refused at
+  every send. The destination is pinned to loopback addresses as an http
+  loopback destination is: a literal is dialled as written, and `localhost`
+  only when every address it resolves to is loopback.
+  `check_url_hook_destination` admits the same URLs. A name under
+  `localhost`, the absolute name `localhost.`, and port zero are still
+  refused. `FixedDestinationPolicy::from_selected` freezes such an event
+  selection under the new `DestinationProfile::LoopbackHttps`. Data and
+  credential destinations are unchanged: `localhost` over https is refused
+  when the policy is built and a loopback literal is refused at send, and
+  either slot refuses the `LoopbackHttps` profile with the new
+  `DestinationPolicyError::LoopbackHttpsRequiresEventDelivery`. BREAKING
+  (Rust API): an exhaustive match on `DestinationProfile` needs the
+  `LoopbackHttps` arm, and one on `DestinationPolicyError` needs the
+  `LoopbackHttpsRequiresEventDelivery` arm.
+
+
+- Every URL hook delivery is signed with Standard Webhooks. The signature is
+  `v1,<base64>` over `webhook-id`, `webhook-timestamp` and the exact body
+  bytes, joined by periods, with HMAC-SHA-256. `webhook-id` is the envelope
+  id, which stays the same on every retry and replay, and `webhook-timestamp`
+  is the Unix time of the attempt. `registry-platform-crypto` adds
+  `delivery_signature::sign`, `verify`, `verify_authenticity`, `DeliveryKey`,
+  `DeliveryKeys` and `distinct_delivery_keys`. A key is 32 to 64 exact bytes,
+  never trimmed or decoded, and text that starts with `whsec_` is refused. A
+  delivery is fresh within 300 seconds before or after the receiver clock.
+  `DeliveryKeys` holds the current key and an optional previous key. The
+  header lists the current key's signature first, then the previous key's.
+  Shared vectors in `standard-webhooks.json` pin the bytes, and
+  `scripts/test_standard_webhooks_vectors.py` checks them with an independent
+  implementation.
+
+- BREAKING: the shared URL hook destination block takes
+  `hmacSha256KeyRef` and an optional `previousHmacSha256KeyRef`. The previous
+  reference is outside the binding digest, so adding or removing it during
+  rotation does not change the digest a pending delivery pinned. Activation
+  reads both files as exact bytes and refuses a key it cannot use. The
+  refusal names the full path, such as
+  `destinations.hooks.<id>.hmacSha256KeyRef`, the byte count and whether the
+  file ends in a newline, and never a key byte. It also refuses two
+  destinations that resolve to the same bytes and a previous key equal to the
+  current key. Each of those messages names both paths and says to write 32
+  new random bytes to a separate secret. In `registry-platform-hooks`,
+  `UrlDestinationParts` takes `keys` in place of `hmac_sha256_key`,
+  `UrlDestination::with_hmac_sha256_key` becomes `keys`,
+  `DeliverySignatureFields` carries only `id`, `timestamp` and `body`, and
+  `UrlHookActivationError` has `SigningKeyUnavailable`, `InvalidSigningKey`
+  and `RepeatedSigningKey` in place of `InvalidSigningMaterial`. A hook
+  delivery no longer carries the Version 1 headers or `Idempotency-Key`.
+
+- The request template `EventDestinationRequestTemplate::signed_event_delivery`
+  sends exactly five headers, `accept`, `content-type`, `webhook-id`,
+  `webhook-timestamp` and `webhook-signature`, and forbids an
+  authorization header.
+
+- `registry-platform-hooks` adds `receiver::verify_hook_delivery` for
+  receivers. It requires one value for each header and `content-type` of
+  `application/json`, verifies the signature over the exact body bytes, checks
+  the 300-second window, parses the envelope, and then requires the envelope
+  `id` to equal `webhook-id`. `receiver::verify_delivery` still reads
+  Version 1 deliveries.
+
+- The documentation site publishes
+  [Receive signed deliveries](https://docs.registrystack.org/reference/delivery-signing/),
+  which covers the headers, key generation, the window, deduplication by
+  `webhook-id` and key rotation. `products/platform/examples/delivery-receiver-go`
+  is a standard-library Go receiver, and CI runs its tests against the shared
+  vectors.
+
+- Outbound destination types.
+  `registry-platform-loopback` adds `TransportClass` (`VerifiedTls`,
+  `LoopbackPlaintext`, `PrivateNetworkPlaintext`), the checks
+  `private_address_eligible` and `private_range_eligible` (RFC 1918, RFC 6598
+  and `fc00::/7`), `PrivateRange` (parsed from `address/prefix`, with
+  `contains`) and `MAX_PRIVATE_RANGES` (16). Eligible does not mean admitted:
+  `100.100.100.200` and `fd00:ec2::254` are eligible, and a caller refuses a
+  cloud metadata address first. `registry-platform-config` adds
+  `DestinationTransport` (`verified-tls`, `loopback-plaintext`,
+  `private-network-plaintext`) and `PrivateRanges`, the `allowedPrivateCidrs`
+  list. Only `private-network-plaintext` is an explicit production setting
+  (`platform.posture.destination-private-plaintext`), reported without a
+  value and never refused. A range list holds canonical network addresses
+  once each, at most 16, each inside private space and never a cloud metadata
+  address on its own. A range that contains a metadata address is accepted. A
+  repeated range is refused at decode as `config.duplicate-item`. Every other
+  refusal carries its own code in the diagnostic, with a fix, from
+  `PrivateRanges::check` and `PrivateRanges::check_file`:
+  `platform.destination.range-malformed`,
+  `platform.destination.range-not-private`,
+  `platform.destination.range-not-canonical` or
+  `platform.destination.too-many-ranges`. `PrivateRanges::ranges` returns the
+  ranges only when none is refused.
+
+- `registry-platform-httputil` selects each outbound destination's transport
+  in one place. `select::select_destination(url, transport, ranges)` returns a
+  `SelectedDestination`, or a `DestinationSelectionError` whose `code()` and
+  `fix()` repeat no configured value. https selects verified TLS, http to a
+  loopback host selects loopback plain text, and http to any other host is
+  refused until the configuration declares `private-network-plaintext` with
+  its ranges. Every refusal has its own code:
+  `platform.destination.unsupported-scheme`,
+  `platform.destination.private-network-not-declared`,
+  `platform.destination.private-network-requires-ranges`,
+  `platform.destination.transport-scheme-mismatch`,
+  `platform.destination.transport-host-mismatch`,
+  `platform.destination.literal-outside-ranges`, the four range codes above, or
+  `platform.destination.credential-requires-protected-transport`.
+  `select::select_cases()` is the shared table of rows each product renders
+  into its own block. The outbound families consume a selection through
+  `FixedDestinationPolicy::from_selected`, `ServiceBaseUrl::selected` and
+  `OutboundClientBuilder::destination`, and a credential-free fetch through
+  `select::validate_selected_fetch`. It returns a `SelectedFetch` pinned to
+  the addresses it admitted, whose `get` sends one GET with the caller's
+  `Accept` and timeout and nothing else, so no credential can be added to it.
+  Over https the fetch admits each answer as a fixed https destination does:
+  a private answer needs a listed range, and a cloud metadata, always-denied
+  or other non-global answer is refused. An explicit loopback literal and
+  `localhost`, pinned to loopback, are admitted. A consumer that moves from
+  `FetchUrlPolicy::strict()` to a selection therefore refuses a CGNAT
+  (`100.64.0.0/10`) answer that `strict()` admits today. The way out is to
+  list the range in `allowedPrivateCidrs`.
+
+- No credential travels over private plain text on any path the platform
+  renders or builds. A secret a caller writes into a free header or a body
+  is the caller's to keep off private plain text.
+  `select::select_credential_destination` refuses such a selection, and
+  `SelectedDestination::admits_credentials` is the one predicate.
+  `FixedDestinationPolicy::new` refuses the credential slot over private plain
+  text with `DestinationPolicyError::CredentialRequiresProtectedTransport`. A
+  send in any slot that carries an authorization value, an AWS signature or a
+  script API key over private plain text is refused before anything is
+  resolved. `OutboundClientBuilder::destination` never builds a client for a
+  private plain-text selection, and `ServiceBaseUrl::selected` refuses one. A
+  client built for an https selection is https-only: a plain-http request,
+  to the selected name or to an address literal, fails before anything is
+  resolved or dialled.
+  `transport_protects_the_credential` is the credential selector with nothing
+  declared. BREAKING (Rust API): `DestinationSendError` adds
+  `CredentialRequiresProtectedTransport` and `DestinationNameMismatch`, so an
+  exhaustive match needs both arms. The non-exhaustive
+  `OutboundClientBuildError` adds `DestinationAddressDenied` and
+  `CredentialRequiresProtectedTransport`, and `FetchUrlError` adds
+  `DestinationAddressDenied` and `Request`.
+
+- `OutboundClientBuilder::destination(&selected)` confines a client's name
+  resolution to its selection. The client resolves only the selected host
+  name and refuses any other name with `DestinationNameMismatch` before it is
+  looked up. Every answer must be one the selection admits: loopback for
+  loopback plain text, and never a cloud metadata or always-denied address
+  for https, judged after the IPv4-mapped, IPv4-compatible (`::/96`), 6to4
+  (`2002::/16`) and well-known NAT64 (`64:ff9b::/96`) forms are decoded.
+  Other translation prefixes, such as local-use NAT64 (`64:ff9b:1::/48`), are
+  not decoded, so reaching a metadata address through one needs a translator
+  on the path that the deployment controls. Over https
+  a private answer needs no range, so a selection's ranges have no effect on
+  a client. An address literal is checked when the client is built, where an
+  explicit loopback literal is admitted over https while a name that answers
+  loopback is refused. BREAKING (Rust API): `destination()` returns a
+  `DestinationClientBuilder`, whose `try_build()` returns a
+  `DestinationClient` and never a raw `reqwest::Client`.
+  `DestinationClient::execute` sends a request only to the selection's own
+  scheme, host and port and refuses any other with
+  `DestinationClientError::OriginNotSelected` before anything is resolved or
+  dialled, so an address literal or `localhost`, which no resolver sees,
+  cannot carry a caller's credential elsewhere. A `Host` header that names
+  another authority, or a second `Host` header, is refused with
+  `DestinationClientError::HostNotSelected` before anything is dialled. A
+  matching `Host`, such as the object store's signed one, is sent. The value
+  is read with a bounded grammar rather than normalized as a URL, so an
+  empty port, a percent-encoded byte, or an IPv4 address not in dotted
+  decimal is refused even when it would normalize to the selected host. A
+  written port is compared as a number, so `receiver.example:000443` matches
+  a default https selection. A
+  name is compared as written, root dot included, so an endpoint such as
+  `https://objects.example./` or `https://objects.0xrelay/` passes its own
+  signed `Host`. Only one root dot is read: a `Host` whose last label is
+  empty after it, such as `objects.example..`, is refused, even against a
+  selection spelled the same way.
+
+- `registry-platform-objectstore` selects the bucket URL and the verifier URL
+  with `select_credential_destination` and builds each client through
+  `.destination()`. `http://localhost` is now accepted beside the loopback
+  literals. A cloud metadata or always-denied literal over https is refused at
+  activation with `InvalidConfiguration`, and an explicit https loopback
+  literal is admitted. A virtual-hosted bucket under `http://localhost` is
+  refused, since `bucket.localhost` is not loopback.
+
+- The shared URL hook destination block takes `transport` and
+  `allowedPrivateCidrs`. `private-network-plaintext` reaches a receiver inside
+  the declared ranges and is reported as the explicit production setting
+  `platform.posture.destination-private-plaintext`. The binding digest covers
+  `transport` only for private plain text and the ranges only when listed, so
+  a destination that declares neither keeps its digest.
+  `registry-platform-hooks` adds `check_url_hook_destination` and
+  `check_url_hook_destination_file`, which report every refusal activation
+  would make: each refused range at its entry, the selector's code at
+  `transport` or `url`, and at `url` a query or fragment, an https URL naming
+  a name under `localhost` or `localhost.`, or port zero. Scheduling and
+  Documents call this check during offline runtime checks and at startup.
+  BREAKING (Rust API): `UrlDestinationAddress` adds `selected`,
+  `UrlDestinationError` adds `Refused`, and `UrlHookActivationError` adds
+  `DestinationRefused`, each carrying the selector's refusal with `code()`.
+  `url_destination_address_selected` is exported. The generated platform,
+  Scheduling and Documents runtime schemas carry both members.
+
+- `registry-platform-config` re-exports `declared`, `declared_from`,
+  `PostureError`, `POSTURE_ENV` and `DEVELOPMENT`, so a product resolves its
+  declared posture without its own dependency on `registry-platform-posture`.
+  The shared `provision` arguments take an optional `--posture` for the
+  product to pass to `declared` before it reads its runtime file.
+
+- Every new audit journal line carries the writer's declared `posture`,
+  either `development` or `production`. `AuditWriter::open` and
+  `AuditWriter::from_line_sink` take the declaration. Their
+  `_without_posture` forms record production. Audit readers accept older
+  lines without the member and refuse malformed posture values.
+
+- Caller contract: `registry-platform-oidc` verifies against a set of issuers.
+  `IssuerSet::new` takes the entries and the `ClaimNames` the kind claim is
+  read with. It refuses two entries that name one issuer, compared as parsed
+  URLs, as `IssuerSetError::DuplicateIss`, and invalid claim names as
+  `IssuerSetError::InvalidClaimNames`. `IssuerSet::verify` refuses a credential
+  that is not three dot-separated segments with a readable header and a JSON
+  object payload as `OidcError::MalformedToken`. It then matches the token to
+  one `IssuerEntry` by its exact `iss`, read before any key is fetched, and
+  verifies it only with that entry's verifier. An `iss` no entry names is
+  `OidcError::IssuerNotConfigured` (the `token-issuer` check). A refusal is a
+  `CallerRefusal` that carries the `OidcError` and, from `OidcError::remedy`,
+  a sentence for the operator's log line that names the setting keys to look
+  at and never a value. `IssuerSet::verify` returns a `VerifiedCaller` that
+  carries the entry id, the verified token and a `CallerKind`.
+
+- Caller contract: the caller kind of a verified token is `Declared` (the
+  operator stated it for the client, else for the issuer), `Claimed` (the token
+  carries the kind claim) or `Unspecified`. The client is the allowed client
+  the token matched, else its `azp`, else its `client_id`. A kind claim that
+  differs from the declared kind is refused as `OidcError::ActorKindConflict`,
+  and one that cannot be read as `OidcError::ActorKindMalformed` (both the
+  `actor-kind` check). A token that grants no scope and whose kind is not
+  `Declared` is refused as `OidcError::IdentityOnly` (the `actor-kind` check),
+  so nothing admits an identity-only token unless the operator declares the
+  client's kind. A claimed kind does not count, and the OpenID Connect scopes
+  `openid`, `profile`, `email`, `address`, `phone` and `offline_access`
+  (`OPENID_CONNECT_SCOPES`) grant nothing. `caller_kind` and
+  `refuse_identity_only` are the two steps.
+
+- Caller contract: `AuthorizationAuditEvent` accepts the actor kind
+  `unspecified`. A product records a caller whose kind is `Unspecified` under
+  that kind, rather than leaving the event out or writing another kind.
+
+- Caller contract: `jwks_document_provider_requirements` reads the static
+  key set document of every entry under `authentication.oidc.issuers`. Where
+  any entry names a `secret:env/` or `secret:file/` document, the schema
+  requires `secretProviders` with that provider, as the runtime does.
+
+- Caller contract: a `TokenVerifier` whose access-token type set holds `JWT`
+  refuses a token that carries a `nonce`, `at_hash`, `c_hash` or `s_hash`
+  claim, or a `typ` claim equal to `ID`, as `OidcError::IdTokenPresented` (the
+  `token-type` check). There is no setting to turn it off.
+  `TokenVerifierConfig::refuses_id_token_markers` reports it. `TokenVerifier`
+  gains `issuer`.
+
+- Caller contract: `registry-platform-oidc` builds an issuer entry from the
+  shared configuration block. `TokenVerifierConfig::for_caller_issuer` takes a
+  `CallerIssuerCore`, the allowed algorithms and, for a `from-package` or
+  `from-policies` client rule, the resolved client list. It applies the issuer,
+  the audience, the access-token type set, the scope claim and the client rule,
+  and the product adds its own members. Without a resolved list, a
+  `from-package` or `from-policies` rule is refused as `UnresolvedClients`.
+  `access_token_types` maps `accessTokenType` to its type set,
+  `DeclaredKinds::from_core` reads `actorKind` and `clientActorKinds`
+  (refusing both at once as `ActorKindTwice`), and `ActorKind` converts from
+  `DeclaredActorKind`.
+
+- Caller contract: `registry-platform-config` adds `Stated<T>`, the twin of
+  `Gated<T>` for an explicit production setting. It never refuses. It records
+  the setting with its pointer and position, and the loader hands each one to
+  `PostureReport::record_explicit`, so the startup log lists it.
+  `collect_posture_settings` returns both lists, and
+  `collect_development_settings` stays as a wrapper over it. The generated
+  schema marks a stated member with `x-registry-explicit-production`.
+
+- Caller contract: `registry-platform-config` adds the shared `CallerIssuers`
+  block. An entry holds a `CallerIssuerCore`: the issuer, its audience and key
+  source, `accessTokenType` (`at+jwt` by default, `JWT` explicit), `scopeClaim`
+  (`scope` by default), `allowedClients`, and an optional `actorKind` or
+  `clientActorKinds`. The explicit settings are
+  `platform.posture.jwt-access-token`, `platform.posture.scope-claim`,
+  `platform.posture.unrestricted-clients`, `platform.posture.issuer-actor-kind`
+  and `platform.posture.client-actor-kinds`. `CallerIssuers::check` reports
+  `platform.oidc.no-issuer`, `platform.oidc.duplicate-issuer`,
+  `platform.oidc.client-in-two-issuers`, `platform.oidc.actor-kind-twice`,
+  `platform.oidc.actor-kind-for-unadmitted-client`,
+  `platform.oidc.audience-is-a-client` and
+  `platform.oidc.scope-claim-reserved`. `CallerIssuers::check_file` gives the
+  same findings for an offline check of a runtime file, with each position,
+  the first entry or listing as `related`, and no comparison of a member the
+  check did not substitute. `client-in-two-issuers` points at the second
+  listing of the client. `CallerIssuers::check_one_audience` and
+  `check_one_audience_file` report `platform.oidc.audiences-differ` at each
+  entry whose audience differs from the first entry's. A product runs them
+  only for a setting that checks every token against one audience, such as
+  task-grant status. A product that resolves `from-package` or
+  `from-policies` clients runs the client kind and audience findings again
+  over the resolved list. The client types are `AllowedClients` (list or
+  `unrestricted`), `ClientList`, `PolicyClients` (`from-policies` or a list)
+  and the existing `PackageClients`, each a `ClientRule`. `clientActorKinds`
+  keys are client identifiers, so an empty key is refused. The shared-blocks
+  schema holds `CallerIssuerCore` over each client type and `CallerIssuers`.
+
+- Caller contract: `registry-platform-httpsec` adds `bearer_challenge`, the
+  `Bearer` value every 401 carries, and, with the `refusal-trace-id` feature,
+  `refusal_detail::name_failed_check`. Under the development posture the layer
+  adds a `failedCheck` member to a JSON refusal body that carries a refusal
+  note. It keeps `Content-Length` equal to the rewritten body. When the body
+  cannot be read, it logs the error at debug level and returns an empty body
+  with no stated length. In production it returns the response untouched and
+  does not read the body. The `refusal-trace-id` feature now enables the
+  refusal recorder of `registry-platform-authcommon`.
+
+- Caller contract: `registry-cli-report` adds `Report::explicit_settings`. A
+  `check` report lists explicit production settings as
+  `explicitProductionSettings` after `posture`, each with `code`, an optional
+  `file`, `pointer`, `line` and `column`, and a value-free `summary`. The list
+  is not a diagnostic, so `--deny-warnings` does not change.
+  `ExplicitSettingLine::from_found` in `registry-cli-report` builds the line
+  for a named file.
+
+- `registry-platform-oidc` can refuse task authority that comes from a
+  development peer. `TaskGrantStatusClient::new` and
+  `TaskGrantStatusRegistry::activate` take a `PeerPolicy`. Under
+  `RefuseDevelopmentPeer`, a status answer carrying
+  `Registry-Posture: development` is refused as
+  `TaskGrantError::DevelopmentPeer` (`platform.task-grant.development-peer`).
+  `GrantClaims` reads the optional `registry_posture` claim, whose only valid
+  value is `development`; any other value is malformed.
+  `GrantClaims::verify_context` takes a `PeerPolicy` and, under
+  `RefuseDevelopmentPeer`, refuses a development assertion as
+  `GrantContextError::DevelopmentAssertion`
+  (`platform.task-grant.development-assertion`).
+  `TaskGrantStatusClient::new_without_peer_policy`,
+  `TaskGrantStatusRegistry::activate_without_peer_policy` and
+  `GrantClaims::verify_context_without_peer_policy` refuse development
+  peers for callers without a declared posture. Every runtime declares its
+  posture and passes a `PeerPolicy`.
+
+- The shared activation ledger records a posture with every activation.
+  `registry-platform-activation` adds `Activation.posture` and
+  `NewActivation.posture`, and `check_active_package` takes the declared
+  posture and answers `ActivePackageError::PostureMismatch { recorded,
+  declared }` when the active row records the other one. A row written
+  before the column existed reads as production.
+  `NewActivation::without_posture` and `check_active_package_without_posture`
+  record and check production for callers without a declared posture. Every
+  runtime declares its posture and passes it directly.
+
+- Every runtime reads a secret file under one rule. A relative link that
+  stays below `secretProviders.file.root` is followed, at most eight links
+  deep. A file owned by root with mode `0440` or `0640` loads when the
+  runtime does not run as root. A file the runtime user owns with group
+  access, a world-readable file, a file with an execute, setuid, setgid or
+  sticky bit, a hard-linked file and a link that leaves the root are refused.
+  Each refusal is a `SecretError::UnsafeFile` that names a
+  `platform.secret-file.*` check and its fix. A process that declares the
+  development posture loads a file whose read or mode bits are too loose and
+  warns once per check. `registry-platform-config` exports `SecretFileCheck`
+  and `MAX_SECRET_LINKS`, and `SecretResolver` gains `in_development` and
+  `inspect_reference`.
+
+- BREAKING: `registry-platform-oidc` no longer has the stage-labelled
+  authentication log helpers: `AuthenticationStage`,
+  `AuthenticationDiagnostics`, `OidcError::authentication_stage`,
+  `TokenVerifier::authentication_diagnostic` and the
+  `log_authentication_refusal!` macro. Every runtime logs and counts
+  refusals by failed check. Migration: use `OidcError::failed_check`.
+
+- `registry-platform-posture`, a `std`-only crate, holds `Posture`,
+  `PostureSource`, `DeclaredPosture`, `PostureError` and
+  `declared_from`/`declared`, which read the `--posture` flag and the
+  `REGISTRY_STACK_POSTURE` variable. Unset means production. A value that is
+  not a posture, or a flag and variable that disagree, is refused before any
+  file is read. Every product runtime and CLI reads it.
+
+- `registry-platform-yaml` exports `DEVELOPMENT_ONLY`, `GatedSite` and
+  `gated_site()`, which let a development-only value learn its pointer and
+  position while the reader decodes it: exact for a node, and the holding
+  mapping with `exact: false` under `#[serde(flatten)]`.
+
+- `registry-platform-config` adds the development-only gate. A configuration
+  type with values only a development process may use implements
+  `DevelopmentClass`, and the member that holds it is a `Gated`, readable only
+  with the `DevelopmentWitness` the loader issues to a process that declared
+  development. `collect_development_settings` records each such value while it
+  decodes, and `PostureReport` is the one decision: production refuses every
+  recorded setting under its `<owner>.posture.<setting>` code, and development
+  accepts and lists it. `ready_member` gives the `posture` and
+  `developmentSettings` members a runtime adds to `/ready`, and `log_startup`
+  logs the declared posture, the development settings in use and the explicit
+  production settings in use. A check acceptance cannot hide a posture
+  diagnostic: one that names a posture code is refused with
+  `config.check-acceptance-not-acceptable`. Every runtime uses this gate.
+
+- BREAKING (Rust API): `RuntimeConfigLoader::new` takes the
+  `DeclaredPosture`. In production it refuses every development-only setting
+  the file holds, listed beside any other problem in the file, and in
+  development it admits them, and `LoadedRuntimeConfig` carries the
+  `PostureReport` and, in development only, the `DevelopmentWitness`.
+  `check_offline` reports each such setting as an error in production and a
+  warning in development, under the same code, and still decodes the file.
+  Migration: pass the resolved `DeclaredPosture` to `RuntimeConfigLoader::new`
+  and `OidcIssuerConfig::check`, or use `new_without_posture` and
+  `check_without_posture` where no posture is declared. Add `transport: None`
+  to a `DatabaseConfig` literal.
+
+- The shared database block adds `database.transport`: `verified-tls`, the
+  default, `loopback-plaintext`, for a Unix socket, a numeric loopback
+  address or `localhost` when it resolves only to loopback addresses, and
+  `private-network-plaintext`, development only,
+  for loopback or private addresses. `DatabaseConfig::permitted_transport`
+  checks the hosts against the value, and `DatabaseConfig::check` refuses
+  `transport` beside `testOnlyPlaintext`, and `testOnlyPlaintext` outside a
+  test build. The shared audit block adds `audit.hashKeyCustody`:
+  `operator-provisioned`, the default, or `development-generated`,
+  development only. `authentication.oidc.allowInsecureHttp: true` is
+  recorded as a development-only setting. The shared and product runtime
+  schemas mark these members `x-registry-development-only`, and every
+  runtime reads them.
+
+- The shared private listener adds `tlsTermination: loopback-plaintext`:
+  plaintext on a loopback bind behind a proxy on the same host, valid in
+  every posture. It is placement only. A non-loopback bind is refused as under
+  `development-loopback`, and it relaxes nothing a runtime relaxes under
+  `development-loopback`. The shared OIDC issuer block adds
+  `jwksSource: {type: test-issuer, documentRef: <secret reference>}`, which
+  reads the key set from the secret like `static`, for a development run's
+  test issuer. Production refuses it with `platform.posture.test-issuer`, and
+  development admits and lists it. Evidence, which reads access-token keys
+  only from `uri`, refuses it in either posture. The
+  shared and product runtime schemas gain both values. Migration: add
+  `JwksSource::TestIssuer { document_ref }` beside `Static { document_ref }`
+  in an exhaustive match, and a `LoopbackPlaintext` arm where
+  `TlsTermination` is matched exhaustively.
+
+- `registry-cli-report` adds `Report::with_posture`, which writes
+  `posture.value` and `posture.source` (`flag`, `environment` or `default`)
+  into a CLI report body after the command members. A report built without it
+  is unchanged.
+
+- `registry-platform-httpsec`: `security_headers(csp, posture)` takes the
+  declared posture. In development it sets `Registry-Posture: development` on
+  every response, over any value a handler set, and in production it sends no
+  mark. `posture_mark(posture)` sets only the mark, for routers that do not use
+  `security_headers`. Every runtime passes its declared posture to
+  `security_headers(csp, posture)`. `security_headers_without_posture(csp)`
+  remains available for callers without a declared posture and behaves as
+  production.
+
+- `registry-platform-httpsec` implements authcommon's `RefusalTraceId` for
+  `TraceId` behind the opt-in `refusal-trace-id` feature, not `server`. A
+  service that only serves HTTP no longer links `registry-platform-authcommon`
+  and the crypto stack. A service that passes its trace id to `record_refusal!`
+  enables the feature.
+
+- `registry-platform-provision` is the one provisioning plan for every
+  database-backed tool, with the `provision` command behind its `cli` feature
+  (`cli::run_provision`). From the two product URLs it creates the migration
+  and runtime login roles, an isolated database closed to `PUBLIC`, the
+  product's schema layout and the optional `btree_gist` and PostGIS
+  extensions. It can run as an administrator over verified TLS, converging by
+  object, or print a `psql` script that holds no password and stops at the
+  first error. It refuses an existing role with other attributes or a
+  membership it did not grant, a `role`, `search_path` or
+  `session_authorization` default for a product role, in every database or
+  the product's (`platform.provision.role-settings-differ`), a template
+  database, a PostGIS installed outside its schema or without the bbox
+  membership, a role name that is `public`, `none` or starts with `pg_`, a
+  name with a control character, a backslash or a bidirectional formatting
+  character, a database name that starts with `postgresql://` or
+  `postgres://`, and the `postgres`, `template0` and `template1` databases.
+  Other role settings, such as `statement_timeout` or `jit`, are accepted on
+  a rerun. It grants the runtime role `USAGE` on `public` directly, so
+  running `provision` again restores it. A run that stops part-way reports
+  the statements that ran, in text output as well, and the report's
+  `executed` is true whenever a statement ran. A session that cannot open in
+  the new database is `platform.provision.database-connect-failed`, and a
+  connection limit reached by a product login is an operational failure
+  (exit 3). `registry-platform-activation` exports
+  `MINIMUM_SERVER_VERSION_NUM`, the PostgreSQL 17 floor the plan and the
+  activation ledger share. `rstack dev` provisions its databases from the
+  same plan.
+
+- A `test-support` feature in `registry-platform-provision` gives the product
+  provision tests one verified-TLS superuser session, so they run against a
+  TLS-only PostgreSQL server. It is enabled only by dev-dependencies.
+
+- One rule for a static key set, in `registry-platform-oidc`
+  (`public_jwks_document`, behind `parse_static_jwks`). A key set that holds
+  a private or symmetric member (`d`, `k`, `p`, `q`, `dp`, `dq`, `qi`,
+  `oth`) is refused whatever the key type, and a repeated member name is
+  refused. Members the rule does not name (`ext`, `x5c`, `x5t`, `x5u` and
+  others) are ignored. A refusal is `OidcError::StaticKeySet` and names the
+  key position and the rule, never a `kid` or a value. The member list is
+  `registry_platform_crypto::PRIVATE_JWK_MEMBERS`. The whole document also
+  follows the strict JSON rule: an integer that a 64-bit floating-point
+  number cannot hold exactly is refused as `StaticJwksError::NotJson`.
+  `parse_static_jwks` refuses an OKP key with
+  `StaticJwksError::OctetKeyPair`, which names the key position and its
+  `kid` and `crv` when it has them, and says to use an RSA or EC key. A key
+  with a member of the wrong shape is refused with
+  `StaticJwksError::KeyShape`, which names the key position.
+  `StaticJwksError` is no longer `Copy`.
+
+- One definition of loopback, the std-only `registry-platform-loopback` crate
+  (re-exported as `registry_platform_httpsec::loopback` and
+  `registry_platform_httputil::loopback`), for outbound destinations and
+  loopback origins. A host is loopback when it is an address literal in
+  `127.0.0.0/8`, `::1` or an IPv4-mapped form of `127.0.0.0/8`, or the exact
+  name `localhost` with the connection pinned to loopback addresses.
+  `*.localhost`, `localhost.` and a bracketed IPv4 literal such as
+  `[127.0.0.1]` are never loopback. Sites that use it accept more literal
+  spellings than before, for example `127.0.0.2` and `[::ffff:127.0.0.1]`.
+
+- BREAKING (Rust API): `registry-platform-httputil` can refuse a response
+  from a peer that declares the development posture.
+  `validate_response_headers` takes a `PeerPolicy`: under
+  `RefuseDevelopmentPeer` a response whose `Registry-Posture` field lists
+  `development` among its comma-separated values is refused with `ResponseHeaderError::DevelopmentPeer`, and
+  `AcceptDevelopmentPeer` checks only the header bounds.
+  `ResponseHeaderBoundError` is now `ResponseHeaderError`. `is_loopback_host`
+  is the one host rule for plain http: a loopback address literal or the
+  exact name `localhost`, valid in every posture.
+  `FetchUrlPolicy::dev` is now `FetchUrlPolicy::https_or_loopback`,
+  `DestinationProfile::LoopbackDevelopmentHttp` is now
+  `DestinationProfile::LoopbackHttp`, and
+  `DestinationProfile::LocalPrivateDevelopmentHttp` exists only in test builds
+  and under the `test-support` feature. Migration: pass a `PeerPolicy` to
+  `validate_response_headers`, or call
+  `validate_response_headers_without_peer_policy` when a caller always refuses
+  development peers, and update call sites for the two renamed names.
+
+- `registry-thunderid-tooling` reads development identity files and task
+  connections with the same loopback rule. A development issuer or local app
+  origin may be any `127.0.0.0/8` address, `[::1]` or the IPv4-mapped form,
+  and never the name `localhost`. An exchange issuer may also use `localhost`
+  or `host.docker.internal`, as before, and one that names the development
+  issuer's own listener in any of those spellings is refused. The identity
+  facts issuer and the local app origin accepted only `127.0.0.1` before.
+
+- Every client built by `OutboundClientBuilder` resolves the name
+  `localhost` to `127.0.0.1` and `::1` itself, so no resolver is asked for
+  it. A host whose resolver or hosts file maps `localhost` elsewhere is no
+  longer followed.
+
+- BREAKING: a `PrivateServiceHttp` fixed destination needs at least one
+  private CIDR. In 0.48.0 an empty list admitted any eligible private
+  address. It is now refused when the destination is frozen, with
+  `DestinationPolicyError::PrivateServiceRequiresPrivateCidr`, so the
+  operator learns it at activation instead of at the first send. Name the
+  range that holds the service's addresses. `ProductionHttps` and loopback
+  destinations still take an empty list.
+
+- `registry-platform-hooks` gives a receiver that names no window of its own
+  a default one: `DEFAULT_DELIVERY_SKEW`, 300 seconds either side of the
+  receiver clock, through `DeliveryFreshness::default_at`.
+
+- `registry_platform_authcommon::FailedCheck` is the closed set of checks a
+  request can fail, with a stable kebab-case label for each. In production it
+  stays operator-side and is never written to a response. Under development,
+  `name_failed_check` can add `failedCheck` to JSON refusal bodies. Behind the
+  `refusal-recorder` feature, `RefusalRecorder` counts every refusal in
+  `<product>_request_refusals_total{check}` and admits at most five log lines
+  per check per minute, and `record_refusal!` writes the line with
+  `failed_check`, `suppressed`, an optional code-defined `remedy` and an
+  optional `trace_id`, which must be a `RefusalTraceId`. The request's
+  `registry_platform_httpsec::TraceId` implements it under httpsec's
+  `refusal-trace-id` feature, and authcommon does not depend on httpsec. Alert
+  on the counter, not on the log line.
+
+- A scope refusal's `request refused` line can name what the operator
+  declared: `record_refusal!(.., declared = Some(&scope))` takes a
+  `registry_platform_authcommon::DeclaredScope` and writes `scope_claim`, and
+  `required_scope` and `access_profile` when they were declared. The values
+  come from the runtime configuration or the reviewed package, never from the
+  caller's token, and the line carries them only when the failed check is
+  `scope`. Each value is cut to 128 bytes. Products attach it to the refusal
+  answer's extensions, which are never written to the response.
+
+- The MCP edge's scope refusal line names the configured scope claim and the
+  required scopes, never the token's own scopes. No answer changes.
+
+- A token whose header `alg` does not fit the key its `kid` names, or whose
+  `kid` names an encryption key such as an RSA-OAEP `use: enc` key, now fails
+  as `OidcError::AlgorithmNotAllowed` (`token-algorithm`) instead of
+  `OidcError::InvalidJwk` (`key-source-unavailable`). Products that answer a
+  key-source failure with 503 answer such a token with their 401 instead.
+  `InvalidJwk` stays a key-source failure for a key the source should not
+  publish.
+
+- `OidcError` names the claim a token failed: a missing `aud` is
+  `AudienceMismatch`, a missing `iss` is `IssuerMismatch`, and a malformed
+  `exp`, `nbf` or `iat` is `InvalidTimeClaims`, as a missing `exp` already
+  was. A UserInfo response about another subject than the access token is
+  the new `OidcError::SubjectMismatch` (`token-claims`). Each of these was
+  `InvalidToken` (`credential-malformed`) before.
+
+- The MCP edge counts every refusal by the check that refused it and writes
+  one `request refused` line with `failed_check`, at most five lines per check
+  per minute. The edge has no metrics listener, so the line is the operator's
+  signal there. An unreachable key set is that line with
+  `failed_check` `key-source-unavailable`, in place of the earlier unbounded
+  warning, and a request the gateway cannot admit because of its own fault
+  writes at most one error line a minute. Refusal statuses, headers and bodies
+  are unchanged. Gateways
+  built on the edge (`registry-mcp`, `registry-breg-mcp`) and the BReg review
+  page now also accept the IPv4-mapped loopback form, for example
+  `[::ffff:127.0.0.1]`, under `development-loopback`. The rest of
+  `127.0.0.0/8`, `[::1]` and `localhost` were already accepted, and
+  `localhost.` and `*.localhost` stay refused. A refused static key set
+  now says why: `registry-mcp` names the refusal in its startup message, and
+  `registry-breg-mcp` logs it, with its startup code unchanged.
+- BREAKING: `registry-platform-httpsec` no longer provides `CorsPolicy` or
+  `CorsValidationError`. No product answers a cross-origin request except the
+  Evidence public check route, which builds its own layer.
+  `products/platform/scripts/check-no-cross-origin.sh` enforces this in CI, and
+  also refuses any `Access-Control-Allow-Credentials`. The tower-http `cors`
+  feature is no longer on the workspace dependency, and Evidence enables it.
 
 ## 0.48.0 - 2026-11-23
 

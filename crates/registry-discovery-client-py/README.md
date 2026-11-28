@@ -218,3 +218,5 @@ capability, origin, or mapping context raises
 fresh selection. Both cases require explicit reselection and a new local
 acceptance decision; renewal never switches to another service or Evidence
 alternative automatically.
+
+The client accepts development-marked responses by default. Set `refuse_development_peer=True` when constructing the client to reject them.

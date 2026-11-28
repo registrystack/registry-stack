@@ -14,6 +14,7 @@ pub(super) enum Availability {
     NotSatisfied {
         revision: u64,
         guard_reason: Option<String>,
+        guard_label: Option<String>,
     },
     InputRequired {
         revision: u64,
@@ -31,6 +32,7 @@ impl Availability {
             Self::NotSatisfied {
                 revision,
                 guard_reason,
+                guard_label,
             } => {
                 let mut value = json!({
                     "available": false, "observedRevision": revision,
@@ -38,6 +40,9 @@ impl Availability {
                 });
                 if let Some(reason) = guard_reason {
                     value["guardReason"] = json!(reason);
+                    if let Some(label) = guard_label {
+                        value["guardLabel"] = json!(label);
+                    }
                 }
                 value
             }
@@ -143,6 +148,7 @@ pub(super) async fn observe(
             return Ok(Availability::NotSatisfied {
                 revision,
                 guard_reason: guard.reason.clone(),
+                guard_label: guard.label.clone(),
             });
         }
     }
@@ -238,7 +244,7 @@ pub(in crate::api) async fn observe_target(
             ReadServiceError::FieldEncryptionUnavailable => field_encryption_unavailable(),
             _ => unavailable(),
         })?
-        .ok_or_else(concealed)?;
+        .ok_or_else(|| concealed(FailedCheck::Visibility))?;
     // Held bytes have already passed the ordinary GET terminal audit gate.
     let value: Value = serde_json::from_slice(read.body()).map_err(|_| unavailable())?;
     let data = value
@@ -277,7 +283,48 @@ pub(in crate::api) async fn observe_target(
     )
     .map_err(|_| unavailable())?
     {
-        return Err(concealed());
+        return Err(concealed(FailedCheck::RowBoundary));
     }
     Ok(Some(ObservedTarget { revision, current }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_satisfied_guard_label_rides_only_beside_its_reason() {
+        let labelled = Availability::NotSatisfied {
+            revision: 3,
+            guard_reason: Some("not-submitted".into()),
+            guard_label: Some("Only a submitted application can be approved.".into()),
+        };
+        assert_eq!(
+            labelled.value(),
+            json!({
+                "available": false, "observedRevision": 3,
+                "reason": "guard-not-satisfied", "recovery": "none",
+                "guardReason": "not-submitted",
+                "guardLabel": "Only a submitted application can be approved."
+            })
+        );
+        let unlabelled = Availability::NotSatisfied {
+            revision: 3,
+            guard_reason: Some("not-submitted".into()),
+            guard_label: None,
+        };
+        assert!(unlabelled.value().get("guardLabel").is_none());
+        let orphan = Availability::NotSatisfied {
+            revision: 3,
+            guard_reason: None,
+            guard_label: Some("A label without its reason.".into()),
+        };
+        assert!(orphan.value().get("guardLabel").is_none());
+        assert!(Availability::NotDisclosed
+            .value()
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|key| !key.starts_with("guard")));
+    }
 }

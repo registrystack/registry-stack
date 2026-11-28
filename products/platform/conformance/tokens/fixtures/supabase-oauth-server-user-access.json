@@ -1,0 +1,54 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "supabase-oauth-server-user-access",
+  "class": "positive",
+  "provider": "supabase-auth",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "documentation",
+    "consultedOn": "2026-11-27",
+    "url": "https://supabase.com/docs/guides/auth/oauth-server/token-security",
+    "note": "The OAuth server token security page lists these claims. It shows no scope claim and does not describe the header. Replace with an observed shape when one exists."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "iss": {
+      "bind": "issuer"
+    },
+    "aud": "authenticated",
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "role": "authenticated",
+    "user_id": "00000000-0000-4000-8000-000000000001",
+    "email": "journey-user@example.test",
+    "aal": "aal1",
+    "amr": [
+      {
+        "method": "password",
+        "timestamp": 1700000000
+      }
+    ],
+    "session_id": "synthetic-session",
+    "client_id": "journey-app",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 3600
+    }
+  },
+  "omits": [
+    "scope",
+    "scp",
+    "azp",
+    "registry_actor_kind"
+  ],
+  "notes": "Stands in for a Supabase client credentials token. The documentation describes no client credentials grant for Supabase Auth, only the authorization code and refresh flows of its OAuth server."
+}

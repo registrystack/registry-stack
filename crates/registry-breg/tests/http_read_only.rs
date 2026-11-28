@@ -3082,7 +3082,11 @@ async fn health_and_readiness_are_operational_and_independent() {
     harness.readiness.0.store(true, Ordering::SeqCst);
     let ready = harness.send(Method::GET, "/ready", None).await;
     assert_eq!(ready.status(), StatusCode::OK);
-    assert_eq!(body_json(ready).await, json!({"status": "ready"}));
+    assert!(!ready.headers().contains_key("registry-posture"));
+    assert_eq!(
+        body_json(ready).await,
+        json!({"status": "ready", "posture": "production", "developmentSettings": []})
+    );
     assert_eq!(harness.records.calls(), 0);
 }
 

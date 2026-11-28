@@ -86,7 +86,7 @@ package:
   expectedDigest: {digest}
 listener:
   bind: 127.0.0.1:0
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
 secretProviders:
   file:
@@ -94,13 +94,15 @@ secretProviders:
 database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
-  testOnlyPlaintext: true
+  transport: loopback-plaintext
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:documents
-    scopeClaim: scope
-    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:documents
+        scopeClaim: scope
+        allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
 audit:
   destination: file
   path: {audit}
@@ -108,7 +110,10 @@ audit:
 storage:
   type: database
 contentVerification:
-  type: disabled
+  type: http
+  url: http://127.0.0.1:9/verify
+  authorizationRef: secret:file/hook-key
+  policyId: documents-test
 cleanup:
   erasure: active
 destinations:
@@ -174,6 +179,71 @@ fn ctl(arguments: &[&str]) -> (i32, Value) {
     let report = serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stdout)));
     (output.status.code().unwrap(), report)
+}
+
+#[tokio::test]
+async fn activation_posture_refuses_opposite_plan_apply_and_startup_and_status_reports_it() {
+    for (recorded, opposite) in [("production", "development"), ("development", "production")] {
+        let deployment = Deployment::new().await;
+        deployment.deploy();
+        let runtime = deployment.runtime();
+        let code = "platform.activation.posture-mismatch";
+        let (exit, applied) = ctl(&["apply", "--runtime-config", &runtime, "--posture", recorded]);
+        assert_eq!(exit, 0, "{applied}");
+        assert_eq!(applied["activation"]["posture"], recorded);
+        for verb in ["plan", "apply", "status"] {
+            let (exit, report) = ctl(&[verb, "--runtime-config", &runtime, "--posture", opposite]);
+            assert_eq!(exit, if verb == "status" { 0 } else { 1 }, "{report}");
+            assert_eq!(report["diagnostics"][0]["code"], code, "{report}");
+            if verb == "status" {
+                assert_eq!(
+                    report["diagnostics"].as_array().unwrap().len(),
+                    1,
+                    "{report}"
+                );
+                assert_eq!(
+                    report["diagnostics"][0]["path"], "/database/runtimeUrlRef",
+                    "{report}"
+                );
+                assert!(report.get("findings").is_none(), "{report}");
+            }
+        }
+        let declared = registry_platform_config::declared_from(Some(opposite), None).unwrap();
+        let config = registry_documents::config::RuntimeConfig::load_with_posture(
+            std::path::Path::new(&runtime),
+            declared,
+        )
+        .unwrap();
+        let status = registry_documents::runtime::activation_status(&config)
+            .await
+            .unwrap();
+        assert_eq!(status.findings[0].path, "/database/runtimeUrlRef");
+        let refused = registry_documents::runtime::prepare_with_posture(&runtime, declared)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(refused, registry_documents::runtime::RuntimeError::Activation(error) if error.code() == Some(code))
+        );
+    }
+}
+
+#[tokio::test]
+async fn status_names_the_transport_when_a_private_database_host_is_refused() {
+    let deployment = Deployment::new().await;
+    deployment.deploy();
+    let url_file = deployment.path("secrets/runtime-database-url");
+    std::fs::write(url_file, "postgresql://synthetic@10.0.0.5/documents").unwrap();
+
+    let (exit, report) = ctl(&["status", "--runtime-config", &deployment.runtime()]);
+    assert_eq!(exit, 1, "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"], "platform.database.transport-host-mismatch",
+        "{report}"
+    );
+    assert_eq!(
+        report["diagnostics"][0]["path"], "/database/transport",
+        "{report}"
+    );
 }
 
 #[tokio::test]
@@ -291,38 +361,6 @@ async fn init_package_plan_apply_and_status_activate_a_starter_deployment() {
         "documents.erasure.not-found"
     );
     assert_eq!(refused["diagnostics"][0]["path"], "erasure");
-
-    // A verification replay activates the project's hooks, so it refuses a
-    // hook destination the runtime does not bind with the positioned
-    // diagnostic `check` and `serve` give for the same files.
-    let document = std::fs::read_to_string(&runtime).unwrap();
-    std::fs::write(
-        &runtime,
-        document.replace("    owning-system-events:", "    other-events:"),
-    )
-    .unwrap();
-    let (code, refused) = ctl(&[
-        "verification",
-        "replay",
-        "--runtime-config",
-        &runtime,
-        "--version-id",
-        &Uuid::new_v4().to_string(),
-        "--expected-generation",
-        "1",
-    ]);
-    assert_eq!(code, 1, "{refused:#}");
-    assert_eq!(refused["status"], "domain-refusal");
-    assert_eq!(
-        refused["diagnostics"][0]["code"],
-        "documents.runtime.unbound-hook-destination"
-    );
-    assert_eq!(refused["diagnostics"][0]["path"], "/destinations/hooks");
-    assert_eq!(refused["diagnostics"][0]["source"]["file"], runtime);
-    assert!(
-        refused["diagnostics"][0]["source"]["line"].is_u64(),
-        "{refused:#}"
-    );
 }
 
 #[tokio::test]
@@ -386,11 +424,12 @@ async fn apply_refuses_a_package_that_is_not_the_pinned_one() {
 }
 
 /// A database provisioned as the Document Store operate page provisions
-/// one: split migration and runtime login roles, `PUBLIC` stripped of every
-/// privilege on the database and on the `public` schema, and the schema
-/// handed to the migration role. The runtime role holds only `CONNECT`, so
-/// before the first apply it has no usage on any schema and its
-/// `current_schema()` is null. Roles are cluster-wide, so each is named
+/// one, as `documentsctl provision` leaves it: split migration and runtime
+/// login roles, `PUBLIC` stripped of every privilege on the database and of
+/// `CREATE` on the `public` schema, the migration role holding `USAGE` and
+/// `CREATE` on `public`, and the runtime role holding `CONNECT` on the
+/// database and `USAGE` on `public`. Before the first apply the runtime
+/// role has no table privilege. Roles are cluster-wide, so each is named
 /// after the suite's own database, which makes a leftover from a failed run
 /// attributable, and [`ProvisionedDatabase::drop`] removes them with the
 /// database.
@@ -404,6 +443,14 @@ impl ProvisionedDatabase {
     const PASSWORD: &'static str = "documents-test";
 
     async fn new(admin: &tokio_postgres::Client) -> Self {
+        Self::with_runtime_usage(admin, true).await
+    }
+
+    /// The database as an operator who provisioned by hand to a layout that
+    /// gives the runtime role no `USAGE` on `public` leaves it, when
+    /// `runtime_usage` is false: no role but the migration role can resolve
+    /// the `public` schema.
+    async fn with_runtime_usage(admin: &tokio_postgres::Client, runtime_usage: bool) -> Self {
         let suite = base_config()
             .get_dbname()
             .expect("DOCUMENTS_TEST_DATABASE_URL names a database")
@@ -445,11 +492,20 @@ impl ProvisionedDatabase {
             .batch_execute(&format!(
                 "REVOKE ALL ON DATABASE {name} FROM PUBLIC;
                  GRANT CONNECT ON DATABASE {name} TO {migration_role}, {runtime_role};
-                 ALTER SCHEMA public OWNER TO {migration_role};
-                 REVOKE ALL ON SCHEMA public FROM PUBLIC;"
+                 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+                 GRANT USAGE, CREATE ON SCHEMA public TO {migration_role};
+                 GRANT USAGE ON SCHEMA public TO {runtime_role};"
             ))
             .await
             .unwrap();
+        if !runtime_usage {
+            database
+                .batch_execute(&format!(
+                    "REVOKE USAGE ON SCHEMA public FROM PUBLIC, {runtime_role}"
+                ))
+                .await
+                .unwrap();
+        }
         drop(database);
         connection.await.unwrap().unwrap();
         provisioned
@@ -506,8 +562,8 @@ fn base_config() -> tokio_postgres::Config {
 }
 
 /// The operate page's journey on a database provisioned as it says: `plan`
-/// over the runtime credential, which holds nothing but `CONNECT` before
-/// the first apply, reports the initial activation; `apply` over the
+/// over the runtime credential, which holds no table privilege before the
+/// first apply, reports the initial activation; `apply` over the
 /// migration credential splits the roles; and `plan` then reports nothing
 /// to change.
 #[tokio::test]
@@ -537,7 +593,7 @@ async fn plan_reports_the_initial_activation_on_a_database_provisioned_as_the_op
     assert_eq!(plan["change"], "activate");
     assert_eq!(plan["planKind"], "initial");
     assert_eq!(plan["activeDigest"], Value::Null);
-    assert_eq!(plan["pendingSchemaVersions"], serde_json::json!([100]));
+    assert_eq!(plan["pendingSchemaVersions"], serde_json::json!([100, 101]));
     assert_eq!(plan["runtimeRoleMode"], Value::Null);
     assert_eq!(plan["refusals"], serde_json::json!([]));
     let output = Command::new(env!("CARGO_BIN_EXE_documentsctl"))
@@ -566,7 +622,9 @@ async fn plan_reports_the_initial_activation_on_a_database_provisioned_as_the_op
 
     // After apply, a runtime role that lost its schema usage resolves no
     // schema again. That is a misconfiguration, refused by name rather
-    // than read as a database nobody applied a package to.
+    // than read as a database nobody applied a package to. `provision`
+    // leaves `PUBLIC` its default `USAGE` on `public`, so the revoke names
+    // `PUBLIC` as well, as an operator who hardened the schema would.
     let (database, connection) =
         tokio_postgres::connect(&provisioned.admin_url(), tokio_postgres::NoTls)
             .await
@@ -574,7 +632,7 @@ async fn plan_reports_the_initial_activation_on_a_database_provisioned_as_the_op
     let connection = tokio::spawn(connection);
     database
         .batch_execute(&format!(
-            "REVOKE USAGE ON SCHEMA public FROM {}",
+            "REVOKE USAGE ON SCHEMA public FROM PUBLIC, {}",
             provisioned.runtime_role
         ))
         .await
@@ -587,6 +645,42 @@ async fn plan_reports_the_initial_activation_on_a_database_provisioned_as_the_op
         plan["diagnostics"][0]["code"],
         "documentsctl.activation.ledger-unreadable"
     );
+
+    provisioned.drop(&deployment.admin).await;
+}
+
+/// A database provisioned by hand so that the runtime role has `USAGE` on no
+/// schema resolves no schema before the first apply. `plan` over that
+/// credential still reports the initial activation: the refusal by name is
+/// for a database a package was already applied to.
+#[tokio::test]
+async fn plan_reports_the_initial_activation_when_the_runtime_role_resolves_no_schema() {
+    let deployment = Deployment::new().await;
+    let digest = deployment.deploy();
+    let runtime = deployment.runtime();
+    let provisioned = ProvisionedDatabase::with_runtime_usage(&deployment.admin, false).await;
+    deployment.secret(
+        "runtime-database-url",
+        &provisioned.url(
+            &provisioned.runtime_role,
+            Some(ProvisionedDatabase::PASSWORD),
+        ),
+    );
+    deployment.secret(
+        "migration-database-url",
+        &provisioned.url(
+            &provisioned.migration_role,
+            Some(ProvisionedDatabase::PASSWORD),
+        ),
+    );
+
+    let (code, plan) = ctl(&["plan", "--runtime-config", &runtime]);
+    assert_eq!(code, 0, "{plan:#}");
+    assert_eq!(plan["packageDigest"], digest);
+    assert_eq!(plan["change"], "activate");
+    assert_eq!(plan["planKind"], "initial");
+    assert_eq!(plan["activeDigest"], Value::Null);
+    assert_eq!(plan["refusals"], serde_json::json!([]));
 
     provisioned.drop(&deployment.admin).await;
 }

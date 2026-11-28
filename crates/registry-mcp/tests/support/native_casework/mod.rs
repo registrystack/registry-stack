@@ -5,6 +5,12 @@ mod casework;
 mod database;
 mod process;
 
+const DEVELOPMENT: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
 use breg::Breg;
 use casework::Casework;
 use database::NativeDatabases;
@@ -253,9 +259,9 @@ impl NativeCaseworkStack {
             &casework.base_url,
             directory.path(),
         );
-        let config =
-            RuntimeConfig::load(&gateway_path).expect("native staff gateway configuration");
-        let router = runtime::build(&config)
+        let config = RuntimeConfig::load_with_posture(&gateway_path, DEVELOPMENT)
+            .expect("native staff gateway configuration");
+        let router = runtime::build_with_posture(&config)
             .await
             .expect("native staff gateway router");
         let gateway = tokio::spawn(async move {
@@ -655,7 +661,7 @@ fn write_gateway_runtime(
         path,
         &json!({
             "apiVersion":"id.registrystack.org/formats/platform/mcp-runtime/v1alpha1","kind":"PlatformMcpRuntimeConfig","name":"Native Casework proof","logLevel":"info",
-            "listener":{"bind":"127.0.0.1:1","tlsTermination":"development-loopback"},"secretProviders":{"file":{"root":scratch.join("secrets")}},
+            "listener":{"bind":"127.0.0.1:1","tlsTermination":"loopback-plaintext"},"secretProviders":{"file":{"root":scratch.join("secrets")}},
             "resourceServer":{"resource":resource,"issuer":issuer.issuer(),"allowInsecureHttp":true,"jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"algorithms":["ES256"],"allowedClients":[CHAT_CLIENT],"requiredScopes":[GATEWAY_SCOPE],"maximumTokenLifetimeSeconds":3600},
             "audit":{"hashKeyRef":"secret:file/audit-key","destination":"file","path":scratch.join("gateway-audit.jsonl")},
             "rateLimits":{"perPrincipal":{"requestsPerMinute":1000,"burst":1000},"perClient":{"requestsPerMinute":1000,"burst":1000}},

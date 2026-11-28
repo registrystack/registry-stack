@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -134,6 +134,12 @@ Validators decide trust in the seal certificate and the timestamp authority.
 
 ### Local seal key files are for test seals
 
+A deployment that seals with a key file runs as development across the stack.
+Production peers refuse responses marked as development.
+Production sealing uses Transit.
+The signed PDF dictionary carries `/Reason (Registry Stack test seal: not an official document)` for a local seal.
+The template, seal metadata, HTTP response and audit also identify a local seal as a test seal.
+
 A `local-jwk` signer's `privateKeyRef` resolves a JWK through the file secret provider, so the key
 is readable by the serving user and, with the worker not a sandbox (see
 [A render worker is not a sandbox](#a-render-worker-is-not-a-sandbox)), by a worker that gained
@@ -210,6 +216,28 @@ rules only.
     a_document_type_is_unsealable_when_its_standard_cannot_hold_the_reserved_space;
     crates/registry-render/src/pdf_signature.rs
     sealable_holds_pdf_a_1_2_and_3_to_their_string_length_limits. */}
+
+## How refusals are recorded
+
+Render counts every refused request by the check that refused it, in
+`render_request_refusals_total{check}`. The series is served on the private metrics listener when
+`metricsListener` is set. Without it the counter still counts and the log line is the only signal.
+The `check` label is a closed set of 45 names, every one published at zero, and no caller value
+becomes a label.
+The counter covers a missing or malformed credential, a legacy API key mismatch, a token the
+verifier refuses, a key source Render cannot reach or use, a missing scope, the legacy key presented to the seal
+route, and a client that the seal's `allowedClients` does not list.
+Each refusal also writes one `request refused` log line with `failed_check` and the request's trace
+id when it has one, at most five lines per check per minute, with `suppressed` counting what a
+window held back.
+Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and
+recording a refusal changes nothing the caller receives.
+A refusal whose audit entry cannot be written is answered as an audit failure and is not counted.
+
+{/* Evidence: crates/registry-render/src/server.rs
+    each_refusal_is_counted_and_logged_under_its_check,
+    refusal_answers_match_the_golden;
+    crates/registry-render/tests/golden/authentication_refusals.json. */}
 
 ## Report a vulnerability
 

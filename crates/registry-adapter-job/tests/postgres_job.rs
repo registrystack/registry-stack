@@ -2,12 +2,14 @@
 
 //! The job host's PostgreSQL suite: the item table's no-payload
 //! invariant, the lease, and every pass edge the seven steps carry. Every test runs in its
-//! own schema inside the database named by `ADAPTER_TEST_DATABASE_URL`;
+//! own schema inside the database named by `ADAPTER_TEST_DATABASE_URL`,
+//! which must use a numeric loopback host;
 //! a test binary that passes because its database URL is absent is not
 //! database verification, so the variable is required: without it every
 //! test in this file fails on the spot.
 #![cfg(feature = "postgres-test")]
 
+use registry_platform_config::Posture::Production;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -74,8 +76,7 @@ async fn isolated() -> Isolated {
 
 /// An isolated schema no migration has touched.
 async fn unmigrated() -> Isolated {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let base = job_fixture::test_database_url();
     let serial = NEXT_SCHEMA.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -159,6 +160,7 @@ impl ManagedChild {
     fn spawn(url: &str, args: Vec<std::ffi::OsString>) -> Self {
         let child = Command::new(env!("CARGO_BIN_EXE_adapter-job"))
             .env("JOB_TEST_DB", url)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -298,11 +300,7 @@ fn assert_value_free_output(label: &str, output: &Output) {
             "{label} exposed a source-only canary"
         );
     }
-    assert!(
-        output.stderr.is_empty(),
-        "{label} wrote stderr after the output passed source-canary checks: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    job_fixture::assert_posture_logs(&output.stderr, label, None);
 }
 
 /// A destination whose answers the test scripts, and whose deliveries
@@ -707,14 +705,14 @@ async fn the_lease_refuses_a_second_pass_until_the_first_releases() {
         .await
         .expect("the state row creates");
     assert!(
-        store::take_lease(&client, "case-daily", Duration::from_secs(60))
+        store::take_lease(&client, "case-daily", Duration::from_secs(60), Production)
             .await
             .expect("the first lease grants")
             .is_some(),
         "a fresh lease grants"
     );
     assert!(
-        store::take_lease(&client, "case-daily", Duration::from_secs(60))
+        store::take_lease(&client, "case-daily", Duration::from_secs(60), Production)
             .await
             .expect("the second lease answers")
             .is_none(),
@@ -729,7 +727,7 @@ async fn the_lease_refuses_a_second_pass_until_the_first_releases() {
         )
         .await
         .expect("the lease expires");
-    let held = store::take_lease(&client, "case-daily", Duration::from_secs(60))
+    let held = store::take_lease(&client, "case-daily", Duration::from_secs(60), Production)
         .await
         .expect("the renewed lease answers")
         .expect("an expired lease grants again");
@@ -741,12 +739,15 @@ async fn the_lease_refuses_a_second_pass_until_the_first_releases() {
         None,
         false,
         store::RescanProgress::None,
-        SystemTime::now(),
+        store::PassFinished {
+            at: SystemTime::now(),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     .expect("the pass completes");
     assert!(
-        store::take_lease(&client, "case-daily", Duration::from_secs(60))
+        store::take_lease(&client, "case-daily", Duration::from_secs(60), Production)
             .await
             .expect("the released lease answers")
             .is_some(),
@@ -766,7 +767,7 @@ async fn a_pass_whose_lease_is_held_refuses_whole() {
         store::ensure_state(&client, "case-daily")
             .await
             .expect("the state row creates");
-        store::take_lease(&client, "case-daily", Duration::from_secs(600))
+        store::take_lease(&client, "case-daily", Duration::from_secs(600), Production)
             .await
             .expect("the lease grants");
     }
@@ -849,7 +850,7 @@ async fn a_crash_before_the_answer_replays_identical_bytes() {
     // A crashed holder leaves its lease to expire by time; a one-second
     // lease stands in for the crash, so the follow-up pass waits it out
     // instead of finding it held.
-    let lease = store::take_lease(&client, "case-daily", Duration::from_secs(1))
+    let lease = store::take_lease(&client, "case-daily", Duration::from_secs(1), Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -1134,6 +1135,7 @@ async fn a_held_item_settles_and_stays_held_until_the_source_changes() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1235,6 +1237,7 @@ async fn a_source_revert_advances_the_sequence_and_stays_held() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1278,6 +1281,7 @@ async fn a_source_revert_advances_the_sequence_and_stays_held() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1334,6 +1338,7 @@ async fn a_source_revert_advances_the_sequence_and_stays_held() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1440,6 +1445,7 @@ async fn a_rescan_retries_the_refused_item_and_skips_the_unchanged_ones() {
     // The rescan runs from the first page, re-delivers the refused item
     // under the same identity, and skips the acknowledged one.
     let rescan_options = PassOptions {
+        posture: registry_platform_config::Posture::Production,
         refusal_limit: 20,
         rescan: true,
         dry_run: false,
@@ -1585,6 +1591,7 @@ async fn a_rescan_holds_a_refused_retry_after_a_lost_breg_answer() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1686,6 +1693,7 @@ async fn an_active_rescan_continues_from_its_saved_cursor() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1702,6 +1710,7 @@ async fn an_active_rescan_continues_from_its_saved_cursor() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1767,6 +1776,7 @@ async fn a_rescan_of_an_ongoing_source_ends_when_it_reaches_the_tail() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1816,6 +1826,7 @@ async fn a_rescan_of_a_finite_source_continues_past_an_empty_page_with_a_cursor(
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1853,6 +1864,7 @@ async fn an_explicit_rescan_dry_run_restarts_without_moving_the_active_state() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1869,6 +1881,7 @@ async fn an_explicit_rescan_dry_run_restarts_without_moving_the_active_state() {
         &program,
         &NullDestination::new(),
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: true,
@@ -1894,7 +1907,7 @@ async fn an_explicit_rescan_dry_run_restarts_without_moving_the_active_state() {
     );
 
     let client = pool.get().await.expect("a pooled client");
-    store::mark_rescan_due(&client, "case-daily")
+    store::mark_rescan_due(&client, "case-daily", Production)
         .await
         .expect("the operator rescan is marked due");
     drop(client);
@@ -1913,6 +1926,7 @@ async fn an_explicit_rescan_dry_run_restarts_without_moving_the_active_state() {
         &program,
         &NullDestination::new(),
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1936,6 +1950,7 @@ async fn the_dry_run_writes_nothing_and_reports_the_hand_offs() {
     let program = compile(&fixture).await;
     let destination = NullDestination::new();
     let options = PassOptions {
+        posture: registry_platform_config::Posture::Production,
         refusal_limit: 20,
         rescan: false,
         dry_run: true,
@@ -2095,7 +2110,7 @@ async fn changed_staging_preserves_the_last_accepted_reference_for_recovery() {
         .await
         .expect("the state row exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -2207,7 +2222,7 @@ async fn a_refusal_sets_the_possibly_admitted_mark_and_never_clears_it() {
         .await
         .expect("the state row exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -2382,7 +2397,7 @@ async fn receiver_identity_and_event_metadata_freeze_per_sequence() {
         .await
         .expect("the state row exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -2505,7 +2520,7 @@ async fn a_rescan_of_a_refused_row_clears_the_identity_its_refused_attempt_froze
         .await
         .expect("the state row exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -2628,7 +2643,7 @@ async fn a_rescan_of_a_refused_retry_of_a_lost_revision_keeps_its_identities_fro
         .await
         .expect("the state row exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -2771,7 +2786,7 @@ async fn a_delivery_attempt_at_i64_max_stops_without_wrapping_or_mutating_the_ro
         .await
         .expect("the state row exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -2833,7 +2848,7 @@ async fn file_item_identity_adopts_only_empty_state_and_fences_every_transition(
         .await
         .expect("the state row exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "file-daily", ttl)
+    let lease = store::take_lease(&client, "file-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -2872,7 +2887,7 @@ async fn file_item_identity_adopts_only_empty_state_and_fences_every_transition(
     store::ensure_state(&client, "http-daily")
         .await
         .expect("the non-row state exists");
-    let raw_lease = store::take_lease(&client, "http-daily", ttl)
+    let raw_lease = store::take_lease(&client, "http-daily", ttl, Production)
         .await
         .expect("the raw lease answers")
         .expect("the raw lease grants");
@@ -2895,7 +2910,7 @@ async fn file_item_identity_adopts_only_empty_state_and_fences_every_transition(
         )
         .await
         .expect("the legacy item inserts");
-    let legacy_lease = store::take_lease(&client, "legacy-file", ttl)
+    let legacy_lease = store::take_lease(&client, "legacy-file", ttl, Production)
         .await
         .expect("the legacy lease answers")
         .expect("the legacy lease grants");
@@ -3114,7 +3129,7 @@ async fn migration_keeps_a_legacy_pending_receiver_identity_unknown() {
         .await
         .expect("the state row exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -3246,7 +3261,7 @@ async fn migration_keeps_a_legacy_refused_revision_fenced_to_its_frozen_receiver
         .await
         .expect("the state row exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -3375,7 +3390,7 @@ async fn a_failed_migration_records_no_version_and_retries_whole() {
         .expect("the retried migration applies whole");
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103, 104]
+        vec![100, 101, 102, 103, 104, 105]
     );
 }
 
@@ -3430,7 +3445,7 @@ fn add_unresolved_non_store_secrets(fixture: &JobFixture) {
         "coordinator-test": {
             "type": "signed-coordinator-event",
             "baseUrl": "https://coordinator.example.invalid",
-            "signingKeyRef": "secret:env/JOB_UNRESOLVED_DESTINATION_KEY",
+            "hmacSha256KeyRef": "secret:env/JOB_UNRESOLVED_DESTINATION_KEY",
             "attemptTimeoutMilliseconds": 3000
         }
     });
@@ -3473,17 +3488,14 @@ async fn init_store_bootstraps_only_the_store_from_the_runtime_reference() {
         "init-store failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        output.stderr.is_empty(),
-        "store initialization logs no errors"
-    );
+    job_fixture::assert_posture_logs(&output.stderr, "store initialization", None);
     assert!(
         fixture.double.requests().is_empty(),
         "store initialization never reads the source endpoint"
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("init-store prints JSON");
     assert_eq!(report["ok"], true);
-    assert_eq!(report["schemaVersion"], 104);
+    assert_eq!(report["schemaVersion"], 105);
     assert_eq!(
         report
             .as_object()
@@ -3496,7 +3508,7 @@ async fn init_store_bootstraps_only_the_store_from_the_runtime_reference() {
     let client = isolated.pool.get().await.expect("a pooled client");
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103, 104]
+        vec![100, 101, 102, 103, 104, 105]
     );
     drop(client);
     for table in [
@@ -3570,7 +3582,7 @@ async fn init_store_repeats_unchanged_and_advances_a_supported_schema() {
     let client = older.pool.get().await.expect("a pooled client");
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103, 104]
+        vec![100, 101, 102, 103, 104, 105]
     );
     store::schema_current(&client)
         .await
@@ -3678,7 +3690,7 @@ async fn initialized_fresh_store_supports_status_inspect_and_dry_run_without_wri
     let client = isolated.pool.get().await.expect("a pooled client");
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103, 104]
+        vec![100, 101, 102, 103, 104, 105]
     );
 }
 
@@ -4053,7 +4065,7 @@ async fn a_dry_run_reads_only_a_store_at_this_release_schema() {
     );
     let client = isolated.pool.get().await.expect("a pooled client");
     client
-        .batch_execute("DELETE FROM adapter_job_schema_migrations WHERE version = 104")
+        .batch_execute("DELETE FROM adapter_job_schema_migrations WHERE version = 105")
         .await
         .expect("the version row deletes");
     let output = run_job(&isolated.url, job_args("pass", &fixture, &["--dry-run"])).await;
@@ -4068,7 +4080,7 @@ async fn a_dry_run_reads_only_a_store_at_this_release_schema() {
     );
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103],
+        vec![100, 101, 102, 103, 104],
         "the dry run applied nothing"
     );
 }
@@ -4095,7 +4107,7 @@ async fn a_rescan_refuses_while_a_pass_holds_the_lease() {
         )
         .await
         .expect("the traversal is in progress");
-    store::take_lease(&client, "case-daily", Duration::from_secs(600))
+    store::take_lease(&client, "case-daily", Duration::from_secs(600), Production)
         .await
         .expect("the lease writes")
         .expect("the lease grants");
@@ -4131,7 +4143,7 @@ async fn recording_an_answer_for_a_missing_row_refuses() {
     store::ensure_state(&client, "case-daily")
         .await
         .expect("the state row exists");
-    let leased = store::take_lease(&client, "case-daily", Duration::from_secs(600))
+    let leased = store::take_lease(&client, "case-daily", Duration::from_secs(600), Production)
         .await
         .expect("the lease writes")
         .expect("the lease grants");
@@ -4172,7 +4184,7 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
     store::ensure_state(&client, "case-daily")
         .await
         .expect("the state row exists");
-    let first = store::take_lease(&client, "case-daily", ttl)
+    let first = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease writes")
         .expect("the first lease grants");
@@ -4183,7 +4195,7 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
         )
         .await
         .expect("the first lease expires");
-    let second = store::take_lease(&client, "case-daily", ttl)
+    let second = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease writes")
         .expect("the second lease grants");
@@ -4271,7 +4283,10 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
             None,
             false,
             store::RescanProgress::None,
-            SystemTime::now(),
+            store::PassFinished {
+                at: SystemTime::now(),
+                posture: registry_platform_config::Posture::Production,
+            },
         )
         .await,
         "complete_pass",
@@ -4282,7 +4297,10 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
             "case-daily",
             stale,
             "lease-held",
-            SystemTime::now(),
+            store::PassFinished {
+                at: SystemTime::now(),
+                posture: registry_platform_config::Posture::Production,
+            },
         )
         .await,
         "stop_pass",
@@ -4309,7 +4327,10 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
         None,
         false,
         store::RescanProgress::None,
-        SystemTime::now(),
+        store::PassFinished {
+            at: SystemTime::now(),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     .expect("the current holder completes");
@@ -4320,7 +4341,7 @@ async fn leased(client: &deadpool_postgres::Object) -> i64 {
     store::ensure_state(client, "case-daily")
         .await
         .expect("the state row exists");
-    store::take_lease(client, "case-daily", Duration::from_secs(600))
+    store::take_lease(client, "case-daily", Duration::from_secs(600), Production)
         .await
         .expect("the lease writes")
         .expect("the lease grants")
@@ -4350,7 +4371,10 @@ async fn a_position_within_the_engine_bound_saves_whatever_its_jsonb_text_length
         Some(&position),
         false,
         store::RescanProgress::None,
-        SystemTime::now(),
+        store::PassFinished {
+            at: SystemTime::now(),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     .expect("a cursor within the engine bound saves");
@@ -4374,7 +4398,10 @@ async fn a_position_over_the_engine_bound_refuses() {
         Some(&position),
         false,
         store::RescanProgress::None,
-        SystemTime::now(),
+        store::PassFinished {
+            at: SystemTime::now(),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     {
@@ -4805,4 +4832,310 @@ async fn actual_cli_interval_loop_finishes_the_running_pass_on_sigterm() {
             .is_none_or(|expires| expires <= SystemTime::now()),
         "the finished pass released the lease"
     );
+}
+
+#[tokio::test]
+async fn migration_preserves_completed_passes_and_allows_new_jobs_without_a_pass() {
+    let isolated = unmigrated().await;
+    install_schema_103(&isolated.pool).await;
+    let client = isolated.pool.get().await.unwrap();
+    client
+        .batch_execute(include_str!(
+            "../src/store/migrations/0104_revision_possibly_admitted.sql"
+        ))
+        .await
+        .unwrap();
+    client
+        .batch_execute(
+            "INSERT INTO adapter_job_schema_migrations(version, applied_at) VALUES (104, now());
+         INSERT INTO adapter_job_state(job_id, last_pass_at) VALUES ('case-daily', now())",
+        )
+        .await
+        .unwrap();
+
+    store::migrate(&client).await.unwrap();
+    let legacy = state(&isolated.pool, "case-daily").await;
+    assert!(legacy.last_pass_at.is_some());
+    assert_eq!(legacy.last_pass_posture, None);
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page_end())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let status = run_job_without_env(
+        &isolated.url,
+        job_args("status", &fixture, &["--posture", "production"]),
+        &["REGISTRY_STACK_POSTURE"],
+    )
+    .await;
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let report: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(report["findings"], json!([]), "{report}");
+
+    let receiver = FixtureReceiver::start(vec![Scripted::Acknowledge { run_id: None }]).await;
+    let pass = run_job_without_env(
+        &isolated.url,
+        fixture_pass_args(&fixture, &receiver),
+        &["REGISTRY_STACK_POSTURE"],
+    )
+    .await;
+    assert!(
+        pass.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pass.stderr)
+    );
+    assert_eq!(
+        state(&isolated.pool, "case-daily").await.last_pass_posture,
+        Some(registry_platform_config::Posture::Production)
+    );
+
+    store::ensure_state(&client, "new-job").await.unwrap();
+    let fresh = state(&isolated.pool, "new-job").await;
+    assert_eq!(fresh.last_pass_at, None);
+    assert_eq!(fresh.last_pass_posture, None);
+
+    let error = client
+        .execute(
+            "INSERT INTO adapter_job_state (job_id, last_pass_at, last_pass_posture)
+         VALUES ('unknown-posture', now(), 'staging')",
+            &[],
+        )
+        .await
+        .expect_err("staging is outside the closed posture set");
+    let error = error.as_db_error().unwrap();
+    assert_eq!(
+        *error.code(),
+        tokio_postgres::error::SqlState::CHECK_VIOLATION
+    );
+    assert_eq!(
+        error.constraint(),
+        Some("adapter_job_state_last_pass_posture_check")
+    );
+
+    client.batch_execute(
+        "ALTER TABLE adapter_job_state DROP CONSTRAINT adapter_job_state_last_pass_posture_check;
+         UPDATE adapter_job_state SET last_pass_posture = 'staging' WHERE job_id = 'case-daily'"
+    ).await.unwrap();
+    assert!(store::read_state(&client, "case-daily").await.is_err());
+}
+
+#[tokio::test]
+async fn expired_development_lease_retains_the_store_posture() {
+    use registry_platform_config::Posture::{Development, Production};
+
+    let isolated = isolated().await;
+    let client = isolated.pool.get().await.unwrap();
+    store::ensure_state(&client, "case-daily").await.unwrap();
+    let ttl = Duration::from_secs(60);
+    assert!(store::take_lease(&client, "case-daily", ttl, Development)
+        .await
+        .unwrap()
+        .is_some());
+    client
+        .batch_execute(
+            "UPDATE adapter_job_state SET lease_expires = now() - interval '1 second' \
+             WHERE job_id = 'case-daily'",
+        )
+        .await
+        .unwrap();
+    let refusal = store::take_lease(&client, "case-daily", ttl, Production)
+        .await
+        .err()
+        .expect("the expired development lease still fences production");
+    assert!(matches!(
+        refusal,
+        store::StoreError::PostureMismatch {
+            recorded: Development
+        }
+    ));
+    assert!(refusal.to_string().contains("adapter.job.posture-mismatch"));
+}
+
+#[tokio::test]
+async fn status_reports_a_pass_recorded_in_a_different_posture() {
+    for (recorded, other) in [("development", "production"), ("production", "development")] {
+        let mut page = reply_page_end();
+        page["nextCursor"] = json!("p2");
+        let fixture = JobFixture::start(
+            job_fixture::PAGE_SCRIPT,
+            vec![(200, page); 3],
+            job_fixture::Edits::Ordered,
+        )
+        .await;
+        let receiver = FixtureReceiver::start(vec![Scripted::Acknowledge { run_id: None }]).await;
+        let isolated = isolated().await;
+        let mut pass_args = fixture_pass_args(&fixture, &receiver);
+        pass_args.extend(["--posture".into(), recorded.into()]);
+        let pass = run_job_without_env(&isolated.url, pass_args, &["REGISTRY_STACK_POSTURE"]).await;
+        assert!(
+            pass.status.success(),
+            "{}",
+            String::from_utf8_lossy(&pass.stderr)
+        );
+
+        let before = state(&isolated.pool, "case-daily").await;
+        assert!(
+            before.position.is_some(),
+            "the settled pass saved its cursor"
+        );
+        let declared_posture = registry_platform_config::Posture::parse(other).unwrap();
+        let client = isolated.pool.get().await.unwrap();
+        assert!(matches!(
+            store::take_lease(&client, "case-daily", Duration::from_secs(60), declared_posture).await,
+            Err(store::StoreError::PostureMismatch { recorded: found })
+                if found.as_str() == recorded
+        ));
+        assert!(matches!(
+            store::mark_rescan_due(&client, "case-daily", declared_posture).await,
+            Err(store::StoreError::PostureMismatch { recorded: found })
+                if found.as_str() == recorded
+        ));
+        drop(client);
+
+        for declared in [recorded, other] {
+            let status = run_job_without_env(
+                &isolated.url,
+                job_args("status", &fixture, &["--posture", declared]),
+                &["REGISTRY_STACK_POSTURE"],
+            )
+            .await;
+            assert!(
+                status.status.success(),
+                "{}",
+                String::from_utf8_lossy(&status.stderr)
+            );
+            let report: Value = serde_json::from_slice(&status.stdout).unwrap();
+            assert_eq!(report["items"]["acknowledged"], 1, "{report}");
+            let expected = if declared == recorded {
+                json!([])
+            } else {
+                json!([{
+                    "code": "adapter.job.posture-mismatch",
+                    "recordedPosture": recorded,
+                    "declaredPosture": declared,
+                    "message": "The job store records a different posture.",
+                    "suggestedAction": "Use the recorded posture, or use a fresh store when changing the deployment posture. Run adapter-job status to see both postures."
+                }])
+            };
+            assert_eq!(report["findings"], expected, "{report}");
+        }
+        for dry_run in [true, false] {
+            let mut args = if dry_run {
+                job_args("pass", &fixture, &["--dry-run"])
+            } else {
+                fixture_pass_args(&fixture, &receiver)
+            };
+            args.extend(["--posture".into(), other.into()]);
+            let refused =
+                run_job_without_env(&isolated.url, args, &["REGISTRY_STACK_POSTURE"]).await;
+            let stdout = String::from_utf8_lossy(&refused.stdout);
+            let stderr = String::from_utf8_lossy(&refused.stderr);
+            assert!(
+                !refused.status.success(),
+                "dry run {dry_run}: {stdout} {stderr}"
+            );
+            assert!(
+                stdout.contains("adapter.job.posture-mismatch")
+                    || stderr.contains("adapter.job.posture-mismatch"),
+                "{stdout} {stderr}"
+            );
+        }
+        set_acceptance_interval(&fixture);
+        let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut runtime: Value =
+            serde_json::from_slice(&std::fs::read(&fixture.runtime).unwrap()).unwrap();
+        runtime["metricsListener"] = json!({"bind": socket.local_addr().unwrap().to_string()});
+        std::fs::write(&fixture.runtime, serde_json::to_vec(&runtime).unwrap()).unwrap();
+        let mut args = fixture_pass_args(&fixture, &receiver);
+        args.extend(["--loop".into(), "--posture".into(), other.into()]);
+        let mut loop_child = ManagedChild::spawn(&isolated.url, args);
+        wait_for_clean_exit(&mut loop_child).await;
+        let refused = loop_child.output();
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(!refused.status.success(), "{stderr}");
+        assert!(stderr.contains("adapter.job.posture-mismatch"), "{stderr}");
+        assert!(
+            !stderr.contains("adapter.job.metrics-listening"),
+            "{stderr}"
+        );
+
+        let after = state(&isolated.pool, "case-daily").await;
+        assert_eq!(after.position, before.position);
+        assert_eq!(after.last_pass_at, before.last_pass_at);
+        assert_eq!(after.last_pass_posture, before.last_pass_posture);
+        assert_eq!(after.lease_expires, before.lease_expires);
+        assert_eq!(after.last_rescan_at, before.last_rescan_at);
+        assert_eq!(after.rescan_active, before.rescan_active);
+    }
+}
+
+async fn assert_job_posture_recovery(dry_run: bool) {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page_end())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let receiver = FixtureReceiver::start(vec![]).await;
+    let isolated = isolated().await;
+    let client = isolated.pool.get().await.unwrap();
+    client
+        .batch_execute(
+            "INSERT INTO adapter_job_state (job_id, last_pass_posture) \
+             VALUES ('case-daily', 'development')",
+        )
+        .await
+        .unwrap();
+    let mut args = if dry_run {
+        job_args("pass", &fixture, &["--dry-run"])
+    } else {
+        fixture_pass_args(&fixture, &receiver)
+    };
+    args.extend(["--posture".into(), "production".into()]);
+    let refused = run_job_without_env(&isolated.url, args, &["REGISTRY_STACK_POSTURE"]).await;
+    assert!(!refused.status.success());
+    let report: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(
+        report["stopped"]["code"],
+        "page-fault:adapter.job.posture-mismatch"
+    );
+    let next = report["stopped"]["next"].as_str().unwrap_or_default();
+    assert!(next.contains("Use the recorded posture"), "{report}");
+    assert!(next.contains("use a fresh store"), "{report}");
+}
+
+#[tokio::test]
+async fn once_pass_posture_refusal_reports_recovery() {
+    assert_job_posture_recovery(false).await;
+}
+
+#[tokio::test]
+async fn preview_pass_posture_refusal_reports_recovery() {
+    assert_job_posture_recovery(true).await;
+}
+
+#[test]
+fn job_database_fixture_rejects_non_numeric_loopback_hosts_before_connecting() {
+    for url in [
+        "postgresql://test@10.0.0.5/job",
+        "postgresql://test@localhost/job",
+        "postgresql://test@127.0.0.1,10.0.0.5/job",
+    ] {
+        let failure = std::panic::catch_unwind(|| job_fixture::validate_test_database_url(url))
+            .expect_err("the harness must refuse this URL before connecting");
+        let message = failure
+            .downcast_ref::<&str>()
+            .expect("a fixed panic message");
+        assert_eq!(
+            *message,
+            "ADAPTER_TEST_DATABASE_URL must name a numeric loopback host"
+        );
+    }
+    job_fixture::validate_test_database_url("postgresql://test@127.0.0.2/job");
+    job_fixture::validate_test_database_url("postgresql://test@[::1]/job");
 }

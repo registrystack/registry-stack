@@ -49,9 +49,9 @@
 //! declaration features a product supports, checked with one shared
 //! diagnostic before any product-specific rule runs.
 //!
-//! The opt-in `receiver` feature adds `receiver::verify_delivery`, the one
-//! receiver-side reading of a signed Version 1 delivery that every product
-//! receiving a hook delivery calls.
+//! The opt-in `receiver` feature verifies Standard Webhooks deliveries
+//! through `receiver::verify_hook_delivery` and Version 1 deliveries through
+//! `receiver::verify_delivery`.
 
 mod capability;
 mod declaration;
@@ -82,5 +82,12 @@ pub use message::{
     BoundedText, BoundedTextError, HandlerOutputLimits, HookMessage, HookMessageError,
     HookProposal, MAX_OUTPUT_BYTES, MAX_REFUSAL_CODE_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
 };
+#[cfg(feature = "receiver")]
+pub use receiver::{
+    verify_hook_delivery, HookDelivery, HookDeliveryError, VerifiedHookDelivery,
+    HOOK_DELIVERY_HEADERS,
+};
+#[cfg(feature = "receiver")]
+pub use registry_platform_crypto::delivery_signature::{DeliveryKey, DeliveryKeys};
 pub use retry::exponential_retry_delays_ms;
 pub use validate::{validate_hooks, HookValidationError};

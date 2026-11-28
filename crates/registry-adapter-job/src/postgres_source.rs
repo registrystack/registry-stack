@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-#[cfg(feature = "postgres-test")]
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +20,9 @@ use registry_adapter_engine::component::postgres::{
     SourceScalar,
 };
 use registry_adapter_engine::job::JobProgram;
-use registry_adapter_engine::job_sources::{PostgresSourceBinding, PostgresSourceTls};
+use registry_adapter_engine::job_sources::{
+    resolve_postgres_host, PostgresSourceBinding, PostgresSourceTls,
+};
 use registry_platform_config::{describe_secret_failure, SecretResolver};
 use registry_platform_yaml::{LocalId, UniqueIdList, UniqueList};
 use tokio_postgres::types::{FromSql, IsNull, ToSql, Type};
@@ -51,6 +52,28 @@ pub fn activate_postgres_sources(
     Ok(())
 }
 
+fn loopback_plaintext_config(
+    mut postgres: tokio_postgres::Config,
+    binding: &PostgresSourceBinding,
+    lookup: impl Fn(&str, u16) -> std::io::Result<Vec<IpAddr>>,
+) -> Result<tokio_postgres::Config, String> {
+    match binding
+        .loopback_addresses(lookup)
+        .map_err(|error| error.render_human())?
+    {
+        Some(addresses) => {
+            for address in addresses {
+                postgres.hostaddr(address);
+            }
+        }
+        None => {
+            postgres.host(&binding.host);
+        }
+    }
+    postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
+    Ok(postgres)
+}
+
 struct PooledPostgresSource {
     pool: Pool,
     cancellation: PostgresCancellation,
@@ -59,7 +82,6 @@ struct PooledPostgresSource {
 #[derive(Clone)]
 enum PostgresCancellation {
     Tls(tokio_postgres_rustls::MakeRustlsConnect),
-    #[cfg(feature = "postgres-test")]
     Plaintext,
 }
 
@@ -82,7 +104,6 @@ impl PostgresCancellation {
     ) -> Result<(), tokio_postgres::Error> {
         match self {
             Self::Tls(tls) => token.cancel_query(tls).await,
-            #[cfg(feature = "postgres-test")]
             Self::Plaintext => token.cancel_query(tokio_postgres::NoTls).await,
         }
     }
@@ -174,6 +195,14 @@ impl PooledPostgresSource {
     /// A connection failure cannot appear here: connections open lazily at
     /// the first read.
     fn build(binding: PostgresSourceBinding, resolver: &SecretResolver) -> Result<Self, String> {
+        Self::build_with_lookup(binding, resolver, resolve_postgres_host)
+    }
+
+    fn build_with_lookup(
+        binding: PostgresSourceBinding,
+        resolver: &SecretResolver,
+        lookup: impl Fn(&str, u16) -> std::io::Result<Vec<IpAddr>>,
+    ) -> Result<Self, String> {
         let endpoint = binding.endpoint.clone();
         let member = |name: &str| format!("sources.postgres.{endpoint}.{name}");
         let password = resolver
@@ -196,13 +225,13 @@ impl PooledPostgresSource {
         };
         let mut postgres = tokio_postgres::Config::new();
         postgres
-            .host(&binding.host)
             .port(binding.port)
             .dbname(&binding.database)
             .user(&binding.user)
             .password(password.expose_secret());
         let (pool, cancellation) = match binding.tls {
             PostgresSourceTls::SystemRoots => {
+                postgres.host(&binding.host);
                 postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
                 let tls = store::native_postgres_tls()
                     .map_err(|_| tls_refused("the platform trust roots could not be loaded"))?;
@@ -212,6 +241,7 @@ impl PooledPostgresSource {
                 )
             }
             PostgresSourceTls::CaBundle { ca_bundle_file } => {
+                postgres.host(&binding.host);
                 postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
                 let ca = capture_ca_bundle(&ca_bundle_file).map_err(|error| {
                     format!(
@@ -226,12 +256,22 @@ impl PooledPostgresSource {
                     PostgresCancellation::Tls(tls),
                 )
             }
+            PostgresSourceTls::LoopbackPlaintext => {
+                let postgres = loopback_plaintext_config(postgres, &binding, lookup)?;
+                (
+                    store::build_verified_pool(
+                        postgres,
+                        tokio_postgres::NoTls,
+                        MAXIMUM_SOURCE_CONNECTIONS,
+                    ),
+                    PostgresCancellation::Plaintext,
+                )
+            }
             #[cfg(feature = "postgres-test")]
             PostgresSourceTls::Plaintext => {
-                let loopback = binding
-                    .host
-                    .parse::<IpAddr>()
-                    .is_ok_and(|address| address.is_loopback());
+                postgres.host(&binding.host);
+                let loopback =
+                    registry_platform_loopback::loopback_literal(&binding.host).is_some();
                 if !loopback {
                     return Err(format!(
                         "the plaintext PostgreSQL test source {endpoint} is not numeric loopback; correct {}",
@@ -672,6 +712,62 @@ mod activation_tests {
             password_ref: SecretReference::parse(password_ref).expect("an exact reference"),
             tls,
         }
+    }
+
+    #[test]
+    fn source_loopback_plaintext_checks_every_localhost_address() {
+        let v4 = "127.0.0.1".parse().unwrap();
+        let v6 = "::1".parse().unwrap();
+        let private = "10.0.0.5".parse().unwrap();
+        for (addresses, accepted) in [
+            (Ok(vec![v4, v6]), true),
+            (Ok(vec![private]), false),
+            (Ok(vec![v4, private]), false),
+            (Ok(vec![]), false),
+            (Err(std::io::ErrorKind::NotFound.into()), false),
+        ] {
+            let mut binding = binding("secret:env/PATH", PostgresSourceTls::LoopbackPlaintext);
+            binding.host = "localhost".to_owned();
+            let answer = std::cell::Cell::new(Some(addresses));
+            let result =
+                loopback_plaintext_config(tokio_postgres::Config::new(), &binding, |host, port| {
+                    assert_eq!((host, port), ("localhost", 5432));
+                    answer.take().expect("the name is looked up once")
+                });
+            if accepted {
+                let config = result.unwrap();
+                assert!(config.get_hosts().is_empty());
+                assert_eq!(config.get_hostaddrs(), &[v4, v6]);
+            } else {
+                let error = result.expect_err("an unpinned localhost must be refused");
+                assert!(
+                    error.contains("platform.database.transport-host-mismatch"),
+                    "{error}"
+                );
+                assert!(error.contains("/sources/postgres/ledger/tls"), "{error}");
+            }
+        }
+        let mut binding = binding("secret:env/PATH", PostgresSourceTls::LoopbackPlaintext);
+        binding.host = "127.0.0.1".to_owned();
+        let config = loopback_plaintext_config(tokio_postgres::Config::new(), &binding, |_, _| {
+            panic!("a numeric loopback address needs no resolver")
+        })
+        .unwrap();
+        assert!(config.get_hosts().is_empty());
+        assert_eq!(config.get_hostaddrs(), &[v4]);
+    }
+
+    #[test]
+    fn source_loopback_plaintext_refuses_a_private_host() {
+        let resolver = SecretResolver::new([SecretProvider::Environment], "").unwrap();
+        let mut binding = binding("secret:env/PATH", PostgresSourceTls::LoopbackPlaintext);
+        binding.host = "10.0.0.5".to_owned();
+        let error = PooledPostgresSource::build(binding, &resolver)
+            .expect_err("the source is not loopback");
+        assert!(
+            error.contains("loopback-plaintext requires a loopback host"),
+            "{error}"
+        );
     }
 
     /// An activation refusal names the endpoint, the step that failed and

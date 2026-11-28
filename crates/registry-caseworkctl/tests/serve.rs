@@ -26,6 +26,7 @@ fn run(binary: &Path, capture: &Path, arguments: &[&str]) -> Output {
         .env("CASEWORK_BIN", binary)
         .env("RUNTIME_CAPTURE", capture)
         .env_remove("RSTACK_GENERATION_DIR")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .expect("caseworkctl starts")
 }
@@ -40,6 +41,7 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_and_exit() {
         .env("CASEWORK_BIN", &binary)
         .env("RUNTIME_CAPTURE", &capture)
         .env_remove("RSTACK_GENERATION_DIR")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -52,7 +54,9 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_and_exit() {
     assert_eq!(output.stderr, b"runtime-stderr\n");
     assert_eq!(
         fs::read_to_string(capture).unwrap(),
-        format!("{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\nserve\n")
+        format!(
+            "{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\n--posture\nproduction\nserve\n"
+        )
     );
 }
 
@@ -71,6 +75,7 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
         .env("RUNTIME_CAPTURE", &capture)
         .env_remove("CASEWORK_BIN")
         .env_remove("RSTACK_GENERATION_DIR")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .expect("caseworkctl starts");
 
@@ -81,7 +86,13 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/path.yaml", "serve"]
+        [
+            "--runtime-config",
+            "/tmp/path.yaml",
+            "--posture",
+            "production",
+            "serve"
+        ]
     );
 }
 
@@ -105,6 +116,7 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
         .args(["serve", "--runtime-config", "/tmp/managed.yaml"])
         .env("PATH", poisoned_path)
         .env("RUNTIME_CAPTURE", &capture)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env("RSTACK_GENERATION_DIR", &generation)
         .env("RSTACK_CASEWORK_BIN", &selected)
         .env("RSTACK_RELEASE_TAG", "v-test")
@@ -119,7 +131,13 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/managed.yaml", "serve"]
+        [
+            "--runtime-config",
+            "/tmp/managed.yaml",
+            "--posture",
+            "production",
+            "serve"
+        ]
     );
     assert_ne!(selected, poisoned);
 }
@@ -147,4 +165,30 @@ fn serve_rejects_json_report_format_before_starting_the_runtime() {
     assert_eq!(report["ok"], false);
     assert_eq!(report["command"], "usage");
     assert!(!capture.exists(), "the runtime must not start");
+}
+
+#[test]
+fn serve_forwards_explicit_and_environment_posture() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = runtime(temp.path(), "casework", 0);
+    let capture = temp.path().join("capture");
+    for from_environment in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_caseworkctl"));
+        command
+            .args(["serve", "--runtime-config", "/tmp/runtime.yaml"])
+            .env("CASEWORK_BIN", &binary)
+            .env("RUNTIME_CAPTURE", &capture)
+            .env_remove("RSTACK_GENERATION_DIR")
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if from_environment {
+            command.env("REGISTRY_STACK_POSTURE", "development");
+        } else {
+            command.args(["--posture", "development"]);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        assert!(fs::read_to_string(&capture)
+            .unwrap()
+            .ends_with("--posture\ndevelopment\nserve\n"));
+    }
 }

@@ -9,42 +9,61 @@
 //! validates the rest of its configuration contract.
 
 pub mod blocks;
+mod caller_issuers;
 mod check_acceptances;
+mod destination;
 mod loader;
 mod metrics_bind;
 mod offline;
 pub mod package;
+mod posture;
+#[cfg(test)]
+mod posture_load_tests;
 #[cfg(feature = "schema")]
 pub mod schema;
 mod secrets;
 
 use sha2::{Digest, Sha256};
 
+pub use blocks::non_empty_assertion_issuers;
 #[cfg(feature = "schema")]
-pub use blocks::url_hook_destinations_schema;
+pub use blocks::{assertion_issuers_schema, url_hook_destinations_schema};
 pub use blocks::{
-    describe_secret_failure, is_sha256_label, url_hook_destinations, AttachmentVerifierConfig,
-    AttemptTimeoutMilliseconds, AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind,
-    DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig, JwksSource,
-    ListenerBind, ListenerConfig, ListenerNetworkExposure, MetricsListenerConfig,
-    ObjectStorageConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig, PackageDigestMismatch,
-    PrivateListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig, TlsTermination,
-    UrlHookDestinationConfig, DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS,
-    DEFAULT_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, DEFAULT_HOOK_MAXIMUM_ATTEMPTS,
-    DEFAULT_TASK_GRANT_STATUS_PATH, DEFAULT_TASK_GRANT_STATUS_SCOPE,
+    check_database_hosts, describe_secret_failure, deserialize_issuer_endpoint, is_sha256_label,
+    plaintext_host_addresses, resolve_database_host, url_hook_destinations, AdmittedClients,
+    AttachmentVerifierConfig, AttemptTimeoutMilliseconds, AuditKeyConfig, AuditKeyCustody,
+    CheckedHost, ConfigBlockError, ConfigBlockErrorKind, DatabaseConfig, DatabaseHost,
+    DatabaseTransport, DatabaseTransportError, EnvironmentSecretProviderConfig,
+    FileSecretProviderConfig, HostResolver, InsecureHttp, JwksSource, ListenerBind, ListenerConfig,
+    ListenerNetworkExposure, MetricsListenerConfig, ObjectStorageConfig, OidcClientsConfig,
+    OidcIssuerConfig, OidcPackageClientsConfig, PackageClients, PackageClientsError, PackageConfig,
+    PackageDigestMismatch, PermittedTransport, PrivateListenerConfig, SecretProvidersConfig,
+    TaskGrantStatusConfig, TlsTermination, UrlHookDestinationConfig,
+    DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS, DEFAULT_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+    DEFAULT_HOOK_MAXIMUM_ATTEMPTS, DEFAULT_TASK_GRANT_STATUS_PATH, DEFAULT_TASK_GRANT_STATUS_SCOPE,
     MAX_ASSERTION_ISSUERS_PER_CLIENT, MAX_ASSERTION_ISSUER_BYTES, MAX_ASSERTION_ISSUER_CLIENTS,
     MAX_ASSERTION_ISSUER_CLIENT_BYTES, MAX_ATTEMPT_TIMEOUT_MILLISECONDS, MAX_HOOK_ATTEMPTS,
     MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, MAX_HOOK_DESTINATIONS, MAX_LISTENER_BIND_CHARACTERS,
     MAX_OIDC_AUDIENCE_CHARACTERS, MIN_ATTEMPT_TIMEOUT_MILLISECONDS,
     MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
+pub use caller_issuers::{
+    AccessTokenType, Admitted, AllowedClients, CallerIssuerCore, CallerIssuerEntry, CallerIssuers,
+    ClientActorKinds, ClientList, ClientRule, DeclaredActorKind, IssuerActorKind, PolicyClients,
+    ScopeClaimName,
+};
 pub use check_acceptances::{apply_check_acceptances, read_project_check_acceptances};
+pub use destination::{
+    DestinationTransport, PrivateRange, PrivateRangeError, PrivateRangeRefusal, PrivateRanges,
+    MAX_PRIVATE_RANGES,
+};
 pub use loader::{
-    contains_environment_expression, reject_environment_expressions_in_authored_yaml,
-    require_trusted_runtime_path, substituted_variable_names, AuthoredExpressions,
-    LoadedRuntimeConfig, RemovedKey, RuntimeConfigError, RuntimeConfigLoader, RuntimeEnvelope,
-    DEFAULT_MAX_RUNTIME_CONFIG_BYTES, MAX_RUNTIME_CONFIG_PATH_BYTES, REMOVED_OIDC_JWKS_SOURCE_KIND,
-    REMOVED_OIDC_JWKS_URI, UNAVAILABLE_CODE,
+    contains_environment_expression, deciding_diagnostic,
+    reject_environment_expressions_in_authored_yaml, require_trusted_runtime_path,
+    substituted_variable_names, AuthoredExpressions, LoadedRuntimeConfig, RemovedKey,
+    RuntimeConfigError, RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_MAX_RUNTIME_CONFIG_BYTES,
+    MAX_RUNTIME_CONFIG_PATH_BYTES, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    UNAVAILABLE_CODE,
 };
 pub use metrics_bind::{
     check_metrics_bind, check_metrics_bind_address, check_metrics_bind_apart, MetricsBindError,
@@ -54,9 +73,32 @@ pub use package::{
     plan_package, verify_package, write_package, write_sum_file, PackageError, PackageErrorKind,
     PackageLimits, VerifiedPackage, REVISION_FILE, SUM_FILE,
 };
-pub use secrets::{
-    ProtectedSecret, SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+pub use posture::{
+    collect_development_settings, collect_posture_settings, declared, declared_from,
+    declared_from_with_production_alias, declared_with_production_alias, has_denied_warnings,
+    CollectedSettings, DeclaredPosture, DevelopmentClass, DevelopmentOnlyRefused,
+    DevelopmentSetting, DevelopmentWitness, ExplicitClass, ExplicitProductionSetting,
+    FoundExplicitSetting, FoundSetting, Gated, Posture, PostureError, PostureReport, PostureSource,
+    SettingOrigin, Stated, DEVELOPMENT, POSTURE_ENV,
 };
+pub use secrets::{
+    ProtectedSecret, SecretError, SecretFileCheck, SecretProvider, SecretReference, SecretResolver,
+    MAX_SECRET_BYTES, MAX_SECRET_LINKS,
+};
+
+/// Detect a posture flag repeated across a subcommand boundary, where Clap
+/// can collapse both declarations into one value.
+pub fn has_repeated_posture_flag() -> bool {
+    std::env::args_os()
+        .skip(1)
+        .take_while(|argument| argument != "--")
+        .filter(|argument| {
+            let argument = argument.as_encoded_bytes();
+            argument == b"--posture" || argument.starts_with(b"--posture=")
+        })
+        .nth(1)
+        .is_some()
+}
 
 fn resolve_config_env_expression(
     expression: &str,

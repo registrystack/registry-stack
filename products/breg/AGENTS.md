@@ -34,6 +34,8 @@ authority stay separate: tooling can edit, diff, and check configuration, and
 cannot hold the production migration credential. Registry Relay is retired;
 BReg does not inherit its publication contract or serve as a generic replacement.
 
+The build posture never enters the package. A development-only property of a package must be derivable from its content and refused by production load, as the placeholder identity is.
+
 ## Source neutrality
 
 `products/breg/scripts/check_source_neutrality.py` forbids fixture-specific
@@ -67,7 +69,7 @@ Changing the blocklist is a boundary decision: record it in this file.
   scenario file (`configure/run-a-project-with-rstack-dev.mdx`),
   `products/breg/quickstart/` for the scripted first hour, and
   `products/breg/examples/` for the canonical projects and their scenario
-  files. `reference/bregctl-dev.mdx` documents the older `bregctl dev` lifecycle.
+  files for the local development workflow.
 - Canonical projects: `products/breg/examples/`, `products/breg/acceptance/`,
   and `products/breg/fixtures/`. `products/breg/examples/README.md` indexes the
   examples; acceptance and fixture projects carry a README where one exists.
@@ -160,12 +162,21 @@ each time: the container ID must be the full hex ID, the CA copy cannot sit
 directly in `/tmp`, the URL host must be `localhost` (the certificate's name),
 and the PostGIS image starts PostgreSQL twice before it is really ready.
 
-Native development lifecycle change. The test owns a PostgreSQL container, so
-it needs Docker:
+`crates/registry-bregctl/tests/provision_postgres.rs` (`cargo test -p registry-bregctl --features
+postgres-test --test provision_postgres`) provisions as a non-superuser owner against that same TLS
+PostGIS container. It reads `PROVISION_TEST_DATABASE_URL` (the superuser URL with
+`sslmode=verify-full`) and `PROVISION_TEST_DATABASE_CA` (the `BREG_TEST_TLS_CA_PEM_PATH` file) and
+fails when either is missing.
+
+Retained development lifecycle changes need Docker and a source-built
+`rstack`, `bregctl`, and `breg`. Run the BReg restart proof:
 
 ```sh
-cargo test --locked -p registry-bregctl --test dev_lifecycle -- --ignored --test-threads=1
+python3 products/platform/scripts/test-rstack-dev.py --bin-dir target/debug --restart breg
 ```
+
+The `breg-tutorial` CI job also runs each ignored example recovery test by its
+exact name against a managed `rstack dev` run.
 
 Evidence export change. The proof drives the three native binaries over
 `products/breg/evidence/` offline and starts no container:

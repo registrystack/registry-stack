@@ -46,9 +46,11 @@ clap.workspace = true
 deadpool-postgres.workspace = true
 getrandom.workspace = true
 jsonwebtoken.workspace = true
+registry-cli-report.workspace = true
 registry-evidence-client.workspace = true
 registry-evidence-verifier.workspace = true
 registry-platform-audit.workspace = true
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto = { workspace = true, features = ["xchacha-seal"] }
@@ -76,6 +78,7 @@ axum-test.workspace = true
 ed25519-dalek.workspace = true
 jsonschema.workspace = true
 p256.workspace = true
+registry-platform-testing = { workspace = true, features = ["token-fixtures"] }
 registry-thunderid-tooling = { workspace = true, features = ["session"] }
 reqwest.workspace = true
 tempfile.workspace = true

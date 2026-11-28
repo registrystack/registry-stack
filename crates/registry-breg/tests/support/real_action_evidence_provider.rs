@@ -15,9 +15,8 @@ use std::{
 
 pub struct RealEvidenceProvider {
     _child: FixtureChild,
-    _scratch: tempfile::TempDir,
+    scratch: tempfile::TempDir,
     ready: Value,
-    client: Arc<EvidenceActionClient>,
 }
 struct FixtureChild(Child);
 impl Drop for FixtureChild {
@@ -42,6 +41,7 @@ impl RealEvidenceProvider {
         let scratch = tempfile::tempdir().unwrap();
         let mut child = FixtureChild(
             Command::new(python)
+                .env_remove("REGISTRY_STACK_POSTURE")
                 .arg(root.join("run-provider.py"))
                 .arg("--evidence")
                 .arg(binary)
@@ -68,31 +68,38 @@ impl RealEvidenceProvider {
         .await
         .expect("real Evidence fixture becomes ready");
         let ready: Value = serde_json::from_slice(&std::fs::read(ready_path).unwrap()).unwrap();
-        let token = std::fs::read_to_string(ready["tokenFile"].as_str().unwrap()).unwrap();
-        let jwks: JwksDocument =
-            serde_json::from_slice(&std::fs::read(ready["jwksFile"].as_str().unwrap()).unwrap())
-                .unwrap();
-        let config = EvidenceClientConfig::new(
-            ready["baseUrl"].as_str().unwrap().parse().unwrap(),
-            Arc::new(StaticToken::new(token.trim()).unwrap()),
-            jwks,
-            vec![],
-        );
-        let binding =
-            EvidenceProviderBinding::new("real-fixture-pinned-trust-v1".into(), config).unwrap();
         Self {
             _child: child,
-            _scratch: scratch,
+            scratch,
             ready,
-            client: Arc::new(EvidenceActionClient::new(BTreeMap::from([(
-                "farmer-registry".into(),
-                binding,
-            )]))),
         }
     }
-    pub fn client(&self) -> Arc<EvidenceActionClient> {
-        self.client.clone()
+
+    pub fn runtime_evaluator(
+        &self,
+        registry: &registry_breg::CompiledRegistry,
+        posture: registry_platform_config::Posture,
+    ) -> Arc<registry_breg::action_evidence::ActionEvidenceEvaluator> {
+        let base = include_str!("../../../../products/breg/examples/minimal/runtime.example.yaml")
+            .replace(
+                "/var/lib/breg/secrets",
+                self.scratch.path().to_str().unwrap(),
+            );
+        let config = format!(
+            "{base}\nevidenceProviders:\n  farmer-registry:\n    baseUrl: {}\n    trustBindingId: real-fixture-pinned-trust-v1\n    tokenRef: secret:file/token\n    trustedJwksRef: secret:file/jwks.json\n",
+            self.ready["baseUrl"].as_str().unwrap()
+        );
+        let config = registry_breg::runtime_config::parse_runtime_config(
+            &config,
+            registry_platform_config::DeclaredPosture {
+                posture,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .unwrap();
+        config.activate_evidence(registry).unwrap().unwrap()
     }
+
     pub fn unauthorized_client(&self) -> Arc<EvidenceActionClient> {
         let token =
             std::fs::read_to_string(self.ready["unauthorizedTokenFile"].as_str().unwrap()).unwrap();
@@ -105,6 +112,7 @@ impl RealEvidenceProvider {
             Arc::new(StaticToken::new(token.trim()).unwrap()),
             jwks,
             vec![],
+            registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
         );
         let binding =
             EvidenceProviderBinding::new("real-fixture-pinned-trust-v1".into(), config).unwrap();

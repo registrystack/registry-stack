@@ -35,6 +35,7 @@ REFERENCE_TEMPLATES = {
     f"{BASE_URL}/problems/...",
     f"{BASE_URL}/problems/..",
     f"{BASE_URL}/problems/",
+    f"{BASE_URL}/problems/registry-platform/session/",
     f"{BASE_URL}/schemas/",
     f"{BASE_URL}/schemas/breg/",
 }
@@ -388,6 +389,7 @@ def explicit_entries(
         if not isinstance(record, dict) or keys not in (
             required,
             required | {"artifactPath", "mediaType"},
+            required | {"problem"},
         ):
             raise CatalogError(f"records[{index}] has an invalid shape")
         has_artifact = "artifactPath" in record
@@ -410,6 +412,10 @@ def explicit_entries(
             "description": record["description"],
             "source": source_record(repo_root, source_path),
         }
+        if record["kind"] == "problem" and "problem" in record:
+            entry["problem"] = record["problem"]
+        elif "problem" in record:
+            raise CatalogError(f"records[{index}] has problem facts for a non-problem kind")
         if has_artifact:
             artifact_path = repo_root / record["artifactPath"]
             if not isinstance(record["mediaType"], str) or not record["mediaType"]:

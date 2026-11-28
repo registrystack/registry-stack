@@ -13,6 +13,7 @@ use registry_adapter_engine::host_protocol::{
     PreparedHostProtocolRequest, VerifiedHostProtocolResponse,
 };
 use registry_evidence_client::RetainedEvidenceVerification;
+use registry_platform_httputil::PeerPolicy;
 use zeroize::Zeroizing;
 
 use crate::{source::SourceAccessAttribution, source_evidence::EvidenceSourceConfig};
@@ -20,18 +21,34 @@ use crate::{source::SourceAccessAttribution, source_evidence::EvidenceSourceConf
 /// The closed built-in protocol registry used for both pure checks and live
 /// source execution. Ordinary endpoints select no protocol.
 pub fn registry() -> Result<HostProtocolRegistry, HostProtocolError> {
+    registry_with_posture(crate::config::Posture::Production)
+}
+
+pub(crate) fn registry_with_posture(
+    posture: crate::config::Posture,
+) -> Result<HostProtocolRegistry, HostProtocolError> {
+    let peer_policy = match posture {
+        crate::config::Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        crate::config::Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    };
     #[allow(unused_mut, reason = "optional protocols are appended by feature")]
     let mut compilers = vec![
-        Arc::new(SignedEvidenceCompiler) as Arc<dyn HostProtocolCompiler>,
+        Arc::new(SignedEvidenceCompiler(peer_policy)) as Arc<dyn HostProtocolCompiler>,
         Arc::new(AttributionCompiler) as Arc<dyn HostProtocolCompiler>,
         Arc::new(LookupCompiler) as Arc<dyn HostProtocolCompiler>,
     ];
     #[cfg(feature = "wallet-presentation")]
     compilers.push(Arc::new(
-        crate::wallet_presentation::WalletPresentationCompiler,
+        crate::wallet_presentation::WalletPresentationCompiler(peer_policy),
     ));
     HostProtocolRegistry::try_new(compilers)
 }
+
+pub(crate) static VERIFIED_RESPONSE_HEADERS: [HeaderName; 3] = [
+    header::CONTENT_TYPE,
+    HeaderName::from_static("traceparent"),
+    HeaderName::from_static("registry-posture"),
+];
 
 static SIGNED_REQUEST_HEADERS: [HeaderName; 1] = [header::ACCEPT];
 static ATTRIBUTION_REQUEST_HEADERS: [HeaderName; 2] = [
@@ -39,7 +56,7 @@ static ATTRIBUTION_REQUEST_HEADERS: [HeaderName; 2] = [
     HeaderName::from_static("registry-access-purpose"),
 ];
 
-struct SignedEvidenceCompiler;
+struct SignedEvidenceCompiler(PeerPolicy);
 impl HostProtocolCompiler for SignedEvidenceCompiler {
     fn id(&self) -> &str {
         "signed-evidence-v1"
@@ -59,14 +76,14 @@ impl HostProtocolCompiler for SignedEvidenceCompiler {
         config.validate_contract().map_err(|_| HostProtocolError)?;
         Ok(Arc::new(SignedEvidenceProtocol {
             config: Arc::new(config),
-            response_headers: vec![header::CONTENT_TYPE, HeaderName::from_static("traceparent")],
+            peer_policy: self.0,
         }))
     }
 }
 
 struct SignedEvidenceProtocol {
     config: Arc<EvidenceSourceConfig>,
-    response_headers: Vec<HeaderName>,
+    peer_policy: PeerPolicy,
 }
 impl CompiledHostProtocol for SignedEvidenceProtocol {
     fn request_header_names(&self) -> &[HeaderName] {
@@ -74,7 +91,7 @@ impl CompiledHostProtocol for SignedEvidenceProtocol {
     }
 
     fn response_header_names(&self) -> &[HeaderName] {
-        &self.response_headers
+        &VERIFIED_RESPONSE_HEADERS
     }
 
     fn allows_credential_refresh_retry(&self) -> bool {
@@ -109,6 +126,7 @@ impl CompiledHostProtocol for SignedEvidenceProtocol {
             Box::new(SignedEvidenceVerifier {
                 config: Arc::clone(&self.config),
                 verification,
+                peer_policy: self.peer_policy,
             }),
         ))
     }
@@ -117,22 +135,14 @@ impl CompiledHostProtocol for SignedEvidenceProtocol {
 struct SignedEvidenceVerifier {
     config: Arc<EvidenceSourceConfig>,
     verification: RetainedEvidenceVerification,
+    peer_policy: PeerPolicy,
 }
 impl HostProtocolResponseVerifier for SignedEvidenceVerifier {
     fn verify(
         self: Box<Self>,
         response: HostProtocolWireResponse,
     ) -> Result<VerifiedHostProtocolResponse, HostProtocolResponseRefusal> {
-        let mut trusted_headers = http::HeaderMap::new();
-        for (name, value) in response.headers() {
-            let name = HeaderName::from_bytes(name.as_bytes())
-                .map_err(|_| HostProtocolResponseRefusal::Protocol)?;
-            let value =
-                HeaderValue::from_str(value).map_err(|_| HostProtocolResponseRefusal::Protocol)?;
-            trusted_headers.append(name, value);
-        }
-        registry_platform_httpsec::response_trace_id(&trusted_headers)
-            .map_err(|_| HostProtocolResponseRefusal::Verification)?;
+        verify_response_headers(&response, self.peer_policy)?;
         let mut media_types = response
             .headers()
             .iter()
@@ -167,6 +177,24 @@ impl HostProtocolResponseVerifier for SignedEvidenceVerifier {
             Some(valid_until.to_rfc3339()),
         ))
     }
+}
+
+pub(crate) fn verify_response_headers(
+    response: &HostProtocolWireResponse,
+    peer_policy: PeerPolicy,
+) -> Result<(), HostProtocolResponseRefusal> {
+    let mut trusted_headers = http::HeaderMap::new();
+    for (name, value) in response.headers() {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| HostProtocolResponseRefusal::Protocol)?;
+        let value =
+            HeaderValue::from_str(value).map_err(|_| HostProtocolResponseRefusal::Protocol)?;
+        trusted_headers.append(name, value);
+    }
+    registry_platform_httpsec::response_trace_id(&trusted_headers)
+        .map_err(|_| HostProtocolResponseRefusal::Verification)?;
+    registry_platform_httputil::validate_response_headers(&trusted_headers, peer_policy)
+        .map_err(|_| HostProtocolResponseRefusal::Verification)
 }
 
 struct AttributionCompiler;

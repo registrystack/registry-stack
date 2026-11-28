@@ -2,6 +2,195 @@
 
 ## Unreleased
 
+- Clean up managed project data through `rstack dev` after fixture runs.
+
+- BREAKING: Rust client configurations take a peer policy in `PaymentClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
+- Adapter payment bridges and direct BReg job destinations accept development BReg responses when the runtime declares development.
+
+- `adapterctl provision` validates its runtime file under the declared posture before printing SQL or connecting to PostgreSQL.
+
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, the Adapter's database connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.
+- Under `store.transport: loopback-plaintext` or `private-network-plaintext`, the job store connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.
+- Under `database.transport` or `store.transport` set to `loopback-plaintext` or `private-network-plaintext`, a keyword connection string host written as an IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`, is skipped when the transport otherwise permits it and the driver would dial it, as the driver itself fails that entry and tries the next. When no other host is left, the connection is refused when it is configured, with `platform.database.bracketed-host` naming the address. Write `host=::1`. When a keyword host has an authored `hostaddr`, the connection still uses that `hostaddr`. A bracketed IPv6 address in a URL, such as `postgresql://app@[::1]/registry`, still works.
+
+- Start a local development run from the starter with `rstack dev start`.
+- BREAKING: the facade and payment runtime read the issuer map under
+  `oidc.issuers`. Each entry has its own signing keys and client list, and
+  all entries share the audience published by the effective contract.
+  Migration: Move the issuer settings and top-level `allowedClients` into a named issuer entry.
+- BREAKING: ID tokens are refused under `accessTokenType: JWT`.
+  Migration: Send an access token issued for the Adapter audience.
+- BREAKING: identity-only tokens without a declared caller kind are refused.
+  Migration: Request the access profile's scope or declare the caller kind for the issuer or client.
+- Every 401 carries a Bearer challenge.
+- `adapterctl generate identity-facts` writes the caller requirements for one issuer.
+- Development refusal bodies include `failedCheck`.
+- `adapterctl check` lists each explicit production setting with its file and position.
+- BREAKING: Adapter sources are https or loopback only. An endpoint binding
+  on plain `http://` to a host that is not loopback now fails `adapterctl
+  check` with `adapter.runtime.insecure-origin` at its `baseUrl`, and the
+  facade and the job host refuse to start, even when `allowedPrivateCidrs`
+  covers its address. Before, such a binding passed `check` and loaded, and
+  each request that carried its credential (Basic, a static authorization or
+  API key, or an OAuth2 bearer) was refused at send time with
+  `egress.refused`, so the refusal surfaced only on traffic. A credential-free
+  binding was sent to in plain HTTP inside the range, and is now refused too.
+  A binding has no `transport` member, so
+  `transport: private-network-plaintext`, which other products accept, is
+  refused as an unknown key. `allowedPrivateCidrs` still decides which
+  private addresses an https source may reach. To migrate, serve the source
+  over https, or run a sidecar on the Adapter's host that carries the
+  connection over TLS, such as a service-mesh proxy or a TLS tunnel, and bind
+  the endpoint to it on loopback, for example `http://127.0.0.1:8081`.
+
+- BREAKING: an Adapter job sends each Coordinator event with Standard
+  Webhooks. The POST carries `accept`, `content-type`, `webhook-id`,
+  `webhook-timestamp` and `webhook-signature`. The signature covers the
+  envelope id, the send time in Unix seconds and the exact body bytes. A retry
+  keeps the envelope id as `webhook-id` and signs with the time of that send.
+  The Version 1 headers are no longer sent.
+- BREAKING: in the job runtime file, `destinations.<binding>.signingKeyRef` is
+  now `hmacSha256KeyRef`. A job that declares a revised receiver also sets
+  `destinations.<binding>.revisedReceiver.hmacSha256KeyRef`, and a job that
+  declares none omits `revisedReceiver`. Startup refuses `signingKeyRef` with
+  the replacement, a missing or extra `revisedReceiver`, and a key that is
+  unavailable, shorter than 32 bytes, longer than 64 bytes or starts with
+  `whsec_`. It also refuses the same key bytes in two triggers, including
+  previous keys. Each refusal names the path and never a key byte.
+- To rotate a trigger key, set `previousHmacSha256KeyRef` beside its
+  `hmacSha256KeyRef`. The job sends two `v1,<base64>` entries, current first.
+  Remove the previous reference after Coordinator holds the new key.
+
+- A job pass records the declared posture when it takes the store lease.
+  A pass, preview, rescan or identity rebind refuses with
+  `adapter.job.posture-mismatch` when the store records a different posture.
+  Use the recorded posture or use a fresh store when you change posture.
+- BREAKING: an undeclared posture is production.
+  Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `check` without a declared posture reports development settings as errors.
+  Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: the payment simulator collection provider is development only.
+  Migration: Collections run under development until a live collection provider is accepted.
+- Use `tlsTermination: loopback-plaintext` for new loopback listener configurations.
+  Both `development-loopback` and `loopback-plaintext` relax the hook-listener port rule in either posture for loopback placement.
+- BREAKING: issuer `allowInsecureHttp: true` is development only.
+  Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
+- BREAKING: production refuses `oidc.issuers.<id>.jwksSource.type: test-issuer`.
+  Migration: Configure a production issuer or declare development for test runs.
+- Development deployments can reach a database container using `transport: private-network-plaintext`.
+- A payment reservation whose integrity check fails leaves the idempotency key available.
+- BREAKING: the pool refusal gains the code `platform.database.test-only-plaintext`.
+  Migration: Update scripts that match the old codes.
+- BREAKING: `/ready` gains `posture` and `developmentSettings`.
+  Migration: No change for probes that read the status code.
+- BREAKING: development responses carry `Registry-Posture: development` and production refuses marked payment peer responses.
+  Migration: Point production runtimes at production peers.
+- The facade and job store accept loopback PostgreSQL plaintext in either posture.
+  PostgreSQL job sources accept `tls.type: loopback-plaintext` for loopback hosts.
+- Adapter startup records each explicit `anonymousHttps: operator-approved` acknowledgement.
+
+- `adapterctl verify` and `adapterctl job check` accept `--posture` and read
+  `REGISTRY_STACK_POSTURE`. Their JSON reports include the declared posture and its source.
+- `adapter-job check` reports `posture`, `developmentSettings` and
+  `explicitProductionSettings`. The `posture` object includes its value and source.
+- `adapter-job status` reports `adapter.job.posture-mismatch` in `findings` when the
+  store records a different posture.
+- `adapter-job init-store` upgrades the job store to schema 105. Earlier binaries
+  refuse the upgraded store.
+- The facade journal upgrades to schema 600. Each new journal row carries the
+  declared posture.
+- New payment access and disbursement audit rows carry the declared posture.
+- A PostgreSQL job source using loopback plaintext with `localhost` requires
+  every resolved address to be loopback.
+- `adapterctl check` lists `anonymousHttps: operator-approved` in
+  `explicitProductionSettings`. The acknowledgement passes `--deny-warnings`.
+
+- BREAKING: the upgraded journal (schema 600) refuses journal writes from
+  earlier Adapter releases.
+  Migration: Stop every earlier Adapter process before upgrading the same
+  database. Restore a backup before rolling back past this release.
+
+- A secret file the Adapter or an Adapter job refuses names the failed
+  check and its fix. A link below the secret root now loads, so the hint
+  that a link reads as a missing file is gone.
+
+- `adapterctl provision --runtime-config FILE` creates the migration and
+  runtime roles and the database from the runtime file's two database URLs, as
+  a non-superuser administrator over verified TLS, or prints the script with
+  `--print-sql`. Running it again creates only what is missing and refuses a
+  role whose password differs from its URL. The runtime role gets only
+  `CONNECT`, and `adapter serve` grants its table privileges at startup as
+  before.
+- A scope refusal on the facade and the payment routes now writes the scope
+  claim name, the scope the operation requires and the access profile or
+  payment connection it applies to on its `request refused` line. The values
+  come from the deployment's configuration and never from the caller's token.
+  Production answers are unchanged.
+- A static key set that the facade refuses at startup states the rule it
+  broke, so the operator can correct the document without reading the source.
+- BREAKING: an Adapter job whose runtime document names a plain `http://`
+  endpoint beyond loopback fails `check` with
+  `adapter.runtime.insecure-origin`, whatever `allowedPrivateCidrs` lists,
+  where before an omitted or empty list admitted every private address for
+  such a host. To migrate, serve the endpoint over https, or reach it on
+  loopback (see the first entry). The job host's hook ingress also counts
+  and logs every refused credential and rate limit under
+  `adapter_job_request_refusals_total{check}`, with no answer change, and the
+  fixture destination and the plaintext test RabbitMQ and PostgreSQL sources
+  use the Adapter's one loopback definition (the RabbitMQ and PostgreSQL test
+  sources still take address literals only).
+- The payment routes count and log every refused caller under the check that
+  refused it, in the same `adapter_request_refusals_total{check}` counter and
+  `request refused` line as the facade. Counting and logging do not change
+  refusal answers. The simulator
+  provider connection and a payment provider base URL accept the same
+  loopback address literals as the rest of the Adapter (the rest of
+  `127.0.0.0/8`, `::1` and the IPv4-mapped forms) and still refuse the name
+  `localhost`.
+- The facade counts and logs every refused caller under the check that
+  refused it. `adapter_request_refusals_total{check}` rises by one and the log
+  carries one `request refused` line with the fixed `failed_check` label, at
+  most five lines per check per minute, replacing the per-stage
+  authentication log line. Counting and logging do not change refusal answers.
+  Loopback is one definition
+  everywhere the Adapter decides it: the rest of `127.0.0.0/8`, `::1` and the
+  IPv4-mapped forms count beside `127.0.0.1`, the name `localhost` is pinned to
+  loopback addresses, and `a.localhost` and `localhost.` stay named hosts. Any
+  plain `http://` origin beyond loopback fails the runtime check with
+  `adapter.runtime.insecure-origin`, whatever `allowedPrivateCidrs` lists.
+- BREAKING: the facade listener answers `GET /health` and `GET /ready` without
+  authentication. `/health` answers `{"status":"ok"}`. `/ready` answers `200`
+  with `status: "ready"`, `posture` and `developmentSettings` when the journal
+  migrations match the binary and the runtime role holds its journal
+  privileges, and a constant 503 `{"status":"not-ready"}` otherwise. The bodies never vary with the
+  project. A project operation whose facade path is `/health` or `/ready` is
+  unserved under `adapter.operation.reserved-facade-path`. To migrate, rename
+  the record type or change the operation path so no binding's concrete path
+  is `/health`, `/ready` or the effective-contract path. `adapterctl check`
+  refuses such a binding with `adapter.project.reserved-facade-path` and
+  `adapterctl compile` refuses it with `adapterctl.compile.reserved-path`.
+- `adapter serve` grants the runtime database role the table privileges its
+  deployment needs, after it migrates and before it listens, when the runtime
+  and migration sessions run as different roles. The grantee is the role the
+  runtime session reports as its `current_user`, read before any grant, never
+  the name in a URL. A runtime connection that fails stops startup before any
+  grant. The grants are the ones the startup check already required, plus
+  `USAGE` on the schema. Only privileges the role lacks are granted, in one
+  transaction under an advisory lock, and nothing more: no default privileges,
+  no revoke. A successful grant logs one line naming the role and the number
+  of privileges. No grant is made to a role that lacks a privilege and has
+  members that would inherit it. A member that holds `ADMIN OPTION` on the
+  role and has no members of its own does not count. A grant the migration
+  role has no right to make (it does not own the object) stops startup with
+  the missing privilege named and rolls everything back. With one role in both
+  sessions, no grant is issued. The payment tables under
+  `--payments-config` follow the same rules: the collection tables always, the
+  G2P tables when `payments.yaml` declares disbursement connections, with
+  `USAGE` on their events sequences, in the facade's grant transaction or, when
+  serving payments without a project, in a grant step of their own that also
+  grants `USAGE` on the schema. The runtime role must exist,
+  and the migration role must own the tables.
 - `adapter serve --payments-config` hosts typed synthetic payment collection
   operations on the shared listener and PostgreSQL store, including without
   a record project. Connections bind institution/service scope, admitted

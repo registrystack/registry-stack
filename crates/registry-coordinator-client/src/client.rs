@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::fmt;
 
+use crate::PeerPolicy;
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
     build_client, classify_keyed_attempt, read_failure_kind, retry_keyed_mutation,
     send_failure_kind, KeyedMutationAttempt, OutboundOptions, RetryAfter, ServiceBaseUrl,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers};
+use registry_platform_httputil::{read_bounded, validate_response_headers, ResponseHeaderError};
 use reqwest::{
     header::{HeaderMap, ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Method, RequestBuilder, Response, StatusCode,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
@@ -31,12 +32,31 @@ const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 /// code under this base, with each `.` read as a path separator.
 const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-coordinator/";
 
+#[derive(Deserialize)]
+struct ProblemWire {
+    #[serde(flatten)]
+    document: ProblemDocument,
+    #[serde(
+        default,
+        rename = "pointer",
+        deserialize_with = "deserialize_problem_pointer"
+    )]
+    _pointer: Option<String>,
+}
+
+fn deserialize_problem_pointer<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
 /// A complete authenticated answer. This product does not define a trace field.
 pub struct CoordinatorComplete<T> {
     pub value: T,
 }
 
 pub struct CoordinatorClient {
+    peer_policy: PeerPolicy,
     http: reqwest::Client,
     base_url: ServiceBaseUrl,
     maximum_response_bytes: u64,
@@ -64,6 +84,7 @@ impl CoordinatorClient {
         })
         .map_err(|_| Error::configuration("the HTTP client could not be built"))?;
         Ok(Self {
+            peer_policy: config.peer_policy,
             http,
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
@@ -398,8 +419,12 @@ impl CoordinatorClient {
         let response = request.send().await.map_err(|e| Error::Transport {
             kind: send_failure_kind(&e),
         })?;
-        validate_response_headers(response.headers())
-            .map_err(|_| protocol(response.status().as_u16(), Failure::HeaderBounds))?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => Error::DevelopmentPeer,
+                _ => protocol(response.status().as_u16(), Failure::HeaderBounds),
+            },
+        )?;
         Ok(response)
     }
 
@@ -448,11 +473,10 @@ impl CoordinatorClient {
                 }
             }
         };
-        if parse_json_strict(&bytes).is_err() {
+        let Ok(value) = parse_json_strict(&bytes) else {
             return protocol(status.as_u16(), Failure::Problem);
-        }
-        let Ok(document) = ProblemDocument::parse_exact(&bytes, MAXIMUM_PROBLEM_BYTES as usize)
-        else {
+        };
+        let Ok(ProblemWire { document, .. }) = serde_json::from_value(value) else {
             return protocol(status.as_u16(), Failure::Problem);
         };
         if document.status != status.as_u16()
@@ -579,4 +603,48 @@ fn valid_revision(revision: &str) -> bool {
                 .bytes()
                 .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
     })
+}
+
+#[cfg(test)]
+mod peer_posture_tests {
+    use super::*;
+    use axum::http::header::{HeaderMap, HeaderValue};
+    use axum::{routing::any, Router};
+
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        for posture in [None, Some("production"), Some("development")] {
+            let mut headers = HeaderMap::new();
+            headers.insert("content-type", HeaderValue::from_static("application/json"));
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_static("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            );
+            if let Some(posture) = posture {
+                headers.insert("registry-posture", HeaderValue::from_static(posture));
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url =
+                url::Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let server = tokio::spawn(async move {
+                let router = Router::new().fallback(any(move || async move { (headers, r#"{}"#) }));
+                axum::serve(listener, router).await.unwrap();
+            });
+            for policy in [
+                PeerPolicy::RefuseDevelopmentPeer,
+                PeerPolicy::AcceptDevelopmentPeer,
+            ] {
+                let client =
+                    CoordinatorClient::new(CoordinatorClientConfig::new(url.clone(), policy))
+                        .unwrap();
+                let response = client.send(client.http.get(url.clone())).await;
+                if posture == Some("development") && policy == PeerPolicy::RefuseDevelopmentPeer {
+                    assert!(matches!(response, Err(Error::DevelopmentPeer)));
+                } else {
+                    response.expect("peer response accepted");
+                }
+            }
+            server.abort();
+        }
+    }
 }

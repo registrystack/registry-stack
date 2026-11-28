@@ -42,7 +42,7 @@
         "properties": {
           "catalogUrl": {
             "$ref": "#/$defs/Url",
-            "description": "Exact production HTTPS URL without credentials, query, or fragment.\nLoopback HTTP is a development exception `discoveryctl` accepts only\nwith `--allow-loopback`, not part of this production authoring schema.",
+            "description": "Exact production HTTPS URL without credentials, query, or fragment.\nLoopback HTTP is a development exception `discoveryctl` accepts only\nin the development posture. The schema describes production.",
             "pattern": "^https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+(?!.*//)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$"
           },
           "enabled": {

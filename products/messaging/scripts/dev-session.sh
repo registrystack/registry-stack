@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Shared by test-dev.sh and measure-throughput.sh: build or find messagingctl,
-# write a starter package whose SMS provider is the example mock provider,
-# start `messagingctl dev` on it, and always stop it and remove what it
-# started. Source it; it defines functions and sets no shell options.
+# Shared by the delivery, shared-issuer and throughput journeys.
+# Prepare a starter with the mock SMS provider and manage its rstack dev run.
+# Source this file to load its functions. The caller sets shell options.
 
 dev_repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 # shellcheck source-path=SCRIPTDIR/../../..
@@ -12,7 +11,7 @@ dev_repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && 
 : "${dev_name:?set dev_name before sourcing dev-session.sh}"
 dev_work=
 dev_project=
-dev_pid=
+dev_run=
 # Set by dev_start and read by the sourcing script.
 # shellcheck disable=SC2034
 {
@@ -35,20 +34,25 @@ dev_prepare() {
       exit 2
     fi
   done
-  if [[ -n "${MESSAGINGCTL_BIN:-}" ]]; then
-    messagingctl_bin=$MESSAGINGCTL_BIN
-  else
-    registry_cargo_build "$dev_repo_root" --locked --quiet -p registry-messagingctl "$@"
-    local profile=debug
-    if [[ " $* " == *" --release "* ]]; then
-      profile=release
+  local profile=debug
+  if [[ " $* " == *" --release "* ]]; then
+    profile=release
+  fi
+  local bin_dir="${CARGO_TARGET_DIR:-$dev_repo_root/target}/$profile"
+  if [[ -z "${RSTACK_BIN:-}" || -z "${MESSAGINGCTL_BIN:-}" || -z "${MESSAGING_BIN:-}" ]]; then
+    registry_cargo_build "$dev_repo_root" --locked --quiet \
+      -p registry-rstack -p registry-messagingctl -p registry-messaging "$@"
+  fi
+  rstack_bin=${RSTACK_BIN:-"$bin_dir/rstack"}
+  messagingctl_bin=${MESSAGINGCTL_BIN:-"$bin_dir/messagingctl"}
+  export RSTACK_MESSAGINGCTL_BIN="$messagingctl_bin"
+  export RSTACK_MESSAGING_BIN=${MESSAGING_BIN:-"$bin_dir/messaging"}
+  for tool in "$rstack_bin" "$RSTACK_MESSAGINGCTL_BIN" "$RSTACK_MESSAGING_BIN"; do
+    if [[ ! -x "$tool" ]]; then
+      printf 'development executable is missing at %s\n' "$tool" >&2
+      exit 2
     fi
-    messagingctl_bin="${CARGO_TARGET_DIR:-$dev_repo_root/target}/$profile/messagingctl"
-  fi
-  if [[ ! -x "$messagingctl_bin" ]]; then
-    printf 'messagingctl is not executable at %s\n' "$messagingctl_bin" >&2
-    exit 2
-  fi
+  done
   dev_work=$(mktemp -d "${TMPDIR:-/tmp}/messaging-dev.XXXXXX")
   chmod 700 "$dev_work"
   dev_project="$dev_work/project"
@@ -61,6 +65,15 @@ dev_prepare() {
     "$dev_project/providers/sms-gateway/provider.yaml"
   cp -R "$dev_repo_root/products/messaging/examples/providers/mock/scripts" \
     "$dev_project/providers/sms-gateway/scripts"
+  # The script below does its own sends. Keep the starter's read-only scenario.
+  python3 - "$dev_project/tests/scenarios.yaml" <<'SCENARIOS'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(path.read_text().split("  - id: send-a-reminder-sms", 1)[0])
+SCENARIOS
+  export RSTACK_DEV_STATE_DIR="$dev_work/runs"
 }
 
 # Read one dotted member of a JSON document on standard input.
@@ -72,87 +85,51 @@ for key in sys.argv[1].split("."):
 print(value)' "$1"
 }
 
-dev_free_port() {
-  python3 -c 'import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])'
-}
-
-# Start the session with any extra `dev` arguments and wait for its ready
-# report. Sets dev_api, dev_mailpit, and dev_metrics.
-# shellcheck disable=SC2034
 dev_start() {
-  local ready_seconds=${MESSAGING_DEV_READY_SECONDS:-600}
-  local api_port metrics_port
-  api_port=$(dev_free_port)
-  metrics_port=$(dev_free_port)
-  "$messagingctl_bin" dev "$dev_project" --port "$api_port" \
-    --metrics-port "$metrics_port" --format json "$@" \
-    >"$dev_work/dev.out" 2>"$dev_work/dev.err" &
-  dev_pid=$!
-  local deadline=$((SECONDS + ready_seconds))
-  until grep -q '"state":"ready"' "$dev_work/dev.out" 2>/dev/null; do
-    if ! kill -0 "$dev_pid" 2>/dev/null; then
-      printf '%s: the session stopped before it was ready\n' "$dev_name" >&2
-      cat "$dev_work/dev.out" >&2
-      exit 1
-    fi
-    if ((SECONDS > deadline)); then
-      printf '%s: the session was not ready in %s seconds\n' "$dev_name" "$ready_seconds" >&2
-      exit 1
-    fi
-    sleep 1
-  done
-  local ready
-  ready=$(head -n 1 "$dev_work/dev.out")
-  dev_api=$(dev_member api <<<"$ready")
-  dev_mailpit=$(dev_member mailpit <<<"$ready")
-  dev_metrics=$(dev_member metrics <<<"$ready")
+  local ready config metrics
+  if ! ready=$("$rstack_bin" --format json dev start "$dev_project" 2>"$dev_work/dev.err"); then
+    dev_run=$(dev_member run_id <<<"$ready" 2>/dev/null) || dev_run=
+    printf '%s\n' "$ready" >&2
+    return 1
+  fi
+  dev_run=$(dev_member run_id <<<"$ready")
+  dev_api=$(dev_member products.messaging <<<"$ready")
+  dev_mailpit=$(dev_member sinks.mail-relay.url <<<"$ready")
+  config=$(dev_member runtimeConfigs.messaging <<<"$ready")
+  metrics=$(dev_member metricsListener.bind <"$config")
+  dev_metrics="http://$metrics/metrics"
 }
 
-# Stop the session with SIGINT and require a clean stop that removed every
-# container it started.
+dev_header() {
+  "$rstack_bin" --format json dev token "$dev_run" --as "$1" |
+    python3 -c 'import json, sys
+entry, = json.load(sys.stdin)["credentials"]
+assert entry["product"] == "messaging"
+print(entry["header_file"])'
+}
+
+dev_containers() {
+  docker ps --all --quiet --filter "label=org.registrystack.rstack.dev-run=$dev_run"
+}
+
 dev_stop() {
-  kill -INT "$dev_pid"
-  wait "$dev_pid"
-  dev_pid=
-  local stopped state removed owner left
-  stopped=$(tail -n 1 "$dev_work/dev.out")
-  state=$(dev_member state <<<"$stopped")
-  removed=$(dev_member containersRemoved <<<"$stopped")
-  if [[ "$state" != stopped || "$removed" != True ]]; then
-    printf '%s: the session did not report a clean stop: %s\n' "$dev_name" "$stopped" >&2
-    exit 1
+  local stopped
+  if ! stopped=$("$rstack_bin" --format json dev stop "$dev_run" --clean); then
+    "$rstack_bin" --format json dev stop "$dev_run" --recover >/dev/null || return 1
+    stopped=$("$rstack_bin" --format json dev stop "$dev_run" --clean) || return 1
   fi
-  owner=$(dev_member owner <"$dev_project/.messaging/dev/session.json")
-  left=$(docker ps --all --quiet --filter "label=org.registrystack.messagingctl.dev-owner=$owner")
-  if [[ -n "$left" ]]; then
-    printf '%s: the session left containers behind\n' "$dev_name" >&2
-    exit 1
+  if [[ "$(dev_member status <<<"$stopped")" != stopped || -n "$(dev_containers)" ]]; then
+    printf '%s: the run did not stop and release its containers\n' "$dev_name" >&2
+    return 1
   fi
+  dev_run=
 }
 
-# Stop the session if it still runs, then remove any container its record
-# names, so a failed run leaves nothing behind.
 dev_cleanup() {
-  local status=$?
-  if [[ -n "$dev_pid" ]] && kill -0 "$dev_pid" 2>/dev/null; then
-    kill -INT "$dev_pid" 2>/dev/null || :
-    local _
-    for _ in $(seq 1 60); do
-      kill -0 "$dev_pid" 2>/dev/null || break
-      sleep 0.5
-    done
-    kill -KILL "$dev_pid" 2>/dev/null || :
-  fi
-  local record="$dev_project/.messaging/dev/session.json"
-  if [[ -n "$dev_project" && -f "$record" ]]; then
-    python3 - "$record" <<'PY' | while IFS= read -r container; do docker rm --force --volumes "$container" >/dev/null 2>&1 || :; done
-import json, sys
-for container in json.load(open(sys.argv[1]))["containers"]:
-    print(container)
-PY
+  local status=${1:-$?}
+  if [[ -n "$dev_run" ]] && ! dev_stop; then
+    printf '%s: cleanup failed for run %s, state retained at %s\n' "$dev_name" "$dev_run" "$dev_work" >&2
+    exit 1
   fi
   if [[ $status -ne 0 && -f "$dev_work/dev.err" ]]; then
     printf '%s: session error output:\n' "$dev_name" >&2

@@ -24,6 +24,7 @@ schema = [
 ]
 
 [dependencies]
+registry-rstack-dev.workspace = true
 registry-cli-report.workspace = true
 clap.workspace = true
 registry-cli-api.workspace = true

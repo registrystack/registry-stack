@@ -48,9 +48,11 @@ PARTY_SOURCE = "crates/registry-scheduling-core/src/party.rs"
 TYPED_SOURCE = "crates/registry-scheduling-core/src/typed.rs"
 OPERATIONAL_SOURCE = "crates/registry-scheduling-core/src/operational.rs"
 BUSY_SOURCE = "crates/registry-scheduling-core/src/source_busy.rs"
+PROBE_SOURCE = "crates/registry-platform-httputil/src/probe.rs"
 ATTENDANCE_SOURCE = "crates/registry-scheduling-core/src/attendance.rs"
 ADMISSION_SOURCE = "crates/registry-scheduling-core/src/admission.rs"
 PROBLEM_SOURCE = "crates/registry-scheduling-core/src/problem.rs"
+REFUSAL_SOURCE = "crates/registry-scheduling/src/refusal.rs"
 HTTPSEC_SOURCE = "crates/registry-platform-httpsec/src/server.rs"
 
 # The committed document `--write` produces and `--check` verifies.
@@ -60,6 +62,8 @@ OUTPUT = "products/scheduling/generated/registry-scheduling.openapi.json"
 # this set from the `axum` router, resolving the constants the router names
 # through `crates/registry-scheduling-core/src/naming.rs`.
 ROUTES = {
+    "/health",
+    "/ready",
     "/healthz",
     "/readyz",
     "/v1/scheduling",
@@ -163,6 +167,8 @@ SCHEMA_STRUCTS = {
 # The axum handler behind each operation. `verify_handler_wiring` reads the
 # handler back out of http.rs and checks the document against what it does.
 ROUTE_HANDLERS = {
+    ("GET", "/health"): "health",
+    ("GET", "/ready"): "ready",
     ("GET", "/healthz"): "healthz",
     ("GET", "/readyz"): "readyz",
     ("GET", "/v1/scheduling"): "scheduling",
@@ -189,6 +195,8 @@ ROUTE_HANDLERS = {
 }
 
 OPERATION_IDS = {
+    ("GET", "/health"): "getHealth",
+    ("GET", "/ready"): "getReady",
     ("GET", "/healthz"): "getLiveness",
     ("GET", "/readyz"): "getReadiness",
     ("GET", "/v1/scheduling"): "describeScheduling",
@@ -228,7 +236,11 @@ OPERATION_IDS = {
 # material, and an issuer that cannot be reached is an outage on this side,
 # answered with Retry-After rather than a challenge the caller cannot satisfy.
 EDGE = ["request.body-too-large", "request.method-not-allowed"]
-AUTHENTICATION = ["authentication.refused", "profile.not-authorized"]
+AUTHENTICATION = [
+    "authentication.refused",
+    "platform.task-grant.development-assertion",
+    "profile.not-authorized",
+]
 JSON_BODY = [
     "request.invalid",
     "request.unprocessable",
@@ -241,6 +253,12 @@ PATH = ["request.invalid"]
 CURSOR = ["cursor.expired", "cursor.invalid"]
 STORAGE = ["service.unavailable"]
 AUTHORITY = ["operation.not-authorized"]
+# An operation that asks the task grant's own status answers a grant that is
+# unexpired but has more than fifteen minutes left on the offline path.
+# Only a route that names no existing hold or appointment answers it: on an
+# id-addressed route a caller cannot learn whether the id exists
+# (SCHEDULING-DEC-01), so the same grant answers `operation.not-authorized`.
+GRANT_LIFETIME = ["grant.lifetime-too-long"]
 IDEMPOTENCY = ["idempotency.expired", "idempotency.key-reused"]
 # An operation that resolves a caller-named offering against the deployed
 # policy answers for one the policy does not publish. The offering listing is
@@ -263,6 +281,8 @@ ADMISSION = [
 ]
 
 OPERATION_PROBLEMS = {
+    ("GET", "/health"): EDGE,
+    ("GET", "/ready"): EDGE + STORAGE,
     ("GET", "/healthz"): EDGE,
     ("GET", "/readyz"): EDGE + STORAGE,
     ("GET", "/v1/scheduling"): EDGE + AUTHENTICATION + STORAGE,
@@ -278,13 +298,13 @@ OPERATION_PROBLEMS = {
     + ["revision.mismatch", "precondition.failed", "resource.unavailable"],
     ("GET", "/v1/availability/explain"): EDGE + AUTHENTICATION + QUERY + STORAGE + OFFERING,
     ("GET", "/v1/operational/appointments"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
-    ("POST", "/v1/holds"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
+    ("POST", "/v1/holds"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME
     + OFFERING + ["service.unavailable"],
     # A release carries no caller-chosen key, so `idempotency.key-reused` is
     # not reachable: the key and the request hash are both the hold's own id.
     ("DELETE", "/v1/holds/{hold_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY
     + ["hold.released", "idempotency.expired", "service.unavailable"],
-    ("POST", "/v1/appointments"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
+    ("POST", "/v1/appointments"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY + GRANT_LIFETIME
     + OFFERING + ["hold.expired", "hold.released", "service.unavailable"],
     ("POST", "/v1/appointments/receipt"): EDGE + AUTHENTICATION + JSON_BODY + ["receipt.unresolved", "service.unavailable"],
     ("GET", "/v1/appointments"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
@@ -632,6 +652,15 @@ def schemas(problem_entries: list[dict]) -> dict:
             {**busy_counts, "kind": {**text, "enum": ["applied", "already-applied"]}, "revision": revision},
             [*busy_counts, "kind", "revision"],
         ),
+        "HealthStatus": answer({"status": {**text, "enum": ["ok"]}}, ["status"]),
+        "ReadyStatus": answer({
+            "status": {**text, "enum": ["ready"]},
+            "posture": {**text, "enum": ["development", "production"]},
+            "developmentSettings": {
+                "type": "array",
+                "items": answer({"code": text, "pointer": text}, ["code", "pointer"]),
+            },
+        }, ["status", "posture", "developmentSettings"]),
         "SchedulingServiceDocument": answer(
             {"schedulingId": text, "policyRevision": revision, "policyDigest": text},
             ["schedulingId", "policyRevision", "policyDigest"],
@@ -927,13 +956,24 @@ def document(contract: dict) -> dict:
     entries = contract["entries"]
     catalog = catalog_of(contract)
     paths = {
-        "/healthz": {"get": unauthenticated(
+        "/health": {"get": unauthenticated(
             "Liveness",
             "Process is live. No authentication, no storage, no policy.",
+            "HealthStatus",
         )},
-        "/readyz": {"get": unauthenticated(
+        "/ready": {"get": unauthenticated(
             "Readiness",
             "Asks the Scheduling store to answer. A store that cannot answer is service.unavailable, with Retry-After.",
+            "ReadyStatus",
+        )},
+        "/healthz": {"get": unauthenticated(
+            "Liveness, older spelling",
+            "Process is live. No authentication, no storage, no policy. Answers an empty 200 and stays beside /health for deployments that already probe it.",
+        )},
+        "/readyz": {"get": unauthenticated(
+            "Readiness, older spelling",
+            "Asks the Scheduling store to answer. A store that cannot answer is service.unavailable, with Retry-After.",
+            "ReadyStatus",
         )},
         "/v1/scheduling": {"get": operation(
             "Describe this Scheduling deployment",
@@ -1093,7 +1133,7 @@ def document(contract: dict) -> dict:
             status="201",
             body="CreateAppointmentRequest",
             idempotency=True,
-            description="Carries exactly one of hold or admission. Confirming transfers the hold's own reservation: the hold must still be active and unexpired, its policy revision still current, and its owner or source-manager binding must match. Exact-time confirmation also checks current physical supply: the selected resource still exists, carries the required capabilities, is available over the entire occupied interval, and satisfies the offering's current opening coverage. It does not re-run new-request start-grid, lead-time or horizon rules for an already admitted hold. A direct create is evaluated against the live ledger like a hold, and commits instead of reserving. Both branches demand a complete task grant naming the offering's service, location, and appointment.create. Source-managed creation or confirmation instead requires appointment.create-for, the same verified manager binding and fresh online grant status.",
+            description="Carries exactly one of hold or admission. Confirming transfers the hold's own reservation: the hold must still be active and unexpired, its policy revision still current, and its owner or source-manager binding must match. Exact-time confirmation also checks current physical supply: the selected resource still exists, carries the required capabilities, is available over the entire occupied interval, and satisfies the offering's current opening coverage. It does not re-run new-request start-grid, lead-time or horizon rules for an already admitted hold. A direct create is evaluated against the live ledger like a hold, and commits instead of reserving. Both branches demand a complete task grant naming the offering's service, location, and appointment.create. Source-managed creation or confirmation instead requires appointment.create-for, the same verified manager binding and fresh online grant status. Only a direct create answers `grant.lifetime-too-long`. Confirming a hold answers `operation.not-authorized` for the same grant.",
         )},
         "/v1/appointments/receipt": {"post": operation(
             "Read the original appointment receipt",
@@ -1209,12 +1249,18 @@ def rust_function(source: str, name: str) -> tuple[str, str]:
 
 
 def route_inventory(
-    http_source: str, naming_source: str, operational_source: str = "", busy_source: str = ""
+    http_source: str,
+    naming_source: str,
+    operational_source: str = "",
+    busy_source: str = "",
 ) -> dict[tuple[str, str], str]:
     """The (method, path) -> handler table, read back out of the axum router."""
     signature, body = rust_function(http_source, "router")
+    # The probe paths are the shared constants the router names from the HTTP
+    # helper crate, so their source is read from the repository itself.
+    probe_source = production_source(_root(), PROBE_SOURCE)
     constants: dict[str, str] = {}
-    for source in (naming_source, operational_source, busy_source, http_source):
+    for source in (naming_source, operational_source, busy_source, probe_source, http_source):
         constants.update(
             {
                 name: value
@@ -1494,6 +1540,7 @@ def verify_operation_problems(
             # never opens the store.
             required |= {
                 "authentication.refused",
+                "platform.task-grant.development-assertion",
                 "profile.not-authorized",
                 "service.unavailable",
             }
@@ -1540,6 +1587,16 @@ def produced_problem_codes(repository_root: Path, variants: dict[str, str]) -> s
         produced |= {
             variants[name] for name in re.findall(r"ProblemCode::([A-Z][A-Za-z0-9]*)", source)
         }
+    # The refusal codes are answered through `RefusalCode::problem`. The
+    # classification after it names every code and so says nothing about
+    # which are produced.
+    refusal_source = production_source(repository_root, REFUSAL_SOURCE)
+    if "pub const fn of" not in refusal_source:
+        raise ValueError("Rust function is missing: RefusalCode::of")
+    refusals = refusal_source.split("pub const fn of", 1)[0]
+    produced |= {
+        variants[name] for name in re.findall(r"ProblemCode::([A-Z][A-Za-z0-9]*)", refusals)
+    }
     return produced
 
 
@@ -1835,8 +1892,8 @@ def verify_source(repository_root: Path) -> None:
         "pub async fn authenticate_read",
         "pub async fn authenticate_explain",
         "pub async fn authenticate_mutate",
-        "grant_claims(&verified.claims",
-        "Err(AuthenticationError::Profile)",
+        "grant_claims(claims, &self.claim_names",
+        "AuthenticationFailure::from(AuthenticationError::Profile(FailedCheck::Scope))",
     ):
         marker(auth_source, text, "auth")
     for text in (
@@ -1850,7 +1907,7 @@ def verify_source(repository_root: Path) -> None:
         "CommitError::KeyReused => ProblemCode::IdempotencyKeyReused",
         "CommitError::KeyExpired => ProblemCode::IdempotencyExpired",
         "CommitError::HoldCeiling => ProblemCode::CapacityExhausted",
-        "CommitError::Unauthorized => ProblemCode::OperationNotAuthorized",
+        "CommitError::Unauthorized | CommitError::NotAttendable | CommitError::GrantLapsed => {\n            ProblemCode::OperationNotAuthorized\n        }",
         "CommitError::RevisionMismatch => ProblemCode::RevisionMismatch",
         "CommitError::CutoffPassed => ProblemCode::CancellationCutoffPassed",
     ):

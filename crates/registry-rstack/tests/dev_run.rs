@@ -3,7 +3,7 @@
 //! `rstack dev` runs, driven through the launcher in source mode against the
 //! development hosts built beside it. Cargo builds only the binaries of the
 //! package under test, so build the hosts first:
-//! `cargo build --locked -p registry-bregctl -p registry-caseworkctl --bins`.
+//! See the two development host build steps in the developer-tools CI shard.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::{
@@ -19,7 +19,7 @@ fn host(name: &str) -> std::path::PathBuf {
     let path = std::path::Path::new(env!("CARGO_BIN_EXE_rstack")).with_file_name(name);
     assert!(
         path.is_file(),
-        "{} is missing; build the development hosts first: cargo build --locked -p registry-bregctl -p registry-caseworkctl -p registry-evidencectl -p registry-evidence --bins",
+        "{} is missing; build the development hosts first: run both development host build steps for the developer-tools shard in .github/workflows/ci.yml",
         path.display()
     );
     path
@@ -63,6 +63,10 @@ fn fake_docker_path() -> std::ffi::OsString {
 /// system `false` as every product runtime, since these runs stop before a
 /// service starts, and the fake Docker CLI with no daemon.
 fn rstack_dev(state: &std::path::Path, json: bool) -> Command {
+    rstack_dev_with_host(state, json, &host("bregctl"))
+}
+
+fn rstack_dev_with_host(state: &std::path::Path, json: bool, bregctl: &std::path::Path) -> Command {
     let uninstalled = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("dev-run-uninstalled");
     let mut command = Command::new(env!("CARGO_BIN_EXE_rstack"));
     command
@@ -76,7 +80,7 @@ fn rstack_dev(state: &std::path::Path, json: bool) -> Command {
     command
         .arg("dev")
         .env("RSTACK_DEV_STATE_DIR", state)
-        .env("RSTACK_BREGCTL_BIN", host("bregctl"))
+        .env("RSTACK_BREGCTL_BIN", bregctl)
         .env("RSTACK_BREG_BIN", system_binary("false"))
         .env_remove("RSTACK_CASEWORKCTL_BIN")
         .env("RSTACK_CASEWORK_BIN", system_binary("false"))
@@ -85,6 +89,42 @@ fn rstack_dev(state: &std::path::Path, json: bool) -> Command {
         .env("PATH", fake_docker_path())
         .env_remove("FAKE_DOCKER_STATE");
     command
+}
+
+#[test]
+fn canonical_casework_names_its_breg_pair_before_starting_postgresql() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("review");
+    let tool = host("caseworkctl");
+    let init = Command::new(&tool)
+        .args(["init", "--template", "canonical-review"])
+        .arg(&project)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "{init:?}");
+
+    let invoke = |action| {
+        rstack_dev(&scratch.path().join("runs"), true)
+            .arg(action)
+            .arg(&project)
+            .env("RSTACK_CASEWORKCTL_BIN", &tool)
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .output()
+            .unwrap()
+    };
+    let checked = invoke("check");
+    assert!(checked.status.success(), "{checked:?}");
+    let started = invoke("start");
+    let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    assert_eq!(started.status.code(), Some(1), "{report}");
+    let message = report["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("facility-registry BReg project"),
+        "{message}"
+    );
+    assert!(message.contains("caseworkctl provider pair"), "{message}");
+    assert!(!scratch.path().join("runs").exists());
 }
 
 /// Runs `rstack --format json dev ARGUMENTS` with run state under `state`.
@@ -114,8 +154,261 @@ impl Drop for GuardFixture {
 
 #[test]
 fn every_host_runs_the_service_guard() {
-    for name in ["bregctl", "caseworkctl"] {
+    for name in [
+        "bregctl",
+        "caseworkctl",
+        "evidencectl",
+        "messagingctl",
+        "schedulingctl",
+        "documentsctl",
+        "coordinatorctl",
+        "adapterctl",
+        "registry-render",
+        "discoveryctl",
+    ] {
         hidden_guard_dispatch_reaps_workload_when_controller_closes(&host(name));
+    }
+}
+
+#[test]
+fn launcher_selects_scheduling_for_a_scheduling_only_plan() {
+    let scratch = tempfile::tempdir().unwrap();
+    let probe = scratch.path().join("schedulingctl");
+    fs::write(
+        &probe,
+        "#!/bin/sh\n[ \"$1\" = rstack-dev ] && [ \"$2\" = check ]\n",
+    )
+    .unwrap();
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        scratch.path().join("dev.yaml"),
+        "products: [{product: scheduling}]\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rstack"))
+        .arg("--install-root")
+        .arg(scratch.path().join("install"))
+        .args(["dev", "check"])
+        .arg(scratch.path())
+        .env("RSTACK_SCHEDULINGCTL_BIN", &probe)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn product_starters_write_plans_that_pass_dev_check() {
+    let scratch = tempfile::tempdir().unwrap();
+    let evidence_starter = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/evidence/examples/standalone");
+    let publicschema = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/evidence/organization-selection.yaml")
+        .canonicalize()
+        .unwrap();
+    let moved_scenario = scratch.path().join("evidence-with-renamed-scenario");
+    copy_tree(&evidence_starter, &moved_scenario);
+    fs::rename(
+        moved_scenario.join("tests/scenarios.yaml"),
+        moved_scenario.join("tests/starter-scenario.yaml"),
+    )
+    .unwrap();
+    let plan = moved_scenario.join("dev.yaml");
+    fs::write(
+        &plan,
+        fs::read_to_string(&plan)
+            .unwrap()
+            .replace("tests/scenarios.yaml", "tests/starter-scenario.yaml"),
+    )
+    .unwrap();
+    let mut starters = vec![
+        ("breg", "bregctl", "RSTACK_BREGCTL_BIN", vec![]),
+        (
+            "breg",
+            "bregctl",
+            "RSTACK_BREGCTL_BIN",
+            vec!["--template", "facility-registry"],
+        ),
+        (
+            "breg",
+            "bregctl",
+            "RSTACK_BREGCTL_BIN",
+            vec!["--from", "publicschema", "--selection", utf8(&publicschema)],
+        ),
+        (
+            "evidence",
+            "evidencectl",
+            "RSTACK_EVIDENCECTL_BIN",
+            vec!["--profile", "local", "--starter", utf8(&moved_scenario)],
+        ),
+        (
+            "messaging",
+            "messagingctl",
+            "RSTACK_MESSAGINGCTL_BIN",
+            vec![],
+        ),
+        (
+            "documents",
+            "documentsctl",
+            "RSTACK_DOCUMENTSCTL_BIN",
+            vec![],
+        ),
+        (
+            "coordinator",
+            "coordinatorctl",
+            "RSTACK_COORDINATORCTL_BIN",
+            vec!["--directory"],
+        ),
+        ("adapter", "adapterctl", "RSTACK_ADAPTERCTL_BIN", vec![]),
+        ("render", "registry-render", "RSTACK_RENDER_BIN", vec![]),
+        (
+            "discovery",
+            "discoveryctl",
+            "RSTACK_DISCOVERYCTL_BIN",
+            vec![],
+        ),
+    ];
+    for template in [
+        "standalone-decision",
+        "canonical-review",
+        "single-reviewer-approval",
+        "two-peer-approval",
+        "technical-check-then-authorization",
+    ] {
+        starters.push((
+            "casework",
+            "caseworkctl",
+            "RSTACK_CASEWORKCTL_BIN",
+            vec!["--template", template],
+        ));
+    }
+    for template in [
+        "standalone-exact-time",
+        "standalone-arrival-window",
+        "resource-reservations",
+    ] {
+        starters.push((
+            "scheduling",
+            "schedulingctl",
+            "RSTACK_SCHEDULINGCTL_BIN",
+            vec!["--template", template],
+        ));
+    }
+    for (index, (product, tool_name, variable, options)) in starters.into_iter().enumerate() {
+        let target = scratch.path().join(format!("{product}-{index}"));
+        let tool = host(tool_name);
+        let initialize = || {
+            let mut command = Command::new(&tool);
+            if product == "adapter" {
+                command.args(["--format", "json"]);
+            }
+            command
+                .arg("init")
+                .args(&options)
+                .arg(&target)
+                .env_remove("REGISTRY_STACK_POSTURE")
+                .output()
+                .unwrap()
+        };
+        let output = initialize();
+        assert!(
+            output.status.success(),
+            "{product}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if product == "adapter" {
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["ok"], true);
+            assert_eq!(report["command"], "init");
+        }
+        assert!(target.join("dev.yaml").is_file(), "{product}");
+        let output = Command::new(env!("CARGO_BIN_EXE_rstack"))
+            .arg("--install-root")
+            .arg(scratch.path().join("install"))
+            .args(["dev", "check"])
+            .arg(&target)
+            .env(variable, &tool)
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{product}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if product == "evidence" {
+            let output = Command::new(&tool)
+                .arg("check")
+                .arg(&target)
+                .arg("--target")
+                .arg(target.join("local-target.yaml"))
+                .env("REGISTRY_STACK_POSTURE", "development")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "Evidence check: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            for directory in ["schemas", "projections"] {
+                let source = scratch.path().join(format!("evidence-{directory}"));
+                copy_tree(&evidence_starter, &source);
+                symlink(
+                    source.join("evidence.yaml"),
+                    source.join(directory).join("link.yaml"),
+                )
+                .unwrap();
+                let output = Command::new(&tool)
+                    .args([
+                        "init",
+                        "--format",
+                        "json",
+                        "--profile",
+                        "local",
+                        "--starter",
+                    ])
+                    .arg(&source)
+                    .arg(scratch.path().join(format!("refused-{directory}")))
+                    .env_remove("REGISTRY_STACK_POSTURE")
+                    .output()
+                    .unwrap();
+                assert!(
+                    !output.status.success(),
+                    "Evidence init copied a symlink from {directory}"
+                );
+                let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(report["diagnostics"][0]["code"], "evidence.init.refused");
+            }
+        }
+        if matches!(product, "adapter" | "discovery") {
+            let refused = initialize();
+            assert!(!refused.status.success(), "{product} overwrote its starter");
+            if product == "adapter" {
+                let report: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
+                assert_eq!(report["diagnostics"][0]["code"], "adapterctl.init.refused");
+            } else {
+                assert_eq!(refused.status.code(), Some(1));
+                assert!(String::from_utf8_lossy(&refused.stderr)
+                    .contains("choose a new starter directory"));
+            }
+            let mut check = Command::new(&tool);
+            check
+                .arg("check")
+                .env("REGISTRY_STACK_POSTURE", "development");
+            if product == "discovery" {
+                check.arg("--project");
+            }
+            let output = check.arg(&target).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{product}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }
 
@@ -260,6 +553,93 @@ fn assert_error_envelope(report: &serde_json::Value, class: &str) {
         panic!("{report} violates the error schema: {errors:?}");
     }
     assert_eq!(report["error"]["class"], class, "{report}");
+}
+
+#[test]
+fn start_and_check_refuse_explicit_production_and_invalid_postures() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("evidence");
+    copy_tree(&example_project("evidence/examples/standalone"), &project);
+    for (posture, code) in [
+        ("production", "platform.posture.conflict"),
+        ("staging", "platform.posture.invalid-value"),
+    ] {
+        for action in ["start", "check"] {
+            let output = rstack_dev_with_host(&state, true, &system_binary("false"))
+                .args([action, utf8(&project)])
+                .env_remove("RSTACK_EVIDENCECTL_BIN")
+                .env_remove("RSTACK_EVIDENCE_BIN")
+                .env("REGISTRY_STACK_POSTURE", posture)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "{action} with {posture}: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            if action == "start" {
+                assert_error_envelope(&report, "usage");
+                assert!(report["error"]["message"].as_str().unwrap().contains(code));
+            } else {
+                assert_eq!(report["status"], "usage-error");
+                assert_eq!(report["ok"], false);
+                assert_eq!(report["command"], "dev-check");
+                assert_eq!(report["kind"], "BRegCtlReport");
+                assert_eq!(
+                    report["apiVersion"],
+                    "id.registrystack.org/formats/breg/ctl-report/v1alpha1"
+                );
+                assert!(report["version"]
+                    .as_str()
+                    .is_some_and(|version| !version.is_empty()));
+                assert_eq!(report["diagnostics"][0]["code"], code, "{report}");
+            }
+        }
+    }
+    assert!(!state.exists());
+}
+
+#[test]
+fn launcher_execs_every_dev_host_in_development_posture() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    let probe = scratch.path().join("posture-probe");
+    fs::write(
+        &probe,
+        "#!/bin/sh\n[ \"${REGISTRY_STACK_POSTURE-}\" = development ]\n",
+    )
+    .unwrap();
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o700)).unwrap();
+    for (arguments, posture) in [
+        (vec!["check", utf8(&project)], None),
+        (vec!["start", utf8(&project)], None),
+        (vec!["status", RUN_ID], Some("production")),
+        (
+            vec!["token", RUN_ID, "--as", "operator"],
+            Some("production"),
+        ),
+        (vec!["stop", RUN_ID], Some("production")),
+    ] {
+        let mut command = rstack_dev_with_host(&state, true, &probe);
+        command.args(&arguments);
+        if let Some(posture) = posture {
+            command.env("REGISTRY_STACK_POSTURE", posture);
+        } else {
+            command.env_remove("REGISTRY_STACK_POSTURE");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{} host did not observe development posture: {}",
+            arguments[0],
+            output.status
+        );
+    }
 }
 
 /// A run directory whose supervisor is gone: its lock file exists, unlocked.
@@ -504,6 +884,60 @@ fn lost_managed_run(state: &std::path::Path) -> std::path::PathBuf {
     )
     .unwrap();
     root
+}
+
+#[test]
+fn clean_removes_the_retained_state_of_an_ended_managed_run() {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    fs::DirBuilder::new().mode(0o700).create(&state).unwrap();
+    let key = "feedfeedfeedfeedfeedfeedfeedfeed";
+    let project = state.join(format!("development-project-{key}"));
+    fs::DirBuilder::new().mode(0o700).create(&project).unwrap();
+    for (name, value) in [
+        ("generation".to_owned(), "generation"),
+        ("docker-daemon".to_owned(), "fixture-daemon"),
+        (format!("run-{RUN_ID}"), key),
+    ] {
+        let path = project.join(name);
+        fs::write(&path, value).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let docker = fake_docker_state(scratch.path(), closed_loopback_port());
+    let volumes = docker.join("volumes");
+    fs::create_dir(&volumes).unwrap();
+    let volume = volumes.join(format!("rstack-development-project-{key}"));
+    fs::write(&volume, format!("org.registrystack.rstack.development-project={key}\norg.registrystack.rstack.generation=generation\n")).unwrap();
+    let clean = || {
+        rstack_dev(&state, true)
+            .env("FAKE_DOCKER_STATE", &docker)
+            .args(["stop", RUN_ID, "--clean"])
+            .output()
+            .unwrap()
+    };
+
+    let lock = fs::File::create(state.join(format!("development-project-{key}.lock"))).unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
+    let held = clean();
+    assert_eq!(held.status.code(), Some(1), "{held:?}");
+    assert!(project.exists() && volume.exists());
+    drop(lock);
+
+    let output = clean();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "stopped");
+    assert_eq!(report["cleaned"], true);
+    assert!(!project.exists() && !volume.exists());
+
+    let retry = clean();
+    assert!(retry.status.success(), "{retry:?}");
+    let report: serde_json::Value = serde_json::from_slice(&retry.stdout).unwrap();
+    assert_eq!(report["status"], "stopped");
+    assert_eq!(report["message"], "Nothing left to clean for this run ID.");
+    assert!(report.get("cleaned").is_none());
 }
 
 #[test]
@@ -1973,7 +2407,7 @@ fn a_malformed_plan_names_its_field_before_allocating_run_state() {
     let state = scratch.path().join("state");
     fs::write(
         scratch.path().join("dev.yaml"),
-        "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\nkind: RStackDev\nissuer: https://example.test\nproducts: [{product: coordinator, project: registry, audience: test}]\npeople: {}\nscenarioFile: tests/scenarios.yaml\n",
+        "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\nkind: RStackDev\nissuer: https://example.test\nproducts: [{product: unrecognised, project: registry, audience: test}]\npeople: {}\nscenarioFile: tests/scenarios.yaml\n",
     )
     .unwrap();
     // The plan lists no hosting product, so the first available host reports
@@ -2073,7 +2507,7 @@ fn live_runs(state: &std::path::Path) -> Vec<String> {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             // A `.RUN_ID.removing` directory is a stopped run whose files are
             // still being deleted.
-            .filter(|name| name != "failed" && !name.starts_with('.'))
+            .filter(|name| name.len() == 32 && name.bytes().all(|byte| byte.is_ascii_hexdigit()))
             .collect(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => panic!("cannot read the run state: {error}"),
@@ -2266,7 +2700,8 @@ fn start_without_database_url_runs_a_labelled_container() {
     assert!(runs[0].contains(" --env-file "), "{argv}");
     assert!(runs[0].contains(" postgres:18.7@sha256:"), "{argv}");
     assert!(!runs[0].contains("--platform"), "{argv}");
-    // The run removed its container by label before it reported the failure.
+    // The first start removed its container by label and discarded the
+    // volume it created. The caller has no run ID to clean up afterward.
     assert!(
         argv.contains(&format!(
             "ps --all --quiet --no-trunc --filter label={DEV_RUN_LABEL}={run_id}"
@@ -2274,6 +2709,7 @@ fn start_without_database_url_runs_a_labelled_container() {
         "{argv}"
     );
     assert_eq!(fs::read_dir(docker.join("containers")).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(docker.join("volumes")).unwrap().count(), 0);
     assert!(report.get("run_id").is_none(), "{report}");
     assert_eq!(live_runs(&state), Vec::<String>::new());
     // The drawn administrator password reached Docker only in a file.
@@ -2462,6 +2898,215 @@ fn a_casework_only_run_starts_reports_and_stops_without_breg() {
     assert_eq!(live_runs(&state), Vec::<String>::new());
 }
 
+#[test]
+#[ignore = "requires the managed PostgreSQL Docker image and the BReg runtime"]
+fn managed_restart_adds_a_first_encrypted_field_and_keeps_records() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    copy_tree(&example_project("breg/examples/minimal"), &project);
+
+    let command = |arguments: &[&str]| {
+        let mut command = rstack_dev(&state, true);
+        command
+            .args(arguments)
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .env("RSTACK_BREG_BIN", host("breg"));
+        command
+    };
+    let start = || command(&["start", utf8(&project)]).output().unwrap();
+    let first = start();
+    assert!(first.status.success(), "{first:?}");
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    let first_id = first["run_id"].as_str().unwrap();
+    let stopped = command(&["stop", first_id]).output().unwrap();
+    assert!(stopped.status.success(), "{stopped:?}");
+
+    // Leave the contact type and its rehearsal untouched. Add an optional
+    // encrypted field on a new type.
+    let registry = project.join("registry.yaml");
+    let source = fs::read_to_string(&registry).unwrap();
+    fs::write(
+        &registry,
+        source
+            .replace(
+                "\nactions:\n",
+                concat!(
+                    "\n  confidential-note:\n",
+                    "    route: confidential-notes\n",
+                    "    primaryDataset: directory\n",
+                    "    mutationMode: mutable\n",
+                    "    classification: restricted\n",
+                    "    display: {label: Confidential note}\n",
+                    "    fields:\n",
+                    "      - {id: note, type: string, maximumLength: 120, classification: restricted, encrypted: true}\n",
+                    "      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}\n",
+                    "\nactions:\n",
+                ),
+            )
+            .replace(
+                "      records:\n",
+                concat!(
+                    "      records:\n",
+                    "        - recordType: confidential-note\n",
+                    "          operations: [create, get]\n",
+                    "          readableFields: [note]\n",
+                    "          writableFields: [note, jurisdiction]\n",
+                    "          rowBoundaries:\n",
+                    "            - {field: jurisdiction, claim: jurisdiction, operator: equals}\n",
+                ),
+            ),
+    )
+    .unwrap();
+
+    let second = start();
+    let second_report: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    let mut read = None;
+    let clean_id = if second.status.success() {
+        let id = second_report["run_id"].as_str().unwrap();
+        let token = command(&["token", id, "--as", "editor"]).output().unwrap();
+        if token.status.success() {
+            let token: serde_json::Value = serde_json::from_slice(&token.stdout).unwrap();
+            let headers = token["credentials"][0]["header_file"].as_str().unwrap();
+            let url = second_report["products"]["breg"].as_str().unwrap();
+            read = Some(get_with_headers(
+                &format!("{url}/v1/records/contacts"),
+                headers,
+            ));
+        }
+        id
+    } else {
+        first_id
+    };
+    let cleaned = command(&["stop", clean_id, "--clean"]).output().unwrap();
+    assert!(cleaned.status.success(), "{cleaned:?}");
+
+    assert!(second.status.success(), "{second:?}");
+    assert_eq!(second_report["scenarios"][0]["result"], "skipped");
+    let (status, body) = read.expect("read kept records with the new run's token");
+    assert_eq!(status, 200);
+    assert!(body.contains("Example contact"));
+    assert!(second_report["createdKeptKeys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|path| {
+            path.as_str()
+                .is_some_and(|path| path.ends_with("/field-key"))
+        }));
+}
+
+#[test]
+#[ignore = "requires the managed PostgreSQL Docker image and the BReg runtime"]
+fn managed_clean_accepts_stopped_and_expired_runs_and_blocks_a_racing_start() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    copy_tree(&example_project("breg/examples/minimal"), &project);
+
+    let path = std::env::var_os("PATH").unwrap();
+    let docker = std::env::split_paths(&path)
+        .map(|directory| directory.join("docker"))
+        .find(|docker| docker.is_file())
+        .expect("Docker is on PATH");
+    let shim = scratch.path().join("docker");
+    fs::write(
+        &shim,
+        r#"#!/bin/sh
+set -eu
+if [ "$1 ${2:-}" = "volume rm" ] && [ -f "$RSTACK_TEST_CLEAN_SYNC/hold" ]; then
+    touch "$RSTACK_TEST_CLEAN_SYNC/removing"
+    for attempt in $(seq 1 150); do
+        [ ! -f "$RSTACK_TEST_CLEAN_SYNC/hold" ] && break
+        sleep 0.1
+    done
+fi
+exec "$RSTACK_TEST_DOCKER" "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(scratch.path().to_path_buf()).chain(std::env::split_paths(&path)),
+    )
+    .unwrap();
+    let command = |arguments: &[&str]| {
+        let mut command = rstack_dev(&state, true);
+        command
+            .args(arguments)
+            .env("PATH", &path)
+            .env("RSTACK_TEST_DOCKER", &docker)
+            .env("RSTACK_TEST_CLEAN_SYNC", scratch.path())
+            .env("RSTACK_BREG_BIN", host("breg"));
+        command
+    };
+    let output_report = |output: std::process::Output| -> serde_json::Value {
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let start = |ttl| {
+        output_report(
+            command(&["start", utf8(&project), "--ttl", ttl])
+                .output()
+                .unwrap(),
+        )
+    };
+    let stop = |run, clean| {
+        let mut args = vec!["stop", run];
+        if clean {
+            args.push("--clean");
+        }
+        output_report(command(&args).output().unwrap())
+    };
+
+    let first = start("30s");
+    let run = first["run_id"].as_str().unwrap();
+    assert_eq!(stop(run, false)["status"], "stopped");
+    assert_eq!(stop(run, true)["cleaned"], true);
+
+    let expired = start("1s");
+    let run = expired["run_id"].as_str().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while state.join(run).exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!state.join(run).exists(), "the run did not expire");
+    assert_eq!(stop(run, true)["cleaned"], true);
+
+    let live = start("30s");
+    let run = live["run_id"].as_str().unwrap();
+    let hold = scratch.path().join("hold");
+    fs::write(&hold, "").unwrap();
+    let clean = command(&["stop", run, "--clean"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let removing = scratch.path().join("removing");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !removing.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+    let raced = removing.exists().then(|| {
+        command(&["start", utf8(&project), "--ttl", "15s"])
+            .output()
+            .unwrap()
+    });
+    fs::remove_file(hold).unwrap();
+    let cleaned = output_report(clean.wait_with_output().unwrap());
+    assert_eq!(cleaned["cleaned"], true);
+    let raced = raced.expect("the supervisor reached volume removal before returning");
+    assert_eq!(raced.status.code(), Some(1), "{raced:?}");
+    let refusal: serde_json::Value = serde_json::from_slice(&raced.stdout).unwrap();
+    assert!(
+        refusal["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("holds this project"),
+        "{refusal}"
+    );
+}
+
 /// Copies the files under `source` into `target`, keeping the layout.
 fn copy_tree(source: &std::path::Path, target: &std::path::Path) {
     fs::create_dir_all(target).unwrap();
@@ -2611,6 +3256,51 @@ fn casework_alone_runs_end_to_end() {
     );
 }
 
+#[test]
+#[ignore = "requires Docker and built coordinatorctl and coordinator binaries"]
+fn coordinator_starter_starts_with_run_owned_keys() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("coordinator-starter");
+    let tool = host("coordinatorctl");
+    let initialized = Command::new(&tool)
+        .args(["init", "--directory", utf8(&project)])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert!(initialized.status.success());
+    let local_dev = || {
+        let mut command = rstack_dev_with_host(&scratch.path().join("state"), true, &tool);
+        command
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .env_remove("RSTACK_BREGCTL_BIN")
+            .env_remove("RSTACK_BREG_BIN")
+            .env("RSTACK_COORDINATORCTL_BIN", &tool)
+            .env("RSTACK_COORDINATOR_BIN", host("coordinator"));
+        command
+    };
+
+    let start = local_dev()
+        .args(["start", utf8(&project)])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&start.stdout).unwrap();
+    if let Some(run) = report["run_id"].as_str() {
+        let stop = local_dev().args(["stop", run]).output().unwrap();
+        assert!(
+            stop.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stop.stdout)
+        );
+    }
+    assert!(
+        start.status.success(),
+        "{}",
+        String::from_utf8_lossy(&start.stdout)
+    );
+    assert_eq!(report["scenarios"][0]["steps"][0]["status"], 200);
+}
+
 /// `rstack dev` with only the Evidence tools: no BReg or Casework binary is
 /// set and none is installed, so the launcher runs the built `evidencectl` as
 /// the host. `docker_state` lets the fake Docker CLI log its calls; without it
@@ -2684,16 +3374,36 @@ fn run_evidence_alone(
     let project = scratch.join("project");
     let _source = SyntheticSource::start(&project);
 
+    let unix_seconds = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    let before = unix_seconds();
     let started = evidence_only_dev(&state, docker_state)
         .args(["start", utf8(&project)])
         .output()
         .unwrap();
+    let after = unix_seconds();
     let report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
     let run_id = report["run_id"].as_str().unwrap_or_default().to_owned();
     if !started.status.success() {
         dev_json(&state, &["stop", &run_id]);
         panic!("{started:?}");
     }
+    let origin = report["products"]["evidence"]
+        .as_str()
+        .expect("Evidence origin");
+    let readiness = Command::new(system_binary("curl"))
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            &format!("{origin}/ready"),
+        ])
+        .output()
+        .unwrap();
     let stopped = evidence_only_dev(&state, docker_state)
         .args(["stop", &run_id])
         .output()
@@ -2703,6 +3413,19 @@ fn run_evidence_alone(
     }
     assert!(stopped.status.success(), "{stopped:?}");
     assert_eq!(live_runs(&state), Vec::<String>::new());
+    assert!(
+        readiness.status.success(),
+        "curl /ready: {}",
+        String::from_utf8_lossy(&readiness.stderr)
+    );
+    let ready: serde_json::Value =
+        serde_json::from_slice(&readiness.stdout).expect("Evidence /ready JSON");
+    assert_eq!(ready["posture"], "development", "Evidence /ready: {ready}");
+    let expiry = report["expires_at"].as_u64().expect("run expiry");
+    assert!(
+        (before + 8 * 3600..=after + 8 * 3600).contains(&expiry),
+        "{report}"
+    );
     report
 }
 

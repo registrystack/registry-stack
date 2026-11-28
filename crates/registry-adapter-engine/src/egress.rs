@@ -2137,21 +2137,19 @@ pub(crate) fn destination_profile(parsed_base: &url::Url) -> DestinationProfile 
     }
     match parsed_base.scheme() {
         "https" => DestinationProfile::ProductionHttps,
-        _ if denotes_loopback(parsed_base) => DestinationProfile::LoopbackDevelopmentHttp,
+        _ if denotes_loopback(parsed_base) => DestinationProfile::LoopbackHttp,
         _ => DestinationProfile::PrivateServiceHttp,
     }
 }
 
 /// Whether the origin's host explicitly denotes loopback: the name
 /// `localhost` or a loopback address literal, the platform's own
-/// admission rule for the development profile.
+/// admission rule for the development profile. The destination policy pins
+/// the name to loopback addresses when it connects.
 pub(crate) fn denotes_loopback(origin: &url::Url) -> bool {
-    match origin.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
-    }
+    origin
+        .host_str()
+        .is_some_and(|host| registry_platform_httputil::loopback::loopback_host(host).is_some())
 }
 
 /// Whether a destination profile admits a token endpoint: the same
@@ -2163,7 +2161,7 @@ pub(crate) fn denotes_loopback(origin: &url::Url) -> bool {
 /// is admitted only under the feature that enables it.
 pub(crate) fn profile_admits_token_endpoints(profile: DestinationProfile) -> bool {
     match profile {
-        DestinationProfile::ProductionHttps | DestinationProfile::LoopbackDevelopmentHttp => true,
+        DestinationProfile::ProductionHttps | DestinationProfile::LoopbackHttp => true,
         #[cfg(feature = "postgres-test")]
         DestinationProfile::PinnedLoopbackHttpsTest => true,
         _ => false,
@@ -2513,6 +2511,10 @@ pub(crate) fn destination_refusal_name(fault: &DestinationSendError) -> &'static
         DestinationSendError::TransportFailedAfterConnect => "transport-failed-after-connect",
         DestinationSendError::TooManyResponseHeaders => "too-many-response-headers",
         DestinationSendError::ResponseHeaderBytesExceeded => "response-header-bytes-exceeded",
+        DestinationSendError::CredentialRequiresProtectedTransport => {
+            "credential-requires-protected-transport"
+        }
+        DestinationSendError::DestinationNameMismatch => "destination-name-mismatch",
     }
 }
 
@@ -3284,7 +3286,7 @@ mod tests {
     /// the partition's exhaustive match (a new variant lands in the
     /// refusal arm and is caught by this table) and the closed journal
     /// name mapping, whose non-exhaustive match refuses to compile.
-    const EVERY_SEND_FAULT: [DestinationSendError; 23] = [
+    const EVERY_SEND_FAULT: [DestinationSendError; 25] = [
         DestinationSendError::InvalidRemainingTimeout,
         DestinationSendError::InvalidFrozenPolicy,
         DestinationSendError::InvalidFrozenRequest,
@@ -3308,6 +3310,8 @@ mod tests {
         DestinationSendError::TransportFailedAfterConnect,
         DestinationSendError::TooManyResponseHeaders,
         DestinationSendError::ResponseHeaderBytesExceeded,
+        DestinationSendError::CredentialRequiresProtectedTransport,
+        DestinationSendError::DestinationNameMismatch,
     ];
 
     /// The one partition classifies every platform send fault on the
@@ -3331,7 +3335,7 @@ mod tests {
             &DestinationSendError,
             ErrorClass,
             DestinationDeliveryCertainty,
-        ); 23] = [
+        ); 25] = [
             (
                 &DestinationSendError::InvalidRemainingTimeout,
                 ErrorClass::EgressRefused,
@@ -3446,6 +3450,16 @@ mod tests {
                 &DestinationSendError::ResponseHeaderBytesExceeded,
                 ErrorClass::UpstreamTooLarge,
                 DestinationDeliveryCertainty::MaybeSent,
+            ),
+            (
+                &DestinationSendError::CredentialRequiresProtectedTransport,
+                ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
+            ),
+            (
+                &DestinationSendError::DestinationNameMismatch,
+                ErrorClass::EgressRefused,
+                DestinationDeliveryCertainty::NotSent,
             ),
         ];
         for (fault, class, certainty) in expected {
@@ -3565,6 +3579,16 @@ mod tests {
             (
                 destination_refusal_name(&DestinationSendError::ResponseHeaderBytesExceeded),
                 "response-header-bytes-exceeded",
+            ),
+            (
+                destination_refusal_name(
+                    &DestinationSendError::CredentialRequiresProtectedTransport,
+                ),
+                "credential-requires-protected-transport",
+            ),
+            (
+                destination_refusal_name(&DestinationSendError::DestinationNameMismatch),
+                "destination-name-mismatch",
             ),
         ];
         assert_eq!(
@@ -3702,11 +3726,11 @@ mod tests {
         );
         assert_eq!(
             destination_profile(&loopback),
-            DestinationProfile::LoopbackDevelopmentHttp
+            DestinationProfile::LoopbackHttp
         );
         assert_eq!(
             destination_profile(&localhost),
-            DestinationProfile::LoopbackDevelopmentHttp
+            DestinationProfile::LoopbackHttp
         );
         assert_eq!(
             destination_profile(&private),
@@ -3716,6 +3740,26 @@ mod tests {
             destination_profile(&public_name),
             DestinationProfile::PrivateServiceHttp
         );
+        for spelled in [
+            "http://127.0.0.2:8080/",
+            "http://[::1]:8080/",
+            "http://[::ffff:127.0.0.1]:8080/",
+        ] {
+            let origin = url::Url::parse(spelled).expect("parsed");
+            assert_eq!(
+                destination_profile(&origin),
+                DestinationProfile::LoopbackHttp,
+                "{spelled}"
+            );
+        }
+        for spelled in ["http://a.localhost:8080/", "http://localhost.:8080/"] {
+            let origin = url::Url::parse(spelled).expect("parsed");
+            assert_eq!(
+                destination_profile(&origin),
+                DestinationProfile::PrivateServiceHttp,
+                "{spelled}"
+            );
+        }
     }
 
     /// Under the postgres-test feature an https loopback origin takes
@@ -3751,7 +3795,7 @@ mod tests {
             DestinationProfile::ProductionHttps
         ));
         assert!(profile_admits_token_endpoints(
-            DestinationProfile::LoopbackDevelopmentHttp
+            DestinationProfile::LoopbackHttp
         ));
         assert!(!profile_admits_token_endpoints(
             DestinationProfile::PrivateServiceHttp

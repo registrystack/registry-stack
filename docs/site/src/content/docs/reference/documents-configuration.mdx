@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -99,6 +99,28 @@ Expressions are refused in or under members whose names end in `Ref` and in secr
     products/documents/generated/runtime/runtime.schema.json. */}
 {/* TODO[evidence]: the one-mebibyte limit and the group-or-other-writable refusal need a cited constant or test. */}
 
+## Deployment posture
+
+Declare `development` or `production` with `REGISTRY_STACK_POSTURE` or `--posture`.
+An undeclared posture is production. If you set both, use the same value.
+Run `rstack dev` for development, or declare it on the command you run. The
+`check` command reports development settings as warnings in development and
+errors in production. `check --production` declares production.
+
+Use `listener.tlsTermination: loopback-plaintext` for a loopback bind. Configure
+PostgreSQL separately with `database.transport`. Its default is `verified-tls`.
+Use `loopback-plaintext` for a socket or a loopback host, or
+`private-network-plaintext` in development for a private-network host.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+A loopback HTTP issuer needs no exception. `allowInsecureHttp: true` and
+`jwksSource.type: test-issuer` require development.
+
+{/* Evidence: crates/registry-platform-posture/src/lib.rs declared_from;
+    crates/registry-platform-config/src/blocks.rs DatabaseTransport, permitted_transport, OidcIssuerConfig;
+    crates/registry-platform-postgres/src/lib.rs postgres_connection;
+    crates/registry-documents/src/config.rs loader_with_posture, check_database. */}
+
 ## Runtime keys
 
 The runtime reads and checks every key in the schema.
@@ -111,7 +133,7 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   `package.expectedDigest` optionally pins it.
 - `listener.bind` is the socket address the HTTP listener binds.
   The starter uses `127.0.0.1:8116`.
-- `listener.tlsTermination` is `operator-controlled-upstream` behind a TLS proxy, or `development-loopback` for local work only.
+- `listener.tlsTermination` is `operator-controlled-upstream` behind a TLS proxy, or `loopback-plaintext` for a loopback bind.
 - `listener.networkExposure` is the shared network exposure declaration for the listener.
 - `metricsListener.bind` is optional and absent by default.
   When it is present, `/metrics` is served on that socket only, and the document listener never routes it.
@@ -130,9 +152,10 @@ The other blocks are checked, so a deployment written now keeps its meaning when
 - `database.caBundleRef` is an optional secret reference to a PEM bundle of the CA certificates that sign the database certificate, for a private CA.
   When it is set, these are the only roots trusted; when it is omitted, the system's trusted roots are used.
 - `database.testOnlyPlaintext` is accepted only by builds with the `postgres-test` feature, for the PostgreSQL test suites.
-  An operator build refuses it with `documents.runtime.plaintext-database`, so a local run needs a database that serves TLS too.
-- `authentication.oidc` is the shared OIDC issuer block (`issuer`, `audience`, `jwksSource`), with `allowedClients` and `scopeClaim` (default `scope`).
-  `allowedClients` must list clients, and `unrestricted` is refused.
+  An operator build refuses it with `platform.database.test-only-plaintext`.
+- `authentication.oidc.issuers` holds one shared OIDC issuer entry per issuer id (`issuer`, `audience`, `jwksSource`), with `allowedClients` and `scopeClaim` (default `scope`).
+  `allowedClients` is required. Write `from-package` to admit exactly the `requesterClients` of the package's access profiles, so the clients are written once, in `documents.yaml`. A list is also accepted, and it must include every client an access profile names, or the runtime refuses to start with `documents.runtime.profile-client-not-allowed`. Clients in the list that no profile names are admitted by the verifier but reach no profile. `unrestricted` and an empty list are refused.
+  Each client named under `assertionIssuers` must be one of the admitted clients, or the runtime refuses to start with `documents.runtime.assertion-issuer-client-not-allowed`.
   `jwksSource` defaults to the key set that the issuer's discovery document names.
   [Access tokens](../../operate/documents/#access-tokens) states what a token must carry and describes the other key sources.
 - `audit` takes `destination` (`file`, the default, or `stdout`), `path` for a file journal, and `hashKeyRef`.
@@ -145,17 +168,21 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   Startup refuses a package whose policy asks for more.
   The storage binding is pinned at the first upload, and a later start under another backend, bucket, or scope is refused.
 - `contentVerification` is `type: http` with `url`, `authorizationRef`, `policyId`, and `attemptTimeoutMilliseconds` (100 to 60000).
-  `type: disabled` is accepted only beside `tlsTermination: development-loopback`.
+  `type: disabled` is accepted only in the development posture.
 - `transfers.minimumDeadlineSeconds` is 1 to 3600, default 60: the deadline of the smallest upload or download.
 - `transfers.mebibyteAllowanceSeconds` is 1 to 600, default 8: the time added to a transfer's deadline for every started mebibyte of the document.
 - `cleanup.erasure` is `active` or `paused`.
   `paused` stops every erasure and the sweep of orphaned objects; a removal request still stops release at once, and lapsed uploads are still expired.
 - `destinations.hooks` is the shared URL hook destination block, keyed by the destination id that `documents.yaml` names.
   Each entry takes `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (100 to 10000, 5000 when omitted), and `maximumAttempts` (1 to 20, 8 when omitted), with at most 128 destinations.
-  Startup refuses a project hook whose destination is not bound here and a signing key it cannot resolve.
-  Plain `http` needs both a loopback address (`127.0.0.1`, `localhost`, or `[::1]`) and `listener.tlsTermination: development-loopback`.
-  Without the listener mode it is refused with `documents.runtime.insecure-url`, and a non-loopback `http` address is refused at startup.
-  A pending or leased delivery pins the binding it was captured under (id, URL, key reference, timeout, attempts), so startup refuses while one remains whose binding is no longer here.
+  Set the optional `previousHmacSha256KeyRef` to keep signing with the previous key during rotation.
+  Startup refuses a project hook whose destination is not bound here and any unavailable, invalid, or repeated signing key.
+  S3, verifier and hook URLs accept HTTPS or HTTP over loopback in either posture. Other HTTP hosts are refused with `documents.runtime.insecure-url`.
+  An `https` URL to a loopback address or the exact name `localhost`, such as `https://localhost:9443/hooks`, is accepted in either posture.
+  `localhost` is delivered to only when every address it resolves to is loopback.
+  A name under `localhost`, the absolute name `localhost.`, or port zero is refused by `documentsctl check` and at startup with `config.invalid-value` at the destination's `url`, for example `/destinations/hooks/owning-system-events/url`.
+  Startup names the same code and pointer as `documentsctl check` for a refused hook destination `url`, `transport` or private range.
+  A pending or leased delivery pins the binding it was captured under (id, URL, current key reference, timeout, attempts), so startup refuses while one remains whose binding is no longer here.
   To move a hook, bind a new destination id, point the hook at it and apply, and remove the old entry once its deliveries have drained or expired.
 - `retention.receiptRetentionDays` is 1 to 365, default 7: how long a replay of an `Idempotency-Key` on a reservation or a grant is answered with the original outcome.
   After it the key stays spent: a replay answers `idempotency.expired`, and the row keeps only the key and request digests and the resource id.
@@ -174,6 +201,7 @@ Set the retention of backups, archived WAL, and bucket replicas to the longest p
 {/* Evidence: crates/registry-documents/src/config.rs, DATABASE_MAXIMUM_DOCUMENT_BYTES,
     S3_MAXIMUM_DOCUMENT_BYTES, MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS, AuditConfig and
     ContentVerificationConfig;
+    crates/registry-platform-hooks/src/delivery/url_binding.rs, activate_url_hook_destination and activate_url_hook_destinations;
     crates/registry-platform-audit/src/writer.rs, DEFAULT_AUDIT_ROTATE_BYTES and DEFAULT_AUDIT_RETAIN_DAYS;
     products/documents/generated/runtime/runtime.schema.json. */}
 {/* TODO[evidence]: the transfer deadline bounds, the 128-destination cap, the destination attempt bounds and the erasure-pause semantics need cited constants or tests. */}
@@ -220,7 +248,7 @@ A token the verifier refuses answers `authentication.refused` with a `Bearer` ch
 
 `documentsctl plan`, `apply`, `status`, `verification list` and `replay`, and `erasure status`, `list`, and `replay` read this same document.
 They write their audit records to a companion journal under the `documentsctl` process name, beside the runtime's file journal, so they never contend for the running service's journal.
-The `verification` and `erasure` commands, like `serve`, need an activated database: a runtime role that cannot use the schema or read the activation ledger is refused as `documentsctl.activation.ledger-unreadable` at `database.runtimeUrlRef`.
+The `verification` and `erasure` commands, like `serve`, need an activated database: a runtime role that cannot use the schema or read the activation ledger is refused as `documentsctl.activation.ledger-unreadable` at `/database/runtimeUrlRef`.
 Run `documentsctl apply` with the migration credential, which grants the runtime role what it lacks, then retry.
 `verification replay` also activates the project's hooks, so it refuses a hook whose destination `destinations.hooks` does not bind with the diagnostic that `serve` gives, on its line of the file.
 

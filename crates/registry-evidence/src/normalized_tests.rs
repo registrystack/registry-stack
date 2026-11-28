@@ -1289,9 +1289,16 @@ sourceConnections:
     .expect("runtime configuration is written");
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o400))
         .expect("runtime configuration is sealed");
-    DeploymentInputs::load(&runtime_path).expect("package and authority ceilings both load");
+    let deployment = DeploymentInputs::load(
+        &runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("package and authority ceilings both load");
     let runtime = Arc::new(
-        EvidenceRuntime::initialize_with_authenticator(&runtime_path, authenticator())
+        EvidenceRuntime::initialize_from_with_authenticator(deployment, authenticator())
             .await
             .expect("normalized runtime initializes"),
     );

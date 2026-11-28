@@ -258,7 +258,7 @@ async fn erase_record_history_scoped(
         .map_err(|_| HistoryErasureError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
     lock_registry(&transaction, request.lock_key).await?;
-    verify_ready_identity(&transaction, request.expected).await?;
+    verify_ready_identity(&transaction, request.expected, request.lock_key.posture()).await?;
 
     let head = lock_history_head(&transaction).await?;
     let summary = target_revision_summary(&transaction, &request.target).await?;

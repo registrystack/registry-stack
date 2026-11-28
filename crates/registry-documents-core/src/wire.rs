@@ -30,8 +30,11 @@ pub const MAXIMUM_PAGE_SIZE: u32 = 100;
 pub struct ReserveDocumentRequest {
     /// The document policy the document is held under.
     pub policy_id: String,
-    /// Who holds the document in custody.
-    pub custodian: CustodianRef,
+    /// Who holds the document in custody. A person may omit it and holds the
+    /// document itself; a service must name the subject it places the
+    /// document for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custodian: Option<CustodianRef>,
     /// The digest the content must have, `sha256:` and 64 lowercase hex.
     pub expected_digest: Digest,
     /// The exact content length in bytes.
@@ -105,8 +108,7 @@ impl schemars::JsonSchema for DocumentLabel {
     }
 }
 
-/// The custodian a reservation names: a subject at the configured token
-/// issuer.
+/// The custodian a reservation names: a subject at the caller's issuer.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -188,8 +190,8 @@ pub struct IssueGrantRequest {
     pub expiry_hours: Option<u32>,
 }
 
-/// The recipient a grant names: a subject at the configured token issuer,
-/// and the actor kind a caller must resolve to for the grant to release
+/// The recipient a grant names: a subject at the caller's issuer, and the
+/// actor kind a caller must resolve to for the grant to release
 /// anything to it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -329,6 +331,23 @@ mod tests {
         let mut upper = valid;
         upper["expectedDigest"] = json!(format!("sha256:{}", "A".repeat(64)));
         assert!(serde_json::from_value::<ReserveDocumentRequest>(upper).is_err());
+    }
+
+    #[test]
+    fn a_reservation_request_may_omit_the_custodian_and_replays_without_it() {
+        let body = json!({
+            "policyId": "citizen-delivery",
+            "expectedDigest": format!("sha256:{}", "a".repeat(64)),
+            "length": 10,
+            "mediaType": "application/pdf",
+        });
+        let request: ReserveDocumentRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(request.custodian, None);
+        assert_eq!(serde_json::to_value(&request).unwrap(), body);
+        let mut null = body;
+        null["custodian"] = serde_json::Value::Null;
+        let nulled: ReserveDocumentRequest = serde_json::from_value(null).unwrap();
+        assert_eq!(nulled.custodian, None);
     }
 
     #[test]

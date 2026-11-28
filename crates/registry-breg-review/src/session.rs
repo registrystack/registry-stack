@@ -335,11 +335,12 @@ mod tests {
     }
 
     fn session(citizen: &str) -> Session {
-        let registry =
-            BaseRegistryClient::new(registry_breg_client::BaseRegistryClientConfig::new(
+        let registry = BaseRegistryClient::new(
+            registry_breg_client::BaseRegistryClientConfig::new_without_peer_policy(
                 url::Url::parse("https://registry.example").unwrap(),
-            ))
-            .unwrap();
+            ),
+        )
+        .unwrap();
         Session::new(
             citizen.to_owned(),
             Arc::new(registry),

@@ -264,7 +264,6 @@ identity:
   environment: acceptance
   instanceId: household-history-acceptance
   databaseId: household-history-adopter-db
-  databaseInitializationEnvironment: acceptance
 secretProviders:
   file:
     root: $temporary_root/secrets
@@ -283,25 +282,27 @@ package:
   root: $package_root
 authentication:
   oidc:
-    issuer: https://issuer.example/history
-    audience: urn:breg:history
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [registry-history-client]
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
+    issuers:
+      primary:
+        issuer: https://issuer.example/history
+        audience: urn:breg:history
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [registry-history-client]
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
+        jwksSource:
+          type: static
+          documentRef: secret:file/oidc-jwks
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

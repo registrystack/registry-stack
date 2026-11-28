@@ -89,7 +89,28 @@ Released from Registry Stack 0.46.0, pre-1.0. The configuration formats are
 Camel concepts, and the [ingestion jobs](https://docs.registrystack.org/configure/adapter-jobs/) page owns the
 ingestion contract and its declared limits.
 
-## Install and operate
+## Start a development run
+
+Install the product with `rstack install` or set the binary overrides for a source build.
+See [Build from source](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#build-from-source) for the override names. Start Docker before running the example.
+
+```sh
+adapterctl init ./adapter
+rstack dev start ./adapter
+```
+
+Copy the run ID and loopback URL from the report. Ask for the starter reader’s token
+and use the header file the command prints.
+Set `RUN` and `ORIGIN` to those reported values before running the commands.
+Set `HEADERS` to the header file path before calling curl.
+
+```sh
+rstack dev token "$RUN" --as reader
+curl --fail --header @"$HEADERS" "$ORIGIN/.well-known/registry-adapter/effective-contract"
+rstack dev stop "$RUN"
+```
+
+## Install a deployment you operate
 
 The `adapter` runtime and the `adapterctl` author tool are published with each
 Registry Stack release. The install paths, the runtime database grants, and the
@@ -243,7 +264,8 @@ BReg and signed Coordinator-event job proofs against their real binaries and
 PostgreSQL. Set `CARGO_TARGET_DIR` explicitly and provide Docker; the wrapper
 owns its pinned loopback PostgreSQL fixture and removes it on success or
 failure. To run only those destination proofs against a caller-owned
-disposable loopback database:
+disposable database, set `ADAPTER_TEST_DATABASE_URL` to a PostgreSQL URL
+with a numeric loopback host:
 
 ```sh
 CARGO_TARGET_DIR=/path/to/your/target \

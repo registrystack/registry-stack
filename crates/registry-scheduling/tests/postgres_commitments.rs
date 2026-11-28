@@ -20,19 +20,20 @@ use chrono::{DateTime, SecondsFormat, TimeDelta, Timelike, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_platform_audit::{AuditHashSecret, AuditKeyHasher};
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
+use registry_platform_crypto::delivery_signature::{
+    verify, DeliveryKey, DeliveryKeys, SignedContent, DELIVERY_TOLERANCE,
+};
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_PATH};
 use registry_platform_oidc::{
     task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry},
-    JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
+    DeclaredKinds, JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::Url;
 use registry_scheduling::audit::{AuditCapture, SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
-use registry_scheduling::auth::SchedulingAuthenticator;
-use registry_scheduling::config::{
-    DatabaseConfig, JwksSource, OidcClientsConfig, OidcConfig, OidcIssuerConfig,
-};
+use registry_scheduling::auth::{AuthorizationProfiles, IssuerSource, SchedulingAuthenticator};
+use registry_scheduling::config::DatabaseConfig;
 use registry_scheduling::config::{ReminderDestinationConfig, UrlHookDestinationConfig};
 use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
@@ -97,6 +98,10 @@ fn read_policy(text: &str) -> Result<SchedulingPolicy, registry_platform_yaml::R
 const AUDIENCE: &str = "urn:registry-scheduling:test";
 const CLIENT: &str = "task-agent";
 const SECRET: &[u8] = b"01234567890123456789012345678901";
+/// A second issuer the deployment trusts, with its own key and client.
+const SECOND_ISSUER: &str = "https://second-issuer.test";
+const SECOND_CLIENT: &str = "second-agent";
+const SECOND_SECRET: &[u8] = b"abcdefghijklmnopqrstuvwxyz012345";
 const SCHEDULING_ID: &str = "commitments-test";
 /// The database identity and package the fixture records as active, which
 /// the hook worker's identity check reads back from the activation record.
@@ -199,6 +204,10 @@ holdPolicy: {ttlMinutes: 10, maximumPerCaller: 2, because: test}
 
 struct Fixture {
     http: Router,
+    /// What the router was built over, so a test can serve the same
+    /// deployment under another declared posture.
+    service: Arc<SchedulingService>,
+    authenticator: Arc<SchedulingAuthenticator>,
     store: PostgresStore,
     hooks: ActivatedHooks,
     hook_secret_ref: String,
@@ -256,6 +265,35 @@ async fn send(
 }
 
 impl Fixture {
+    /// The same deployment served as `posture` declares it.
+    fn http_declared(&self, posture: registry_platform_config::Posture) -> Router {
+        router(HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            ),
+            service: Arc::clone(&self.service),
+            authenticator: Arc::clone(&self.authenticator),
+        })
+    }
+
+    /// The same deployment served over `authenticator`, in the development
+    /// posture, so a refusal names the check that made it.
+    fn http_authenticating(&self, authenticator: SchedulingAuthenticator) -> Router {
+        router(HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            ),
+            service: Arc::clone(&self.service),
+            authenticator: Arc::new(authenticator),
+        })
+    }
+
     async fn request(
         &self,
         method: &str,
@@ -342,7 +380,14 @@ async fn fixture_publishing_with_hook_url(
     pool_ids: &[String],
     hook_url: &str,
 ) -> Fixture {
-    fixture_publishing_with_hook_and_status(policy, pool_ids, hook_url, None).await
+    fixture_publishing_with_hook_and_status(
+        policy,
+        pool_ids,
+        hook_url,
+        None,
+        registry_platform_config::Posture::Production,
+    )
+    .await
 }
 
 async fn fixture_publishing_with_hook_and_status(
@@ -350,6 +395,7 @@ async fn fixture_publishing_with_hook_and_status(
     pool_ids: &[String],
     hook_url: &str,
     task_grant_status: Option<Arc<TaskGrantStatusRegistry>>,
+    posture: registry_platform_config::Posture,
 ) -> Fixture {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
@@ -386,14 +432,16 @@ async fn fixture_publishing_with_hook_and_status(
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
     let migration_store =
-        PostgresStore::connect_migration(&database, &secrets).expect("the migration store");
+        PostgresStore::connect_migration(&database, &secrets, None).expect("the migration store");
     migration_store
         .migrate()
         .await
         .expect("the scheduling migrations");
-    let store = PostgresStore::connect_runtime(&database, &secrets).expect("the runtime store");
+    let store =
+        PostgresStore::connect_runtime(&database, &secrets, None).expect("the runtime store");
     // Every handle cloned from this store, the service and the router
     // included, reads the pinned instant as its now.
     let now = pinned_now();
@@ -448,10 +496,13 @@ async fn fixture_publishing_with_hook_and_status(
             destination_id.clone(),
             UrlHookDestinationConfig {
                 url: Url::new(hook_url).expect("the test hook URL"),
+                transport: None,
+                allowed_private_cidrs: registry_platform_config::PrivateRanges::default(),
                 hmac_sha256_key_ref: SecretReference::parse(format!(
                     "secret:env/{hook_secret_name}"
                 ))
                 .expect("the test hook key reference"),
+                previous_hmac_sha256_key_ref: None,
                 attempt_timeout_milliseconds: 5_000,
                 maximum_attempts: 1,
             },
@@ -462,6 +513,7 @@ async fn fixture_publishing_with_hook_and_status(
         &hook_destinations,
         &secrets,
         HookRuntimeIdentity {
+            posture,
             database_id: DATABASE_ID.to_owned(),
             package_digest: PACKAGE_DIGEST.to_owned(),
             scheduling_id: SCHEDULING_ID.to_owned(),
@@ -483,16 +535,23 @@ async fn fixture_publishing_with_hook_and_status(
             AuditKeyHasher::Keyed(keying),
             audit.clone(),
             7,
+            &authenticator(),
         )
         .with_hooks(hooks.clone())
         .with_task_grant_status(task_grant_status),
     );
+    let authenticator = Arc::new(authenticator());
     let http = router(HttpState {
-        service,
-        authenticator: Arc::new(authenticator()),
+        posture: registry_platform_config::PostureReport::new(
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
+        service: Arc::clone(&service),
+        authenticator: Arc::clone(&authenticator),
     });
     Fixture {
         http,
+        service,
+        authenticator,
         store,
         hooks,
         hook_secret_ref: format!("secret:env/{hook_secret_name}"),
@@ -583,6 +642,7 @@ async fn activated_task_status(
         &[TaskGrantStatusEndpoint::from(&status)],
         AUDIENCE,
         &secrets,
+        registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
     )
     .expect("activate the task-grant status registry");
     (server, Arc::new(registry))
@@ -594,6 +654,7 @@ async fn fixture_with_task_status(status: Arc<TaskGrantStatusRegistry>) -> Fixtu
         &["north-counter".into(), "two-counter".into()],
         "http://127.0.0.1:9/scheduling-hooks",
         Some(status),
+        registry_platform_config::Posture::Production,
     )
     .await
 }
@@ -604,6 +665,14 @@ fn authenticator() -> SchedulingAuthenticator {
 
 fn authenticator_with_busy_profiles(
     busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
+) -> SchedulingAuthenticator {
+    authenticator_declaring(busy_import_profiles, DeclaredKinds::None)
+}
+
+/// The test authenticator whose first issuer entry declares `main_kinds`.
+fn authenticator_declaring(
+    busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
+    main_kinds: DeclaredKinds,
 ) -> SchedulingAuthenticator {
     let operational_profile = |scope: &str, attendance: bool| OperationalReadProfileConfig {
         scope: scope.to_owned(),
@@ -631,18 +700,7 @@ fn authenticator_with_busy_profiles(
             external_reference_products: vec!["registry-casework".to_owned()],
         },
     };
-    let oidc = OidcConfig {
-        provider: OidcIssuerConfig {
-            issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
-            audience: AUDIENCE.to_owned(),
-            jwks_source: JwksSource::Discovery {},
-            allow_insecure_http: false,
-        },
-        clients: OidcClientsConfig {
-            allowed_clients: vec![CLIENT.to_owned()],
-            assertion_issuers: std::collections::BTreeMap::new(),
-        },
-        scope_claim: "registry_scopes".to_owned(),
+    let profiles = AuthorizationProfiles {
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),
         appointment_read_profiles: BTreeMap::from([
@@ -657,26 +715,46 @@ fn authenticator_with_busy_profiles(
         ]),
         busy_import_profiles,
     };
-    let verifier = TokenVerifierConfig::access_token_profile(
-        ISSUER,
-        vec![AUDIENCE.to_owned()],
-        vec![Algorithm::HS256],
-        vec!["at+jwt".to_owned()],
+    let source = |id: &str, issuer: &str, client: &str, secret: &[u8], kinds: DeclaredKinds| {
+        IssuerSource::new(
+            id,
+            TokenVerifierConfig::access_token_profile(
+                issuer,
+                vec![AUDIENCE.to_owned()],
+                vec![Algorithm::HS256],
+                vec!["at+jwt".to_owned()],
+            )
+            .with_scope_claim("registry_scopes")
+            .with_allowed_clients(vec![client.to_owned()]),
+            Arc::new(JwksFetcher::new_static(
+                serde_json::from_value(json!({"keys": [{
+                    "kty": "oct",
+                    "kid": "test",
+                    "alg": "HS256",
+                    "use": "sig",
+                    "k": URL_SAFE_NO_PAD.encode(secret),
+                }]}))
+                .expect("the test signing keys"),
+                JwksFetcherConfig::defaults(),
+            )),
+            kinds,
+            AUDIENCE,
+        )
+    };
+    SchedulingAuthenticator::new(
+        profiles,
+        vec![
+            source("main", ISSUER, CLIENT, SECRET, main_kinds),
+            source(
+                "second",
+                SECOND_ISSUER,
+                SECOND_CLIENT,
+                SECOND_SECRET,
+                DeclaredKinds::None,
+            ),
+        ],
     )
-    .with_scope_claim("registry_scopes")
-    .with_allowed_clients(vec![CLIENT.to_owned()]);
-    let keys = Arc::new(JwksFetcher::new_static(
-        serde_json::from_value(json!({"keys": [{
-            "kty": "oct",
-            "kid": "test",
-            "alg": "HS256",
-            "use": "sig",
-            "k": URL_SAFE_NO_PAD.encode(SECRET),
-        }]}))
-        .expect("the test signing keys"),
-        JwksFetcherConfig::defaults(),
-    ));
-    SchedulingAuthenticator::new(&oidc, verifier, keys)
+    .expect("the test issuers name distinct issuers")
 }
 
 /// Resolve the owned exact-time supply pieces a direct store commitment can
@@ -1699,6 +1777,9 @@ async fn rotating_the_audit_key_keeps_existing_claims_with_their_owner() {
     let digest = policy.policy_digest();
     let rotated_key = AuditHashSecret::new(vec![0x24; 32]).expect("the rotated audit hash secret");
     let rotated = router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
         service: Arc::new(
             SchedulingService::new(
                 fx.store.clone(),
@@ -1709,6 +1790,7 @@ async fn rotating_the_audit_key_keeps_existing_claims_with_their_owner() {
                 AuditKeyHasher::Keyed(rotated_key),
                 fx.audit.clone(),
                 7,
+                &authenticator(),
             )
             .with_hooks(fx.hooks.clone()),
         ),
@@ -1904,11 +1986,22 @@ async fn hook_fixture() -> Fixture {
 /// naming the package its hook worker serves, as `schedulingctl apply`
 /// records it, since the worker checks that record in every transaction.
 async fn hook_fixture_at(hook_url: &str) -> Fixture {
+    use registry_platform_config::Posture;
+    hook_fixture_postures(hook_url, Posture::Production, Posture::Production).await
+}
+
+async fn hook_fixture_postures(
+    hook_url: &str,
+    recorded: registry_platform_config::Posture,
+    worker: registry_platform_config::Posture,
+) -> Fixture {
     let policy = read_policy(&observer_policy()).expect("the scheduling hook policy");
-    let fx = fixture_publishing_with_hook_url(
+    let fx = fixture_publishing_with_hook_and_status(
         policy,
         &["north-counter".to_owned(), "two-counter".to_owned()],
         hook_url,
+        None,
+        worker,
     )
     .await;
     registry_platform_activation::append_activation(
@@ -1922,6 +2015,7 @@ async fn hook_fixture_at(hook_url: &str) -> Fixture {
             backup_references: &[],
             role_mode: RoleMode::Single,
             runtime_role: Some("scheduling_test"),
+            posture: recorded,
         },
     )
     .await
@@ -2162,6 +2256,56 @@ async fn a_hook_capture_failure_rolls_back_the_whole_appointment_transaction() {
 }
 
 #[tokio::test]
+async fn hook_delivery_requires_the_workers_posture_to_match() {
+    use registry_platform_config::Posture;
+
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/scheduling-hooks"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&destination)
+        .await;
+    let url = format!("{}/scheduling-hooks", destination.uri());
+    for worker in [Posture::Development, Posture::Production] {
+        let mut fx = hook_fixture_postures(&url, Posture::Development, worker).await;
+        let transaction = fx.admin.transaction().await.unwrap();
+        let verified = registry_platform_hooks::delivery::verify_active_package(
+            &transaction,
+            &activation_layout(),
+            DATABASE_ID,
+            PACKAGE_DIGEST,
+            worker,
+            1000,
+        )
+        .await;
+        transaction.rollback().await.unwrap();
+        if worker == Posture::Development {
+            verified.unwrap();
+        } else {
+            assert!(matches!(
+                verified,
+                Err(registry_platform_hooks::delivery::DeliveryError::Unavailable)
+            ));
+        }
+        booked(&fx, 300, 440, "hook-posture").await;
+        let result = fx
+            .hooks
+            .delivery_service(fx.store.clone(), fx.audit.clone())
+            .deliver_once()
+            .await;
+        if worker == Posture::Development {
+            assert_eq!(result.unwrap(), DeliveryOutcome::Delivered);
+        } else {
+            assert!(matches!(
+                result,
+                Err(registry_platform_hooks::delivery::DeliveryError::Unavailable)
+            ));
+        }
+    }
+}
+
+#[tokio::test]
 async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_proposals() {
     let destination = MockServer::start().await;
     Mock::given(method("POST"))
@@ -2237,29 +2381,15 @@ async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_propo
         request.body, *payload,
         "the stored canonical bytes are sent"
     );
-    let header = |name: &str| {
-        request
-            .headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_else(|| panic!("missing valid {name} header"))
-    };
-    assert_eq!(header("ce-specversion"), "1.0");
-    assert_eq!(header("ce-id"), envelope.id);
-    assert_eq!(header("ce-source"), envelope.source);
-    assert_eq!(header("ce-type"), "confirmed-observer");
-    assert_eq!(header("ce-dataschema"), envelope.dataschema);
-    let payload_json: Value = serde_json::from_slice(payload).expect("the canonical envelope JSON");
-    assert_eq!(header("ce-time"), payload_json["time"]);
-    assert_eq!(header("x-registry-event-generation"), "1");
-    assert_eq!(header("x-registry-delivery-attempt"), "1");
-    assert!(!header("x-registry-delivery-time").is_empty());
-    let idempotency_key = header("idempotency-key");
-    assert!(idempotency_key.starts_with("sha256:"));
-    assert_eq!(idempotency_key.len(), 71);
-    let signature = header("x-registry-signature");
-    assert!(signature.starts_with("v1="));
-    assert_eq!(signature.len(), 46, "v1 plus one HMAC-SHA-256 tag");
+    let content = signed_webhook_content(&request.headers, &request.body);
+    assert_eq!(content.id, envelope.id);
+    verify(
+        &webhook_keys(b"0123456789abcdef0123456789abcdef"),
+        content,
+        std::time::SystemTime::now(),
+        DELIVERY_TOLERANCE,
+    )
+    .expect("the captured hook delivery verifies");
 
     let state = fx
         .admin
@@ -2416,6 +2546,7 @@ async fn hook_delivery_is_refused_when_the_activation_record_names_another_datab
             backup_references: &[],
             role_mode: RoleMode::Single,
             runtime_role: Some("scheduling_test"),
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .await
@@ -2468,6 +2599,7 @@ async fn hook_delivery_stops_once_the_activation_record_names_another_package() 
             backup_references: &[],
             role_mode: RoleMode::Single,
             runtime_role: Some("scheduling_test"),
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .await
@@ -2513,8 +2645,11 @@ async fn changed_retained_hook_destination_binding_is_refused() {
         UrlHookDestinationConfig {
             url: Url::new("http://127.0.0.1:9/changed-scheduling-hooks")
                 .expect("the changed hook URL"),
+            transport: None,
+            allowed_private_cidrs: registry_platform_config::PrivateRanges::default(),
             hmac_sha256_key_ref: SecretReference::parse(fx.hook_secret_ref.clone())
                 .expect("the test hook key reference"),
+            previous_hmac_sha256_key_ref: None,
             attempt_timeout_milliseconds: 5_000,
             maximum_attempts: 1,
         },
@@ -2524,6 +2659,7 @@ async fn changed_retained_hook_destination_binding_is_refused() {
         &destinations,
         &secrets,
         HookRuntimeIdentity {
+            posture: registry_platform_config::Posture::Production,
             database_id: DATABASE_ID.to_owned(),
             package_digest: PACKAGE_DIGEST.to_owned(),
             scheduling_id: SCHEDULING_ID.to_owned(),
@@ -2933,8 +3069,12 @@ async fn a_duplicate_active_key_survives_an_opening_shift_on_the_same_pool() {
         AuditKeyHasher::Keyed(keying),
         fx.audit.clone(),
         7,
+        &authenticator(),
     ));
     fx.http = router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
         service,
         authenticator: Arc::new(authenticator()),
     });
@@ -3567,6 +3707,484 @@ async fn confirm_appointment_refuses_indistinguishably_for_missing_and_unauthori
     assert_eq!(missing_problem["code"], existing_problem["code"]);
     assert_eq!(existing_status, StatusCode::FORBIDDEN);
     assert_eq!(existing_problem["code"], "operation.not-authorized");
+}
+
+/// A caller whose grant covers the offering but who does not own a hold is
+/// refused as not authorized whatever state the hold is in: Scheduling checks
+/// the caller owns a hold before it reads the hold's state. The owner meets
+/// the state the hold is in.
+#[tokio::test]
+async fn a_grant_covered_non_owner_is_refused_before_the_hold_state_is_read() {
+    let fx = fixture().await;
+    let other = agent_token_for("principal-other");
+    let hold_for = |key: &'static str, from: i64, to: i64| {
+        let fx = &fx;
+        async move {
+            let slot = first_slot(fx, OFFERING, from, to).await;
+            let (status, hold) = fx
+                .post("/v1/holds", &fx.agent, key, admission(fx, OFFERING, slot))
+                .await;
+            assert_eq!(status, StatusCode::CREATED, "{hold}");
+            hold["holdId"].as_str().unwrap().to_owned()
+        }
+    };
+    let confirm = |hold_id: &str| json!({"hold": hold_id, "admission": null});
+    let assert_not_authorized = |label: &str, (status, problem): (StatusCode, Value)| {
+        assert_eq!(status, StatusCode::FORBIDDEN, "{label}: {problem}");
+        assert_eq!(problem["code"], "operation.not-authorized", "{label}");
+    };
+
+    // A live hold is the control: not owning it is refused.
+    let live = hold_for("non-owner-live", 90, 200).await;
+    assert_not_authorized(
+        "confirm a live hold",
+        fx.post(
+            "/v1/appointments",
+            &other,
+            "non-owner-confirm-live",
+            confirm(&live),
+        )
+        .await,
+    );
+    assert_not_authorized(
+        "release a live hold",
+        fx.delete(&format!("/v1/holds/{live}"), &other).await,
+    );
+
+    // A hold past its expiry that the sweeper has not yet closed is one the
+    // owner is told expired.
+    let expired = hold_for("non-owner-expired", 300, 440).await;
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claims SET hold_expires_at=$1 WHERE claim_id=$2::text::uuid",
+            &[&(pinned_now() - TimeDelta::minutes(1)), &expired],
+        )
+        .await
+        .expect("lapse the hold");
+    commit_current_test_writer(&fx.admin).await;
+    assert_not_authorized(
+        "confirm an expired hold",
+        fx.post(
+            "/v1/appointments",
+            &other,
+            "non-owner-confirm-expired",
+            confirm(&expired),
+        )
+        .await,
+    );
+    assert_not_authorized(
+        "release an expired hold",
+        fx.delete(&format!("/v1/holds/{expired}"), &other).await,
+    );
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "owner-confirm-expired",
+            confirm(&expired),
+        )
+        .await;
+    assert_eq!(status, StatusCode::GONE, "{problem}");
+    assert_eq!(problem["code"], "hold.expired");
+
+    // A released hold is closed. The owner is told so.
+    let released = hold_for("non-owner-released", 500, 640).await;
+    let (status, _) = fx.delete(&format!("/v1/holds/{released}"), &fx.agent).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_not_authorized(
+        "confirm a released hold",
+        fx.post(
+            "/v1/appointments",
+            &other,
+            "non-owner-confirm-released",
+            confirm(&released),
+        )
+        .await,
+    );
+    assert_not_authorized(
+        "release a released hold",
+        fx.delete(&format!("/v1/holds/{released}"), &other).await,
+    );
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "owner-confirm-released",
+            confirm(&released),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "hold.released");
+
+    // A hold admitted under a policy that has since moved is one the owner
+    // is told is stale. This case runs last: it moves the policy under the
+    // fixture.
+    let stale = hold_for("non-owner-stale", 700, 840).await;
+    let mut replacement = read_policy(POLICY).expect("the replacement policy");
+    replacement.project.version = "2".to_owned();
+    let replacement_digest = replacement.policy_digest();
+    fx.store
+        .apply_policy(
+            SCHEDULING_ID,
+            &replacement_digest,
+            &["north-counter".to_owned(), "two-counter".to_owned()],
+            &replacement,
+        )
+        .await
+        .expect("publish a second policy revision");
+    assert_not_authorized(
+        "confirm a hold under a stale policy",
+        fx.post(
+            "/v1/appointments",
+            &other,
+            "non-owner-confirm-stale",
+            confirm(&stale),
+        )
+        .await,
+    );
+    assert_not_authorized(
+        "release a hold under a stale policy",
+        fx.delete(&format!("/v1/holds/{stale}"), &other).await,
+    );
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "owner-confirm-stale",
+            confirm(&stale),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{problem}");
+    assert_eq!(problem["code"], "policy.changed");
+}
+
+/// A booking agent of the second issuer: the same scopes and grant as the
+/// first issuer's agent, its own client, and the subject given.
+fn second_issuer_agent_token(subject: &str) -> String {
+    let mut claims = json!({
+        "iss": SECOND_ISSUER,
+        "sub": subject,
+        "azp": SECOND_CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    let mut grant = grant_claims();
+    grant["registry_grant_client"] = json!(SECOND_CLIENT);
+    claims.as_object_mut().unwrap().extend(
+        grant
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    let now = Utc::now().timestamp();
+    let object = claims.as_object_mut().unwrap();
+    object.entry("aud").or_insert(json!(AUDIENCE));
+    object.entry("iat").or_insert(json!(now));
+    object
+        .entry("exp")
+        .or_insert(json!(pinned_now().timestamp() + 300));
+    let mut header = Header::new(Algorithm::HS256);
+    header.kid = Some("test".to_owned());
+    header.typ = Some("at+jwt".to_owned());
+    jsonwebtoken::encode(&header, &claims, &EncodingKey::from_secret(SECOND_SECRET)).unwrap()
+}
+
+/// One principal namespace per issuer: the same subject from a second issuer
+/// does not own a hold the first issuer's subject holds.
+#[tokio::test]
+async fn a_subject_from_one_issuer_does_not_own_a_hold_of_the_same_subject_from_another() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "namesake-hold",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().unwrap().to_owned();
+
+    // The same `sub` the owner carries, signed by the second issuer.
+    let namesake = second_issuer_agent_token("principal-agent");
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &namesake,
+            "namesake-confirm",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    let (status, problem) = fx.delete(&format!("/v1/holds/{hold_id}"), &namesake).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+
+    // The owner still holds it.
+    let (status, _) = fx.delete(&format!("/v1/holds/{hold_id}"), &fx.agent).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+/// A booking agent whose token carries a task grant and claims its kind but
+/// asks for no scope: identity-only, so the issuer set admits it only where
+/// the entry declares the client's kind.
+fn scopeless_grant_token(subject: &str) -> String {
+    let mut claims = json!({
+        "sub": subject,
+        "azp": CLIENT,
+        "registry_scopes": "",
+        "registry_actor_kind": "agent",
+    });
+    claims.as_object_mut().unwrap().extend(
+        grant_claims()
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    token(claims)
+}
+
+/// The narrowing the identity-only rule made: a grant with no scope and a
+/// merely claimed kind no longer commits.
+#[tokio::test]
+async fn a_grant_token_with_no_scope_and_a_claimed_kind_is_refused_at_a_commitment() {
+    let fx = fixture().await;
+    let start = first_slot(&fx, OFFERING, 90, 200).await;
+    let http = fx.http_authenticating(authenticator());
+    let response = send(
+        http,
+        "POST".to_owned(),
+        "/v1/holds".to_owned(),
+        scopeless_grant_token("scopeless-agent"),
+        Some("scopeless-hold".to_owned()),
+        Some(admission(&fx, OFFERING, start)),
+    )
+    .await;
+    assert_eq!(response.0, StatusCode::UNAUTHORIZED, "{}", response.1);
+    assert_eq!(response.1["failedCheck"], "actor-kind", "{}", response.1);
+}
+
+/// A grant with only OpenID Connect scopes is as identity-only as one with
+/// none.
+#[tokio::test]
+async fn a_grant_token_with_only_openid_scopes_and_a_claimed_kind_is_refused_at_a_commitment() {
+    let fx = fixture().await;
+    let start = first_slot(&fx, OFFERING, 90, 200).await;
+    let http = fx.http_authenticating(authenticator());
+    let mut claims = json!({
+        "sub": "openid-agent",
+        "azp": CLIENT,
+        "registry_scopes": "openid profile",
+        "registry_actor_kind": "agent",
+    });
+    claims.as_object_mut().unwrap().extend(
+        grant_claims()
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    let response = send(
+        http,
+        "POST".to_owned(),
+        "/v1/holds".to_owned(),
+        token(claims),
+        Some("openid-hold".to_owned()),
+        Some(admission(&fx, OFFERING, start)),
+    )
+    .await;
+    assert_eq!(response.0, StatusCode::UNAUTHORIZED, "{}", response.1);
+    assert_eq!(response.1["failedCheck"], "actor-kind", "{}", response.1);
+}
+
+/// The migration the changelog gives: the entry declares the client's kind,
+/// and the same token commits.
+#[tokio::test]
+async fn the_same_token_commits_once_the_entry_declares_the_client_kind() {
+    let fx = fixture().await;
+    let start = first_slot(&fx, OFFERING, 90, 200).await;
+    let http = fx.http_authenticating(authenticator_declaring(
+        BTreeMap::new(),
+        DeclaredKinds::Clients(BTreeMap::from([(
+            CLIENT.to_owned(),
+            registry_platform_oidc::ActorKind::Agent,
+        )])),
+    ));
+    let response = send(
+        http,
+        "POST".to_owned(),
+        "/v1/holds".to_owned(),
+        scopeless_grant_token("scopeless-agent"),
+        Some("declared-hold".to_owned()),
+        Some(admission(&fx, OFFERING, start)),
+    )
+    .await;
+    assert_eq!(response.0, StatusCode::CREATED, "{}", response.1);
+}
+
+/// With two issuer entries the principal an audit row of a commitment names
+/// covers the verifying issuer as well as the subject, as every ownership
+/// decision does: one subject from two issuers is two principals in the audit.
+#[tokio::test]
+async fn the_audit_principal_is_the_pair_of_issuer_and_subject() {
+    let fx = fixture().await;
+    let first_start = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "audit-principal-first",
+            admission(&fx, OFFERING, first_start),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let second_start = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &second_issuer_agent_token("principal-agent"),
+            "audit-principal-second",
+            admission(&fx, OFFERING, second_start),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+
+    let principals: Vec<String> = fx
+        .capture
+        .records("response")
+        .into_iter()
+        .filter(|record| {
+            record["operation"] == "hold.create" && record["reason"] == "authorization.allowed"
+        })
+        .map(|record| {
+            record["principalPseudonym"]
+                .as_str()
+                .expect("a granted row names its principal")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(principals.len(), 2, "{principals:?}");
+    assert_ne!(
+        principals[0], principals[1],
+        "one subject from two issuers is two principals"
+    );
+}
+
+/// The problem document of a response, without its per-request trace.
+async fn problem_members(response: axum::response::Response) -> serde_json::Map<String, Value> {
+    let bytes = to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("a bounded test body");
+    let mut members = serde_json::from_slice::<Value>(&bytes)
+        .expect("a JSON problem")
+        .as_object()
+        .expect("a problem object")
+        .clone();
+    assert!(members.remove("traceId").is_some());
+    members
+}
+
+async fn get_as(http: Router, uri: &str, token: &str) -> axum::response::Response {
+    http.oneshot(
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .expect("a well-formed test request"),
+    )
+    .await
+    .expect("an in-process request always answers")
+}
+
+#[tokio::test]
+async fn the_development_body_names_the_failed_check_and_production_does_not() {
+    let fx = fixture().await;
+    // A token signed with a key no issuer published.
+    let mut forged_claims = json!({
+        "sub": "principal-read",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read",
+        "registry_actor_kind": "service",
+    });
+    let now = Utc::now().timestamp();
+    let object = forged_claims.as_object_mut().unwrap();
+    object.insert("iss".to_owned(), json!(ISSUER));
+    object.insert("aud".to_owned(), json!(AUDIENCE));
+    object.insert("iat".to_owned(), json!(now));
+    object.insert("exp".to_owned(), json!(pinned_now().timestamp() + 300));
+    let mut header = Header::new(Algorithm::HS256);
+    header.kid = Some("test".to_owned());
+    header.typ = Some("at+jwt".to_owned());
+    let forged = jsonwebtoken::encode(
+        &header,
+        &forged_claims,
+        &EncodingKey::from_secret(b"another-secret-another-secret-another!"),
+    )
+    .unwrap();
+
+    let mut answers = Vec::new();
+    for posture in [
+        registry_platform_config::Posture::Production,
+        registry_platform_config::Posture::Development,
+    ] {
+        let response = get_as(fx.http_declared(posture), "/v1/services", &forged).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{posture:?}");
+        answers.push(problem_members(response).await);
+    }
+    let [production, mut development] = <[_; 2]>::try_from(answers).unwrap();
+    assert!(!production.contains_key("failedCheck"), "{production:?}");
+    assert_eq!(
+        development.remove("failedCheck"),
+        Some(json!(
+            registry_platform_authcommon::FailedCheck::TokenSignature.as_str()
+        ))
+    );
+    assert_eq!(
+        development, production,
+        "the development body adds failedCheck and nothing else"
+    );
+}
+
+#[tokio::test]
+async fn the_same_token_reaches_the_same_profile_in_both_postures() {
+    let fx = fixture().await;
+    let mut answers = Vec::new();
+    for posture in [
+        registry_platform_config::Posture::Production,
+        registry_platform_config::Posture::Development,
+    ] {
+        let response = get_as(fx.http_declared(posture), "/v1/services", &fx.reader).await;
+        assert_eq!(response.status(), StatusCode::OK, "{posture:?}");
+        answers.push(to_bytes(response.into_body(), 1 << 20).await.unwrap());
+    }
+    assert_eq!(answers[0], answers[1]);
+
+    // A token without the reads scope is refused the same way in both
+    // postures, and development alone says which check refused it.
+    let no_scope = operational_token("principal-read", "scheduling-other");
+    let mut refusals = Vec::new();
+    for posture in [
+        registry_platform_config::Posture::Production,
+        registry_platform_config::Posture::Development,
+    ] {
+        let response = get_as(fx.http_declared(posture), "/v1/services", &no_scope).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{posture:?}");
+        refusals.push(problem_members(response).await);
+    }
+    let [production, mut development] = <[_; 2]>::try_from(refusals).unwrap();
+    assert_eq!(
+        development.remove("failedCheck"),
+        Some(json!(
+            registry_platform_authcommon::FailedCheck::Scope.as_str()
+        ))
+    );
+    assert_eq!(development, production);
 }
 
 /// Every closing writer advances the claim's revision, so the history event
@@ -4922,25 +5540,25 @@ async fn outbox_row(fx: &Fixture, outbox_id: Uuid) -> (String, i32, Option<Strin
     (row.get(0), row.get(1), row.get(2), row.get(3))
 }
 
+const REMINDER_TEST_KEY: &str = "reminder-delivery-signing-key-0123456789abcdef";
+
 /// A frozen transport to a destination this test controls.
 fn transport_to(destination: &MockServer) -> Arc<ReminderTransport> {
-    // The destination declares no bearer reference, so nothing is resolved;
-    // the resolver still has to exist, and refuses to be built with no
-    // provider enabled at all.
-    let secrets = SecretResolver::new([SecretProvider::Environment], std::path::Path::new(""))
-        .expect("a resolver this destination asks nothing of");
-    Arc::new(
-        reminder_transport(
-            &ReminderDestinationConfig {
-                url: format!("{}/events", destination.uri()),
-                purpose_urls: Default::default(),
-                bearer_token_ref: None,
-                hmac_sha256_key_ref: None,
-            },
-            &secrets,
-        )
-        .expect("the configured destination compiles into a frozen transport"),
-    )
+    transport_to_origin(&destination.uri())
+}
+
+fn transport_to_origin(origin: &str) -> Arc<ReminderTransport> {
+    let secret_name =
+        format!("SCHEDULING_REMINDER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    std::env::set_var(&secret_name, REMINDER_TEST_KEY);
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("the reminder test secret resolver");
+    let config: ReminderDestinationConfig = serde_json::from_value(json!({
+        "url": format!("{origin}/events"),
+        "hmacSha256KeyRef": format!("secret:env/{secret_name}")
+    }))
+    .expect("the reminder destination configuration");
+    Arc::new(reminder_transport(&config, &secrets).expect("the reminder transport activates"))
 }
 
 /// The environment records the fixture seeds, minus the named resources: the
@@ -5117,6 +5735,7 @@ async fn an_activation_whose_acknowledgment_was_lost_is_read_back() {
         .expect("the test role")
         .get(0);
     let request = |digest: &'static str| ActivationRequest {
+        posture: registry_platform_config::Posture::Production,
         activation_id: Uuid::new_v4(),
         package_digest: digest,
         database_id: "activation-read-back",
@@ -5182,6 +5801,7 @@ async fn a_records_swap_checks_the_active_package_under_its_locks() {
     fx.store
         .activate(
             &ActivationRequest {
+                posture: registry_platform_config::Posture::Production,
                 activation_id: Uuid::new_v4(),
                 package_digest: first,
                 database_id: "records-ledger",
@@ -5196,6 +5816,7 @@ async fn a_records_swap_checks_the_active_package_under_its_locks() {
         .await
         .expect("the first package activates");
     let expected = |database_id, package_digest| ActivePackage {
+        posture: registry_platform_config::Posture::Production,
         database_id,
         package_digest,
     };
@@ -5230,8 +5851,8 @@ async fn a_records_swap_checks_the_active_package_under_its_locks() {
         .execute(
             "INSERT INTO scheduling_activations(activation_id, apply_order, package_digest, \
              predecessor_package_digest, database_id, plan_kind, applied_at, role_mode, \
-             runtime_role) SELECT gen_random_uuid(), max(apply_order) + 1, $1, $2, \
-             'records-ledger', 'successor', now(), 'single', current_user \
+             runtime_role, posture) SELECT gen_random_uuid(), max(apply_order) + 1, $1, $2, \
+             'records-ledger', 'successor', now(), 'single', current_user, 'production' \
              FROM scheduling_activations",
             &[&second, &first],
         )
@@ -5244,6 +5865,7 @@ async fn a_records_swap_checks_the_active_package_under_its_locks() {
                 SCHEDULING_ID,
                 &records_without(&[]),
                 &ActivePackage {
+                    posture: registry_platform_config::Posture::Production,
                     database_id: "records-ledger",
                     package_digest: first,
                 },
@@ -5413,11 +6035,11 @@ fn sealed_deployment(
             "migrationUrlRef": format!("secret:env/{secret_name}"),
             "testOnlyPlaintext": true,
         },
-        "authentication": {"oidc": {
+        "authentication": {"oidc": {"issuers": {"main": {
             "issuer": ISSUER,
             "audience": AUDIENCE,
             "allowedClients": [CLIENT],
-        }},
+        }}}},
         "taskGrantStatus": "unchecked-final-fifteen-minutes",
         "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:env/UNUSED"},
         "destinations": {},
@@ -5437,9 +6059,12 @@ async fn a_database_that_refuses_at_startup_names_the_step_and_the_cause() {
     let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())
         .expect("a temporary deployment root");
     let operator = unreachable_deployment(root.path());
-    let failure = registry_scheduling::runtime::serve_from_path(&operator)
-        .await
-        .expect_err("an unreachable database fails startup");
+    let failure = registry_scheduling::runtime::serve_from_path(
+        &operator,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("an unreachable database fails startup");
     let message = failure.to_string();
     assert!(
         message.contains("schema readiness check"),
@@ -5478,11 +6103,14 @@ async fn a_divergent_startup_leaves_the_published_policy_untouched() {
         1,
     );
     let operator = sealed_deployment(root.path(), &divergent, &scoped, "divergent-startup");
-    let candidate = registry_scheduling::config::RuntimeConfig::load(&operator)
-        .expect("the divergent runtime configuration")
-        .load_policy()
-        .expect("the divergent package verifies")
-        .package_digest;
+    let candidate = registry_scheduling::config::RuntimeConfig::load(
+        &operator,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .expect("the divergent runtime configuration")
+    .load_policy()
+    .expect("the divergent package verifies")
+    .package_digest;
     let published = read_policy(POLICY).expect("the published policy");
     assert_ne!(
         read_policy(&divergent)
@@ -5505,6 +6133,7 @@ async fn a_divergent_startup_leaves_the_published_policy_untouched() {
             store
                 .activate(
                     &ActivationRequest {
+                        posture: registry_platform_config::Posture::Production,
                         activation_id: Uuid::new_v4(),
                         package_digest: &package_digest,
                         database_id: "divergent-startup",
@@ -5535,10 +6164,13 @@ async fn a_divergent_startup_leaves_the_published_policy_untouched() {
         .await
         .expect("the published state")
         .get(0);
-    let error = registry_scheduling::runtime::serve_from_path(&operator)
-        .await
-        .expect_err("startup refuses a package the ledger does not name")
-        .to_string();
+    let error = registry_scheduling::runtime::serve_from_path(
+        &operator,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses a package the ledger does not name")
+    .to_string();
     assert!(error.contains("is not the active package"), "{error}");
     let after: Value = fx
         .admin
@@ -5563,10 +6195,13 @@ async fn a_divergent_startup_leaves_the_published_policy_untouched() {
         json!(published.policy_digest()),
         "the stored policy is still the published one"
     );
-    let error = registry_scheduling::runtime::serve_from_path(&operator)
-        .await
-        .expect_err("startup refuses a stored policy its package does not carry")
-        .to_string();
+    let error = registry_scheduling::runtime::serve_from_path(
+        &operator,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses a stored policy its package does not carry")
+    .to_string();
     assert!(
         error.contains("not in the state this runtime expects"),
         "{error}"
@@ -5890,6 +6525,40 @@ async fn an_allowed_commitment_writes_its_request_before_and_its_response_after(
     }
 }
 
+/// The probe routes answer without a token. Both readiness spellings
+/// report the declared posture.
+#[tokio::test]
+async fn probe_routes_answer_the_shared_bodies_and_the_older_spellings_still_answer() {
+    let fx = fixture().await;
+    let ready =
+        json!({"status":"ready","posture":"production","developmentSettings":[]}).to_string();
+    for (path, expected) in [
+        (HEALTH_PATH, Some(HEALTH_BODY)),
+        (READY_PATH, Some(ready.as_str())),
+        ("/healthz", None),
+        ("/readyz", Some(ready.as_str())),
+    ] {
+        let response = fx
+            .http
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .expect("an in-process request always answers");
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let content_type = response.headers().get("content-type").cloned();
+        let body = to_bytes(response.into_body(), 1024)
+            .await
+            .expect("a bounded test body");
+        match expected {
+            Some(expected) => {
+                assert_eq!(content_type.unwrap(), "application/json", "{path}");
+                assert_eq!(body.as_ref(), expected.as_bytes(), "{path}");
+            }
+            None => assert!(body.is_empty(), "{path}"),
+        }
+    }
+}
+
 /// SCHEDULING-SEC-14: a commitment whose request entry the destination
 /// refuses never opens its capacity transaction. No claim is taken, no
 /// receipt is stored, and the caller is told the service is unavailable.
@@ -5919,6 +6588,12 @@ async fn a_refused_request_entry_opens_no_capacity_transaction() {
         status,
         StatusCode::SERVICE_UNAVAILABLE,
         "readiness follows the audit destination"
+    );
+    let (status, _) = fx.get(READY_PATH, &fx.reader).await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the shared readiness route follows the audit destination"
     );
 }
 
@@ -6868,90 +7543,126 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
     );
 }
 
-#[tokio::test]
-async fn a_signed_reminder_uses_the_shared_event_delivery_contract() {
-    const SIGNING_KEY: &str = "reminder-delivery-signing-key-0123456789abcdef";
+fn webhook_keys(bytes: &[u8]) -> DeliveryKeys {
+    DeliveryKeys::new(DeliveryKey::new(bytes).unwrap(), None).unwrap()
+}
 
-    let destination = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/events"))
-        .respond_with(ResponseTemplate::new(202))
-        .mount(&destination)
-        .await;
-    let fx = fixture().await;
-    let (appointment, _) = booked(&fx, 90, 200, "dispatch-signed").await;
-    let secret_name =
-        format!("SCHEDULING_REMINDER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
-    let bearer_name =
-        format!("SCHEDULING_REMINDER_BEARER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
-    std::env::set_var(&secret_name, SIGNING_KEY);
-    std::env::set_var(&bearer_name, "synthetic-reminder-token");
-    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
-        .expect("the scheduling reminder secret resolver");
-    let destination_config: ReminderDestinationConfig = serde_json::from_value(json!({
-        "url": format!("{}/events", destination.uri()),
-        "hmacSha256KeyRef": format!("secret:env/{secret_name}"),
-        "bearerTokenRef": format!("secret:env/{bearer_name}")
-    }))
-    .expect("the signed reminder destination configuration");
-    let transport = reminder_transport(&destination_config, &secrets)
-        .expect("the signed destination compiles into a frozen transport");
-
-    bring_intents_due(&fx, pinned_now()).await;
-    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::new(transport)))
-        .await
-        .expect("the signed dispatch pass runs");
-
-    let requests = destination
-        .received_requests()
-        .await
-        .expect("the signed reminder request");
-    let request = requests
-        .iter()
-        .find(|request| String::from_utf8_lossy(&request.body).contains(appointment.as_str()))
-        .expect("the appointment's signed reminder");
-    let event: Value = serde_json::from_slice(&request.body).expect("the canonical reminder event");
+fn signed_webhook_content<'a>(
+    headers: &'a axum::http::HeaderMap,
+    body: &'a [u8],
+) -> SignedContent<'a> {
     let header = |name: &str| {
-        request
-            .headers
+        headers
             .get(name)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_else(|| panic!("missing valid {name} header"))
     };
-    assert_eq!(header("ce-specversion"), "1.0");
-    assert_eq!(header("ce-id"), event["id"]);
-    assert_eq!(header("ce-source"), event["source"]);
-    assert_eq!(header("ce-type"), event["type"]);
-    assert_eq!(header("ce-time"), event["time"]);
-    assert_eq!(header("ce-dataschema"), event["dataschema"]);
-    assert_eq!(header("x-registry-event-generation"), "1");
-    assert_eq!(header("x-registry-delivery-attempt"), "1");
-    assert!(!header("x-registry-delivery-time").is_empty());
-    assert!(header("idempotency-key").starts_with("sha256:"));
-    assert_eq!(header("authorization"), "Bearer synthetic-reminder-token");
-    let fields = |request_target| SignatureFields {
-        id: header("ce-id"),
-        source: header("ce-source"),
-        event_type: header("ce-type"),
-        time: header("ce-time"),
-        data_schema: header("ce-dataschema"),
-        generation: header("x-registry-event-generation"),
-        attempt: header("x-registry-delivery-attempt"),
-        delivery_time: header("x-registry-delivery-time"),
-        method: "POST",
-        request_target,
-        content_type: "application/json",
-        idempotency_key: header("idempotency-key"),
-        body: &request.body,
-    };
-    let expected =
-        sign_v1(SIGNING_KEY.as_bytes(), fields("/events")).expect("the shared signature");
-    assert_eq!(header("x-registry-signature"), expected);
-    assert_ne!(
-        sign_v1(SIGNING_KEY.as_bytes(), fields("/other")).expect("the target-bound signature"),
-        expected,
-        "the exact request target is covered"
+    // The HTTP client supplies host and framing.
+    let mut names = headers
+        .keys()
+        .map(|name| name.as_str())
+        .filter(|name| !matches!(*name, "host" | "content-length"))
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "accept",
+            "content-type",
+            "webhook-id",
+            "webhook-signature",
+            "webhook-timestamp"
+        ]
     );
+    assert_eq!(header("accept"), "application/json");
+    assert_eq!(header("content-type"), "application/json");
+    SignedContent {
+        id: header("webhook-id"),
+        timestamp: header("webhook-timestamp"),
+        signature: header("webhook-signature"),
+        body,
+    }
+}
+
+#[tokio::test]
+async fn a_signed_reminder_uses_the_standard_webhooks_delivery_contract() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let transport = transport_to_origin(&format!("http://{}", listener.local_addr().unwrap()));
+    let (captured, mut requests) = tokio::sync::mpsc::channel(1);
+    let receiver = Router::new().route(
+        "/events",
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                let (respond, release) = tokio::sync::oneshot::channel();
+                captured.send((headers, body, respond)).await.unwrap();
+                release.await.unwrap()
+            },
+        ),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, receiver).await.unwrap() });
+    let fx = fixture().await;
+    let (appointment, _) = booked(&fx, 90, 200, "dispatch-signed").await;
+    let outbox_id = intent_of(&fx, &appointment, "confirmation").await;
+    let keys = webhook_keys(REMINDER_TEST_KEY.as_bytes());
+    let mut attempts = Vec::new();
+
+    for response in [StatusCode::SERVICE_UNAVAILABLE, StatusCode::ACCEPTED] {
+        make_intent_due(&fx, outbox_id).await;
+        let store = fx.store.clone();
+        let transport = Arc::clone(&transport);
+        let running = tokio::spawn(async move {
+            dispatch_due_intents(&store, SCHEDULING_ID, Some(transport)).await
+        });
+
+        let (headers, body, respond) =
+            tokio::time::timeout(Duration::from_secs(5), requests.recv())
+                .await
+                .expect("the signed reminder reaches the receiver")
+                .unwrap();
+        let lease_time: DateTime<Utc> = fx
+            .admin
+            .query_one(
+                "SELECT attempt_started_at FROM scheduling_outbox WHERE outbox_id = $1 AND state = 'leased'",
+                &[&outbox_id],
+            )
+            .await
+            .expect("read the lease during delivery")
+            .get(0);
+        respond.send(response).unwrap();
+
+        let event: Value = serde_json::from_slice(&body).expect("the canonical reminder event");
+        let content = signed_webhook_content(&headers, &body);
+        assert_eq!(content.id, outbox_id.to_string());
+        assert_eq!(content.id, event["id"]);
+        assert_eq!(content.timestamp, lease_time.timestamp().to_string());
+        verify(&keys, content, lease_time.into(), DELIVERY_TOLERANCE)
+            .expect("the captured reminder verifies");
+        attempts.push((content.id.to_owned(), body, lease_time.timestamp()));
+
+        running
+            .await
+            .unwrap()
+            .expect("the signed dispatch pass runs");
+        if response == StatusCode::SERVICE_UNAVAILABLE {
+            // Ensure a reused timestamp would fail on the second attempt.
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    assert_eq!(attempts[0].0, attempts[1].0);
+    assert_eq!(attempts[0].1, attempts[1].1);
+    assert!(attempts[0].2 < attempts[1].2);
+    let state: String = fx
+        .admin
+        .query_one(
+            "SELECT state FROM scheduling_outbox WHERE outbox_id = $1",
+            &[&outbox_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(state, "delivered");
+    server.abort();
 }
 
 /// A receiver can accept an event before the dispatcher loses the database
@@ -7771,10 +8482,14 @@ async fn republished(fx: &Fixture, policy: SchedulingPolicy, pool_ids: &[String]
             AuditKeyHasher::Keyed(keying),
             fx.audit.clone(),
             7,
+            &authenticator(),
         )
         .with_hooks(fx.hooks.clone()),
     );
     router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
         service,
         authenticator: Arc::new(authenticator()),
     })
@@ -8834,7 +9549,10 @@ async fn an_unlisted_source_is_refused_and_never_reaches_the_offline_path() {
 
 /// SEC-03. On the offline path that `unchecked-final-fifteen-minutes`
 /// selects, a grant with one second more than fifteen minutes left is refused
-/// and one with exactly fifteen minutes left books.
+/// with `grant.lifetime-too-long` and one with exactly fifteen minutes left
+/// books. The new answer follows the bounds check: a caller with no grant, or
+/// whose grant does not cover the offering, still gets
+/// `operation.not-authorized`.
 #[tokio::test]
 async fn the_offline_path_accepts_at_most_fifteen_minutes_of_remaining_lifetime() {
     let fx = fixture().await;
@@ -8849,6 +9567,82 @@ async fn the_offline_path_accepts_at_most_fifteen_minutes_of_remaining_lifetime(
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "grant.lifetime-too-long");
+    // The refusal is audited under the same reason every grant refusal
+    // carries, so an audit consumer keyed on it still sees these.
+    let journal = audit_by_reason(&fx);
+    assert_eq!(
+        journal.keys().cloned().collect::<Vec<_>>(),
+        vec!["authorization.refused".to_owned()]
+    );
+    assert_eq!(journal["authorization.refused"]["outcome"], "denied");
+    assert_eq!(
+        journal["authorization.refused"]["operation"],
+        "appointment.create"
+    );
+
+    let a_day_left = agent_token_with_grant_exp(pinned_now().timestamp() + 86_400);
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &a_day_left,
+            "a-day-left",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "grant.lifetime-too-long");
+
+    let no_grant = token(json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    }));
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &no_grant,
+            "no-grant-order",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+
+    let mut uncovered = grant_claims();
+    uncovered["registry_grant_exp"] = json!(pinned_now().timestamp() + 86_400);
+    uncovered["registry_grant_bounds"]["permissions"] = json!([{
+        "service": "registry-other",
+        "location": "south-counter",
+        "actions": ["appointment.create"],
+    }]);
+    let mut claims = json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    claims
+        .as_object_mut()
+        .expect("claims are an object")
+        .extend(
+            uncovered
+                .as_object()
+                .expect("grant claims are an object")
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &token(claims),
+            "uncovered-order",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
 
     let at_the_cap = agent_token_with_grant_exp(pinned_now().timestamp() + 900);
     let (status, booked) = fx
@@ -9984,8 +10778,10 @@ async fn refuses_a_pre_1_0_ledger_at_migrate_and_readiness(version: i64) {
         migration_url_ref: format!("secret:env/{secret_name}"),
         ca_bundle_ref: None,
         test_only_plaintext: true,
+        transport: None,
     };
-    let store = PostgresStore::connect_migration(&database, &secrets).expect("the migration store");
+    let store =
+        PostgresStore::connect_migration(&database, &secrets, None).expect("the migration store");
 
     let refusal = store
         .migrate()
@@ -12193,7 +12989,11 @@ mod queue_depth {
         use tower::ServiceExt;
         let fx = hook_fixture().await;
         let metrics = Arc::new(registry_scheduling::metrics::Metrics::default());
-        let app = registry_scheduling::http::metrics_router(metrics, fx.store.clone());
+        let app = registry_scheduling::http::metrics_router(
+            metrics,
+            fx.store.clone(),
+            registry_platform_config::Posture::Development,
+        );
         let response = app
             .clone()
             .oneshot(
@@ -12204,6 +13004,7 @@ mod queue_depth {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["registry-posture"], "development");
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();

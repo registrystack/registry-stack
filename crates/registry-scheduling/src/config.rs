@@ -16,22 +16,26 @@ use registry_platform_audit::{
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    sha256_uri, url_hook_destinations, ConfigBlockError, ConfigBlockErrorKind, MetricsBindError,
-    PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
-    VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    sha256_uri, url_hook_destinations, AllowedClients, CallerIssuerCore, CallerIssuerEntry,
+    CallerIssuers, ConfigBlockError, ConfigBlockErrorKind, DatabaseTransportError, DeclaredPosture,
+    DevelopmentWitness, FoundExplicitSetting, MetricsBindError, OidcClientsConfig,
+    PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, Posture, PostureReport,
+    PostureSource, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck,
+    SecretReference, SecretResolver, VerifiedPackage, DEFAULT_STAND_IN,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
-    JwksSource, ListenerNetworkExposure, MetricsListenerConfig, OidcClientsConfig,
-    OidcIssuerConfig, PackageConfig, PrivateListenerConfig as ListenerConfig,
-    SecretProvidersConfig, TaskGrantStatusConfig, TlsTermination, UrlHookDestinationConfig,
+    JwksSource, ListenerNetworkExposure, MetricsListenerConfig, OidcIssuerConfig, PackageConfig,
+    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig,
+    TlsTermination, UrlHookDestinationConfig,
 };
 use registry_platform_httputil::destination::validate_fixed_destination_path;
+use registry_platform_loopback::loopback_host;
 use registry_platform_oidc::task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry};
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm, DeclaredKinds,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifierConfig,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, Diagnostic, Invalid, LocalId, Report, RetiredApiVersion,
@@ -44,10 +48,14 @@ use registry_scheduling_core::{
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
+use crate::auth::IssuerSource;
 use crate::operational::{validate_operational_read_profiles, OperationalReadProfileConfig};
 use crate::source_busy::{validate_busy_import_profiles, BusyImportProfileConfig};
 
 const MAXIMUM_POLICY_FILE_BYTES: usize = 1024 * 1024;
+
+/// The JSON Pointer of the `issuers` member.
+const ISSUERS_POINTER: &str = "/authentication/oidc/issuers";
 
 /// The command that writes a Scheduling package, named by every package
 /// refusal.
@@ -87,8 +95,51 @@ pub const SCHEDULING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 /// Keys an earlier Scheduling runtime configuration accepted, each refused
 /// with the key that replaced it.
 pub const SCHEDULING_REMOVED_KEYS: &[RemovedKey] = &[
-    REMOVED_OIDC_JWKS_URI,
-    REMOVED_OIDC_JWKS_SOURCE_KIND,
+    RemovedKey {
+        path: "destinations.reminders.bearerTokenRef",
+        replacement: "Remove bearerTokenRef. Reminders are signed with destinations.reminders.hmacSha256KeyRef (Standard Webhooks).",
+    },
+    RemovedKey {
+        path: "destinations.reminders.purposeUrls",
+        replacement: "Move each purpose URL to destinations.reminders.purposes.<purpose>.url with its own hmacSha256KeyRef.",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuer",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.audience",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksUri",
+        replacement:
+            "declare it under authentication.oidc.issuers.ISSUER_ID as jwksSource with type: uri",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksSource",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowInsecureHttp",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowedClients",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.assertionIssuers",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.scopeClaim",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.issuers.*.jwksSource.kind",
+        replacement: "Write `jwksSource.type` with the same value.",
+    },
     RemovedKey {
         path: "audit.retainDays",
         replacement: "Rename audit.retainDays to audit.retentionDays",
@@ -125,6 +176,12 @@ pub const SCHEDULING_RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeConfig {
+    #[serde(skip, default = "default_posture_report")]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    posture: PostureReport,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    development: Option<DevelopmentWitness>,
     pub api_version: String,
     pub kind: String,
     /// The logical identity of the database this deployment owns. The first
@@ -316,25 +373,6 @@ fn valid_database_id(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-/// A secret reference, `secret:env/NAME` or `secret:file/name` (CFG-SEC-1),
-/// kept as written. The reader refuses any other spelling at its position
-/// without repeating it.
-fn secret_reference<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    SecretReference::deserialize(deserializer).map(|reference| reference.as_str().to_owned())
-}
-
-/// An optional member holding a secret reference; absent reads as `None`
-/// through `serde(default)`.
-fn optional_secret_reference<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    secret_reference(deserializer).map(Some)
-}
-
 /// The policy and package identity produced by one verified package load.
 #[derive(Clone, Debug)]
 pub struct LoadedSchedulingPolicy {
@@ -349,28 +387,17 @@ pub struct AuthenticationConfig {
     pub oidc: OidcConfig,
 }
 
-/// The access tokens this runtime accepts: the issuer and its keys, the
-/// clients admitted, and the scopes each route family requires.
+/// The access tokens this runtime accepts: the issuers that sign them, and
+/// the scopes each route family requires.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
-    /// The exact issuer, the one audience every token carries, and where the
-    /// issuer's signing keys come from.
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    /// The issuers whose access tokens are accepted, each with its keys, the
+    /// clients it admits and the claim carrying their scopes.
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuers"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub provider: OidcIssuerConfig,
-    /// The clients admitted and the assertion authorities each may exchange
-    /// a subject token from. A deployment that performs no token exchange
-    /// leaves `assertionIssuers` empty; once a client is listed, an assertion
-    /// minted by an unrelated authority the issuer happens to federate cannot
-    /// become a booking credential here.
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-clients"))]
-    #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub clients: OidcClientsConfig,
-    /// The claim carrying the accepted OAuth scopes.
-    #[serde(default = "default_scope_claim")]
-    pub scope_claim: String,
+    pub issuers: CallerIssuers<IssuerConfig>,
     /// The scope every listing and availability read requires.
     #[serde(default = "default_reads_scope")]
     pub reads_scope: String,
@@ -401,6 +428,45 @@ pub struct OidcConfig {
         schemars(schema_with = "busy_import_profiles_schema")
     )]
     pub busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
+}
+
+/// One issuer Scheduling accepts access tokens from: the shared caller-issuer
+/// members and the assertion authorities each client may exchange from.
+///
+/// `allowedClients` is a list of at least one client. The keyword
+/// `unrestricted`, which would admit every client the issuer verifies, is
+/// read and then refused. A client belongs to one issuer.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssuerConfig {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer-core"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    core: CallerIssuerCore<AllowedClients>,
+    /// Assertion authorities each client may exchange a subject token from,
+    /// keyed by client identifier. Omitted, no assertion-issuer rule applies
+    /// and a token that arrived through an exchange is refused. Written, it
+    /// lists at least one client, each with at least one authority. Once a
+    /// client is listed, an assertion minted by an unrelated authority the
+    /// issuer happens to federate cannot become a booking credential here.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "registry_platform_config::non_empty_assertion_issuers"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_config::assertion_issuers_schema")
+    )]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+impl CallerIssuerEntry for IssuerConfig {
+    type Clients = AllowedClients;
+
+    fn core(&self) -> &CallerIssuerCore<AllowedClients> {
+        &self.core
+    }
 }
 
 /// A mapping keyed by local identifiers (CFG-ID-1), with keys kept as
@@ -438,17 +504,10 @@ fn local_id_map_schema<V: schemars::JsonSchema>(
     })
 }
 
-/// The RFC 9068 access-token media type this runtime verifies. The pair of
-/// spellings it admits is derived, never authored, so no deployment can widen
-/// it to an ordinary JWT.
-const SCHEDULING_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 /// The access-token signature algorithms the service accepts.
 const ACCESS_TOKEN_ALGORITHMS: [AccessTokenAlgorithm; 2] =
     [AccessTokenAlgorithm::RS256, AccessTokenAlgorithm::ES256];
 
-fn default_scope_claim() -> String {
-    "scope".to_owned()
-}
 fn default_reads_scope() -> String {
     "scheduling:read".to_owned()
 }
@@ -530,6 +589,7 @@ pub struct DestinationsConfig {
     pub hooks: BTreeMap<String, UrlHookDestinationConfig>,
 }
 
+/// Fallback destination for reminder delivery.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -539,68 +599,95 @@ pub struct ReminderDestinationConfig {
     #[serde(deserialize_with = "registry_scheduling_core::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub url: String,
-    /// Optional endpoints for individual reminder purposes. Any omitted
-    /// purpose uses `url`; every override must share that URL's origin.
+    /// Reference to 32 to 64 exact key bytes used only for this destination.
+    pub hmac_sha256_key_ref: SecretReference,
+    /// Previous signing key during rotation.
+    #[serde(default, deserialize_with = "present_reminder_key_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
+    /// Purpose-specific destinations on the fallback URL's origin.
     #[serde(default)]
-    pub purpose_urls: ReminderPurposeUrls,
-    #[serde(default, deserialize_with = "optional_secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
-    pub bearer_token_ref: Option<String>,
-    /// Optional HMAC-SHA-256 key for the shared signed event-delivery
-    /// contract. Bearer authentication, when configured, remains independent.
-    #[serde(default, deserialize_with = "optional_secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
-    pub hmac_sha256_key_ref: Option<String>,
+    pub purposes: ReminderPurposes,
 }
 
-/// Optional endpoint overrides named for the four reminder intent purposes
-/// Scheduling emits.
+/// Destination for reminder delivery of one configured purpose.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReminderPurposeDestinationConfig {
+    #[serde(deserialize_with = "registry_scheduling_core::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub url: String,
+    /// Reference to 32 to 64 exact key bytes used only for this destination.
+    pub hmac_sha256_key_ref: SecretReference,
+    /// Previous signing key during rotation.
+    #[serde(default, deserialize_with = "present_reminder_key_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
+}
+
+/// Optional reminder destinations that override the fallback by purpose.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReminderPurposeUrls {
-    #[serde(default, deserialize_with = "optional_url")]
+pub struct ReminderPurposes {
+    #[serde(default, deserialize_with = "present_reminder_purpose")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Url>")
+        schemars(with = "ReminderPurposeDestinationConfig")
     )]
-    pub confirmation: Option<String>,
-    #[serde(default, deserialize_with = "optional_url")]
+    pub confirmation: Option<ReminderPurposeDestinationConfig>,
+    #[serde(default, deserialize_with = "present_reminder_purpose")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Url>")
+        schemars(with = "ReminderPurposeDestinationConfig")
     )]
-    pub change: Option<String>,
-    #[serde(default, deserialize_with = "optional_url")]
+    pub change: Option<ReminderPurposeDestinationConfig>,
+    #[serde(default, deserialize_with = "present_reminder_purpose")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Url>")
+        schemars(with = "ReminderPurposeDestinationConfig")
     )]
-    pub cancellation: Option<String>,
-    #[serde(default, deserialize_with = "optional_url")]
+    pub cancellation: Option<ReminderPurposeDestinationConfig>,
+    #[serde(default, deserialize_with = "present_reminder_purpose")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Url>")
+        schemars(with = "ReminderPurposeDestinationConfig")
     )]
-    pub reminder: Option<String>,
+    pub reminder: Option<ReminderPurposeDestinationConfig>,
 }
 
-impl ReminderPurposeUrls {
-    fn iter(&self) -> [(&'static str, Option<&str>); 4] {
+impl ReminderPurposes {
+    pub(crate) fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &ReminderPurposeDestinationConfig)> {
         [
-            ("confirmation", self.confirmation.as_deref()),
-            ("change", self.change.as_deref()),
-            ("cancellation", self.cancellation.as_deref()),
-            ("reminder", self.reminder.as_deref()),
+            ("confirmation", self.confirmation.as_ref()),
+            ("change", self.change.as_ref()),
+            ("cancellation", self.cancellation.as_ref()),
+            ("reminder", self.reminder.as_ref()),
         ]
+        .into_iter()
+        .filter_map(|(purpose, destination)| Some((purpose, destination?)))
     }
 }
 
-fn optional_url<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+fn present_reminder_key_reference<'de, D>(
+    deserializer: D,
+) -> Result<Option<SecretReference>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    registry_scheduling_core::url(deserializer).map(Some)
+    SecretReference::deserialize(deserializer).map(Some)
+}
+
+fn present_reminder_purpose<'de, D>(
+    deserializer: D,
+) -> Result<Option<ReminderPurposeDestinationConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    ReminderPurposeDestinationConfig::deserialize(deserializer).map(Some)
 }
 
 /// Retention periods the retention sweep enforces. Every value is deployment
@@ -702,20 +789,52 @@ pub fn verify_scheduling_package(
     Ok(verified)
 }
 
+/// The declaration used when tests have no posture input.
+pub const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
+
+fn default_posture_report() -> PostureReport {
+    PostureReport::new(DEFAULT_POSTURE)
+}
+
 impl RuntimeConfig {
+    pub fn posture_report(&self) -> &PostureReport {
+        &self.posture
+    }
+
+    pub fn development_witness(&self) -> Option<&DevelopmentWitness> {
+        self.development.as_ref()
+    }
+
+    fn finish_load(
+        path: &Path,
+        loaded: registry_platform_config::LoadedRuntimeConfig<Self>,
+    ) -> Result<Self, RuntimeConfigError> {
+        loaded.posture.decide(path)?;
+        let mut config = loaded.config;
+        config.posture = loaded.posture;
+        config.development = loaded.development;
+        config.check()?;
+        Ok(config)
+    }
+
     /// Load and validate the operator document, reading the authored policy
     /// beside it. The bytes never re-enter a parser after startup.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
-        let loaded = Self::loader().load::<Self>(path.as_ref())?;
-        loaded.config.check()?;
-        Ok(loaded.config)
+    pub fn load(
+        path: impl AsRef<Path>,
+        declared: DeclaredPosture,
+    ) -> Result<Self, RuntimeConfigError> {
+        let path = path.as_ref();
+        Self::finish_load(path, Self::loader(declared).load(path)?)
     }
 
     /// The shared runtime configuration loader under Scheduling's envelope,
     /// removed keys, and retired apiVersions.
     #[must_use]
-    pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new(SCHEDULING_RUNTIME_ENVELOPE)
+    pub const fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(SCHEDULING_RUNTIME_ENVELOPE, declared)
             .removed_keys(SCHEDULING_REMOVED_KEYS)
             .retired_api_versions(SCHEDULING_RETIRED_RUNTIME_API_VERSIONS)
             .require_trusted_ownership()
@@ -874,11 +993,16 @@ impl RuntimeConfig {
             "audit.hashKeyRef".to_owned(),
             self.audit.key.hash_key_ref.as_str(),
         ));
-        if let Some(document_ref) = self.authentication.oidc.provider.jwks_source.document_ref() {
-            references.push((
-                "authentication.oidc.jwksSource.documentRef".to_owned(),
-                document_ref,
-            ));
+        for (id, entry) in self.authentication.oidc.issuers.iter() {
+            if let Some(document_ref) = entry.core().provider.jwks_source.document_ref() {
+                references.push((
+                    format!(
+                        "authentication.oidc.issuers.{}.jwksSource.documentRef",
+                        id.as_str()
+                    ),
+                    document_ref,
+                ));
+            }
         }
         for (index, status) in self.task_grant_status_authorities().iter().enumerate() {
             references.push((
@@ -892,27 +1016,34 @@ impl RuntimeConfig {
                 ));
             }
         }
-        if let Some(reference) = self
-            .destinations
-            .reminders
-            .as_ref()
-            .and_then(|reminders| reminders.bearer_token_ref.as_deref())
-        {
-            references.push((
-                "destinations.reminders.bearerTokenRef".to_owned(),
-                reference,
-            ));
-        }
-        if let Some(reference) = self
-            .destinations
-            .reminders
-            .as_ref()
-            .and_then(|reminders| reminders.hmac_sha256_key_ref.as_deref())
-        {
-            references.push((
-                "destinations.reminders.hmacSha256KeyRef".to_owned(),
-                reference,
-            ));
+        if let Some(reminders) = &self.destinations.reminders {
+            let mut check =
+                |prefix: &[&str], current: &SecretReference, previous: Option<&SecretReference>| {
+                    self.check_binding_reference(
+                        findings,
+                        &[prefix, &["hmacSha256KeyRef"]].concat(),
+                        current.as_str(),
+                    );
+                    if let Some(previous) = previous {
+                        self.check_binding_reference(
+                            findings,
+                            &[prefix, &["previousHmacSha256KeyRef"]].concat(),
+                            previous.as_str(),
+                        );
+                    }
+                };
+            check(
+                &["destinations", "reminders"],
+                &reminders.hmac_sha256_key_ref,
+                reminders.previous_hmac_sha256_key_ref.as_ref(),
+            );
+            for (purpose, destination) in reminders.purposes.iter() {
+                check(
+                    &["destinations", "reminders", "purposes", purpose],
+                    &destination.hmac_sha256_key_ref,
+                    destination.previous_hmac_sha256_key_ref.as_ref(),
+                );
+            }
         }
         for (field, raw) in references {
             if let Err(error) = self.secret_providers.check_reference(&field, raw) {
@@ -925,6 +1056,13 @@ impl RuntimeConfig {
                 &["destinations", "hooks", id, "hmacSha256KeyRef"],
                 destination.hmac_sha256_key_ref.as_str(),
             );
+            if let Some(reference) = &destination.previous_hmac_sha256_key_ref {
+                self.check_binding_reference(
+                    findings,
+                    &["destinations", "hooks", id, "previousHmacSha256KeyRef"],
+                    reference.as_str(),
+                );
+            }
         }
     }
 
@@ -966,26 +1104,38 @@ impl RuntimeConfig {
 
     fn check_oidc(&self, findings: &mut Vec<RuntimeConfigError>) {
         let oidc = &self.authentication.oidc;
-        if let Err(error) = oidc.provider.check(
-            "authentication.oidc",
-            self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
-        ) {
-            findings.push(error.into());
-        }
-        if let Err(error) = oidc.clients.check("authentication.oidc") {
-            findings.push(error.into());
-        }
-        // `allowedClients: unrestricted` admits every client the issuer
-        // verifies, so the deployment would accept a token minted for an
-        // unrelated application in the same realm. A development file is
-        // copied toward production, so every file lists the clients it admits
-        // (CFG-EMPTY-2): the reader refuses an omitted member and `[]`, and
-        // `unrestricted` is refused here in every mode.
-        if oidc.clients.allowed_clients.is_empty() {
-            findings.push(RuntimeConfigError::AllowedClientsRequired);
+        findings.extend(
+            oidc.issuers
+                .check(ISSUERS_POINTER)
+                .into_iter()
+                .map(|diagnostic| RuntimeConfigError::Issuer(Box::new(diagnostic))),
+        );
+        for (id, entry) in oidc.issuers.iter() {
+            // `allowedClients: unrestricted` would admit every client the
+            // issuer verifies. Development keeps no exception.
+            // An empty client names no client.
+            let empty_client = matches!(
+                &entry.core().allowed_clients,
+                AllowedClients::Listed(clients) if clients.iter().any(String::is_empty)
+            );
+            if empty_client || entry.core().allowed_clients == AllowedClients::Unrestricted {
+                findings.push(RuntimeConfigError::AllowedClientsRequired {
+                    issuer: id.as_str().to_owned(),
+                });
+            }
+            let field = format!("authentication.oidc.issuers.{}", id.as_str());
+            if let Err(error) = entry.core().provider.check(&field) {
+                findings.push(error.into());
+            }
+            let assertions = OidcClientsConfig {
+                allowed_clients: Vec::new(),
+                assertion_issuers: entry.assertion_issuers.clone(),
+            };
+            if let Err(error) = assertions.check(&field) {
+                findings.push(error.into());
+            }
         }
         for (path, value) in [
-            ("authentication.oidc.scopeClaim", &oidc.scope_claim),
             ("authentication.oidc.readsScope", &oidc.reads_scope),
             ("authentication.oidc.explainScope", &oidc.explain_scope),
         ] {
@@ -1037,9 +1187,17 @@ impl RuntimeConfig {
             Some(TaskGrantStatus::UncheckedFinalFifteenMinutes) => return,
             Some(TaskGrantStatus::Authorities(authorities)) => authorities,
         };
+        findings.extend(
+            self.authentication
+                .oidc
+                .issuers
+                .check_one_audience(ISSUERS_POINTER, "taskGrantStatus")
+                .into_iter()
+                .map(|diagnostic| RuntimeConfigError::Issuer(Box::new(diagnostic))),
+        );
         if TaskGrantStatusRegistry::validate_configuration(
             &task_grant_status_endpoints(authorities),
-            &self.authentication.oidc.provider.audience,
+            self.task_grant_resource(),
         )
         .is_err()
         {
@@ -1051,9 +1209,8 @@ impl RuntimeConfig {
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             findings.push(RuntimeConfigError::InvalidDatabaseReference);
         }
-        #[cfg(not(feature = "postgres-test"))]
-        if self.database.test_only_plaintext {
-            findings.push(RuntimeConfigError::PlaintextDatabase);
+        if let Err(error) = self.database.check(cfg!(feature = "postgres-test")) {
+            findings.push(RuntimeConfigError::DatabaseTransport(error));
         }
     }
 
@@ -1067,11 +1224,9 @@ impl RuntimeConfig {
                     "url",
                 ]));
             }
-            for (purpose, configured) in reminders.purpose_urls.iter() {
-                let Some(configured) = configured else {
-                    continue;
-                };
-                let segments = ["destinations", "reminders", "purposeUrls", purpose];
+            for (purpose, destination) in reminders.purposes.iter() {
+                let configured = &destination.url;
+                let segments = ["destinations", "reminders", "purposes", purpose, "url"];
                 match reminder_destination_origin_and_path(configured) {
                     None => findings.push(RuntimeConfigError::invalid_destination_url(&segments)),
                     Some(_)
@@ -1121,17 +1276,49 @@ impl RuntimeConfig {
         }
     }
 
-    pub async fn oidc_verifier(
+    /// The audience a task grant is bound to when its status is checked: the
+    /// audience of the first issuer entry, in issuer id order. Where status
+    /// authorities are listed, [`RuntimeConfig::check`] refuses entries whose
+    /// audiences differ, so this is the audience of every entry. It has also
+    /// refused a document with no entry.
+    #[must_use]
+    pub fn task_grant_resource(&self) -> &str {
+        self.authentication
+            .oidc
+            .issuers
+            .iter()
+            .next()
+            .map_or("", |(_, entry)| entry.core().provider.audience.as_str())
+    }
+
+    /// The entry `id` names.
+    fn issuer(&self, id: &str) -> Result<&IssuerConfig, RuntimeConfigError> {
+        self.authentication
+            .oidc
+            .issuers
+            .iter()
+            .find_map(|(entry_id, entry)| (entry_id.as_str() == id).then_some(entry))
+            .ok_or_else(|| RuntimeConfigError::InvalidIssuerSet {
+                message: format!("the runtime names no issuer entry {id}"),
+            })
+    }
+
+    /// Build the key source of the issuer entry `id` from its configured JWKS
+    /// source.
+    pub async fn jwks_fetcher(
         &self,
+        id: &str,
         secrets: &SecretResolver,
-    ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
-        let provider = &self.authentication.oidc.provider;
-        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
+    ) -> Result<std::sync::Arc<JwksFetcher>, RuntimeConfigError> {
+        let provider = &self.issuer(id)?.core().provider;
+        let document_field = format!("authentication.oidc.issuers.{id}.jwksSource.documentRef");
         let network =
             IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
-                .map_err(|_| RuntimeConfigError::Oidc)?;
+                .map_err(|_| RuntimeConfigError::InvalidIssuerSet {
+                    message: format!(
+                        "the issuer entry {id} names an issuer the network policy refuses"
+                    ),
+                })?;
         let fetcher = match &provider.jwks_source {
             JwksSource::Uri { uri } => {
                 let policy = network.declared_jwks_fetch_policy();
@@ -1143,7 +1330,7 @@ impl RuntimeConfig {
             }
             JwksSource::Discovery {} => {
                 let discovery_config = OidcDiscoveryConfig {
-                    issuer: self.authentication.oidc.provider.issuer.to_string(),
+                    issuer: provider.issuer.to_string(),
                     jwks_uri_override: None,
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
@@ -1158,55 +1345,87 @@ impl RuntimeConfig {
                     policy,
                 )
             }
-            JwksSource::Static { document_ref } => {
+            JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
-                    RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
-                        "authentication.oidc.jwksSource.documentRef",
-                        document_ref,
-                        &error,
-                    ))
+                    RuntimeConfigError::OidcJwksSecret {
+                        issuer: id.to_owned(),
+                        message: describe_secret_failure(&document_field, document_ref, &error),
+                    }
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                let jwks = parse_static_jwks(document.expose_secret()).map_err(|error| {
+                    match error {
+                        // The operator's document broke a key set rule: say
+                        // which, so the fix does not start at the issuer.
+                        OidcError::StaticKeySet(refusal) => RuntimeConfigError::OidcJwksSecret {
+                            issuer: id.to_owned(),
+                            message: format!(
+                                "the document at {document_field} was refused: {refusal}"
+                            ),
+                        },
+                        _ => RuntimeConfigError::Oidc,
+                    }
+                })?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
-        Ok((self.verifier_profile(), std::sync::Arc::new(fetcher)))
+        Ok(std::sync::Arc::new(fetcher))
     }
 
-    fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.authentication
-            .oidc
-            .provider
-            .allow_insecure_http
-            .then_some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-            )
-    }
-
-    /// The access-token verifier profile this deployment's OIDC settings
-    /// describe.
+    /// The access-token verifier profile of the issuer entry `id`.
     ///
-    /// RFC 9068 gives the access token one media type spelled two ways,
-    /// `at+jwt` and `application/at+jwt`, and requires a resource server to
-    /// accept that pair and refuse every other `typ`. The list comes from
-    /// [`access_token_typ_set`] so a plain `JWT` stays out: an ID token, a
-    /// UserInfo JWT or any other JWT minted for this audience is not an
-    /// access token, and admitting one would let a credential issued for
-    /// another purpose book, reschedule or cancel an appointment.
-    pub(crate) fn verifier_profile(&self) -> TokenVerifierConfig {
-        TokenVerifierConfig::access_token_profile(
-            self.authentication.oidc.provider.issuer.to_string(),
-            vec![self.authentication.oidc.provider.audience.clone()],
+    /// The entry's `accessTokenType` selects the token media type, `at+jwt`
+    /// admitting the RFC 9068 pair of spellings and `JWT` admitting the one
+    /// type. An ID token is refused under either.
+    pub fn verifier_profile(&self, id: &str) -> Result<TokenVerifierConfig, RuntimeConfigError> {
+        let entry = self.issuer(id)?;
+        TokenVerifierConfig::for_caller_issuer(
+            entry.core(),
             ACCESS_TOKEN_ALGORITHMS
                 .into_iter()
                 .map(AccessTokenAlgorithm::to_jsonwebtoken)
                 .collect(),
-            access_token_typ_set(SCHEDULING_ACCESS_TOKEN_TYPE),
+            None,
         )
-        .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(self.authentication.oidc.clients.allowed_clients.clone())
-        .with_assertion_issuers(self.authentication.oidc.clients.assertion_issuers.clone())
+        .map(|profile| profile.with_assertion_issuers(entry.assertion_issuers.clone()))
+        .map_err(|_| RuntimeConfigError::InvalidIssuerSet {
+            message: format!("the verifier profile of the issuer entry {id} is refused"),
+        })
+    }
+
+    /// Every issuer entry as the authenticator takes it: its verifier
+    /// profile, its signing keys, the audience its task grants are bound to,
+    /// and the caller kinds it declares.
+    pub async fn issuer_sources(
+        &self,
+        secrets: &SecretResolver,
+    ) -> Result<Vec<IssuerSource>, RuntimeConfigError> {
+        let mut sources = Vec::new();
+        for (id, entry) in self.authentication.oidc.issuers.iter() {
+            let id = id.as_str();
+            sources.push(IssuerSource::new(
+                id,
+                self.verifier_profile(id)?,
+                self.jwks_fetcher(id, secrets).await?,
+                DeclaredKinds::from_core(entry.core()).map_err(|_| {
+                    RuntimeConfigError::Issuer(Box::new(Diagnostic::error(
+                        "platform.oidc.actor-kind-twice",
+                        pointer_to(&["authentication", "oidc", "issuers", id, "clientActorKinds"]),
+                        "actorKind and clientActorKinds are both written",
+                        "Declare one kind for the whole issuer with actorKind, or one per client with clientActorKinds.",
+                    )))
+                })?,
+                entry.core().provider.audience.clone(),
+            ));
+        }
+        Ok(sources)
+    }
+
+    /// The explicit production settings the document states, each with its
+    /// position. A setting is never a finding: it records a choice the
+    /// operator made on purpose.
+    #[must_use]
+    pub fn explicit_settings(&self) -> &[FoundExplicitSetting] {
+        self.posture.explicit_settings()
     }
 }
 
@@ -1280,10 +1499,9 @@ fn valid_destination_url(value: &str) -> bool {
     {
         match parsed.scheme() {
             "https" => true,
-            "http" => matches!(
-                parsed.host_str(),
-                Some("127.0.0.1") | Some("localhost") | Some("[::1]")
-            ),
+            "http" => parsed
+                .host_str()
+                .is_some_and(|host| loopback_host(host).is_some()),
             _ => false,
         }
     } else {
@@ -1345,6 +1563,31 @@ pub struct RuntimeCheck {
     pub diagnostics: Vec<Diagnostic>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
+    /// The explicit production settings the file states, each with its
+    /// position, when the file loaded. A setting is never a finding: it
+    /// records a choice the operator made on purpose.
+    pub explicit_settings: Option<Vec<FoundExplicitSetting>>,
+}
+
+/// What hook activation would refuse in each bound destination, from the
+/// shared hook destination check, at the destination's own pointer.
+fn hook_destination_diagnostics(
+    check: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
+) -> Vec<Diagnostic> {
+    config
+        .destinations
+        .hooks
+        .iter()
+        .flat_map(|(id, destination)| {
+            registry_platform_hooks::delivery::check_url_hook_destination_file(
+                destination,
+                &format!("/destinations/hooks/{}", escape_pointer_segment(id)),
+                check,
+                SCHEDULING_RUNTIME_KIND,
+            )
+        })
+        .collect()
 }
 
 fn runtime_identifier_collision_diagnostics(
@@ -1402,10 +1645,15 @@ pub fn check_runtime(
     path: &Path,
     policy: Option<&SchedulingPolicy>,
     substitute: bool,
+    declared: DeclaredPosture,
 ) -> RuntimeCheck {
-    let check =
-        RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
+    let check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+        path,
+        substitute,
+        stand_in_for,
+    );
     let mut diagnostics = Vec::new();
+    let mut explicit_settings = None;
     if let Some(loaded) = &check.loaded {
         diagnostics.extend(
             loaded
@@ -1413,18 +1661,41 @@ pub fn check_runtime(
                 .findings(policy)
                 .iter()
                 .filter(|finding| !finding.is_identifier_collision())
-                .filter(|finding| !reads_deferred_value(&check, finding))
+                .filter(|finding| !finding.is_shared_issuer_rule())
+                .filter(|finding| !reads_deferred_value(&check, &loaded.config, finding))
                 .map(|finding| positioned(&check, finding)),
         );
         diagnostics.extend(runtime_identifier_collision_diagnostics(
             &check,
             &loaded.config,
         ));
+        diagnostics.extend(issuer_diagnostics(&loaded.config, &check));
+        // `unrestricted` is a setting this runtime refuses in every posture,
+        // so a file stating it is refused rather than listed as a choice.
+        explicit_settings = Some(
+            loaded
+                .posture
+                .explicit_settings()
+                .iter()
+                .filter(|found| found.setting.code != UNRESTRICTED_CLIENTS_SETTING)
+                .cloned()
+                .collect(),
+        );
+        for diagnostic in hook_destination_diagnostics(&check, &loaded.config) {
+            // A refusal scheduling reports in its own words is not repeated.
+            if !diagnostics
+                .iter()
+                .any(|known| known.path == diagnostic.path)
+            {
+                diagnostics.push(diagnostic);
+            }
+        }
     }
     let report = check.report_with(SCHEDULING_RUNTIME_KIND, diagnostics);
     RuntimeCheck {
         diagnostics: report.into_diagnostics(),
         unavailable: check.unavailable,
+        explicit_settings,
     }
 }
 
@@ -1434,13 +1705,18 @@ pub fn check_runtime(
 /// A refusal of the package or of a dependency is one diagnostic at the member
 /// that names it. `None` when the file itself cannot be read.
 #[must_use]
-pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report> {
+pub fn startup_report(
+    path: &Path,
+    error: &RuntimeConfigError,
+    declared: DeclaredPosture,
+) -> Option<Report> {
     match error {
         RuntimeConfigError::Load(error) => return Some(Report::new(error.diagnostics().to_vec())),
         RuntimeConfigError::Policy(report) => return Some(report.clone()),
         _ => {}
     }
-    let check = RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, true, stand_in_for);
+    let check =
+        RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(path, true, stand_in_for);
     if !error.in_file() {
         check.loaded.as_ref()?;
         return Some(Report::new(vec![positioned(&check, error)]));
@@ -1451,11 +1727,36 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
         .findings(policy.as_ref().map(|loaded| &loaded.policy))
         .iter()
         .filter(|finding| !finding.is_identifier_collision())
+        .filter(|finding| !finding.is_shared_issuer_rule())
         .map(|finding| positioned(&check, finding))
         .collect();
     diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
+    diagnostics.extend(issuer_diagnostics(config, &check));
     let report = check.report_with(SCHEDULING_RUNTIME_KIND, diagnostics);
     (!report.is_empty()).then_some(report)
+}
+
+/// The findings of the shared issuer-set check over `config`, each positioned
+/// in the file `check` read. Where status authorities are listed, the entries
+/// must also name one audience.
+fn issuer_diagnostics(
+    config: &RuntimeConfig,
+    check: &RuntimeFileCheck<RuntimeConfig>,
+) -> Vec<Diagnostic> {
+    let issuers = &config.authentication.oidc.issuers;
+    let mut diagnostics = issuers.check_file(ISSUERS_POINTER, check, SCHEDULING_RUNTIME_KIND);
+    if matches!(
+        config.task_grant_status,
+        Some(TaskGrantStatus::Authorities(_))
+    ) {
+        diagnostics.extend(issuers.check_one_audience_file(
+            ISSUERS_POINTER,
+            "taskGrantStatus",
+            check,
+            SCHEDULING_RUNTIME_KIND,
+        ));
+    }
+    diagnostics
 }
 
 /// `finding` at the value of its member, or, for a member that is absent, at
@@ -1515,13 +1816,23 @@ fn check_metrics_apart(metrics: SocketAddr, listener: SocketAddr) -> Result<(), 
 /// expression, so the stand-in, not the operator's value, decided it.
 fn reads_deferred_value(
     check: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
     finding: &RuntimeConfigError,
 ) -> bool {
+    if matches!(finding, RuntimeConfigError::InvalidTaskGrantStatus)
+        && config
+            .authentication
+            .oidc
+            .issuers
+            .iter()
+            .any(|(id, _)| check.defers_within(&issuer_audience_pointer(id.as_str())))
+    {
+        return true;
+    }
     let reads: &[&str] = match finding {
         RuntimeConfigError::InvalidListener => &["/listener"],
         RuntimeConfigError::InvalidMetricsListener(_) => &["/metricsListener/networkExposure"],
         RuntimeConfigError::MetricsListenerSharesSocket(_) => &["/listener/bind"],
-        RuntimeConfigError::InvalidTaskGrantStatus => &["/authentication/oidc/audience"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
         }
@@ -1538,6 +1849,15 @@ fn reads_deferred_value(
         || reads.iter().any(|pointer| check.defers_within(pointer))
 }
 
+/// The explicit production setting the shared reader records for
+/// `allowedClients: unrestricted`.
+const UNRESTRICTED_CLIENTS_SETTING: &str = "platform.posture.unrestricted-clients";
+
+/// The pointer of the audience the issuer entry `id` names.
+fn issuer_audience_pointer(id: &str) -> String {
+    pointer_to(&["authentication", "oidc", "issuers", id, "audience"])
+}
+
 /// A value for an expression the offline check does not substitute, chosen
 /// so the member it fills decodes and passes the rules about its value.
 fn stand_in_for(pointer: &str) -> &'static str {
@@ -1546,7 +1866,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["listener", "bind"] => "127.0.0.1:8100",
         ["metricsListener", "bind"] => "127.0.0.1:9100",
         ["metricsListener", "networkExposure"] => "private-address",
-        ["listener", "tlsTermination"] => "development-loopback",
+        ["listener", "tlsTermination"] => "loopback-plaintext",
         ["listener", "networkExposure"] => "private-address",
         ["audit", "destination"] => "file",
         ["package", "root"] | ["audit", "path"] | ["secretProviders", "file", "root"] => {
@@ -1558,10 +1878,10 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["taskGrantStatus", _, "statusPath"] => "/{grantId}",
         ["taskGrantStatus", _, "baseUrl"]
         | ["taskGrantStatus", _, "tokenEndpoint"]
-        | ["authentication", "oidc", "issuer"]
-        | ["authentication", "oidc", "jwksSource", "uri"]
+        | ["authentication", "oidc", "issuers", _, "issuer"]
+        | ["authentication", "oidc", "issuers", _, "jwksSource", "uri"]
         | ["destinations", "reminders", "url"]
-        | ["destinations", "reminders", "purposeUrls", _]
+        | ["destinations", "reminders", "purposes", _, "url"]
         | ["destinations", "hooks", _, "url"] => "https://deferred.invalid",
         ["taskGrantStatus", _, "sourceIssuer"]
         | ["taskGrantStatus", _, "statusResource"]
@@ -1639,10 +1959,16 @@ pub enum RuntimeConfigError {
     InvalidOperationalReadProfile { path: String, reason: &'static str },
     #[error("authentication.oidc.busyImportProfiles must bind unique source ids, explicit resource sets, bounded coverage and freshness, and a write scope distinct from read profiles")]
     InvalidBusyImportProfile,
+    /// A problem in the set of issuer entries that the shared check reports.
+    #[error("{}", .0.message)]
+    Issuer(Box<Diagnostic>),
     #[error(
-        "authentication.oidc.allowedClients must name every client the deployment admits; unrestricted would admit every client the issuer verifies"
+        "authentication.oidc.issuers.{issuer}.allowedClients must name every client the entry admits; unrestricted would admit every client the issuer verifies"
     )]
-    AllowedClientsRequired,
+    AllowedClientsRequired { issuer: String },
+    /// The issuer entries do not make a set the authenticator accepts.
+    #[error("the issuer entries are refused: {message}")]
+    InvalidIssuerSet { message: String },
     #[error(
         "the runtime configuration must state how a task grant is checked before capacity work; add taskGrantStatus with the task authorities whose grant status Scheduling checks, or unchecked-final-fifteen-minutes"
     )]
@@ -1665,12 +1991,12 @@ pub enum RuntimeConfigError {
         "destinations.hooks must bind every destination scheduling.yaml hooks.*.handler.destinationId names"
     )]
     HookDestinationInventoryMismatch,
-    #[error("plaintext PostgreSQL is test-only")]
-    PlaintextDatabase,
+    #[error(transparent)]
+    DatabaseTransport(DatabaseTransportError),
     #[error("the OIDC issuer could not be initialized")]
     Oidc,
-    #[error("the static OIDC signing keys could not be loaded: {0}")]
-    OidcJwksSecret(String),
+    #[error("the static OIDC signing keys could not be loaded: {message}")]
+    OidcJwksSecret { issuer: String, message: String },
 }
 
 /// The fix for a rebuilt package, named by every package refusal.
@@ -1717,15 +2043,20 @@ impl RuntimeConfigError {
             Self::InvalidDestinationUrl { path, .. } => path,
             Self::ReminderDestinationOriginMismatch { path, .. } => path,
             Self::Oidc => "authentication.oidc",
-            Self::AllowedClientsRequired => "authentication.oidc.allowedClients",
             Self::MissingTaskGrantStatus | Self::InvalidTaskGrantStatus => "taskGrantStatus",
-            Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
+            Self::OidcJwksSecret { .. }
+            | Self::Issuer(_)
+            | Self::AllowedClientsRequired { .. }
+            | Self::InvalidIssuerSet { .. } => "authentication.oidc.issuers",
             Self::InvalidListener => "listener.bind",
             Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "metricsListener.bind"
             }
             Self::InvalidDatabaseReference => "database",
-            Self::PlaintextDatabase => "database.testOnlyPlaintext",
+            Self::DatabaseTransport(DatabaseTransportError::TestOnlyPlaintext) => {
+                "database.testOnlyPlaintext"
+            }
+            Self::DatabaseTransport(_) => "database.transport",
             Self::InvalidAuditDestination(error) => audit_field(error),
             Self::HookDestinationInventoryMismatch => "destinations.hooks",
             Self::Policy(_) | Self::PolicyUnreadable | Self::PolicyChanged => {
@@ -1746,6 +2077,22 @@ impl RuntimeConfigError {
             Self::BindingSecret { pointer, .. }
             | Self::InvalidDestinationUrl { pointer, .. }
             | Self::ReminderDestinationOriginMismatch { pointer, .. } => pointer.clone(),
+            Self::Issuer(diagnostic) => diagnostic.path.clone(),
+            Self::AllowedClientsRequired { issuer } => pointer_to(&[
+                "authentication",
+                "oidc",
+                "issuers",
+                issuer,
+                "allowedClients",
+            ]),
+            Self::OidcJwksSecret { issuer, .. } => pointer_to(&[
+                "authentication",
+                "oidc",
+                "issuers",
+                issuer,
+                "jwksSource",
+                "documentRef",
+            ]),
             Self::MissingIdentity => "/identity".to_owned(),
             Self::Policy(_)
             | Self::PolicyUnreadable
@@ -1783,7 +2130,6 @@ impl RuntimeConfigError {
                 "scheduling.runtime.invalid-operational-read-profile"
             }
             Self::InvalidBusyImportProfile => "scheduling.runtime.invalid-busy-import-profile",
-            Self::AllowedClientsRequired => "scheduling.runtime.allowed-clients-required",
             Self::MissingTaskGrantStatus => "scheduling.runtime.missing-task-grant-status",
             Self::InvalidTaskGrantStatus => "scheduling.runtime.invalid-task-grant-status",
             Self::InvalidDatabaseReference => "scheduling.runtime.invalid-database-reference",
@@ -1793,9 +2139,12 @@ impl RuntimeConfigError {
                 "scheduling.runtime.reminder-destination-origin-mismatch"
             }
             Self::HookDestinationInventoryMismatch => "scheduling.runtime.unbound-hook-destination",
-            Self::PlaintextDatabase => "scheduling.runtime.plaintext-database",
+            Self::DatabaseTransport(error) => error.code(),
             Self::Oidc => "scheduling.runtime-dependency.unavailable",
-            Self::OidcJwksSecret(_) => "scheduling.runtime.unreadable-jwks-secret",
+            Self::OidcJwksSecret { .. } => "scheduling.runtime.unreadable-jwks-secret",
+            Self::Issuer(diagnostic) => &diagnostic.code,
+            Self::AllowedClientsRequired { .. } => "scheduling.runtime.allowed-clients-required",
+            Self::InvalidIssuerSet { .. } => "scheduling.runtime.invalid-issuer-set",
         }
     }
 
@@ -1832,7 +2181,7 @@ impl RuntimeConfigError {
                 "Set package.expectedDigest to the digest `schedulingctl package` reported for the package at package.root, or remove it."
             }
             Self::InvalidListener => {
-                "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
+                "Bind to a loopback address under loopback-plaintext; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
             }
             Self::InvalidMetricsListener(cause) | Self::MetricsListenerSharesSocket(cause) => {
                 return cause.remedy("metricsListener.networkExposure");
@@ -1852,9 +2201,6 @@ impl RuntimeConfigError {
             Self::InvalidTaskGrantStatus => {
                 "Configure at most 32 distinct absolute source issuers with safe service/token URLs, non-empty client and assertion audience, an absolute status resource, one statusScope token, and a statusPath that starts with / and holds exactly one {grantId} segment, then retry."
             }
-            Self::AllowedClientsRequired => {
-                "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry."
-            }
             Self::InvalidDatabaseReference => {
                 "Write database.runtimeUrlRef and database.migrationUrlRef as secret references."
             }
@@ -1868,14 +2214,23 @@ impl RuntimeConfigError {
             Self::HookDestinationInventoryMismatch => {
                 "Add a destinations.hooks entry for each destination scheduling.yaml hooks.*.handler.destinationId names."
             }
-            Self::PlaintextDatabase => {
-                "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
-            }
+            Self::DatabaseTransport(error) => error.suggested_action(),
             Self::Oidc => {
                 "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
             }
-            Self::OidcJwksSecret(_) => {
-                "Make the secret authentication.oidc.jwksSource.documentRef names readable and hold a JWKS document."
+            Self::OidcJwksSecret { issuer, .. } => {
+                return format!(
+                    "Make the secret authentication.oidc.issuers.{issuer}.jwksSource.documentRef names readable and hold a JWKS document."
+                );
+            }
+            Self::Issuer(diagnostic) => return diagnostic.suggested_action.clone(),
+            Self::AllowedClientsRequired { issuer } => {
+                return format!(
+                    "List every client identifier the entry {issuer} admits in authentication.oidc.issuers.{issuer}.allowedClients, then retry."
+                );
+            }
+            Self::InvalidIssuerSet { .. } => {
+                "Correct the issuer entries so that each names its own issuer and one caller kind rule, then retry."
             }
         };
         action.to_owned()
@@ -1897,8 +2252,15 @@ impl RuntimeConfigError {
                 | Self::PackageContents { .. }
                 | Self::PolicyChanged
                 | Self::Oidc
-                | Self::OidcJwksSecret(_)
+                | Self::OidcJwksSecret { .. }
         )
+    }
+
+    /// Whether the shared issuer-set check reported this refusal, which an
+    /// offline check reports through [`CallerIssuers::check_file`] so each
+    /// diagnostic carries its position and the entry it involves.
+    fn is_shared_issuer_rule(&self) -> bool {
+        matches!(self, Self::Issuer(_))
     }
 }
 
@@ -2047,6 +2409,14 @@ mod tests {
     };
     use registry_platform_oidc::is_access_token_typ_pair;
 
+    impl RuntimeConfig {
+        /// The one issuer entry the test documents declare.
+        fn main_entry(&self) -> &IssuerConfig {
+            self.issuer("main")
+                .expect("the test document declares `main`")
+        }
+    }
+
     const POLICY: &str = r#"apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
 kind: SchedulingProject
 project:
@@ -2139,11 +2509,11 @@ holdPolicy:
                 "runtimeUrlRef": "secret:env/RUNTIME",
                 "migrationUrlRef": "secret:env/MIGRATION"
             },
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:scheduling",
                 "allowedClients": ["scheduling-booking-agent"]
-            }},
+            }}}},
             "taskGrantStatus": "unchecked-final-fifteen-minutes",
             "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
             "destinations": {},
@@ -2178,12 +2548,8 @@ holdPolicy:
     fn assert_unsafe_runtime(error: registry_platform_config::RuntimeConfigError) {
         let diagnostic = error.deciding_diagnostic();
         assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
-        assert!(diagnostic
-            .message
-            .contains("owned by root or the runtime user"));
-        assert!(diagnostic
-            .suggested_action
-            .contains("remove group and other write permission"));
+        assert!(diagnostic.message.contains("is writable by its group"));
+        assert!(diagnostic.suggested_action.contains("chmod g-w "));
     }
 
     #[cfg(unix)]
@@ -2195,7 +2561,7 @@ holdPolicy:
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-        RuntimeConfig::loader()
+        RuntimeConfig::loader(DEFAULT_POSTURE)
             .load::<serde_json::Value>(&path)
             .expect("an owner-writable runtime in a private directory loads");
     }
@@ -2208,7 +2574,7 @@ holdPolicy:
         let directory = tempfile::tempdir().unwrap();
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
-        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        let result = RuntimeConfig::loader(DEFAULT_POSTURE).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
@@ -2224,7 +2590,7 @@ holdPolicy:
         std::fs::create_dir(&writable).unwrap();
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
         let path = write_ownership_test_runtime(&writable);
-        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        let result = RuntimeConfig::loader(DEFAULT_POSTURE).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         assert_unsafe_runtime(
@@ -2234,7 +2600,7 @@ holdPolicy:
 
     fn parse_runtime(document: &serde_json::Value) -> Result<RuntimeConfig, RuntimeConfigError> {
         let text = serde_norway::to_string(document).unwrap();
-        RuntimeConfig::loader()
+        RuntimeConfig::loader(DEFAULT_POSTURE)
             .parse_str::<RuntimeConfig>(&text, |_| None)
             .map(|loaded| loaded.config)
             .map_err(RuntimeConfigError::Load)
@@ -2255,20 +2621,95 @@ holdPolicy:
     }
 
     #[test]
+    fn default_posture_refuses_all_selected_development_settings() {
+        let mut document = operator_value(Path::new("/placeholder/package"), "loopback-plaintext");
+        document["database"]["transport"] = serde_json::json!("private-network-plaintext");
+        document["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            serde_json::json!("http://identity.example.test");
+        document["authentication"]["oidc"]["issuers"]["main"]["allowInsecureHttp"] =
+            serde_json::json!(true);
+        let text = serde_norway::to_string(&document).unwrap();
+        let error = RuntimeConfig::loader(DEFAULT_POSTURE)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect_err("default production must refuse development settings");
+        let codes: Vec<_> = error
+            .diagnostics()
+            .iter()
+            .map(|item| item.code.as_str())
+            .collect();
+        assert!(
+            codes.contains(&"platform.posture.database-private-plaintext"),
+            "{codes:?}"
+        );
+        assert!(
+            codes.contains(&"platform.posture.insecure-issuer-http"),
+            "{codes:?}"
+        );
+        for diagnostic in error.diagnostics() {
+            assert!(
+                diagnostic.suggested_action.contains("rstack dev"),
+                "{diagnostic:?}"
+            );
+            assert!(
+                diagnostic
+                    .suggested_action
+                    .contains("--posture development"),
+                "{diagnostic:?}"
+            );
+        }
+        let explicitly_production = DeclaredPosture {
+            source: PostureSource::Flag,
+            ..DEFAULT_POSTURE
+        };
+        assert!(RuntimeConfig::loader(explicitly_production)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .is_err());
+        let development = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let loaded = RuntimeConfig::loader(development)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect("development loads");
+        assert!(loaded.development.is_some());
+        assert_eq!(
+            loaded.posture.ready_member()["developmentSettings"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        tracing::dispatcher::with_default(&captured.subscriber(), || loaded.posture.log_startup());
+        let startup = captured.text();
+        assert!(startup.contains("posture declared"), "{startup}");
+        for code in codes {
+            assert!(startup.contains(code), "{startup}");
+        }
+    }
+
+    #[test]
     fn runtime_reads_the_explicit_http_issuer_opt_in() {
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
-        document["authentication"]["oidc"]["issuer"] =
+        document["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
             serde_json::json!("http://identity.example.test");
-        document["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
-        let config = parse_runtime(&document).expect("explicit HTTP issuer opt-in");
-        assert!(config.authentication.oidc.provider.allow_insecure_http);
+        document["authentication"]["oidc"]["issuers"]["main"]["allowInsecureHttp"] =
+            serde_json::json!(true);
+        let declared = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let text = serde_norway::to_string(&document).unwrap();
+        let loaded = RuntimeConfig::loader(declared)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect("explicit HTTP issuer opt-in in development");
         assert_eq!(
-            config.insecure_http_startup_diagnostic(),
-            Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-            )
+            loaded.posture.ready_member()["developmentSettings"][0]["code"],
+            "platform.posture.insecure-issuer-http"
         );
+        let config = loaded.config;
+        assert!(config.main_entry().core().provider.allow_insecure_http);
     }
 
     #[test]
@@ -2295,22 +2736,26 @@ holdPolicy:
     fn an_empty_assertion_issuer_map_is_refused_at_its_pointer() {
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
-        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({});
+        document["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] =
+            serde_json::json!({});
         let error = parse_runtime(&document).expect_err("an empty map is refused");
-        assert_eq!(error.pointer(), "/authentication/oidc/assertionIssuers");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/assertionIssuers"
+        );
     }
 
     #[test]
     fn a_listed_client_with_no_assertion_issuers_is_refused_at_that_client() {
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
-        document["authentication"]["oidc"]["assertionIssuers"] =
+        document["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] =
             serde_json::json!({"case-portal": []});
         let error = parse_runtime(&document).expect_err("an empty issuer list is refused");
         assert_eq!(error.code(), "config.invalid-value", "{error}");
         assert_eq!(
             error.pointer(),
-            "/authentication/oidc/assertionIssuers/case-portal"
+            "/authentication/oidc/issuers/main/assertionIssuers/case-portal"
         );
     }
 
@@ -2318,9 +2763,12 @@ holdPolicy:
     fn a_development_configuration_loads_and_exposes_its_defaults() {
         let root = canonical_tempdir();
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("configuration is accepted");
-        assert_eq!(config.authentication.oidc.scope_claim, "scope");
+        assert_eq!(
+            config.main_entry().core().scope_claim.get().as_str(),
+            "scope"
+        );
         assert_eq!(config.authentication.oidc.reads_scope, "scheduling:read");
         assert_eq!(
             config.authentication.oidc.explain_scope,
@@ -2600,6 +3048,17 @@ holdPolicy:
     }
 
     #[test]
+    fn listener_diagnostics_use_the_current_plaintext_value() {
+        assert_eq!(
+            stand_in_for("/listener/tlsTermination"),
+            "loopback-plaintext"
+        );
+        assert!(RuntimeConfigError::InvalidListener
+            .suggested_action()
+            .contains("loopback-plaintext"));
+    }
+
+    #[test]
     fn offline_check_refuses_task_status_structures_before_activation() {
         let root = canonical_tempdir();
         let package = root.path().join("package");
@@ -2638,7 +3097,7 @@ holdPolicy:
             entry[field] = serde_json::json!(value);
             let mut document = operator_value(&package, "development-loopback");
             document["taskGrantStatus"] = serde_json::json!([entry]);
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err(&format!("offline check must refuse {field}"));
             assert!(error.pointer().starts_with("/taskGrantStatus"), "{error:?}");
             if !value.trim().is_empty() {
@@ -2662,7 +3121,7 @@ holdPolicy:
                 .collect();
             document["taskGrantStatus"] = serde_json::json!(entries);
             assert_eq!(
-                RuntimeConfig::load(write_operator(root.path(), document))
+                RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                     .unwrap_err()
                     .pointer(),
                 "/taskGrantStatus"
@@ -2692,7 +3151,8 @@ holdPolicy:
                 "caBundleRef":"secret:file/missing-root-ca"
             }))
             .collect::<Vec<_>>());
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         assert_eq!(config.task_grant_status_authorities().len(), 32);
         assert!(!root.path().join("secrets").exists());
     }
@@ -2712,7 +3172,7 @@ holdPolicy:
             "statusResource": "urn:casework:test"
         }]);
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         assert!(!check.unavailable);
         let [diagnostic] = check.diagnostics.as_slice() else {
             panic!("one positioned status finding: {:?}", check.diagnostics);
@@ -2726,6 +3186,143 @@ holdPolicy:
         assert!(!diagnostic.message.contains("relative-issuer"));
         assert!(!root.path().join("missing-package").exists());
         assert!(!root.path().join("secrets").exists());
+    }
+
+    /// The offline check runs the shared hook destination check, so it
+    /// refuses at the destination's own URL what activation refuses.
+    #[test]
+    fn the_offline_check_refuses_what_hook_activation_refuses() {
+        let found = |url: &str| {
+            let root = canonical_tempdir();
+            let mut document =
+                operator_value(&root.path().join("missing-package"), "development-loopback");
+            document["destinations"]["hooks"] = serde_json::json!({"appointment-events": {
+                "url": url,
+                "hmacSha256KeyRef": "secret:file/hook"
+            }});
+            let path = write_operator(root.path(), document);
+            check_runtime(&path, None, false, DEFAULT_POSTURE)
+                .diagnostics
+                .iter()
+                .map(|d| format!("{} {}", d.code, d.path))
+                .collect::<Vec<_>>()
+        };
+        for refused in [
+            "https://localhost.:9443/hooks",
+            "https://receiver.localhost:9443/hooks",
+        ] {
+            assert_eq!(
+                found(refused),
+                ["config.invalid-value /destinations/hooks/appointment-events/url"],
+                "{refused}"
+            );
+        }
+        for admitted in [
+            "https://localhost:9443/hooks",
+            "https://127.0.0.1:9443/hooks",
+            "https://[::1]:9443/hooks",
+        ] {
+            assert_eq!(found(admitted), Vec::<String>::new(), "{admitted}");
+        }
+    }
+
+    /// Startup names the code and the pointer the offline check reports for
+    /// the same runtime document: from the load when scheduling refuses the
+    /// member itself, and from hook activation otherwise.
+    #[test]
+    fn startup_reports_the_hook_refusal_the_offline_check_reports() {
+        const URL: &str = "/destinations/hooks/appointment-events/url";
+        let mut documents = Vec::new();
+        for (id, url, expected) in [
+            (
+                "appointment-events",
+                "https://localhost.:9443/hooks",
+                Some(("config.invalid-value", URL)),
+            ),
+            (
+                "appointment-events",
+                "https://localhost:0/hooks",
+                Some(("scheduling.runtime.invalid-destination-url", URL)),
+            ),
+            (
+                "appointment-events",
+                "https://receiver.localhost:9443/hooks",
+                Some(("config.invalid-value", URL)),
+            ),
+            (
+                "appointment-events",
+                "ftp://receiver.example.test/hooks",
+                None,
+            ),
+            (
+                "a/b~c",
+                "https://events.example.test/hooks",
+                Some(("config.invalid-value", "/destinations/hooks/a~1b~0c")),
+            ),
+        ] {
+            let hooks = serde_json::json!({id: {
+                "url": url,
+                "hmacSha256KeyRef": "secret:file/hook"
+            }});
+            let expected = expected.map(|(code, pointer)| vec![format!("{code} {pointer}")]);
+            documents.push((hooks, expected));
+        }
+        for (hooks, expected) in documents {
+            let root = canonical_tempdir();
+            let mut document =
+                operator_value(&root.path().join("missing-package"), "development-loopback");
+            document["destinations"]["hooks"] = hooks.clone();
+            let path = write_operator(root.path(), document.clone());
+            let offline = check_runtime(&path, None, false, DEFAULT_POSTURE)
+                .diagnostics
+                .iter()
+                .map(|d| format!("{} {}", d.code, d.path))
+                .collect::<Vec<_>>();
+            assert!(!offline.is_empty(), "{hooks}");
+            if let Some(expected) = expected {
+                assert_eq!(offline, expected, "{hooks}");
+            }
+            assert_eq!(startup_refusal(&document), offline, "{hooks}");
+        }
+    }
+
+    /// What startup reports for `document`: the load's refusals, or the code
+    /// and pointer of the hook activation refusal.
+    fn startup_refusal(document: &serde_json::Value) -> Vec<String> {
+        let config = match parse_runtime(document) {
+            Ok(config) => config,
+            Err(RuntimeConfigError::Load(error)) => {
+                return error
+                    .diagnostics()
+                    .iter()
+                    .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.path))
+                    .collect();
+            }
+            Err(other) => panic!("an unexpected load refusal: {other}"),
+        };
+        let findings = config.findings(None);
+        if !findings.is_empty() {
+            return findings
+                .iter()
+                .map(|finding| format!("{} {}", finding.code(), finding.pointer()))
+                .collect();
+        }
+        let secrets = registry_platform_config::SecretResolver::new(
+            [registry_platform_config::SecretProvider::Environment],
+            "/",
+        )
+        .expect("the test secret resolver");
+        let error = crate::hooks::activate_destinations(
+            &std::collections::BTreeSet::new(),
+            &config.destinations.hooks,
+            &secrets,
+        )
+        .map(drop)
+        .expect_err("startup refuses the destination");
+        match (error.code(), error.pointer()) {
+            (Some(code), Some(pointer)) => vec![format!("{code} {pointer}")],
+            _ => panic!("an unpositioned activation refusal: {error}"),
+        }
     }
 
     #[test]
@@ -2746,7 +3343,7 @@ holdPolicy:
             "statusPath": "${SCHEDULING_STATUS_CHECK_UNSET_PATH}"
         }]);
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         let found: Vec<_> = check
             .diagnostics
             .iter()
@@ -2778,7 +3375,7 @@ holdPolicy:
             "statusResource": "urn:example:casework",
             "caBundleRef": "secret:file/institution-root-ca"
         }]);
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("the status authority configuration is accepted");
         assert_eq!(config.task_grant_status_authorities().len(), 1);
         let status = &config.task_grant_status_authorities()[0];
@@ -2813,7 +3410,7 @@ holdPolicy:
         let load = |entry: serde_json::Value| {
             let mut document = operator_value(&package, "development-loopback");
             document["taskGrantStatus"] = serde_json::json!([entry]);
-            RuntimeConfig::load(write_operator(root.path(), document))
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect("the status authority configuration is accepted")
         };
 
@@ -2842,7 +3439,7 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document.as_object_mut().unwrap().remove("identity");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("a configuration without identity is refused");
         assert_eq!(
             refusal(&error),
@@ -2862,7 +3459,7 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document.as_object_mut().unwrap().remove("taskGrantStatus");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("a configuration without taskGrantStatus is refused");
         assert_eq!(
             refusal(&error),
@@ -2886,7 +3483,7 @@ holdPolicy:
         let mut document = operator_value(&root.path().join("package"), "development-loopback");
         document.as_object_mut().unwrap().remove("taskGrantStatus");
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         let [diagnostic] = check.diagnostics.as_slice() else {
             panic!("one missing-member finding: {:?}", check.diagnostics);
         };
@@ -2938,7 +3535,7 @@ holdPolicy:
     fn the_unchecked_keyword_selects_the_offline_path() {
         let root = canonical_tempdir();
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("the keyword is accepted");
         assert_eq!(
             config.task_grant_status,
@@ -2954,7 +3551,7 @@ holdPolicy:
         let load = |database_id: serde_json::Value| {
             let mut document = base.clone();
             document["identity"] = serde_json::json!({"databaseId": database_id});
-            RuntimeConfig::load(write_operator(root.path(), document))
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
         };
         let config = load(serde_json::json!("scheduling-production")).expect("valid id");
         assert_eq!(config.database_id(), "scheduling-production");
@@ -2979,7 +3576,7 @@ holdPolicy:
         }
         let mut document = base.clone();
         document["identity"]["extra"] = serde_json::json!("value");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("identity refuses an unknown key");
         assert_eq!(
             refusal(&error),
@@ -2998,7 +3595,7 @@ holdPolicy:
         let load = |audit: serde_json::Value| {
             let mut document = base.clone();
             document["audit"] = audit;
-            RuntimeConfig::load(write_operator(root.path(), document))
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
         };
 
         let config = load(serde_json::json!({
@@ -3120,7 +3717,8 @@ holdPolicy:
         ] {
             let mut document = base.clone();
             document[member][value] = serde_json::json!(7);
-            let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+                .unwrap_err();
             assert_eq!(
                 refusal(&error),
                 ("config.removed-key".to_owned(), pointer.to_owned())
@@ -3146,7 +3744,8 @@ holdPolicy:
             "privateKeyRef": "secret:file/missing-status-key",
             "caseworkResource": "urn:example:casework"
         }]);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3166,7 +3765,8 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["apiVersion"] = serde_json::json!(RETIRED_SCHEDULING_RUNTIME_API_VERSION);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3192,7 +3792,8 @@ holdPolicy:
             root.path(),
             operator_value(&package, "operator-controlled-upstream"),
         );
-        let config = RuntimeConfig::load(&operator).expect("configuration is accepted");
+        let config =
+            RuntimeConfig::load(&operator, DEFAULT_POSTURE).expect("configuration is accepted");
 
         let loaded = config
             .load_policy()
@@ -3211,14 +3812,15 @@ holdPolicy:
             let package = root.path().join("package");
             write_policy(&package);
             let operator = write_operator(root.path(), operator_value(&package, tls));
-            let config = RuntimeConfig::load(&operator).expect("the package is admitted");
+            let config =
+                RuntimeConfig::load(&operator, DEFAULT_POSTURE).expect("the package is admitted");
             assert_eq!(
                 config.package_digest().unwrap(),
                 sha256_uri(&std::fs::read(package.join(SUM_FILE)).unwrap())
             );
 
             let refused = |named: &str| {
-                let error = RuntimeConfig::load(&operator).unwrap_err();
+                let error = RuntimeConfig::load(&operator, DEFAULT_POSTURE).unwrap_err();
                 let message = error.to_string();
                 assert_eq!(error.pointer(), "/package/root", "{tls}: {message}");
                 assert!(!error.in_file(), "{tls}: {message}");
@@ -3242,14 +3844,17 @@ holdPolicy:
             std::fs::remove_file(&policy).unwrap();
             refused("missing: scheduling.yaml");
             std::fs::write(&policy, POLICY).unwrap();
-            RuntimeConfig::load(&operator).expect("the restored package is admitted");
+            RuntimeConfig::load(&operator, DEFAULT_POSTURE)
+                .expect("the restored package is admitted");
 
             // No unlisted file name is read as a manifest: a JSON manifest
             // beside the policy is one more extra file.
             std::fs::write(package.join("scheduling.package.json"), "{}").unwrap();
             refused("extra: scheduling.package.json");
             assert_eq!(
-                RuntimeConfig::load(&operator).unwrap_err().code(),
+                RuntimeConfig::load(&operator, DEFAULT_POSTURE)
+                    .unwrap_err()
+                    .code(),
                 "scheduling.package.invalid"
             );
             std::fs::remove_file(package.join("scheduling.package.json")).unwrap();
@@ -3282,10 +3887,10 @@ holdPolicy:
                 "/authentication/oidc/explainScope",
             ),
             (
-                "oidc",
+                "issuer",
                 serde_json::json!({"scopeClaim": ""}),
-                "scheduling.runtime.invalid-oidc-claim",
-                "/authentication/oidc/scopeClaim",
+                "config.invalid-value",
+                "/authentication/oidc/issuers/main/scopeClaim",
             ),
             (
                 "retention",
@@ -3313,30 +3918,21 @@ holdPolicy:
             ),
             (
                 "destinations",
-                serde_json::json!({"reminders": {"url": "not-a-url"}}),
+                serde_json::json!({"reminders": {"url": "not-a-url", "hmacSha256KeyRef": "secret:file/reminder"}}),
                 "config.invalid-value",
                 "/destinations/reminders/url",
             ),
             (
                 "destinations",
-                serde_json::json!({"reminders": {"url": "https://reminders.example.test/due?all=1"}}),
+                serde_json::json!({"reminders": {"url": "https://reminders.example.test/due?all=1", "hmacSha256KeyRef": "secret:file/reminder"}}),
                 "scheduling.runtime.invalid-destination-url",
                 "/destinations/reminders/url",
             ),
             (
                 "destinations",
-                serde_json::json!({"reminders": {"url": "http://reminders.example.test/due"}}),
+                serde_json::json!({"reminders": {"url": "http://reminders.example.test/due", "hmacSha256KeyRef": "secret:file/reminder"}}),
                 "scheduling.runtime.invalid-destination-url",
                 "/destinations/reminders/url",
-            ),
-            (
-                "destinations",
-                serde_json::json!({"reminders": {
-                    "url": "https://reminders.example.test/due",
-                    "bearerTokenRef": "vault:reminders"
-                }}),
-                "config.invalid-value",
-                "/destinations/reminders/bearerTokenRef",
             ),
             (
                 "destinations",
@@ -3380,10 +3976,15 @@ holdPolicy:
                     .as_object_mut()
                     .unwrap()
                     .extend(patch.as_object().unwrap().clone());
+            } else if member == "issuer" {
+                document["authentication"]["oidc"]["issuers"]["main"]
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(patch.as_object().unwrap().clone());
             } else {
                 document[member] = patch.clone();
             }
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err("the member is refused");
             assert_eq!(
                 refusal(&error),
@@ -3394,34 +3995,165 @@ holdPolicy:
     }
 
     #[test]
-    fn reminder_purpose_urls_are_typed_and_optional() {
+    fn a_reminder_destination_without_a_key_is_refused_with_its_fix() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due"
+        });
+        let error = parse_runtime(&document).expect_err("a signing key is required");
+        assert_eq!(error.code(), "config.missing-key");
+        assert!(
+            error.suggested_action().contains("hmacSha256KeyRef"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_reminder_bearer_token_names_its_replacement() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due",
+            "bearerTokenRef": "secret:file/bearer"
+        });
+        let error = parse_runtime(&document).expect_err("bearer authentication was removed");
+        assert!(
+            error.suggested_action().contains("Standard Webhooks"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn reminder_purpose_urls_name_their_replacement() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due",
+            "purposeUrls": {"confirmation": "https://events.example.test/confirmed"}
+        });
+        let error = parse_runtime(&document).expect_err("purposeUrls was removed");
+        assert!(
+            error.suggested_action().contains("purposes.<purpose>.url"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_reminder_purpose_without_its_own_key_is_refused() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due",
+            "hmacSha256KeyRef": "secret:file/reminder",
+            "purposes": {"confirmation": {"url": "https://events.example.test/confirmed"}}
+        });
+        let error = parse_runtime(&document).expect_err("the confirmation needs its own key");
+        assert_eq!(error.code(), "config.missing-key");
+        assert_eq!(
+            error.pointer(),
+            "/destinations/reminders/purposes/confirmation"
+        );
+        assert!(
+            error.suggested_action().contains("hmacSha256KeyRef"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_null_previous_reminder_key_is_refused() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due",
+            "hmacSha256KeyRef": "secret:file/reminder",
+            "previousHmacSha256KeyRef": null
+        });
+        let error = parse_runtime(&document).expect_err("omit the previous key when absent");
+        assert_eq!(error.code(), "config.null-value");
+        assert_eq!(
+            error.pointer(),
+            "/destinations/reminders/previousHmacSha256KeyRef"
+        );
+    }
+
+    #[test]
+    fn a_hook_previous_key_naming_a_disabled_provider_is_refused_by_check() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["secretProviders"]
+            .as_object_mut()
+            .unwrap()
+            .remove("environment");
+        document["database"] = serde_json::json!({
+            "runtimeUrlRef": "secret:file/runtime",
+            "migrationUrlRef": "secret:file/migration"
+        });
+        document["destinations"]["hooks"] = serde_json::json!({"appointment-events": {
+            "url": "https://events.example.test/hooks",
+            "hmacSha256KeyRef": "secret:file/hook",
+            "previousHmacSha256KeyRef": "secret:env/HOOK_PREVIOUS"
+        }});
+        let config = parse_runtime(&document).expect("the document decodes");
+        assert_eq!(
+            config
+                .findings(None)
+                .iter()
+                .map(refusal)
+                .collect::<Vec<_>>(),
+            [(
+                "scheduling.runtime.secret-provider-disabled".to_owned(),
+                "/destinations/hooks/appointment-events/previousHmacSha256KeyRef".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn reminder_purposes_are_typed_and_optional() {
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["destinations"]["reminders"] = serde_json::json!({
             "url": "https://events.example.test:443/fallback",
-            "purposeUrls": {
-                "confirmation": "https://events.example.test/confirmed",
-                "change": "https://events.example.test/rescheduled",
-                "cancellation": "https://events.example.test/cancelled",
-                "reminder": "https://events.example.test/reminder"
+            "hmacSha256KeyRef": "secret:file/reminder",
+            "purposes": {
+                "confirmation": {"url": "https://events.example.test/confirmed", "hmacSha256KeyRef": "secret:file/purpose"},
+                "change": {"url": "https://events.example.test/rescheduled", "hmacSha256KeyRef": "secret:file/purpose"},
+                "cancellation": {"url": "https://events.example.test/cancelled", "hmacSha256KeyRef": "secret:file/purpose"},
+                "reminder": {"url": "https://events.example.test/reminder", "hmacSha256KeyRef": "secret:file/purpose"}
             }
         });
         let config = parse_runtime(&document).expect("purpose-specific URLs are accepted");
         let reminders = config.destinations.reminders.expect("reminder destination");
         assert_eq!(
-            reminders.purpose_urls.confirmation.as_deref(),
+            reminders
+                .purposes
+                .confirmation
+                .as_ref()
+                .map(|destination| destination.url.as_str()),
             Some("https://events.example.test/confirmed")
         );
         assert_eq!(
-            reminders.purpose_urls.change.as_deref(),
+            reminders
+                .purposes
+                .change
+                .as_ref()
+                .map(|destination| destination.url.as_str()),
             Some("https://events.example.test/rescheduled")
         );
         assert_eq!(
-            reminders.purpose_urls.cancellation.as_deref(),
+            reminders
+                .purposes
+                .cancellation
+                .as_ref()
+                .map(|destination| destination.url.as_str()),
             Some("https://events.example.test/cancelled")
         );
         assert_eq!(
-            reminders.purpose_urls.reminder.as_deref(),
+            reminders
+                .purposes
+                .reminder
+                .as_ref()
+                .map(|destination| destination.url.as_str()),
             Some("https://events.example.test/reminder")
         );
     }
@@ -3434,34 +4166,35 @@ holdPolicy:
             (
                 serde_json::json!({"unknown": "https://events.example.test/unknown-canary"}),
                 "config.unknown-key",
-                "/destinations/reminders/purposeUrls/unknown",
+                "/destinations/reminders/purposes/unknown",
                 "unknown-canary",
             ),
             (
-                serde_json::json!({"confirmation": "https://other.example.test/origin-canary"}),
+                serde_json::json!({"confirmation": {"url": "https://other.example.test/origin-canary", "hmacSha256KeyRef": "secret:file/purpose"}}),
                 "scheduling.runtime.reminder-destination-origin-mismatch",
-                "/destinations/reminders/purposeUrls/confirmation",
+                "/destinations/reminders/purposes/confirmation/url",
                 "other.example.test",
             ),
             (
-                serde_json::json!({"change": "https://events.example.test/path?query-canary=1"}),
+                serde_json::json!({"change": {"url": "https://events.example.test/path?query-canary=1", "hmacSha256KeyRef": "secret:file/purpose"}}),
                 "scheduling.runtime.invalid-destination-url",
-                "/destinations/reminders/purposeUrls/change",
+                "/destinations/reminders/purposes/change/url",
                 "query-canary",
             ),
             (
-                serde_json::json!({"cancellation": "https://events.example.test/a/%2Funsafe-canary"}),
+                serde_json::json!({"cancellation": {"url": "https://events.example.test/a/%2Funsafe-canary", "hmacSha256KeyRef": "secret:file/purpose"}}),
                 "scheduling.runtime.invalid-destination-url",
-                "/destinations/reminders/purposeUrls/cancellation",
+                "/destinations/reminders/purposes/cancellation/url",
                 "unsafe-canary",
             ),
         ] {
             let mut document = base.clone();
             document["destinations"]["reminders"] = serde_json::json!({
                 "url": "https://events.example.test/fallback",
-                "purposeUrls": purpose_urls
+                "hmacSha256KeyRef": "secret:file/reminder",
+            "purposes": purpose_urls
             });
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err("the purpose URL is refused");
             assert_eq!(
                 refusal(&error),
@@ -3560,8 +4293,11 @@ holdPolicy:
         let root = canonical_tempdir();
         let (package, mut document) = development(root.path());
         package_policy(&package, &format!("{POLICY}{OBSERVER}"));
-        let error = RuntimeConfig::load(write_operator(root.path(), document.clone()))
-            .expect_err("an unbound hook destination is refused");
+        let error = RuntimeConfig::load(
+            write_operator(root.path(), document.clone()),
+            DEFAULT_POSTURE,
+        )
+        .expect_err("an unbound hook destination is refused");
         assert_eq!(
             refusal(&error),
             (
@@ -3576,7 +4312,7 @@ holdPolicy:
                 "hmacSha256KeyRef": "secret:file/hook-key"
             }
         });
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("the hook destination is bound");
         let binding = &config.destinations.hooks["appointment-events"];
         assert_eq!(binding.attempt_timeout_milliseconds, 5_000);
@@ -3590,7 +4326,8 @@ holdPolicy:
         let (_, mut document) = development(root.path());
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
         document["database"]["testOnlyPlaintext"] = serde_json::json!(canary);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(error.pointer(), "/database/testOnlyPlaintext");
         let RuntimeConfigError::Load(load) = &error else {
             panic!("a reader refusal: {error}");
@@ -3611,11 +4348,12 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["database"]["testOnlyPlaintext"] = serde_json::json!(true);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
-                "scheduling.runtime.plaintext-database".to_owned(),
+                "platform.database.test-only-plaintext".to_owned(),
                 "/database/testOnlyPlaintext".to_owned()
             )
         );
@@ -3628,7 +4366,7 @@ holdPolicy:
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
         std::fs::write(&operator, format!("{canary}\n")).unwrap();
 
-        let error = RuntimeConfig::load(&operator).unwrap_err();
+        let error = RuntimeConfig::load(&operator, DEFAULT_POSTURE).unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
         assert_eq!(error.pointer(), "");
         assert!(!error.to_string().contains(canary), "{error}");
@@ -3636,14 +4374,15 @@ holdPolicy:
 
     #[test]
     fn the_runtime_configuration_is_read_through_the_shared_loader() {
-        let error = RuntimeConfig::load("runtime.yaml").unwrap_err();
+        let error = RuntimeConfig::load("runtime.yaml", DEFAULT_POSTURE).unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
         assert!(error.to_string().contains("absolute"), "{error}");
 
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["listener"].as_object_mut().unwrap().remove("bind");
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             ("config.missing-key".to_owned(), "/listener".to_owned())
@@ -3658,7 +4397,7 @@ holdPolicy:
         // A tab can never open an indented line, so the reader stops on it.
         std::fs::write(&operator, "apiVersion: v1\n\tkind: x\n").unwrap();
 
-        let error = RuntimeConfig::load(&operator).unwrap_err();
+        let error = RuntimeConfig::load(&operator, DEFAULT_POSTURE).unwrap_err();
         let RuntimeConfigError::Load(load) = &error else {
             panic!("a reader refusal: {error}");
         };
@@ -3671,6 +4410,252 @@ holdPolicy:
         assert_eq!(source.line, Some(2));
     }
 
+    /// The document with a second issuer entry beside `main`.
+    fn with_second_issuer(root: &Path, clients: serde_json::Value) -> serde_json::Value {
+        let (_, mut document) = development(root);
+        document["authentication"]["oidc"]["issuers"]["second"] = serde_json::json!({
+            "issuer": "https://second.example.test",
+            "audience": "urn:example:scheduling",
+            "allowedClients": clients,
+        });
+        document
+    }
+
+    #[test]
+    fn each_issuer_entry_reads_its_own_settings_with_the_shared_defaults() {
+        let root = canonical_tempdir();
+        let mut document = with_second_issuer(root.path(), serde_json::json!(["second-agent"]));
+        document["authentication"]["oidc"]["issuers"]["second"]["scopeClaim"] =
+            serde_json::json!("scp");
+        document["authentication"]["oidc"]["issuers"]["second"]["accessTokenType"] =
+            serde_json::json!("JWT");
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .expect("two issuer entries are accepted");
+        let main = config.issuer("main").unwrap().core();
+        let second = config.issuer("second").unwrap().core();
+        assert_eq!(main.scope_claim.get().as_str(), "scope");
+        assert_eq!(second.scope_claim.get().as_str(), "scp");
+        assert_eq!(
+            config.verifier_profile("main").unwrap().allowed_typ,
+            vec!["at+jwt".to_owned(), "application/at+jwt".to_owned()]
+        );
+        assert_eq!(
+            config.verifier_profile("second").unwrap().allowed_typ,
+            vec!["JWT".to_owned()]
+        );
+        assert_eq!(
+            config.verifier_profile("second").unwrap().scope_claim,
+            "scp"
+        );
+        assert_eq!(
+            config.verifier_profile("second").unwrap().allowed_clients,
+            vec!["second-agent".to_owned()]
+        );
+    }
+
+    #[test]
+    fn two_issuers_with_the_same_iss_refuse_at_startup() {
+        let root = canonical_tempdir();
+        let mut document = with_second_issuer(root.path(), serde_json::json!(["second-agent"]));
+        document["authentication"]["oidc"]["issuers"]["second"]["issuer"] =
+            serde_json::json!("https://identity.example.test");
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .expect_err("two entries cannot name one issuer");
+        assert_eq!(error.code(), "platform.oidc.duplicate-issuer", "{error}");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/second/issuer"
+        );
+        assert!(
+            !error.to_string().contains("identity.example.test"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_client_listed_by_two_issuer_entries_is_refused_at_startup() {
+        let root = canonical_tempdir();
+        let document =
+            with_second_issuer(root.path(), serde_json::json!(["scheduling-booking-agent"]));
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .expect_err("a client belongs to one issuer");
+        assert_eq!(
+            error.code(),
+            "platform.oidc.client-in-two-issuers",
+            "{error}"
+        );
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/second/allowedClients/0"
+        );
+    }
+
+    /// A status authority the status registry accepts.
+    fn status_authority() -> serde_json::Value {
+        serde_json::json!({
+            "sourceIssuer": "https://casework.example.test/task-authority",
+            "baseUrl": "https://casework.example.test",
+            "tokenEndpoint": "https://identity.example.test/oauth2/token",
+            "clientAssertionAudience": "https://identity.example.test",
+            "clientId": "scheduling-task-status",
+            "privateKeyRef": "secret:file/task-status-private-jwk",
+            "statusResource": "urn:example:casework"
+        })
+    }
+
+    /// Two issuer entries whose audiences differ, with `task_grant_status`
+    /// written as given.
+    fn differing_audiences(root: &Path, task_grant_status: serde_json::Value) -> serde_json::Value {
+        let mut document = with_second_issuer(root, serde_json::json!(["second-agent"]));
+        document["authentication"]["oidc"]["issuers"]["second"]["audience"] =
+            serde_json::json!("urn:example:another-audience");
+        document["taskGrantStatus"] = task_grant_status;
+        document
+    }
+
+    #[test]
+    fn status_authorities_need_one_audience_across_the_issuer_entries() {
+        let root = canonical_tempdir();
+        let document = differing_audiences(root.path(), serde_json::json!([status_authority()]));
+        let path = write_operator(root.path(), document);
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE)
+            .expect_err("a status registry checks every grant against one audience");
+        assert_eq!(
+            refusal(&error),
+            (
+                "platform.oidc.audiences-differ".to_owned(),
+                "/authentication/oidc/issuers/second/audience".to_owned()
+            ),
+            "{error}"
+        );
+
+        // The offline check reports the same finding, positioned, with the
+        // entry that names the first audience beside it.
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
+        let found = check
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "platform.oidc.audiences-differ")
+            .unwrap_or_else(|| panic!("{:?}", check.diagnostics));
+        assert_eq!(found.path, "/authentication/oidc/issuers/second/audience");
+        assert!(found.source.as_ref().is_some_and(|s| s.line.is_some()));
+        assert_eq!(
+            found.related[0].path,
+            "/authentication/oidc/issuers/main/audience"
+        );
+    }
+
+    #[test]
+    fn differing_audiences_load_where_no_status_authority_is_listed_or_the_audiences_are_equal() {
+        let root = canonical_tempdir();
+        let document = differing_audiences(
+            root.path(),
+            serde_json::json!("unchecked-final-fifteen-minutes"),
+        );
+        RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .expect("no status authority needs one audience");
+
+        let mut equal = differing_audiences(root.path(), serde_json::json!([status_authority()]));
+        equal["authentication"]["oidc"]["issuers"]["second"]["audience"] =
+            equal["authentication"]["oidc"]["issuers"]["main"]["audience"].clone();
+        let config = RuntimeConfig::load(write_operator(root.path(), equal), DEFAULT_POSTURE)
+            .expect("equal audiences share one status resource");
+        assert_eq!(
+            config.task_grant_resource(),
+            config
+                .issuer("second")
+                .unwrap()
+                .core()
+                .provider
+                .audience
+                .as_str()
+        );
+    }
+
+    #[test]
+    fn an_expression_in_another_member_does_not_skip_the_task_grant_status_check() {
+        let root = canonical_tempdir();
+        let invalid = {
+            let mut authority = status_authority();
+            authority["statusResource"] = serde_json::json!("not-an-absolute-resource");
+            authority
+        };
+        let check = |member: &str| {
+            let mut document = operator_value(&root.path().join("package"), "development-loopback");
+            document["authentication"]["oidc"]["issuers"]["main"][member] =
+                serde_json::json!("${SCHEDULING_OFFLINE_CHECK_UNSET_VALUE}");
+            document["taskGrantStatus"] = serde_json::json!([invalid.clone()]);
+            let path = write_operator(root.path(), document);
+            check_runtime(&path, None, false, DEFAULT_POSTURE)
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.clone())
+                .collect::<Vec<_>>()
+        };
+        // The status check reads the entries' audiences and nothing else of
+        // the issuer map, so an expression elsewhere defers nothing.
+        assert!(
+            check("issuer").contains(&"scheduling.runtime.invalid-task-grant-status".to_owned())
+        );
+        assert!(
+            !check("audience").contains(&"scheduling.runtime.invalid-task-grant-status".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_issuer_set_refusal_is_a_refusal_of_the_file_with_its_own_code() {
+        let error = RuntimeConfigError::InvalidIssuerSet {
+            message: "an entry names both actorKind and clientActorKinds".to_owned(),
+        };
+        assert_eq!(error.code(), "scheduling.runtime.invalid-issuer-set");
+        assert_eq!(error.pointer(), ISSUERS_POINTER);
+        assert!(error.in_file());
+        assert!(error.to_string().contains("actorKind"), "{error}");
+    }
+
+    #[test]
+    fn the_moved_oidc_keys_are_refused_with_their_new_home() {
+        let root = canonical_tempdir();
+        let (_, base) = development(root.path());
+        for (key, value) in [
+            ("issuer", serde_json::json!("https://identity.example.test")),
+            ("audience", serde_json::json!("urn:example:scheduling")),
+            ("allowInsecureHttp", serde_json::json!(true)),
+            (
+                "allowedClients",
+                serde_json::json!(["scheduling-booking-agent"]),
+            ),
+            (
+                "assertionIssuers",
+                serde_json::json!({"scheduling-booking-agent": ["https://authority.example.test"]}),
+            ),
+            ("scopeClaim", serde_json::json!("scope")),
+            (
+                "jwksSource",
+                serde_json::json!({"type": "uri", "uri": "https://identity.example.test/jwks"}),
+            ),
+        ] {
+            let mut document = base.clone();
+            document["authentication"]["oidc"][key] = value;
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+                .expect_err("a moved key is refused");
+            assert_eq!(
+                refusal(&error),
+                (
+                    "config.removed-key".to_owned(),
+                    format!("/authentication/oidc/{key}")
+                ),
+                "{key}"
+            );
+            assert!(
+                error
+                    .suggested_action()
+                    .contains("authentication.oidc.issuers.ISSUER_ID"),
+                "{key}: {error}"
+            );
+        }
+    }
+
     #[test]
     fn a_removed_jwks_uri_names_its_replacement() {
         let root = canonical_tempdir();
@@ -3678,7 +4663,8 @@ holdPolicy:
         let mut document = base.clone();
         document["authentication"]["oidc"]["jwksUri"] =
             serde_json::json!("https://identity.example.test/jwks");
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3689,16 +4675,17 @@ holdPolicy:
         assert!(
             error
                 .suggested_action()
-                .contains("authentication.oidc.jwksSource"),
+                .contains("authentication.oidc.issuers.ISSUER_ID"),
             "{error}"
         );
 
         let mut document = base;
-        document["authentication"]["oidc"]["jwksSource"] =
+        document["authentication"]["oidc"]["issuers"]["main"]["jwksSource"] =
             serde_json::json!({"type": "uri", "uri": "https://identity.example.test/jwks"});
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         assert_eq!(
-            config.authentication.oidc.provider.jwks_source.uri(),
+            config.main_entry().core().provider.jwks_source.uri(),
             Some("https://identity.example.test/jwks")
         );
     }
@@ -3707,20 +4694,19 @@ holdPolicy:
     fn a_jwks_source_tagged_by_kind_names_type() {
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
-        document["authentication"]["oidc"]["jwksSource"] =
+        document["authentication"]["oidc"]["issuers"]["main"]["jwksSource"] =
             serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
                 "config.removed-key".to_owned(),
-                "/authentication/oidc/jwksSource/kind".to_owned()
+                "/authentication/oidc/issuers/main/jwksSource/kind".to_owned()
             )
         );
         assert!(
-            error
-                .suggested_action()
-                .contains("authentication.oidc.jwksSource.type"),
+            error.suggested_action().contains("jwksSource.type"),
             "{error}"
         );
         assert!(
@@ -3734,18 +4720,20 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, base) = development(root.path());
         let mut document = base.clone();
-        document["authentication"]["oidc"]["audience"] =
+        document["authentication"]["oidc"]["issuers"]["main"]["audience"] =
             serde_json::json!("${SCHEDULING_TEST_AUDIENCE:-urn:example:substituted}");
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         assert_eq!(
-            config.authentication.oidc.provider.audience,
+            config.main_entry().core().provider.audience,
             "urn:example:substituted"
         );
 
         let mut document = base;
         document["database"]["runtimeUrlRef"] =
             serde_json::json!("${SCHEDULING_TEST_REFERENCE:-secret:env/RUNTIME}");
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3779,14 +4767,15 @@ holdPolicy:
             ),
         );
         let path = write_operator(root.path(), document);
-        let error = RuntimeConfig::load(&path).unwrap_err();
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE).unwrap_err();
         assert_eq!(
             policy_refusal(&error),
             ["/openings/counter-hours/because config.substitution-not-allowed"]
         );
         assert_eq!(error.code(), "scheduling.package.invalid-project");
         assert!(!error.in_file());
-        let report = startup_report(&path, &error).expect("the policy's own report");
+        let report =
+            startup_report(&path, &error, DEFAULT_POSTURE).expect("the policy's own report");
         assert_eq!(report.error_count(), 1);
     }
 
@@ -3799,7 +4788,8 @@ holdPolicy:
             &package,
             &POLICY.replace("ttlMinutes: 5", &format!("ttlMinutes: {canary}")),
         );
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             policy_refusal(&error),
             ["/holdPolicy/ttlMinutes config.expected-integer"]
@@ -3833,14 +4823,15 @@ holdPolicy:
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
         document["package"]["expectedDigest"] = serde_json::json!(digest);
-        let config =
-            RuntimeConfig::load(write_operator(root.path(), document)).expect("the pin matches");
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .expect("the pin matches");
         assert_eq!(config.package_digest().unwrap(), digest);
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
         let expected = format!("sha256:{}", "0".repeat(64));
         document["package"]["expectedDigest"] = serde_json::json!(&expected);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3864,7 +4855,8 @@ holdPolicy:
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
         document["retention"]["receiptRetentionDays"] = serde_json::json!(canary);
 
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(error.pointer(), "/retention/receiptRetentionDays");
         let RuntimeConfigError::Load(load) = &error else {
             panic!("a reader refusal: {error}");
@@ -3884,9 +4876,11 @@ holdPolicy:
         let root = canonical_tempdir();
         let package = root.path().join("package");
         write_policy(&package);
+        // `unrestricted` is a keyword the reader accepts and the runtime
+        // refuses, as it refuses a list that does not name a client.
         let expected = (
             "scheduling.runtime.allowed-clients-required".to_owned(),
-            "/authentication/oidc/allowedClients".to_owned(),
+            "/authentication/oidc/issuers/main/allowedClients".to_owned(),
         );
 
         // The decision is written in every file, in either listener mode: an
@@ -3895,68 +4889,118 @@ holdPolicy:
         // loopback included (CFG-EMPTY-2).
         for termination in ["operator-controlled-upstream", "development-loopback"] {
             let mut omitted = operator_value(&package, termination);
-            omitted["authentication"]["oidc"]
+            omitted["authentication"]["oidc"]["issuers"]["main"]
                 .as_object_mut()
                 .unwrap()
                 .remove("allowedClients");
-            let error = RuntimeConfig::load(write_operator(root.path(), omitted))
+            let error = RuntimeConfig::load(write_operator(root.path(), omitted), DEFAULT_POSTURE)
                 .expect_err("a deployment with no allowedClients was accepted");
             assert_eq!(error.code(), "config.missing-key", "{termination}: {error}");
             assert!(error.to_string().contains("allowedClients"), "{error}");
 
             let mut empty = operator_value(&package, termination);
-            empty["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
-            let error = RuntimeConfig::load(write_operator(root.path(), empty))
+            empty["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+                serde_json::json!([]);
+            let error = RuntimeConfig::load(write_operator(root.path(), empty), DEFAULT_POSTURE)
                 .expect_err("a deployment with an empty allowedClients was accepted");
             assert_eq!(
                 refusal(&error),
                 (
                     "config.invalid-value".to_owned(),
-                    "/authentication/oidc/allowedClients".to_owned()
+                    "/authentication/oidc/issuers/main/allowedClients".to_owned()
                 ),
                 "{termination}: {error}"
             );
 
             let mut repeated = operator_value(&package, termination);
-            repeated["authentication"]["oidc"]["allowedClients"] =
+            repeated["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
                 serde_json::json!(["scheduling-booking-agent", "scheduling-booking-agent"]);
-            let error = RuntimeConfig::load(write_operator(root.path(), repeated))
+            let error = RuntimeConfig::load(write_operator(root.path(), repeated), DEFAULT_POSTURE)
                 .expect_err("a repeated client was accepted");
             assert_eq!(
                 refusal(&error),
                 (
                     "config.duplicate-item".to_owned(),
-                    "/authentication/oidc/allowedClients/1".to_owned()
+                    "/authentication/oidc/issuers/main/allowedClients/1".to_owned()
                 ),
                 "{termination}: {error}"
             );
 
             let mut unrestricted = operator_value(&package, termination);
-            unrestricted["authentication"]["oidc"]["allowedClients"] =
+            unrestricted["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
                 serde_json::json!("unrestricted");
-            let error = RuntimeConfig::load(write_operator(root.path(), unrestricted))
+            let path = write_operator(root.path(), unrestricted);
+            let error = RuntimeConfig::load(&path, DEFAULT_POSTURE)
                 .expect_err("a deployment admitting every client was accepted");
             assert_eq!(refusal(&error), expected, "{termination}");
+            assert!(
+                check_runtime(&path, None, false, DEFAULT_POSTURE)
+                    .diagnostics
+                    .iter()
+                    .any(
+                        |diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()) == expected
+                    ),
+                "{termination}: the offline check reports it too"
+            );
+            // Refused outright, it is no explicit production setting.
+            let listed = check_runtime(&path, None, false, DEFAULT_POSTURE)
+                .explicit_settings
+                .unwrap_or_default();
+            assert!(
+                listed
+                    .iter()
+                    .all(|found| found.setting.code != "platform.posture.unrestricted-clients"),
+                "{termination}: {:?}",
+                listed
+                    .iter()
+                    .map(|found| found.setting.code)
+                    .collect::<Vec<_>>()
+            );
 
-            RuntimeConfig::load(write_operator(
-                root.path(),
-                operator_value(&package, termination),
-            ))
+            RuntimeConfig::load(
+                write_operator(root.path(), operator_value(&package, termination)),
+                DEFAULT_POSTURE,
+            )
             .expect("a named client list is accepted");
         }
+    }
+
+    #[test]
+    fn an_empty_client_in_the_list_is_refused_as_the_schema_refuses_it() {
+        let root = canonical_tempdir();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            serde_json::json!(["scheduling-booking-agent", ""]);
+        let path = write_operator(root.path(), document);
+        let expected = (
+            "scheduling.runtime.allowed-clients-required".to_owned(),
+            "/authentication/oidc/issuers/main/allowedClients".to_owned(),
+        );
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE)
+            .expect_err("an empty client names no client");
+        assert_eq!(refusal(&error), expected, "{error}");
+        assert!(
+            check_runtime(&path, None, false, DEFAULT_POSTURE)
+                .diagnostics
+                .iter()
+                .any(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()) == expected),
+            "the offline check reports it too"
+        );
     }
 
     #[test]
     fn a_declared_assertion_authority_binds_the_client_that_may_exchange_from_it() {
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
-        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+        document["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = serde_json::json!({
             "scheduling-booking-agent": ["https://authority.example.test"]
         });
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("an assertion authority is declarable");
         assert_eq!(
-            config.verifier_profile().assertion_issuers,
+            config.verifier_profile("main").unwrap().assertion_issuers,
             BTreeMap::from([(
                 "scheduling-booking-agent".to_owned(),
                 vec!["https://authority.example.test".to_owned()]
@@ -3993,15 +5037,17 @@ holdPolicy:
             serde_json::json!({"client": too_many_issuers}),
         ] {
             let mut document = base.clone();
-            document["authentication"]["oidc"]["assertionIssuers"] = refused.clone();
-            let error = RuntimeConfig::load(write_operator(root.path(), document)).expect_err(
-                &format!("an assertion-issuer map outside its bounds was accepted: {refused}"),
-            );
+            document["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] =
+                refused.clone();
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+                .expect_err(&format!(
+                    "an assertion-issuer map outside its bounds was accepted: {refused}"
+                ));
             assert_eq!(
                 refusal(&error),
                 (
                     "scheduling.runtime.invalid-assertion-issuers".to_owned(),
-                    "/authentication/oidc/assertionIssuers".to_owned()
+                    "/authentication/oidc/issuers/main/assertionIssuers".to_owned()
                 ),
                 "{refused}"
             );
@@ -4014,17 +5060,17 @@ holdPolicy:
         let (_, base) = development(root.path());
 
         let mut document = base.clone();
-        document["authentication"]["oidc"]["issuer"] =
+        document["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
             serde_json::json!("http://identity.example.test");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("a remote http issuer");
-        assert_eq!(error.pointer(), "/authentication/oidc/issuer");
+        assert_eq!(error.pointer(), "/authentication/oidc/issuers/main/issuer");
 
         // The shared blocks leave the enclosing block closed.
         let mut document = base;
         document["authentication"]["oidc"]["issuerr"] =
             serde_json::json!("https://identity.example.test");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("an unknown oidc member");
         assert_eq!(
             refusal(&error),
@@ -4048,15 +5094,15 @@ holdPolicy:
         };
         let text = insert_after(
             document,
-            "    issuer: https://identity.example.test\n",
-            "    issuers: canary-a\n    allowedClient: canary-b\n",
+            "        issuer: https://identity.example.test\n",
+            "        issuers: canary-a\n        allowedClient: canary-b\n",
         );
         let text = insert_after(
             text,
             "  hashKeyRef: secret:file/audit\n",
             "  hashKey: canary-c\n  paths: canary-d\n",
         );
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(DEFAULT_POSTURE)
             .parse_str::<RuntimeConfig>(&text, |_| None)
             .expect_err("unknown keys inside the shared blocks are refused");
         let line_of = |key: &str| {
@@ -4082,8 +5128,12 @@ holdPolicy:
             })
             .collect();
         for (path, key, column) in [
-            ("/authentication/oidc/issuers", "issuers", 5),
-            ("/authentication/oidc/allowedClient", "allowedClient", 5),
+            ("/authentication/oidc/issuers/main/issuers", "issuers", 9),
+            (
+                "/authentication/oidc/issuers/main/allowedClient",
+                "allowedClient",
+                9,
+            ),
             ("/audit/hashKey", "hashKey", 3),
             ("/audit/paths", "paths", 3),
         ] {
@@ -4118,7 +5168,7 @@ holdPolicy:
             "scopes": "canary-b"
         }]);
         let text = serde_norway::to_string(&document).unwrap();
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(DEFAULT_POSTURE)
             .parse_str::<RuntimeConfig>(&text, |_| None)
             .expect_err("unknown keys inside a status entry are refused");
         let position_of = |key: &str| {
@@ -4182,8 +5232,8 @@ holdPolicy:
         for (nulled, pointer) in [
             (&["audit", "path"][..], "/audit/path"),
             (
-                &["authentication", "oidc", "scopeClaim"][..],
-                "/authentication/oidc/scopeClaim",
+                &["authentication", "oidc", "issuers", "main", "scopeClaim"][..],
+                "/authentication/oidc/issuers/main/scopeClaim",
             ),
             (
                 &["destinations", "reminders"][..],
@@ -4215,7 +5265,7 @@ holdPolicy:
         ] {
             let (_, mut document) = development(root.path());
             document["metricsListener"] = serde_json::json!({"bind": bind});
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err("the metrics listener is refused");
             assert!(
                 matches!(
@@ -4229,11 +5279,12 @@ holdPolicy:
         }
         let (_, mut document) = development(root.path());
         document["metricsListener"] = serde_json::json!({"bind": "127.0.0.1:9100"});
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("a private metrics listener is accepted");
         assert!(config.metrics_listener.is_some());
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         assert!(config.metrics_listener.is_none());
     }
 
@@ -4243,7 +5294,7 @@ holdPolicy:
         let load = |metrics: serde_json::Value| {
             let (_, mut document) = development(root.path());
             document["metricsListener"] = metrics;
-            RuntimeConfig::load(write_operator(root.path(), document))
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
         };
         assert!(matches!(
             load(serde_json::json!({"bind": "0.0.0.0:9100"})),
@@ -4279,7 +5330,7 @@ holdPolicy:
         let refusal = |bind: &str| {
             let (_, mut document) = development(root.path());
             document["metricsListener"] = serde_json::json!({"bind": bind});
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err("the metrics listener is refused");
             (error.to_string(), error.suggested_action())
         };
@@ -4312,7 +5363,9 @@ holdPolicy:
             "networkExposure": "${SCHEDULING_OFFLINE_CHECK_UNSET_EXPOSURE}"
         });
         let path = write_operator(root.path(), document);
-        assert!(check_runtime(&path, None, false).diagnostics.is_empty());
+        assert!(check_runtime(&path, None, false, DEFAULT_POSTURE)
+            .diagnostics
+            .is_empty());
     }
 
     #[test]
@@ -4338,10 +5391,10 @@ holdPolicy:
     fn the_access_token_profile_accepts_exactly_rs256_and_es256() {
         let root = canonical_tempdir();
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("configuration is accepted");
         assert_eq!(
-            config.verifier_profile().allowed_algorithms,
+            config.verifier_profile("main").unwrap().allowed_algorithms,
             vec![
                 jsonwebtoken::Algorithm::RS256,
                 jsonwebtoken::Algorithm::ES256
@@ -4353,9 +5406,9 @@ holdPolicy:
     fn the_access_token_profile_admits_only_the_rfc_9068_pair() {
         let root = canonical_tempdir();
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("configuration is accepted");
-        let profile = config.verifier_profile();
+        let profile = config.verifier_profile("main").unwrap();
         assert!(
             is_access_token_typ_pair(&profile.allowed_typ),
             "the access-token profile is not the RFC 9068 pair: {:?}",
@@ -4407,7 +5460,8 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["listener"]["bind"] = serde_json::json!("10.20.30.40:8105");
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -4417,10 +5471,49 @@ holdPolicy:
         );
     }
 
+    /// `loopback-plaintext` places the listener on loopback in every posture
+    /// and either spelling admits a loopback HTTP issuer in production.
+    #[test]
+    fn loopback_plaintext_places_the_listener_and_relaxes_nothing() {
+        let root = canonical_tempdir();
+        let (_, base) = development(root.path());
+        let load = |tls: &str, bind: &str, issuer: Option<&str>| {
+            let mut document = base.clone();
+            document["listener"]["tlsTermination"] = serde_json::json!(tls);
+            document["listener"]["bind"] = serde_json::json!(bind);
+            if let Some(issuer) = issuer {
+                document["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+                    serde_json::json!(issuer);
+            }
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+        };
+
+        load("loopback-plaintext", "127.0.0.1:8105", None).expect("a loopback bind is admitted");
+        for tls in ["development-loopback", "loopback-plaintext"] {
+            let error = load(tls, "10.20.30.40:8105", None).unwrap_err();
+            assert_eq!(
+                refusal(&error),
+                (
+                    "scheduling.runtime.invalid-listener".to_owned(),
+                    "/listener/bind".to_owned()
+                ),
+                "{tls}"
+            );
+        }
+
+        let issuer = "http://127.0.0.1:8082";
+        load("development-loopback", "127.0.0.1:8105", Some(issuer))
+            .expect("development-loopback admits a loopback http issuer");
+        load("loopback-plaintext", "127.0.0.1:8105", Some(issuer))
+            .expect("loopback-plaintext admits a loopback http issuer");
+    }
+
     /// The runtime's static JWKS arm hands the resolved document to the
     /// shared parser and refuses a key set it cannot trust before any
     /// verifier exists: a symmetric key, an unnamed key, two keys sharing a
-    /// name, or no key at all.
+    /// name, a private key member, or no key at all. The operator is told
+    /// which rule the file broke, under the code for an unusable key file
+    /// and never the issuer-unreachable one.
     #[cfg(unix)]
     #[tokio::test]
     async fn static_jwks_requires_unique_named_asymmetric_keys() {
@@ -4430,9 +5523,10 @@ holdPolicy:
         let (_, mut document) = development(root.path());
         let secrets_root = root.path().join("secrets");
         std::fs::create_dir(&secrets_root).unwrap();
-        document["authentication"]["oidc"]["jwksSource"] =
+        document["authentication"]["oidc"]["issuers"]["main"]["jwksSource"] =
             serde_json::json!({"type": "static", "documentRef": "secret:file/jwks.json"});
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         let secrets = config.secret_providers.resolver().unwrap();
         let jwks = secrets_root.join("jwks.json");
 
@@ -4443,34 +5537,94 @@ holdPolicy:
 
         write_jwks(br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#);
         config
-            .oidc_verifier(&secrets)
+            .jwks_fetcher("main", &secrets)
             .await
             .expect("one named asymmetric key is accepted");
 
-        for (case, invalid) in [
-            ("symmetric", br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#.as_slice()),
-            ("unnamed", br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB"}]}"#),
+        // Members the key set rule does not name are not inspected.
+        write_jwks(
+            br#"{"issuer":"https://issuer.test","keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB","ext":true,"x5c":["AA=="],"x5t":"AA","x5u":"https://issuer.test/chain"}]}"#,
+        );
+        config
+            .jwks_fetcher("main", &secrets)
+            .await
+            .expect("unknown public members are ignored");
+
+        for (case, invalid, text) in [
+            (
+                "symmetric",
+                br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#.as_slice(),
+                "symmetric key",
+            ),
+            (
+                "unnamed",
+                br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB"}]}"#,
+                "has no \"kid\"",
+            ),
             (
                 "duplicate name",
                 br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
+                "repeats the \"kid\"",
             ),
-            ("empty", br#"{"keys":[]}"#),
+            ("empty", br#"{"keys":[]}"#, "holds no keys"),
+            (
+                "private member",
+                br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB","d":"AQAB"}]}"#,
+                "private-key member \"d\"",
+            ),
+            (
+                "repeated member name",
+                br#"{"keys":[{"kty":"RSA","kid":"one","kid":"two","n":"AQAB","e":"AQAB"}]}"#,
+                "repeats a member name",
+            ),
         ] {
             write_jwks(invalid);
             let error = config
-                .oidc_verifier(&secrets)
+                .jwks_fetcher("main", &secrets)
                 .await
                 .map(|_| ())
                 .expect_err(case);
             assert_eq!(
                 refusal(&error),
                 (
-                    "scheduling.runtime-dependency.unavailable".to_owned(),
-                    "/authentication/oidc".to_owned()
+                    "scheduling.runtime.unreadable-jwks-secret".to_owned(),
+                    "/authentication/oidc/issuers/main/jwksSource/documentRef".to_owned()
                 ),
                 "{case}"
             );
+            assert!(error.to_string().contains(text), "{case}: {error}");
             assert!(!error.in_file(), "{case}");
+        }
+    }
+
+    /// A reminder or hook destination takes plain http only on a loopback
+    /// host: any address of 127.0.0.0/8, `::1`, a mapped loopback address, or
+    /// the exact name `localhost`. Another host, or another spelling of the
+    /// name, is refused.
+    #[test]
+    fn plain_http_destinations_take_only_loopback_hosts() {
+        for accepted in [
+            "http://127.0.0.1:8080/hook",
+            "http://127.0.0.2:8080/hook",
+            "http://[::1]:8080/hook",
+            "http://[::ffff:127.0.0.1]:8080/hook",
+            "http://localhost:8080/hook",
+            "http://LOCALHOST:8080/hook",
+            "https://example.test/hook",
+        ] {
+            assert!(valid_destination_url(accepted), "{accepted}");
+        }
+        for refused in [
+            "http://10.0.0.1:8080/hook",
+            "http://[::ffff:10.0.0.1]:8080/hook",
+            "http://0.0.0.0:8080/hook",
+            "http://[::]:8080/hook",
+            "http://169.254.169.254/hook",
+            "http://a.localhost:8080/hook",
+            "http://localhost.:8080/hook",
+            "http://example.test/hook",
+        ] {
+            assert!(!valid_destination_url(refused), "{refused}");
         }
     }
 
@@ -4480,7 +5634,7 @@ holdPolicy:
         document["identity"]["databaseId"] = serde_json::json!(" padded ");
         document["listener"]["bind"] = serde_json::json!("10.0.0.5:8100");
         document["destinations"] = serde_json::json!({
-            "reminders": {"url": "http://reminders.example.test/due"}
+            "reminders": {"url": "http://reminders.example.test/due", "hmacSha256KeyRef": "secret:file/reminder"}
         });
         write_operator(root, document)
     }
@@ -4489,7 +5643,7 @@ holdPolicy:
     fn cfg_check_1_every_rule_a_runtime_file_breaks_is_reported_at_its_position() {
         let root = canonical_tempdir();
         let path = file_breaking_three_rules(root.path());
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         assert!(!check.unavailable);
         let found: Vec<(&str, &str)> = check
             .diagnostics
@@ -4564,7 +5718,7 @@ holdPolicy:
             .any(RuntimeConfigError::is_identifier_collision));
         let path = write_operator(root.path(), document);
         let text = std::fs::read_to_string(&path).unwrap();
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         let collisions = check
             .diagnostics
             .iter()
@@ -4602,7 +5756,7 @@ holdPolicy:
             }
         });
         let path = write_operator(root.path(), independent);
-        assert!(check_runtime(&path, None, false)
+        assert!(check_runtime(&path, None, false, DEFAULT_POSTURE)
             .diagnostics
             .iter()
             .all(|diagnostic| !diagnostic.code.ends_with("-id-collision")));
@@ -4614,7 +5768,7 @@ holdPolicy:
         let mut document = operator_value(&root.path().join("package"), "development-loopback");
         document.as_object_mut().unwrap().remove("identity");
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
         let diagnostic = &check.diagnostics[0];
         assert_eq!(diagnostic.code, "scheduling.runtime.missing-identity");
@@ -4631,7 +5785,7 @@ holdPolicy:
                 serde_json::json!("${SCHEDULING_OFFLINE_CHECK_UNSET_BIND}");
             document["metricsListener"] = serde_json::json!({"bind": bind});
             let path = write_operator(root.path(), document);
-            check_runtime(&path, None, false)
+            check_runtime(&path, None, false, DEFAULT_POSTURE)
                 .diagnostics
                 .iter()
                 .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
@@ -4662,14 +5816,14 @@ holdPolicy:
         document["listener"]["tlsTermination"] =
             serde_json::json!("${SCHEDULING_OFFLINE_CHECK_UNSET_TLS}");
         let path = write_operator(root.path(), document);
-        let deferred = check_runtime(&path, None, false);
+        let deferred = check_runtime(&path, None, false, DEFAULT_POSTURE);
         assert!(
             deferred.diagnostics.is_empty(),
             "{:?}",
             deferred.diagnostics
         );
 
-        let substituted = check_runtime(&path, None, true);
+        let substituted = check_runtime(&path, None, true, DEFAULT_POSTURE);
         let found: Vec<(&str, &str)> = substituted
             .diagnostics
             .iter()
@@ -4693,7 +5847,7 @@ holdPolicy:
         );
         document["retention"]["hookPayloadRetentionDays"] = serde_json::json!(0);
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         let found: Vec<(&str, &str)> = check
             .diagnostics
             .iter()
@@ -4710,7 +5864,9 @@ holdPolicy:
         let root = canonical_tempdir();
         let document = operator_value(&root.path().join("package"), "development-loopback");
         let path = write_operator(root.path(), document);
-        assert!(check_runtime(&path, None, false).diagnostics.is_empty());
+        assert!(check_runtime(&path, None, false, DEFAULT_POSTURE)
+            .diagnostics
+            .is_empty());
 
         let policy = SchedulingPolicy::read(
             AUTHORED_POLICY_FILE,
@@ -4718,7 +5874,7 @@ holdPolicy:
         )
         .unwrap()
         .value;
-        let check = check_runtime(&path, Some(&policy), false);
+        let check = check_runtime(&path, Some(&policy), false, DEFAULT_POSTURE);
         let found: Vec<(&str, &str)> = check
             .diagnostics
             .iter()
@@ -4738,9 +5894,9 @@ holdPolicy:
     fn a_startup_refusal_reports_every_rule_the_runtime_file_breaks() {
         let root = canonical_tempdir();
         let path = file_breaking_three_rules(root.path());
-        let error = RuntimeConfig::load(&path).unwrap_err();
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE).unwrap_err();
         assert_eq!(error.code(), "scheduling.runtime.invalid-database-id");
-        let report = startup_report(&path, &error).expect("a rule of the file");
+        let report = startup_report(&path, &error, DEFAULT_POSTURE).expect("a rule of the file");
         assert_eq!(report.error_count(), 3);
         assert!(report.diagnostics().iter().all(|diagnostic| diagnostic
             .source
@@ -4753,8 +5909,8 @@ holdPolicy:
         document["listener"]["unknownOne"] = serde_json::json!(1);
         document["retention"]["unknownTwo"] = serde_json::json!(2);
         let path = write_operator(root.path(), document);
-        let error = RuntimeConfig::load(&path).unwrap_err();
-        let report = startup_report(&path, &error).expect("a loader refusal");
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE).unwrap_err();
+        let report = startup_report(&path, &error, DEFAULT_POSTURE).expect("a loader refusal");
         let unknown: Vec<&str> = report
             .diagnostics()
             .iter()
@@ -4768,9 +5924,10 @@ holdPolicy:
         let root = canonical_tempdir();
         let document = operator_value(&root.path().join("package"), "development-loopback");
         let path = write_operator(root.path(), document);
-        let error = RuntimeConfig::load(&path).expect_err("no package exists");
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE).expect_err("no package exists");
         assert!(!error.in_file(), "{error}");
-        let report = startup_report(&path, &error).expect("a positioned package refusal");
+        let report =
+            startup_report(&path, &error, DEFAULT_POSTURE).expect("a positioned package refusal");
         let [diagnostic] = report.diagnostics() else {
             panic!("one diagnostic expected: {report:?}");
         };

@@ -9,7 +9,7 @@
 const native = require('./index');
 
 /**
- * The stable ten-kind error envelope every mapped Evidence Node failure
+ * The stable error envelope every mapped Evidence Node failure
  * carries (see `crates/registry-evidence-client-node/src/convert.rs`'s
  * `map_client_error`), as properties on a thrown `Error` rather than as JSON
  * text a caller has to `JSON.parse` out of `.message`.
@@ -45,7 +45,7 @@ class EvidenceClientError extends Error {
  * serialization defect, a caught panic, napi's own argument-type checking)
  * throws a plain, non-JSON reason instead, and is left exactly as thrown:
  * only a recognized envelope becomes an `EvidenceClientError`, so a caller
- * cannot mistake "some other native failure" for one of the ten stable
+ * cannot mistake "some other native failure" for one of the stable
  * kinds.
  */
 function normalize(error) {
@@ -206,11 +206,9 @@ class EvidenceClient extends native.EvidenceClient {
    * that work below this wrapper is intentional: JavaScript never receives a
    * key set or a subject-continuity store to accidentally retain.
    */
-  static fromProfile(path, privateKeyJwk) {
+  static fromProfile(path, privateKeyJwk, refuseDevelopmentPeer) {
     try {
-      const client = privateKeyJwk === undefined
-        ? native.EvidenceClient.fromProfile(path)
-        : native.EvidenceClient.fromProfile(path, privateKeyJwk);
+      const client = native.EvidenceClient.fromProfile(path, privateKeyJwk, refuseDevelopmentPeer);
       Object.setPrototypeOf(client, this.prototype);
       return client;
     } catch (error) {
@@ -218,9 +216,9 @@ class EvidenceClient extends native.EvidenceClient {
     }
   }
 
-  static fromProfileWithAuthorization(path, authorization) {
+  static fromProfileWithAuthorization(path, authorization, refuseDevelopmentPeer) {
     try {
-      const client = native.EvidenceClient.fromProfileWithAuthorization(path, authorization);
+      const client = native.EvidenceClient.fromProfileWithAuthorization(path, authorization, refuseDevelopmentPeer);
       Object.setPrototypeOf(client, this.prototype);
       return client;
     } catch (error) {

@@ -4,7 +4,7 @@ const {createServer} = require('node:http');
 const {createHash} = require('node:crypto');
 const {RenderClient} = require('../client');
 
-test('provider authenticates one document; invalid input precedes acquisition', async () => {
+test('provider authenticates one document from a development peer and invalid input precedes acquisition', async () => {
   const pdf=Buffer.from('%PDF-native-client');
   let requests=0;let tokens=0;
   const server=createServer((request,response) => {
@@ -12,7 +12,7 @@ test('provider authenticates one document; invalid input precedes acquisition', 
     assert.equal(request.url,'/v1/render/receipt');
     assert.equal(request.headers.authorization,'Bearer canary-render-token');
     request.resume();request.on('end',()=> {
-      response.writeHead(200,{'content-type':'application/json','traceparent':'00-1234567890abcdef1234567890abcdef-1234567890abcdef-01'});
+      response.writeHead(200,{'registry-posture':'development','content-type':'application/json','traceparent':'00-1234567890abcdef1234567890abcdef-1234567890abcdef-01'});
       const pdfHex=createHash('sha256').update(pdf).digest('hex');
       response.end(JSON.stringify({pdfBase64:pdf.toString('base64'),pdfDigest:`sha256:${pdfHex}`,dataDigest:`sha256:${'0'.repeat(64)}`,documentVersion:'receipt v1',warnings:[]}));
     });
@@ -39,6 +39,14 @@ test('provider authenticates one document; invalid input precedes acquisition', 
     const original=new Error('value-free provider refusal');original.kind='token';
     await assert.rejects(client.render({bearerToken:async()=>{throw original;}},'receipt',{issuedAt:'2026-10-23T00:00:00Z',data:{}}),error=>error===original);
     assert.equal(requests,2);
+    const refusing = new RenderClient({
+      baseUrl: `http://127.0.0.1:${server.address().port}`,
+      refuseDevelopmentPeer: true,
+    });
+    await assert.rejects(
+      refusing.render(provider, 'receipt', { issuedAt: '2026-10-23T00:00:00Z', data: {} }),
+      (error) => error.kind === 'development-peer',
+    );
 
   } finally { await new Promise(resolve=>server.close(resolve)); }
 });

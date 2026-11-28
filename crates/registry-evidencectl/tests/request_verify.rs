@@ -257,6 +257,7 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
     assert_eq!(evidence_args[1], "--runtime-config");
     assert_eq!(evidence_args[3], "--input");
     assert!(evidence_args[4].ends_with("/procedure-input.json"));
+    assert_eq!(&evidence_args[5..], ["--posture", "production"]);
     assert!(!evidence_args.join(" ").contains(TOKEN));
     assert_eq!(
         fs::read_to_string(fixture.evidence.with_extension("prepare.stdin")).unwrap(),
@@ -371,6 +372,90 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
         serde_json::from_slice::<Value>(&fs::read(&verified_path).unwrap()).unwrap(),
         verified_payload
     );
+}
+
+#[test]
+fn request_prepare_forwards_flag_environment_and_default_posture() {
+    let fixture = Fixture::new();
+    let inputs = [
+        "adult-status",
+        "--purpose",
+        "age-check",
+        "--subject",
+        "person_id=person-123",
+    ];
+    for (mode, expected) in [
+        ("flag", "development"),
+        ("environment", "development"),
+        ("default", "production"),
+    ] {
+        let output = fixture.prepare_with_posture(&inputs, mode, mode);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let args = fs::read_to_string(fixture.evidence.with_extension("prepare.args")).unwrap();
+        assert!(
+            args.ends_with(&format!("--posture\n{expected}\n")),
+            "{args}"
+        );
+    }
+}
+
+#[test]
+fn request_prepare_applies_its_posture_to_marked_discovery() {
+    let fixture = Fixture::new();
+    fixture.server.development.store(true, Ordering::Relaxed);
+    let refused = fixture.prepare("production");
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("Evidence definition discovery failed")
+    );
+    assert_no_request_artifacts(&fixture.root, "production");
+    let accepted = fixture.prepare_with_posture(
+        &[
+            "adult-status",
+            "--purpose",
+            "age-check",
+            "--subject",
+            "person_id=person-123",
+        ],
+        "development",
+        "flag",
+    );
+    assert_success(&accepted);
+}
+
+#[test]
+fn request_prepare_preserves_value_free_posture_refusal_from_the_runtime() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.evidence.with_extension("posture-refusal"),
+        serde_json::json!({
+            "ok": false,
+            "diagnostics": [{
+                "code": "evidence.posture.local-assurance",
+                "severity": "error",
+                "path": "/assuranceProfile",
+                "message": "local assurance is accepted only in development",
+                "suggestedAction": "Use rstack dev or REGISTRY_STACK_POSTURE=development."
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = fixture.prepare("refused-posture");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for expected in [
+        "evidence.posture.local-assurance",
+        "/assuranceProfile",
+        "REGISTRY_STACK_POSTURE=development",
+    ] {
+        assert!(stderr.contains(expected), "{stderr}");
+    }
+    assert_no_request_artifacts(&fixture.root, "refused-posture");
 }
 
 #[test]
@@ -755,6 +840,7 @@ fn failed_client_verification_removes_the_unpublished_output() {
 struct EvidenceServer {
     origin: String,
     refuse: Arc<AtomicBool>,
+    development: Arc<AtomicBool>,
     requests: Arc<AtomicUsize>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
@@ -763,6 +849,7 @@ struct EvidenceServer {
 #[derive(Clone)]
 struct EvidenceServerState {
     refuse: Arc<AtomicBool>,
+    development: Arc<AtomicBool>,
     requests: Arc<AtomicUsize>,
 }
 
@@ -777,9 +864,11 @@ impl EvidenceServer {
             listener.local_addr().expect("Evidence address")
         );
         let refuse = Arc::new(AtomicBool::new(false));
+        let development = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicUsize::new(0));
         let state = EvidenceServerState {
             refuse: Arc::clone(&refuse),
+            development: Arc::clone(&development),
             requests: Arc::clone(&requests),
         };
         let (shutdown, stopped) = tokio::sync::oneshot::channel();
@@ -805,6 +894,7 @@ impl EvidenceServer {
         Self {
             origin,
             refuse,
+            development,
             requests,
             shutdown: Some(shutdown),
             thread: Some(thread),
@@ -836,7 +926,14 @@ async fn test_definitions(
     {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    ([("traceparent", TRACEPARENT)], Json(definitions_document())).into_response()
+    let mut response =
+        ([("traceparent", TRACEPARENT)], Json(definitions_document())).into_response();
+    if state.development.load(Ordering::Relaxed) {
+        response
+            .headers_mut()
+            .insert("registry-posture", "development".parse().unwrap());
+    }
+    response
 }
 
 impl Drop for EvidenceServer {
@@ -955,7 +1052,7 @@ impl Fixture {
         let evidence = temporary.path().join("evidence-stub");
         executable(
             &evidence,
-            b"#!/bin/sh\ncase \"$1\" in\n  prepare-local-relying-procedure)\n    printf '%s\\n' \"$@\" > \"$0.prepare.args\"\n    [ \"$2\" = '--runtime-config' ] || exit 40\n    [ \"$4\" = '--input' ] || exit 41\n    cp \"$5\" \"$0.input\" || exit 42\n    if IFS= read -r unexpected; then exit 43; fi\n    printf 'stdin-empty\\n' > \"$0.prepare.stdin\"\n    [ ! -f \"$0.fail-prepare\" ] || exit 44\n    cat \"$0.procedure\"\n    ;;\n  *) exit 45 ;;\nesac\n",
+            b"#!/bin/sh\ncase \"$1\" in\n  prepare-local-relying-procedure)\n    printf '%s\\n' \"$@\" > \"$0.prepare.args\"\n    [ \"$2\" = '--runtime-config' ] || exit 40\n    [ \"$4\" = '--input' ] || exit 41\n    cp \"$5\" \"$0.input\" || exit 42\n    if IFS= read -r unexpected; then exit 43; fi\n    printf 'stdin-empty\\n' > \"$0.prepare.stdin\"\n    [ ! -f \"$0.fail-prepare\" ] || exit 44\n    if [ -f \"$0.posture-refusal\" ]; then cat \"$0.posture-refusal\"; exit 1; fi\n    cat \"$0.procedure\"\n    ;;\n  *) exit 45 ;;\nesac\n",
         );
         executable::wait_until_executable_with(&evidence, "probe");
         Self {
@@ -1065,8 +1162,13 @@ impl Fixture {
     }
 
     fn prepare_with(&self, inputs: &[&str], name: &str) -> Output {
+        self.prepare_with_posture(inputs, name, "default")
+    }
+
+    fn prepare_with_posture(&self, inputs: &[&str], name: &str, mode: &str) -> Output {
         self.write_procedure(inputs);
-        command()
+        let mut command = command();
+        command
             .current_dir(&self.root)
             .args(["request", "prepare"])
             .args(inputs)
@@ -1077,9 +1179,13 @@ impl Fixture {
             .arg("--runtime-config")
             .arg(&self.runtime)
             .arg("--evidence-bin")
-            .arg(&self.evidence)
-            .output()
-            .expect("prepare command")
+            .arg(&self.evidence);
+        if mode == "flag" {
+            command.args(["--posture", "development"]);
+        } else if mode == "environment" {
+            command.env("REGISTRY_STACK_POSTURE", "development");
+        }
+        command.output().expect("prepare command")
     }
 
     fn write_signed_adult_response(&self) {
@@ -1164,7 +1270,9 @@ impl Fixture {
 }
 
 fn command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
+    command.env_remove("REGISTRY_STACK_POSTURE");
+    command
 }
 
 fn private_directory(path: &Path) {

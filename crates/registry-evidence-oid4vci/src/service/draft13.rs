@@ -108,8 +108,9 @@ async fn credential(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Some(access_token) = bearer_credential(&headers) else {
-        return unauthorized("a bearer access token is required");
+    let access_token = match bearer_credential(&headers) {
+        Ok(access_token) => access_token,
+        Err(check) => return unauthorized(check, "a bearer access token is required"),
     };
     let access_token = Zeroizing::new(access_token.to_owned());
     stage.mark_claiming_token();
@@ -125,7 +126,10 @@ async fn credential(
         Ok(prepared) => prepared,
         Err(StoreError::Unknown) => {
             service.metrics.record_outcome(Outcome::TokenClaimRefused);
-            return unauthorized("the access token cannot be used");
+            return unauthorized(
+                FailedCheck::OneTimeCredential,
+                "the access token cannot be used",
+            );
         }
         Err(error) => return store_response(&service, &error, Outcome::TokenClaimRefused),
     };

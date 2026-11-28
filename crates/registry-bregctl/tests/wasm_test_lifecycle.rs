@@ -80,6 +80,7 @@ fn public_bregctl_test_fingerprint_only_measures_the_schema_the_full_run_binds()
     let project = ProjectFixture::write(&database, &idp, FixtureAudit::File);
 
     let measured = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
@@ -95,6 +96,7 @@ fn public_bregctl_test_fingerprint_only_measures_the_schema_the_full_run_binds()
     // The full run installs on the same database, so it also proves the
     // measurement left nothing behind.
     let full = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
@@ -142,6 +144,7 @@ fn run_schema_test(audit: FixtureAudit) -> (Output, Option<Value>) {
     let project = ProjectFixture::write(&database, &idp, audit);
 
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
@@ -241,12 +244,18 @@ impl ProjectFixture {
         )
         .expect("runtime configuration writes");
         set_private(&runtime_config);
-        registry_breg::runtime_config::load_runtime_config(&runtime_config)
-            .expect("runtime configuration loads")
-            .secret_resolver()
-            .expect("runtime secret resolver builds")
-            .resolve("secret:file/operator-token")
-            .expect("operator token resolves through the public runtime configuration");
+        registry_breg::runtime_config::load_runtime_config(
+            &runtime_config,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Default,
+            },
+        )
+        .expect("runtime configuration loads")
+        .secret_resolver()
+        .expect("runtime secret resolver builds")
+        .resolve("secret:file/operator-token")
+        .expect("operator token resolves through the public runtime configuration");
 
         let credentials = root_path.join("credentials.yaml");
         fs::write(
@@ -389,7 +398,7 @@ identity:
   environment: local
   instanceId: {INSTANCE_ID}
   databaseId: {DATABASE_ID}
-  databaseInitializationEnvironment: local
+
 secretProviders:
   file: {{root: {}}}
 database:
@@ -407,23 +416,25 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: {}
-    audience: {AUDIENCE}
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksSource: {{type: static, documentRef: secret:file/oidc-jwks}}
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {}
+        audience: {AUDIENCE}
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksSource: {{type: static, documentRef: secret:file/oidc-jwks}}
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

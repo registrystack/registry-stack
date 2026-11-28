@@ -3,11 +3,12 @@
 Check the citizen example from the source workspace without resolving a credential:
 
 ```sh
-cargo run --locked -p registry-mcp -- --runtime-config "$PWD/products/platform/examples/mcp-runtime/runtime.example.yaml" check
+cargo run --locked -p registry-mcp -- --runtime-config "$PWD/products/platform/examples/mcp-runtime/runtime.example.yaml" check --production
 ```
 
-The example selects the existing BReg citizen tools explicitly.
-Its issuer, registry and review origins are placeholders; an offline pass establishes configuration validity, not access to a running service.
+The example publishes HTTPS resource, issuer, and review URLs and selects the existing BReg citizen tools explicitly.
+Its endpoints are placeholders. A TLS proxy on the same host publishes the resource name and forwards to the loopback listener.
+The offline check validates the configuration without contacting those services.
 Use the institution's independently operated issuer and task authority for protected BReg operations.
 
 The staff example selects the separate delegated-read contract explicitly:
@@ -116,10 +117,10 @@ For source disclosure, the institution explicitly grants the BReg agent profile
 its reviewer population and permitted fields/rows. That profile does not
 automatically intersect with each represented person's human BReg permissions.
 
-Configure Casework's `authentication.oidc.humanIdentity` against an issuer-verified
-claim about the represented person, and preserve that claim through both
-exchanges. The native fixture uses a separate subject-human claim: the gateway's
-current actor category can correctly be `service` while its represented subject
-is human. Preserve the principal, purpose and jurisdiction claims selected by
+Configure `representedHuman` on the Casework `delegatedStaffReaders` binding
+against an issuer-verified claim about the represented person, and preserve that
+claim through both exchanges. The native fixture uses a separate subject-human
+claim: the gateway's current actor category can correctly be `service` while its
+represented subject is human. Preserve the principal, purpose and jurisdiction claims selected by
 the source profile as well. Tokens must derive these claims from the verified
 subject; tool arguments cannot supply them.

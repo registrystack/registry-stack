@@ -24,7 +24,7 @@ use tokio_postgres::Socket;
 
 /// Every schema version, in the order it is applied. Each later
 /// migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 5] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 6] = [
     (100, include_str!("store/migrations/0100_job_items.sql")),
     (101, include_str!("store/migrations/0101_rescan_active.sql")),
     (102, include_str!("store/migrations/0102_held_items.sql")),
@@ -35,6 +35,10 @@ pub(crate) const MIGRATIONS: [(i64, &str); 5] = [
     (
         104,
         include_str!("store/migrations/0104_revision_possibly_admitted.sql"),
+    ),
+    (
+        105,
+        include_str!("store/migrations/0105_last_pass_posture.sql"),
     ),
 ];
 
@@ -97,6 +101,13 @@ pub enum StoreError {
         bytes: usize,
         /// The engine's bound.
         maximum: usize,
+    },
+    /// A recorded pass has a posture outside the supported set.
+    InvalidRecordedPosture,
+    /// The recorded pass used a different deployment posture.
+    PostureMismatch {
+        /// The posture recorded by the last pass.
+        recorded: registry_platform_config::Posture,
     },
     /// A pool or connection could not be built or reached.
     Pool(String),
@@ -165,6 +176,15 @@ impl fmt::Display for StoreError {
                 formatter,
                 "the position to save is {bytes} bytes serialized, over the {maximum}-byte cursor bound"
             ),
+            StoreError::InvalidRecordedPosture => write!(
+                formatter,
+                "the job store has an invalid recorded posture"
+            ),
+            StoreError::PostureMismatch { recorded } => write!(
+                formatter,
+                "{POSTURE_MISMATCH}: the job store records {}. {POSTURE_RECOVERY}",
+                recorded.as_str()
+            ),
             StoreError::Pool(reason) => write!(
                 formatter,
                 "the adapter job database pool failed: {reason}"
@@ -196,6 +216,8 @@ impl StoreError {
             StoreError::DeliveryAttemptExhausted => "delivery-attempt-exhausted",
             StoreError::ItemIdentityMigrationRequired => "item-identity-migration-required",
             StoreError::PositionBound { .. } => "position-bound",
+            StoreError::InvalidRecordedPosture => "invalid-recorded-posture",
+            StoreError::PostureMismatch { .. } => "posture-mismatch",
             StoreError::Pool(_) => "pool",
             StoreError::Query(error) => return query_cause(error),
         };
@@ -242,6 +264,8 @@ impl std::error::Error for StoreError {
             | StoreError::DeliveryAttemptExhausted
             | StoreError::ItemIdentityMigrationRequired
             | StoreError::PositionBound { .. }
+            | StoreError::InvalidRecordedPosture
+            | StoreError::PostureMismatch { .. }
             | StoreError::Pool(_) => None,
             StoreError::Query(error) => Some(error),
         }
@@ -381,35 +405,88 @@ pub const LEASE_MARGIN_SECONDS: u64 = 60;
 /// An unresolvable reference, an invalid URL, or an unbuildable pool
 /// refuses, naming the block and never the URL.
 pub fn build_pool(config: &JobStoreConfig, resolver: &SecretResolver) -> Result<Pool, StoreError> {
+    build_pool_in_posture(config, resolver, None)
+}
+
+pub fn build_pool_in_posture(
+    config: &JobStoreConfig,
+    resolver: &SecretResolver,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+) -> Result<Pool, StoreError> {
     let invalid = |what: &str| StoreError::Pool(format!("store: {what}"));
     let reference = &config.runtime_url_ref;
+    config
+        .database_config()
+        .check(cfg!(feature = "postgres-test"))
+        .map_err(job_store_transport_error)?;
     let protected = resolver
         .resolve(reference.as_str())
         .map_err(|_| invalid("a connection reference could not be resolved"))?;
     let url = std::str::from_utf8(protected.expose_secret())
         .map_err(|_| invalid("the connection url is not text"))?;
-    let mut postgres = tokio_postgres::Config::from_str(url)
+    let (postgres, verified_tls) = driver_config(
+        config,
+        url,
+        development,
+        &registry_platform_config::resolve_database_host,
+    )?;
+    let pool = if verified_tls {
+        build_verified_pool(postgres, tls_connector(config, resolver)?, 4)
+    } else {
+        build_verified_pool(postgres, tokio_postgres::NoTls, 4)
+    };
+    pool.map_err(|error| invalid(&error))
+}
+
+fn job_store_transport_error(
+    error: registry_platform_config::DatabaseTransportError,
+) -> StoreError {
+    let (message, action) =
+        registry_adapter_engine::job_sources::job_store_transport_diagnostic(&error);
+    // The bracketed host is an address literal, never a name or a credential.
+    let message = match error {
+        registry_platform_config::DatabaseTransportError::BracketedHost(address) => {
+            format!("{message}: [{address}]")
+        }
+        _ => message.to_owned(),
+    };
+    StoreError::Pool(format!(
+        "store: {}: {message}; next: {action}",
+        error.code()
+    ))
+}
+
+/// The driver configuration the pool is built from, and whether it requires
+/// verified TLS. Under a plaintext transport every TCP host is replaced by
+/// the numeric addresses its check accepted, so the driver never resolves a
+/// name again.
+fn driver_config(
+    config: &JobStoreConfig,
+    url: &str,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<(tokio_postgres::Config, bool), StoreError> {
+    let invalid = |what: &str| StoreError::Pool(format!("store: {what}"));
+    let postgres = tokio_postgres::Config::from_str(url)
         .map_err(|_| invalid("the connection url is invalid"))?;
     if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
         return Err(invalid("the connection url names no user or database"));
     }
-    #[cfg(feature = "postgres-test")]
-    let pool = if config.test_only_plaintext {
-        postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-        build_verified_pool(postgres, tokio_postgres::NoTls, 4)
+    let (transport, mut postgres) = registry_platform_postgres::postgres_connection(
+        &config.database_config(),
+        postgres,
+        development,
+        resolve,
+    )
+    .map_err(job_store_transport_error)?;
+    let verified_tls = !config.test_only_plaintext
+        && transport == registry_platform_config::DatabaseTransport::VerifiedTls;
+    postgres.ssl_mode(if verified_tls {
+        tokio_postgres::config::SslMode::Require
     } else {
-        postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-        build_verified_pool(postgres, tls_connector(config, resolver)?, 4)
-    };
-    #[cfg(not(feature = "postgres-test"))]
-    let pool = {
-        if config.test_only_plaintext {
-            return Err(invalid("plaintext connections are refused in this build"));
-        }
-        postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-        build_verified_pool(postgres, tls_connector(config, resolver)?, 4)
-    };
-    pool.map_err(|error| invalid(&error))
+        tokio_postgres::config::SslMode::Disable
+    });
+    Ok((postgres, verified_tls))
 }
 
 /// Build one finite verified PostgreSQL pool. The store and every source pool
@@ -1357,18 +1434,19 @@ pub struct IdentityRebind {
 ///
 /// # Errors
 ///
-/// [`StoreError::LeaseHeld`] while a pass holds the lease; a failed query
-/// refuses.
+/// [`StoreError::PostureMismatch`] when the recorded posture differs,
+/// [`StoreError::LeaseHeld`] while a pass holds the lease, or a query error.
 pub async fn rebind_item_identity(
     client: &mut Object,
     job_id: &str,
     digest: Option<&[u8; 32]>,
+    posture: registry_platform_config::Posture,
 ) -> Result<IdentityRebind, StoreError> {
     let tx = client.transaction().await?;
     let state = tx
         .query_opt(
-            "SELECT item_identity_digest, (lease_expires IS NOT NULL AND lease_expires > now()) \
-             FROM adapter_job_state WHERE job_id = $1 FOR UPDATE",
+            "SELECT item_identity_digest, (lease_expires IS NOT NULL AND lease_expires > now()), \
+             last_pass_posture FROM adapter_job_state WHERE job_id = $1 FOR UPDATE",
             &[&job_id],
         )
         .await?;
@@ -1387,6 +1465,7 @@ pub async fn rebind_item_identity(
             items_kept,
         });
     };
+    check_recorded_posture(parse_recorded_posture(state.get(2))?, posture)?;
     let leased: bool = state.get(1);
     if leased {
         return Err(StoreError::LeaseHeld);
@@ -1425,6 +1504,8 @@ pub struct JobStateRow {
     pub lease_expires: Option<SystemTime>,
     /// When the last pass ran.
     pub last_pass_at: Option<SystemTime>,
+    /// The declaration recorded when a pass acquires its lease.
+    pub last_pass_posture: Option<registry_platform_config::Posture>,
     /// Why the last pass stopped, value-free.
     pub last_pass_stop: Option<String>,
     /// When the last rescan pass ran.
@@ -1450,12 +1531,16 @@ pub async fn read_state(
     let row = client
         .query_opt(
             "SELECT position, projection_digest, lease_expires, last_pass_at, last_pass_stop, \
-             last_rescan_at, rescan_active, idle_streak, error_streak \
+             last_rescan_at, rescan_active, idle_streak, error_streak, last_pass_posture \
              FROM adapter_job_state WHERE job_id = $1",
             &[&job_id],
         )
         .await?;
-    Ok(row.map(|row| JobStateRow {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let last_pass_posture = parse_recorded_posture(row.get(9))?;
+    Ok(Some(JobStateRow {
         position: row.get(0),
         projection_digest: row.get(1),
         lease_expires: row.get(2),
@@ -1465,7 +1550,53 @@ pub async fn read_state(
         rescan_active: row.get(6),
         idle_streak: row.get(7),
         error_streak: row.get(8),
+        last_pass_posture,
     }))
+}
+
+pub const POSTURE_MISMATCH: &str = "adapter.job.posture-mismatch";
+pub const POSTURE_RECOVERY: &str =
+    "Use the recorded posture, or use a fresh store when changing the deployment posture. Run adapter-job status to see both postures.";
+
+fn parse_recorded_posture(
+    raw: Option<&str>,
+) -> Result<Option<registry_platform_config::Posture>, StoreError> {
+    raw.map(|value| {
+        registry_platform_config::Posture::parse(value).ok_or(StoreError::InvalidRecordedPosture)
+    })
+    .transpose()
+}
+
+fn check_recorded_posture(
+    recorded: Option<registry_platform_config::Posture>,
+    declared: registry_platform_config::Posture,
+) -> Result<(), StoreError> {
+    if let Some(recorded) = recorded.filter(|recorded| *recorded != declared) {
+        return Err(StoreError::PostureMismatch { recorded });
+    }
+    Ok(())
+}
+
+impl JobStateRow {
+    pub fn check_posture(
+        &self,
+        posture: registry_platform_config::Posture,
+    ) -> Result<(), StoreError> {
+        check_recorded_posture(self.last_pass_posture, posture)
+    }
+}
+
+/// Check the recorded posture without writing. The lease and rescan writes
+/// also enforce it in their own update predicates.
+pub async fn check_posture(
+    client: &impl GenericClient,
+    job_id: &str,
+    posture: registry_platform_config::Posture,
+) -> Result<(), StoreError> {
+    read_state(client, job_id)
+        .await?
+        .unwrap_or_default()
+        .check_posture(posture)
 }
 
 /// The state one pass leases: the fencing token the lease wrote, and
@@ -1491,24 +1622,29 @@ pub struct LeasedState {
 ///
 /// # Errors
 ///
-/// A failed write refuses; an error is never a held lease, which is
-/// the `None` answer.
+/// [`StoreError::PostureMismatch`] when the recorded posture differs,
+/// or a failed write. A held lease returns `None`.
 pub async fn take_lease(
     client: &impl GenericClient,
     job_id: &str,
     ttl: Duration,
+    posture: registry_platform_config::Posture,
 ) -> Result<Option<LeasedState>, StoreError> {
     // make_interval's secs member is double precision.
     let ttl = ttl.as_secs().min(i64::MAX as u64) as f64;
     let granted = client
         .query_opt(
             "UPDATE adapter_job_state SET lease_epoch = lease_epoch + 1, \
-             lease_expires = now() + make_interval(secs => $2) \
+             lease_expires = now() + make_interval(secs => $2), last_pass_posture = $3 \
              WHERE job_id = $1 AND (lease_expires IS NULL OR lease_expires <= now()) \
+             AND (last_pass_posture IS NULL OR last_pass_posture = $3) \
              RETURNING lease_epoch, position, rescan_active",
-            &[&job_id, &ttl],
+            &[&job_id, &ttl, &posture.as_str()],
         )
         .await?;
+    if granted.is_none() {
+        check_posture(client, job_id, posture).await?;
+    }
     Ok(granted.map(|row| LeasedState {
         token: row.get(0),
         position: row.get(1),
@@ -1581,6 +1717,12 @@ pub enum RescanProgress {
     Ended,
 }
 
+/// The process declaration and time recorded when a pass settles.
+pub struct PassFinished {
+    pub at: SystemTime,
+    pub posture: registry_platform_config::Posture,
+}
+
 /// Settle a completed pass: save the page's next cursor, or clear the
 /// position at a finite end, stamp the pass, count the pass into the
 /// schedule streaks, and release the lease. A rescan pass that ends its
@@ -1599,7 +1741,7 @@ pub async fn complete_pass(
     position: Option<&Value>,
     idle: bool,
     rescan: RescanProgress,
-    now: SystemTime,
+    finished: PassFinished,
 ) -> Result<(), StoreError> {
     // A rescan traversal stays in progress while pages remain: the
     // marker clears and the delay clock starts only at its end.
@@ -1628,16 +1770,17 @@ pub async fn complete_pass(
              last_rescan_at = CASE WHEN $4 THEN $3 ELSE last_rescan_at END, \
              rescan_active = $5, \
              idle_streak = CASE WHEN $6 THEN idle_streak + 1 ELSE 0 END, \
-             error_streak = 0 \
+             error_streak = 0, last_pass_posture = $8 \
              WHERE job_id = $1 AND lease_epoch = $7",
             &[
                 &job_id,
                 &position,
-                &now,
+                &finished.at,
                 &rescan_finished,
                 &rescan_continues,
                 &idle,
                 &token,
+                &finished.posture.as_str(),
             ],
         )
         .await?;
@@ -1659,15 +1802,21 @@ pub async fn stop_pass(
     job_id: &str,
     token: i64,
     stop_code: &str,
-    now: SystemTime,
+    finished: PassFinished,
 ) -> Result<(), StoreError> {
     let stopped = client
         .execute(
             "UPDATE adapter_job_state SET \
              last_pass_at = $3, last_pass_stop = $4, lease_expires = NULL, \
-             error_streak = error_streak + 1, idle_streak = 0 \
+             error_streak = error_streak + 1, idle_streak = 0, last_pass_posture = $5 \
              WHERE job_id = $1 AND lease_epoch = $2",
-            &[&job_id, &token, &now, &stop_code],
+            &[
+                &job_id,
+                &token,
+                &finished.at,
+                &stop_code,
+                &finished.posture.as_str(),
+            ],
         )
         .await?;
     if stopped != 1 {
@@ -1683,17 +1832,24 @@ pub async fn stop_pass(
 ///
 /// # Errors
 ///
-/// [`StoreError::LeaseHeld`] while a pass holds the lease, or when no
-/// state row exists; a failed write refuses.
-pub async fn mark_rescan_due(client: &impl GenericClient, job_id: &str) -> Result<(), StoreError> {
+/// [`StoreError::PostureMismatch`] when the recorded posture differs,
+/// [`StoreError::LeaseHeld`] while a pass holds the lease or when no state row
+/// exists, or a failed write.
+pub async fn mark_rescan_due(
+    client: &impl GenericClient,
+    job_id: &str,
+    posture: registry_platform_config::Posture,
+) -> Result<(), StoreError> {
     let marked = client
         .execute(
             "UPDATE adapter_job_state SET last_rescan_at = NULL, rescan_active = false \
-             WHERE job_id = $1 AND (lease_expires IS NULL OR lease_expires <= now())",
-            &[&job_id],
+             WHERE job_id = $1 AND (lease_expires IS NULL OR lease_expires <= now()) \
+             AND (last_pass_posture IS NULL OR last_pass_posture = $2)",
+            &[&job_id, &posture.as_str()],
         )
         .await?;
     if marked != 1 {
+        check_posture(client, job_id, posture).await?;
         return Err(StoreError::LeaseHeld);
     }
     Ok(())
@@ -1936,5 +2092,45 @@ mod storage_time_tests {
         );
         let exact = base + Duration::from_micros(56_268);
         assert_eq!(storage_time(exact), exact);
+    }
+}
+
+#[cfg(test)]
+mod driver_config_tests {
+    use super::*;
+
+    #[test]
+    fn a_loopback_name_reaches_the_pool_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        let config: JobStoreConfig = serde_json::from_value(serde_json::json!({
+            "runtimeUrlRef": "secret:env/JOB_STORE_URL",
+            "transport": "loopback-plaintext",
+        }))
+        .unwrap();
+        let (postgres, verified_tls) = driver_config(
+            &config,
+            "postgresql://app@localhost:5433/adapter_job",
+            None,
+            &fixed,
+        )
+        .unwrap();
+        assert!(!verified_tls);
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
     }
 }

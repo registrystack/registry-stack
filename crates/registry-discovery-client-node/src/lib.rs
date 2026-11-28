@@ -22,6 +22,7 @@ const MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BYTES: usize = 4 * 1024 * 1024;
 #[napi(object)]
 pub struct DiscoveryClientOptions {
     pub base_url: String,
+    pub refuse_development_peer: Option<bool>,
     pub attempt_timeout_milliseconds: Option<f64>,
     pub connect_timeout_milliseconds: Option<f64>,
     pub maximum_response_bytes: Option<f64>,
@@ -81,6 +82,10 @@ fn error(source: DiscoveryClientError) -> Error {
             "kind": "problem",
             "status": status,
             "message": "Discovery refused or failed the request with an unrecognized problem type"
+        }),
+        DiscoveryClientError::DevelopmentPeer => json!({
+            "kind": "development-peer",
+            "message": DiscoveryClientError::DevelopmentPeer.to_string(),
         }),
         DiscoveryClientError::Protocol => json!({
             "kind": "protocol",
@@ -184,6 +189,7 @@ impl DiscoveryClient {
         let options = match options {
             Either::A(base_url) => DiscoveryClientOptions {
                 base_url,
+                refuse_development_peer: None,
                 attempt_timeout_milliseconds: None,
                 connect_timeout_milliseconds: None,
                 maximum_response_bytes: None,
@@ -193,7 +199,12 @@ impl DiscoveryClient {
         };
         let base_url = url::Url::parse(&options.base_url)
             .map_err(|_| error(DiscoveryClientError::Configuration))?;
-        let mut config = DiscoveryClientConfig::new(base_url);
+        let peer_policy = if options.refuse_development_peer == Some(true) {
+            registry_discovery_client::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            registry_discovery_client::PeerPolicy::AcceptDevelopmentPeer
+        };
+        let mut config = DiscoveryClientConfig::new(base_url, peer_policy);
         if let Some(milliseconds) = options.attempt_timeout_milliseconds {
             config = config.with_attempt_timeout(Duration::from_millis(u64::from(positive_u32(
                 milliseconds,

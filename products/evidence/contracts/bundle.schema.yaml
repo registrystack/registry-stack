@@ -349,26 +349,6 @@ allOf:
   - if:
       properties:
         assuranceProfile:
-          const: local
-    then:
-      properties:
-        authentication:
-          properties:
-            oidc:
-              properties:
-                issuer:
-                  pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4})$
-                jwksSource:
-                  properties:
-                    uri:
-                      # Local development permits a supervised issuer on the exact
-                      # canonical loopback origin, serving its JWKS from that origin at
-                      # any absolute path without query or fragment. The route is the
-                      # issuer's to choose; the origin is not.
-                      pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4}/[^\s?#]*)$
-  - if:
-      properties:
-        assuranceProfile:
           enum:
             - production
             - evidence-grade
@@ -378,12 +358,15 @@ allOf:
           properties:
             oidc:
               properties:
+                allowInsecureHttp:
+                  const: false
                 issuer:
-                  pattern: ^https://
+                  $ref: '#/$defs/DeployableOidcEndpoint'
+                  pattern: '^[^?]*$'
                 jwksSource:
                   properties:
                     uri:
-                      pattern: ^https://
+                      $ref: '#/$defs/DeployableOidcEndpoint'
         sourceConnections:
           additionalProperties:
             properties:
@@ -418,6 +401,11 @@ allOf:
               type: string
               pattern: ^https://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[1-9][0-9]{0,4})?$
 $defs:
+  DeployableOidcEndpoint:
+    # IPv6 loopback and mapped 127/8 admit expanded zero groups and one
+    # compression marker. The runtime also validates URLs and fetch policy.
+    pattern: '^(?:[Hh][Tt][Tt][Pp][Ss]://[^#]+|[Hh][Tt][Tt][Pp]://(?:[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|\[(?:(?:(?:0{1,4}:){7}|(?:(?:0{1,4}:){1,6}:|::)|(?:(?:0{1,4}:){1,5}:|::)(?:0{1,4}:){1}|(?:(?:0{1,4}:){1,4}:|::)(?:0{1,4}:){2}|(?:(?:0{1,4}:){1,3}:|::)(?:0{1,4}:){3}|(?:(?:0{1,4}:){1,2}:|::)(?:0{1,4}:){4}|(?:(?:0{1,4}:){1,1}:|::)(?:0{1,4}:){5}|::(?:0{1,4}:){6})0{0,3}1|(?:(?:0{1,4}:){5}|(?:(?:0{1,4}:){1,4}:|::)|(?:(?:0{1,4}:){1,3}:|::)(?:0{1,4}:){1}|(?:(?:0{1,4}:){1,2}:|::)(?:0{1,4}:){2}|(?:(?:0{1,4}:){1,1}:|::)(?:0{1,4}:){3}|::(?:0{1,4}:){4})[Ff]{4}:(?:127(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|7[Ff][0-9A-Fa-f]{2}:[0-9A-Fa-f]{1,4}))\])(?::[0-9]*)?(?:[/?][^#]*)?)$'
+
   Digest:
     type: string
     pattern: ^sha256:[0-9a-f]{64}$
@@ -521,15 +509,15 @@ $defs:
       issuer:
         description: >-
           Exact token issuer an inbound access token must declare, with path-based issuers
-          supported; deployable bundles require HTTPS.
+          supported. Deployable bundles admit HTTPS or loopback HTTP.
         $ref: '#/$defs/Url'
-        pattern: ^https?://
+        pattern: ^[Hh][Tt][Tt][Pp][Ss]?://
         maxLength: 512
       allowInsecureHttp:
         description: >-
           Permits plain HTTP to the issuer and JWKS URI beyond loopback under the local assurance
-          profile only. Deployable bundles require HTTPS for both even when it is set, and a
-          production or evidence-grade bundle that sets it to true is refused. Omission is false.
+          profile in development. Production and evidence-grade bundles accept loopback HTTP
+          with the opt-in omitted or false.
         type: boolean
         default: false
       audience:
@@ -589,11 +577,10 @@ $defs:
               operator declares, it inherits the declared issuer's allowance on any origin: it
               may resolve to a public, private, or loopback address, while cloud-metadata and
               link-local destinations remain prohibited, DNS is pinned for each fetch, and
-              ambient proxies and redirects are disabled. It requires HTTPS; the local assurance
-              profile also permits HTTP on the exact numeric 127.0.0.1 loopback origin with an
-              explicit port, or elsewhere under allowInsecureHttp.
+              ambient proxies and redirects are disabled. Deployable bundles admit HTTPS or loopback
+              HTTP. The local profile also requires loopback for HTTP unless the opt-in is set.
             $ref: '#/$defs/Url'
-            pattern: ^https?://
+            pattern: ^[Hh][Tt][Tt][Pp][Ss]?://
             maxLength: 512
       tlsTrustProfile:
         description: >-
@@ -2264,8 +2251,10 @@ secret_policy:
     There is no query-string placement, so no credential can reach a token URL, and the token
     URL, body, response, and debug output are still fully redacted.
   file_provider_rule: >-
-    Resolve secret:file logical names beneath the configured owner-controlled file root, reject
-    symlinks and path traversal, require regular owner-only files, and parse values as data.
+    Resolve secret:file logical names beneath the configured owner-controlled file root, follow
+    only relative downward links, reject path traversal, require regular files that meet the shared
+    secret-file rule (owned by the service identity or root, never accessible to others), and parse
+    values as data.
   environment_provider_rule: >-
     Resolve secret:env names from the process environment only when the runtime declares
     secretProviders.environment; a bundle reference naming the environment is refused at

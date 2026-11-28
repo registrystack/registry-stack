@@ -135,13 +135,14 @@ database:
   migrationUrlRef: secret:env/CONTRACT_TEST_DB_URL
   testOnlyPlaintext: true
 oidc:
-  issuer: http://127.0.0.1:9
-  audience: breg-govstack-contract-test
-  allowInsecureHttp: true
-  jwksSource:
-    type: static
-    documentRef: secret:env/CONTRACT_TEST_JWKS
-allowedClients: [synthetic-client]
+  issuers:
+    primary:
+      issuer: http://127.0.0.1:9
+      audience: breg-govstack-contract-test
+      jwksSource:
+        type: static
+        documentRef: secret:env/CONTRACT_TEST_JWKS
+      allowedClients: [synthetic-client]
 allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90

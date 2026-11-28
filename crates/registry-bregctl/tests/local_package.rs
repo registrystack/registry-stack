@@ -155,7 +155,7 @@ fn public_parity_start_result(
     let reserved = status == Some("refused")
         && started["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("breg.registry.canonical-base-iri-reserved"));
+            .is_some_and(|message| message.contains("breg.posture.placeholder-identity"));
     serde_json::json!({"phase":"native-start","startExit":exit,"schema":schema,"status":status,
         "class":class,"protocolEnvelopeValid":valid,"reservedIdentityDiagnostic":reserved,
         "sourceBytesUnchanged":source_unchanged})
@@ -183,7 +183,7 @@ fn public_parity_retention_excludes_short_claim_message_and_forged_codes() {
         assert!(result["reservedIdentityDiagnostic"] == false);
     }
     let report = serde_json::json!({"schema_version":"registry.rstack.error.v1","status":"refused",
-        "error":{"class":"domain","message":"breg.registry.canonical-base-iri-reserved short-claim-canary auth.forged-canary"}});
+        "error":{"class":"domain","message":"breg.posture.placeholder-identity short-claim-canary auth.forged-canary"}});
     let result = public_parity_start_result(&report, Some(1), false);
     assert!(result["reservedIdentityDiagnostic"] == true);
     assert!(result["sourceBytesUnchanged"] == false);
@@ -278,6 +278,7 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
     impl OwnedRun {
         fn command(&self, operation: &str, subject: &Path) -> Command {
             let mut command = Command::new(&self.rstack);
+            command.env_remove("REGISTRY_STACK_POSTURE");
             command
                 .args(["--install-root"])
                 .arg(&self.install)
@@ -490,7 +491,7 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
     load_package(
         &package,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .unwrap();
@@ -498,7 +499,7 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
         load_package(
             &package,
             &PackageLoadContext {
-                database_initialization_environment: "production"
+                posture: registry_platform_config::Posture::Production
             }
         ),
         Err(PackageError::DeploymentIdentity)
@@ -506,11 +507,12 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
     load_predecessor_package(
         &package,
         &PackageLoadContext {
-            database_initialization_environment: "production",
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .unwrap();
     let deployment = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("package")
         .arg(&project)
         .arg("--test-receipt")
@@ -526,7 +528,7 @@ fn a_local_placeholder_project_runs_without_becoming_a_deployment_package() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|d| d["code"] == "breg.registry.canonical-base-iri-reserved"));
+        .any(|d| d["code"] == "breg.posture.placeholder-identity"));
     assert!(!root.join("deployment-build").exists());
     let status = owned.command("status", Path::new(id)).output().unwrap();
     assert!(status.status.success());
@@ -550,6 +552,7 @@ fn local_package_public_command_keeps_reserved_identity_refusal() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
     let initialized = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("init")
         .arg(&project)
         .args(["--format", "json"])
@@ -569,6 +572,7 @@ fn local_package_public_command_keeps_reserved_identity_refusal() {
     fs::write(&path, &source).unwrap();
     let output = root.path().join("deployment-build");
     let refused = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("package")
         .arg(&project)
         .arg("--schema-fingerprint")
@@ -589,7 +593,7 @@ fn local_package_public_command_keeps_reserved_identity_refusal() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|item| item["code"] == "breg.registry.canonical-base-iri-reserved"));
+        .any(|item| item["code"] == "breg.posture.placeholder-identity"));
     assert!(!output.exists());
     assert!(fs::read_to_string(&path).unwrap() == source);
 }
@@ -599,6 +603,7 @@ fn native_schema_test_runtime_path_refusal_has_closed_report_envelope() {
     let scratch = tempfile::tempdir().unwrap();
     fixture_project(scratch.path(), "");
     let result = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("test")
         .arg(scratch.path())
         .args([

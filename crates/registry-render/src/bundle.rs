@@ -480,9 +480,18 @@ impl Bundle {
         )
     }
 
-    /// Exact authored files supplied to the shared package writer.
+    /// Exact authored product files supplied to the shared package writer.
     pub(crate) fn package_inputs(&self) -> BTreeMap<String, Vec<u8>> {
-        self.snapshot.package_inputs()
+        let mut inputs = self.snapshot.package_inputs();
+        inputs.retain(|path, bytes| {
+            !registry_platform_yaml::Reader::new(path.as_str())
+                .scan(bytes)
+                .ok()
+                .flatten()
+                .as_ref()
+                .is_some_and(registry_rstack_dev::is_development_companion)
+        });
+        inputs
     }
 
     /// Assemble the documents from the captured bytes, reporting every

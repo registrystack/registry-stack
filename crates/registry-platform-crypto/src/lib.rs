@@ -116,6 +116,10 @@ pub fn domain_separated_sha256(domain: &[u8], canonical_payload: &[u8]) -> [u8; 
 
 /// Maximum raw JSON bytes accepted by the JWK parsing boundaries.
 pub const MAX_JWK_JSON_BYTES: usize = 64 * 1024;
+
+/// JWK members that carry private or symmetric key material.
+pub const PRIVATE_JWK_MEMBERS: [&str; 8] = ["k", "d", "p", "q", "dp", "dq", "qi", "oth"];
+
 const MAX_DID_JWK_IDENTIFIER_BYTES: usize = MAX_JWK_JSON_BYTES.div_ceil(3) * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -505,7 +509,7 @@ impl<'de> Visitor<'de> for PublicJwkVisitor {
                 "y" => deserialize_optional_jwk_field(&mut map, &mut y, "y")?,
                 "n" => deserialize_optional_jwk_field(&mut map, &mut n, "n")?,
                 "e" => deserialize_optional_jwk_field(&mut map, &mut e, "e")?,
-                "k" | "d" | "p" | "q" | "dp" | "dq" | "qi" | "oth" => {
+                name if PRIVATE_JWK_MEMBERS.contains(&name) => {
                     let _: IgnoredAny = map.next_value()?;
                     return Err(de::Error::custom("public JWK contains private material"));
                 }
@@ -2129,8 +2133,7 @@ fn algorithm_from_fields(
 }
 
 fn reject_private_members(value: &Value) -> Result<(), JwkError> {
-    const PRIVATE_MEMBERS: [&str; 8] = ["k", "d", "p", "q", "dp", "dq", "qi", "oth"];
-    if PRIVATE_MEMBERS
+    if PRIVATE_JWK_MEMBERS
         .iter()
         .any(|member| value.get(member).is_some())
     {
@@ -4018,6 +4021,26 @@ mod tests {
 
         let err = PublicJwk::parse(&json).expect_err("private member must reject");
         assert!(matches!(err, JwkError::Invalid(_)));
+    }
+
+    #[test]
+    fn the_private_member_list_is_complete_and_every_member_is_refused_by_parse() {
+        assert_eq!(
+            PRIVATE_JWK_MEMBERS,
+            ["k", "d", "p", "q", "dp", "dq", "qi", "oth"]
+        );
+        for member in PRIVATE_JWK_MEMBERS {
+            let mut value: Value = serde_json::from_str(&rsa_public_json()).expect("public json");
+            value
+                .as_object_mut()
+                .expect("object")
+                .insert(member.to_string(), json!("not-allowed-on-public"));
+            let json = serde_json::to_string(&value).expect("json serializes");
+            assert!(
+                matches!(PublicJwk::parse(&json), Err(JwkError::Invalid(_))),
+                "{member} must be refused"
+            );
+        }
     }
 
     #[test]

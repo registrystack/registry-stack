@@ -13,19 +13,64 @@ fn operational_targets(level: Level) -> Targets {
     Targets::new()
         .with_target("registry_mcp", level)
         .with_target("registry_mcp_edge", level)
+        .with_target("registry_platform_config::posture", Level::INFO)
         .with_target("registry_breg_mcp", level)
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    let flag = cli.posture.as_deref();
+    let production = matches!(&cli.command, Command::Check(arguments) if arguments.production);
+    let usage_error = |code: &str, message: &str, action: &str| {
+        if matches!(&cli.command, Command::Check(arguments) if matches!(arguments.format, Format::Json))
+        {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "apiVersion": "id.registrystack.org/formats/platform/mcp-ctl-report/v1alpha1",
+                    "kind": "PlatformMcpCtlReport",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "command": "check",
+                    "status": "usage-error",
+                    "ok": false,
+                    "filesChecked": 0,
+                    "errors": 1,
+                    "warnings": 0,
+                    "diagnostics": [{"severity": "error", "code": code, "path": "", "message": message, "suggestedAction": action}],
+                })
+            );
+        } else {
+            eprintln!("{code}: {message}. {action}");
+        }
+        ExitCode::from(2)
+    };
+    if production && flag == Some("development") {
+        return usage_error(
+            "platform.posture.conflict",
+            "--production and --posture development contradict each other",
+            "Use one of them.",
+        );
+    }
+    let flag = if production {
+        flag.or(Some("production"))
+    } else {
+        flag
+    };
+    let declared = match registry_platform_config::declared(flag) {
+        Ok(declared) => declared,
+        Err(error) => return usage_error(error.code(), error.message(), error.suggested_action()),
+    };
+
     if let Command::Check(arguments) = cli.command {
         let check_path =
             std::path::absolute(&cli.runtime_config).unwrap_or_else(|_| cli.runtime_config.clone());
-        let (report, unavailable) = RuntimeConfig::check_status(&check_path, arguments.environment);
+        let (report, unavailable) =
+            RuntimeConfig::check_status_with_posture(&check_path, arguments.environment, declared);
         let failed = unavailable
             || report.has_errors()
-            || (arguments.deny_warnings && report.warning_count() > 0);
+            || (arguments.deny_warnings
+                && registry_platform_config::has_denied_warnings(report.diagnostics()));
         match arguments.format {
             Format::Human if failed => {
                 let headline = if unavailable {
@@ -37,7 +82,7 @@ async fn main() -> ExitCode {
             }
             Format::Human => print!("{}", report.render_human()),
             Format::Json => match serde_json::to_string_pretty(
-                &serde_json::json!({"ok":!failed,"command":"check","status":if unavailable {"operational-failure"} else if failed {"domain-refusal"} else {"complete"},"apiVersion":"id.registrystack.org/formats/platform/mcp-ctl-report/v1alpha1","kind":"PlatformMcpCtlReport","version":env!("CARGO_PKG_VERSION"),"filesChecked":1,"errors":report.error_count(),"warnings":report.warning_count(),"diagnostics":report.to_json_value()}),
+                &serde_json::json!({"ok":!failed,"command":"check","status":if unavailable {"operational-failure"} else if failed {"domain-refusal"} else {"complete"},"apiVersion":"id.registrystack.org/formats/platform/mcp-ctl-report/v1alpha1","kind":"PlatformMcpCtlReport","version":env!("CARGO_PKG_VERSION"),"filesChecked":1,"errors":report.error_count(),"warnings":report.warning_count(),"diagnostics":report.to_json_value(),"posture":{"value":declared.posture.as_str(),"source":declared.source.as_str()}}),
             ) {
                 Ok(json) => println!("{json}"),
                 Err(_) => {
@@ -54,7 +99,7 @@ async fn main() -> ExitCode {
             ExitCode::SUCCESS
         };
     }
-    let config = match RuntimeConfig::load(&cli.runtime_config) {
+    let loaded = match RuntimeConfig::load_with_posture(&cli.runtime_config, declared) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("{error}");
@@ -63,6 +108,7 @@ async fn main() -> ExitCode {
     };
     // Restrict logging to the gateway's operational namespace.
     use tracing_subscriber::prelude::*;
+    let config = &loaded.config;
     let level = match config.log_level {
         registry_mcp_edge::config::LogLevel::Error => Level::ERROR,
         registry_mcp_edge::config::LogLevel::Warn => Level::WARN,
@@ -72,11 +118,7 @@ async fn main() -> ExitCode {
         .with(operational_targets(level))
         .with(tracing_subscriber::fmt::layer().json())
         .init();
-    if config.resource_server.allow_insecure_http {
-        tracing::warn!(
-            "resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-        );
-    }
+    loaded.posture.log_startup();
     let shutdown = match shutdown_after(registry_platform_httpsec::shutdown_signal) {
         Ok(shutdown) => shutdown,
         Err(error) => {
@@ -84,7 +126,7 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime::serve(&config, shutdown).await {
+    match runtime::serve(&loaded, shutdown).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");

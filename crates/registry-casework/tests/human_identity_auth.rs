@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
-use registry_casework::{AuthenticationError, CaseworkAuthenticator, HumanIdentityConfig};
+use registry_casework::{AuthenticationError, CaseworkAuthenticator, CaseworkIssuerVerifier};
 use registry_casework_core::{
     AccessProfile, CaseworkActsAs, CaseworkProject, InboxPolicy, ProjectIdentity, QueuePolicy,
     CASEWORK_API_VERSION, CASEWORK_KIND,
 };
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_httputil::FetchUrlPolicy;
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_oidc::{ActorKind, DeclaredKinds, JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use serde_json::{json, Value};
 
@@ -16,7 +17,7 @@ const AUDIENCE: &str = "urn:test:casework";
 const QUEUE_MEMBER_PRINCIPAL: &str = "urn:test:person:queue-member";
 
 #[tokio::test]
-async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_service_identity() {
+async fn a_human_kind_gates_human_profiles_and_requester_accepts_service_identity() {
     let idp = MockIdp::start().await;
     assert_eq!(project().check(), Ok(()));
     let authenticator = authenticator(&idp);
@@ -42,21 +43,36 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
         assert_eq!(actor.role, role);
     }
 
-    for asserted_kind in [
-        Some(json!("service")),
-        None,
-        Some(json!(true)),
-        Some(json!([])),
-        Some(json!({})),
-        Some(json!("")),
-    ] {
+    // A service kind, or no kind at all, is not a person: the human profile
+    // refuses it.
+    for asserted_kind in [Some(json!("service")), None] {
         let refusal = authenticator
             .authenticate(&token(&idp, "casework:staff", asserted_kind), "staff")
             .await
-            .expect_err(
-                "a service, missing, or non-string actor kind cannot produce an ActorContext",
+            .expect_err("a service or unspecified kind cannot produce a human ActorContext");
+        assert_eq!(
+            refusal,
+            AuthenticationError::NotHuman(FailedCheck::ActorKind)
+        );
+    }
+    // A kind claim that cannot be read is refused at authentication, whatever
+    // profile is selected.
+    for asserted_kind in [json!(true), json!([]), json!({}), json!("")] {
+        for profile in ["staff", "requester"] {
+            let scope = if profile == "staff" {
+                "casework:staff"
+            } else {
+                "casework:request"
+            };
+            assert_eq!(
+                authenticator
+                    .authenticate(&token(&idp, scope, Some(asserted_kind.clone())), profile)
+                    .await
+                    .expect_err("an unreadable actor kind claim cannot authenticate"),
+                AuthenticationError::Refused(FailedCheck::ActorKind),
+                "{asserted_kind} on {profile}"
             );
-        assert_eq!(refusal, AuthenticationError::NotHuman);
+        }
     }
 
     let requester = authenticator
@@ -81,7 +97,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
                 .authenticate(&requester_with_human_assertion, human_profile)
                 .await
                 .expect_err("the dedicated Requester scope cannot select a human profile"),
-            AuthenticationError::Profile
+            AuthenticationError::Profile(FailedCheck::Scope)
         );
     }
 
@@ -93,7 +109,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             )
             .await
             .expect_err("selecting Staff does not union the Requester scope or identity class"),
-        AuthenticationError::Profile
+        AuthenticationError::Profile(FailedCheck::Scope)
     );
 
     let wrong_audience = idp.mint_token(json!({
@@ -107,7 +123,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             .authenticate(&wrong_audience, "staff")
             .await
             .expect_err("the verifier preserves audience enforcement"),
-        AuthenticationError::Refused
+        AuthenticationError::Refused(FailedCheck::TokenAudience)
     );
 
     let expired = idp.mint_token(json!({
@@ -122,7 +138,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             .authenticate(&expired, "staff")
             .await
             .expect_err("the verifier preserves expiry enforcement"),
-        AuthenticationError::Refused
+        AuthenticationError::Refused(FailedCheck::TokenTime)
     );
 
     assert_eq!(
@@ -133,7 +149,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             )
             .await
             .expect_err("the selected profile still requires its configured scope"),
-        AuthenticationError::Profile
+        AuthenticationError::Profile(FailedCheck::Scope)
     );
 
     let missing_principal = idp.mint_token(json!({
@@ -146,34 +162,29 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             .authenticate(&missing_principal, "staff")
             .await
             .expect_err("a human assertion cannot replace the configured principal claim"),
-        AuthenticationError::Claims
+        AuthenticationError::Claims(FailedCheck::TokenClaims)
     );
 
-    let custom_authenticator = authenticator_with_human_identity(
+    // An issuer whose every token is a person's needs no kind claim, and a
+    // token that claims another kind contradicts the declaration.
+    let declared_human = authenticator_with_declared_kinds(
         &idp,
-        HumanIdentityConfig {
-            claim: "session_kind".to_owned(),
-            value: "person".to_owned(),
-        },
+        &project(),
+        DeclaredKinds::Issuer(ActorKind::Human),
     );
-    let custom_human = idp.mint_token(json!({
-        "aud": AUDIENCE,
-        "registry_principal": QUEUE_MEMBER_PRINCIPAL,
-        "scope": "casework:staff",
-        "session_kind": "person"
-    }));
-    custom_authenticator
-        .authenticate(&custom_human, "staff")
+    declared_human
+        .authenticate(&token(&idp, "casework:staff", None), "staff")
         .await
-        .expect("the configured custom human claim and value are accepted");
-
-    let default_assertion_only = token(&idp, "casework:staff", Some(json!("human")));
+        .expect("the declared kind makes the caller a person");
     assert_eq!(
-        custom_authenticator
-            .authenticate(&default_assertion_only, "staff")
+        declared_human
+            .authenticate(
+                &token(&idp, "casework:staff", Some(json!("service"))),
+                "staff"
+            )
             .await
-            .expect_err("the default assertion cannot satisfy a custom claim contract"),
-        AuthenticationError::NotHuman
+            .expect_err("a token kind that contradicts the declared kind is refused"),
+        AuthenticationError::Refused(FailedCheck::ActorKind)
     );
 
     idp.stop().await;
@@ -208,7 +219,11 @@ async fn delegated_or_grant_bearing_tokens_are_refused_for_officer_profiles_only
                     .authenticate(&idp.mint_token(claims), profile)
                     .await
                     .expect_err("delegated authority cannot enter an officer session"),
-                AuthenticationError::Refused
+                AuthenticationError::Refused(if extra.get("act").is_some() {
+                    FailedCheck::Delegation
+                } else {
+                    FailedCheck::TaskGrantClaims
+                })
             );
         }
 
@@ -304,11 +319,7 @@ async fn same_role_profiles_on_one_principal_claim_are_selected_by_their_own_sco
         CaseworkActsAs::Staff,
     ));
     assert_eq!(two_staff.check(), Ok(()));
-    let authenticator = authenticator_for_project_with_human_identity(
-        &idp,
-        &two_staff,
-        HumanIdentityConfig::default(),
-    );
+    let authenticator = authenticator_with_declared_kinds(&idp, &two_staff, DeclaredKinds::None);
 
     assert_eq!(
         authenticator
@@ -318,7 +329,7 @@ async fn same_role_profiles_on_one_principal_claim_are_selected_by_their_own_sco
             )
             .await
             .expect_err("the scope of one staff profile cannot select the other"),
-        AuthenticationError::Profile
+        AuthenticationError::Profile(FailedCheck::Scope)
     );
     let selected = authenticator
         .authenticate(
@@ -333,32 +344,29 @@ async fn same_role_profiles_on_one_principal_claim_are_selected_by_their_own_sco
 }
 
 fn authenticator(idp: &MockIdp) -> CaseworkAuthenticator {
-    authenticator_with_human_identity(idp, HumanIdentityConfig::default())
+    authenticator_with_declared_kinds(idp, &project(), DeclaredKinds::None)
 }
 
-fn authenticator_with_human_identity(
-    idp: &MockIdp,
-    human_identity: HumanIdentityConfig,
-) -> CaseworkAuthenticator {
-    authenticator_for_project_with_human_identity(idp, &project(), human_identity)
-}
-
-fn authenticator_for_project_with_human_identity(
+fn authenticator_with_declared_kinds(
     idp: &MockIdp,
     project: &CaseworkProject,
-    human_identity: HumanIdentityConfig,
+    declared: DeclaredKinds,
 ) -> CaseworkAuthenticator {
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     CaseworkAuthenticator::new(
         project,
-        oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
-        keys,
-        human_identity,
+        vec![CaseworkIssuerVerifier {
+            id: "main".to_owned(),
+            verifier: oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
+            keys,
+            declared,
+        }],
     )
+    .expect("one issuer entry")
 }
 
 fn token(idp: &MockIdp, scope: &str, asserted_kind: Option<Value>) -> String {

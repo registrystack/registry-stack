@@ -49,9 +49,13 @@ members = [
     "crates/registry-platform-hooks",
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
+    "crates/registry-platform-loopback",
     "crates/registry-platform-metrics",
     "crates/registry-platform-objectstore",
     "crates/registry-platform-oidc",
+    "crates/registry-platform-postgres",
+    "crates/registry-platform-posture",
+    "crates/registry-platform-provision",
     "crates/registry-platform-ratelimit",
     "crates/registry-platform-resilience",
     "crates/registry-platform-script",
@@ -203,9 +207,13 @@ registry-platform-dispatch = { path = "crates/registry-platform-dispatch", versi
 registry-platform-hooks = { path = "crates/registry-platform-hooks", version = "0.49.0" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.49.0", default-features = false }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.49.0" }
+registry-platform-loopback = { path = "crates/registry-platform-loopback", version = "0.49.0" }
 registry-platform-metrics = { path = "crates/registry-platform-metrics", version = "0.49.0" }
 registry-platform-objectstore = { path = "crates/registry-platform-objectstore", version = "0.49.0" }
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.49.0" }
+registry-platform-postgres = { path = "crates/registry-platform-postgres", version = "0.49.0" }
+registry-platform-posture = { path = "crates/registry-platform-posture", version = "0.49.0" }
+registry-platform-provision = { path = "crates/registry-platform-provision", version = "0.49.0" }
 registry-platform-ratelimit = { path = "crates/registry-platform-ratelimit", version = "0.49.0" }
 registry-platform-resilience = { path = "crates/registry-platform-resilience", version = "0.49.0" }
 registry-platform-script = { path = "crates/registry-platform-script", version = "0.49.0" }
@@ -346,7 +354,7 @@ tower = { version = "0.5" }
 tower-lsp-server = { version = "0.23" }
 tree-sitter = { version = "0.27" }
 tree-sitter-yaml = { version = "0.7.2" }
-tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "set-header", "timeout", "trace"] }
+tower-http = { version = "0.7", features = ["limit", "request-id", "set-header", "timeout", "trace"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 # Typst library-mode rendering. Pinned minor: output bytes and world semantics

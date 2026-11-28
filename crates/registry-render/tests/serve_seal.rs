@@ -81,6 +81,7 @@ fn now_seconds() -> time::OffsetDateTime {
 #[derive(Clone, Copy)]
 enum TsaMode {
     Grant,
+    GrantDevelopment,
     Reject,
     ServerError,
     Oversize,
@@ -254,7 +255,7 @@ fn answer_timestamp_request(
     }
     let reply = "application/timestamp-reply";
     let (status, content_type, body) = match mode {
-        TsaMode::Grant => (
+        TsaMode::Grant | TsaMode::GrantDevelopment => (
             "200 OK",
             reply,
             respond_to_timestamp_request(&query, pki, now_seconds()).expect("grant"),
@@ -279,8 +280,13 @@ fn answer_timestamp_request(
         ),
         TsaMode::Silent => unreachable!("a silent authority never answers"),
     };
+    let posture_header = if matches!(mode, TsaMode::GrantDevelopment) {
+        "Registry-Posture: development\r\n"
+    } else {
+        ""
+    };
     let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{posture_header}\r\n",
         body.len()
     );
     let _ = stream.write_all(head.as_bytes());
@@ -353,6 +359,7 @@ fn package(home: &Path) -> PathBuf {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sealed-notice");
     let output = home.join("package");
     let packaged = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["package", "--bundle"])
         .arg(&source)
         .arg("--output")
@@ -424,7 +431,7 @@ fn deployment_signed_by(seal: Option<SealSpec>, signer: Signer) -> Fixture {
         }
     };
     let runtime = format!(
-        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{}\n  shutdownGraceMilliseconds: 5000\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauthentication:\n  oidc:\n    issuer: https://issuer.example.test\n    audience: urn:render:test\n    allowedClients: [{OTHER_CLIENT}, {SEAL_CLIENT}]\n    jwksSource:\n      type: static\n      documentRef: secret:file/jwks.json\n{LIMITS}audit:\n  path: {}\n{signing}",
+        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener:\n  bind: 127.0.0.1:{}\n  shutdownGraceMilliseconds: 5000\npackage:\n  root: {}\nsecretProviders:\n  file:\n    root: {}\nauthentication:\n  oidc:\n    issuers:\n      main:\n        issuer: https://issuer.example.test\n        audience: urn:render:test\n        allowedClients: [{OTHER_CLIENT}, {SEAL_CLIENT}]\n        jwksSource:\n          type: static\n          documentRef: secret:file/jwks.json\n{LIMITS}audit:\n  path: {}\n{signing}",
         free_port(),
         package.display(),
         home.display(),
@@ -696,14 +703,28 @@ fn start_server(fixture: &Fixture) -> Server {
     panic!("the server port was taken on every attempt");
 }
 
+fn fixture_posture(fixture: &Fixture) -> &'static str {
+    if std::fs::read_to_string(&fixture.runtime_path)
+        .unwrap()
+        .lines()
+        .any(|line| line == "assuranceProfile: production")
+    {
+        "production"
+    } else {
+        "development"
+    }
+}
+
 fn try_start_server(fixture: &Fixture) -> Option<Server> {
     // Standard error goes to a file: an undrained pipe could fill and stall
     // the server.
     let stderr = tempfile::tempfile().expect("server stderr file");
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("serve")
         .arg("--runtime-config")
         .arg(&fixture.runtime_path)
+        .args(["--posture", fixture_posture(fixture)])
         .stdout(Stdio::null())
         .stderr(stderr.try_clone().expect("server stderr handle"))
         .spawn()
@@ -739,10 +760,16 @@ fn try_start_server(fixture: &Fixture) -> Option<Server> {
 /// standard error. A serve that is still running after the deadline started
 /// instead of refusing: it is stopped and the test fails rather than hangs.
 fn refused_startup(fixture: &Fixture) -> (Option<i32>, String) {
+    refused_startup_with_posture(fixture, fixture_posture(fixture))
+}
+
+fn refused_startup_with_posture(fixture: &Fixture, posture: &str) -> (Option<i32>, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("serve")
         .arg("--runtime-config")
         .arg(&fixture.runtime_path)
+        .args(["--posture", posture])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -1207,6 +1234,7 @@ fn compile_preview_seal_renders_the_seal_routes_first_revision() {
     let data = fixture.home.join("data.json");
     std::fs::write(&data, request["data"].to_string()).unwrap();
     let compiled = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["compile", "--bundle"])
         .arg(fixture.home.join("package"))
         .args(["--type", "notice", "--data"])
@@ -1330,8 +1358,72 @@ fn the_document_list_names_each_served_seal() {
 }
 
 #[test]
+fn explicit_unrestricted_clients_are_logged_and_reported_but_absent_from_readiness() {
+    let fixture = transit_sealed();
+    let text = std::fs::read_to_string(&fixture.runtime_path)
+        .unwrap()
+        .replace(
+            &format!("allowedClients: [{OTHER_CLIENT}, {SEAL_CLIENT}]"),
+            "allowedClients: unrestricted",
+        );
+    std::fs::write(&fixture.runtime_path, text).unwrap();
+
+    let server = start_server(&fixture);
+    let pointer = "/authentication/oidc/issuers/main/allowedClients";
+    assert!(
+        server.log().iter().any(|event| event["fields"]["message"]
+            == "explicit production setting in use"
+            && event["fields"]["pointer"] == pointer),
+        "{:?}",
+        server.log()
+    );
+    let ready = request(server.port, "GET", "/ready", &[], None).json();
+    assert_eq!(ready["posture"], "production");
+    assert!(!ready.to_string().contains(pointer));
+    assert!(ready.get("explicitProductionSettings").is_none());
+
+    let check = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args(["check", "--runtime-config"])
+        .arg(&fixture.runtime_path)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert!(check.status.success(), "{check:?}");
+    let report: serde_json::Value = serde_json::from_slice(&check.stdout).unwrap();
+    assert_eq!(report["explicitProductionSettings"][0]["pointer"], pointer);
+    assert_eq!(report["warnings"], 0);
+
+    let human = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args(["check", "--runtime-config"])
+        .arg(&fixture.runtime_path)
+        .output()
+        .unwrap();
+    assert!(human.status.success(), "{human:?}");
+    let text = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        text.contains(&format!(
+            "Explicit production setting platform.posture.unrestricted-clients at {pointer}."
+        )),
+        "{text}"
+    );
+}
+
+#[test]
 fn without_signing_the_seal_route_and_signing_readiness_do_not_exist() {
     let fixture = deployment(None);
+    let (exit, stderr) = refused_startup_with_posture(&fixture, "production");
+    assert_eq!(exit, Some(20), "{stderr}");
+    for expected in [
+        "render.posture.seals-not-served",
+        "/signing",
+        "notice",
+        "Configure signing.seals",
+        "REGISTRY_STACK_POSTURE=development",
+    ] {
+        assert!(stderr.contains(expected), "{stderr}");
+    }
     let server = start_server(&fixture);
     let reply = post(
         &server,
@@ -1343,9 +1435,194 @@ fn without_signing_the_seal_route_and_signing_readiness_do_not_exist() {
     assert_eq!(reply.json()["code"], "render.not-found");
     let ready = request(server.port, "GET", "/ready", &[], None);
     assert_eq!(ready.status, 200);
-    assert_eq!(ready.json(), serde_json::json!({"status":"ready"}));
+    assert_eq!(
+        ready.json(),
+        serde_json::json!({"status":"ready","posture":"development","developmentSettings":[{"code":"render.posture.seals-not-served","pointer":"/signing"}]})
+    );
     let openapi = request(server.port, "GET", "/openapi.json", &[], None).json();
     assert!(openapi["paths"].get("/v1/seal/{type}").is_none());
+}
+
+#[test]
+fn development_logs_the_seals_not_served_setting_once() {
+    let fixture = deployment(None);
+    let server = start_server(&fixture);
+    let log = server.log();
+    let mentions = log
+        .iter()
+        .filter(|event| {
+            event["fields"]["error_code"] == "render.posture.seals-not-served"
+                || event["fields"]["code"] == "render.posture.seals-not-served"
+        })
+        .count();
+    assert_eq!(mentions, 1, "{log:?}");
+}
+
+#[test]
+fn production_startup_reports_runtime_and_package_posture_together() {
+    let fixture = deployment(None);
+    let runtime = std::fs::read_to_string(&fixture.runtime_path).unwrap();
+    std::fs::write(
+        &fixture.runtime_path,
+        format!("{runtime}assuranceProfile: local\n"),
+    )
+    .unwrap();
+    let (exit, stderr) = refused_startup_with_posture(&fixture, "production");
+    assert_eq!(exit, Some(20), "{stderr}");
+    assert!(
+        stderr.contains("render.posture.local-assurance"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("render.posture.seals-not-served"),
+        "{stderr}"
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args(["check", "--runtime-config"])
+        .arg(&fixture.runtime_path)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    for (code, path) in [
+        ("render.posture.local-assurance", "/assuranceProfile"),
+        ("render.posture.seals-not-served", "/signing"),
+    ] {
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["code"] == code && diagnostic["path"] == path),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn library_runtime_checks_verify_the_configured_bundle() {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+    use registry_render::runtime::{check_runtime, check_runtime_only, check_runtime_with_bundle};
+
+    let fixture = deployment(None);
+    let production = DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Default,
+    };
+    for check in [
+        check_runtime(&fixture.runtime_path, false, None),
+        check_runtime_with_bundle(&fixture.runtime_path, false, None, None, production),
+    ] {
+        assert!(
+            check.diagnostics.iter().any(|finding| {
+                finding.code == "render.posture.seals-not-served" && finding.path == "/signing"
+            }),
+            "{:?}",
+            check.diagnostics
+        );
+    }
+    let package_root = fixture.runtime_path.parent().unwrap().join("package");
+    std::fs::write(package_root.join("SHA256SUMS"), "invalid checksum manifest").unwrap();
+    let configured = check_runtime(&fixture.runtime_path, false, None);
+    assert!(configured.diagnostics.iter().any(|finding| {
+        finding.code == "render.runtime.package-refused" && finding.path == "/package/root"
+    }));
+    let check = check_runtime_only(&fixture.runtime_path, false, None, production);
+    assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
+}
+
+#[test]
+fn runtime_check_reports_the_configured_packages_seals_without_bundle_flag() {
+    let fixture = deployment(None);
+    let check = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .args(["check", "--runtime-config"])
+            .arg(&fixture.runtime_path)
+            .args(["--format", "json"])
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (output.status.code(), report)
+    };
+    let (exit, report) = check();
+    assert_eq!(exit, Some(1), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "render.posture.seals-not-served"),
+        "{report}"
+    );
+
+    let package = fixture.home.join("package");
+    std::fs::rename(&package, fixture.home.join("other-package")).unwrap();
+    let (exit, report) = check();
+    assert_eq!(exit, Some(0), "{report}");
+
+    std::fs::create_dir(&package).unwrap();
+    let production = registry_platform_config::declared_from(None, None).unwrap();
+    let runtime_only = registry_render::runtime::check_runtime_only(
+        &fixture.runtime_path,
+        false,
+        None,
+        production,
+    );
+    assert!(
+        runtime_only.diagnostics.is_empty(),
+        "{:?}",
+        runtime_only.diagnostics
+    );
+    let (exit, report) = check();
+    assert_eq!(exit, Some(1), "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "render.runtime.package-refused"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/package/root");
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_check_reports_an_unreadable_configured_package() {
+    let fixture = deployment(None);
+    let package = fixture.home.join("package");
+    std::fs::rename(&package, fixture.home.join("other-package")).unwrap();
+    std::os::unix::fs::symlink(&package, &package).unwrap();
+    assert!(package.try_exists().is_err());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args(["check", "--runtime-config"])
+        .arg(&fixture.runtime_path)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(3), "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "render.runtime.package-refused"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/package/root");
+}
+
+#[test]
+fn posture_is_logged_and_combination_refused_before_authentication_starts() {
+    let fixture = deployment(None);
+    // Authentication cannot start without its key set. The posture block and
+    // the seals refusal come first, so they are what an operator reads.
+    std::fs::remove_file(fixture.home.join("jwks.json")).unwrap();
+    let (exit, stderr) = refused_startup_with_posture(&fixture, "production");
+    assert_eq!(exit, Some(20), "{stderr}");
+    assert!(stderr.contains("posture declared"), "{stderr}");
+    assert!(
+        stderr.contains("render.posture.seals-not-served"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -1358,7 +1635,7 @@ fn readiness_reports_each_seal_and_never_requests_a_timestamp() {
         assert_eq!(ready.status, 200);
         assert_eq!(
             ready.json(),
-            serde_json::json!({"status":"ready","signing":{"ministry":{"status":"ready","testOnly":true}}})
+            serde_json::json!({"status":"ready","posture":"development","developmentSettings":[{"code":"render.posture.local-assurance","pointer":"/assuranceProfile"}],"signing":{"ministry":{"status":"ready","testOnly":true}}})
         );
     }
     assert_eq!(tsa.requests.load(Ordering::SeqCst), 0);
@@ -1390,7 +1667,7 @@ fn render_stays_ready_while_an_expired_seal_is_unavailable() {
     assert_eq!(ready.status, 200, "render stays ready");
     assert_eq!(
         ready.json(),
-        serde_json::json!({"status":"ready","signing":{"ministry":{"status":"not-ready","reason":"certificate-expired","testOnly":true}}})
+        serde_json::json!({"status":"ready","posture":"development","developmentSettings":[{"code":"render.posture.local-assurance","pointer":"/assuranceProfile"}],"signing":{"ministry":{"status":"not-ready","reason":"certificate-expired","testOnly":true}}})
     );
     let plain = post(
         &server,
@@ -1899,6 +2176,7 @@ fn ready_answers_at_once_while_a_probe_waits_on_a_stalled_transit_proxy() {
     );
 
     Command::new("kill")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["-TERM", &server.child.id().to_string()])
         .output()
         .expect("send SIGTERM");
@@ -2008,7 +2286,7 @@ fn an_unusable_key_file_names_its_reason_and_fix() {
         stderr.contains("the referenced secret file is unsafe"),
         "{stderr}"
     );
-    assert!(stderr.contains("mode 0600"), "{stderr}");
+    assert!(stderr.contains("mode 0400 or 0600"), "{stderr}");
     assert!(
         stderr.contains(&seal_member_position(&fixture, "privateKeyRef:")),
         "{stderr}"
@@ -2025,7 +2303,7 @@ fn an_unusable_key_file_names_its_reason_and_fix() {
         stderr.contains("the referenced secret is unavailable"),
         "{stderr}"
     );
-    assert!(!stderr.contains("mode 0600"), "{stderr}");
+    assert!(!stderr.contains("0400 or 0600"), "{stderr}");
     assert!(
         stderr.contains("Provide the seal's private key"),
         "{stderr}"
@@ -2099,6 +2377,47 @@ fn a_certificate_without_a_signing_key_usage_refuses_startup() {
         stderr.contains("render.runtime.seal-certificate-usage"),
         "{stderr}"
     );
+}
+
+#[test]
+fn production_refuses_a_development_timestamp_authority() {
+    let tsa = start_tsa(TsaMode::GrantDevelopment);
+    let production = deployment_signed_by(
+        Some(SealSpec {
+            tsa_url: Some(tsa.url()),
+            seal: seal_pki().issue_seal(SigningAlgorithm::Es256).unwrap(),
+            key_of: None,
+        }),
+        Signer::Transit,
+    );
+    let development = sealed(Some(&tsa));
+    for (fixture, status) in [(&production, 502), (&development, 200)] {
+        let server = start_server(fixture);
+        let reply = post(
+            &server,
+            "/v1/seal/notice",
+            &fixture.token("render:seal", SEAL_CLIENT),
+            "application/json",
+        );
+        assert_eq!(reply.status, status);
+        if status == 502 {
+            assert_eq!(reply.json()["code"], "render.timestamp-failed");
+            assert!(
+                server
+                    .log()
+                    .iter()
+                    .any(|event| event["fields"]["problem"] == "timestamp-failed"
+                        && event["fields"]["reason"] == "response-headers"),
+                "{:?}",
+                server.log()
+            );
+            let audit = fixture.audit();
+            assert_eq!(audit[1]["record"]["reason"], "response-headers");
+        } else {
+            assert_eq!(reply.json()["seal"]["level"], "B-T");
+        }
+    }
+    assert_eq!(tsa.requests.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -2413,6 +2732,7 @@ fn shutdown_drains_a_seal_waiting_on_the_timestamp_authority() {
         std::thread::sleep(Duration::from_millis(20));
     }
     Command::new("kill")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["-TERM", &server.child.id().to_string()])
         .output()
         .expect("send SIGTERM");
@@ -2505,6 +2825,7 @@ fn shutdown_with_a_seal_in_flight_is_bounded_by_the_grace() {
     }
     let signalled = Instant::now();
     Command::new("kill")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["-TERM", &server.child.id().to_string()])
         .output()
         .expect("send SIGTERM");
@@ -2618,6 +2939,8 @@ struct TrustSignals {
     ready: serde_json::Value,
     audit: Vec<serde_json::Value>,
     startup_warnings: usize,
+    posture: Option<String>,
+    signed_reason: bool,
 }
 
 fn trust_signals(fixture: &Fixture) -> TrustSignals {
@@ -2627,6 +2950,12 @@ fn trust_signals(fixture: &Fixture) -> TrustSignals {
     let reply = post(&server, "/v1/seal/notice", &token, "application/pdf");
     assert_eq!(reply.status, 200);
     let header = reply.header("x-registry-seal-test-only").map(str::to_owned);
+    let posture = reply.header("registry-posture").map(str::to_owned);
+    let reason = b"/Reason (Registry Stack test seal: not an official document)";
+    let signature = read_signed_file(&reply.body, 0);
+    let signed_reason = signature.signed_parts[0]
+        .windows(reason.len())
+        .any(|bytes| bytes == reason);
     let ready =
         request(server.port, "GET", "/ready", &[], None).json()["signing"]["ministry"].clone();
     let startup_warnings = server
@@ -2634,22 +2963,20 @@ fn trust_signals(fixture: &Fixture) -> TrustSignals {
         .iter()
         .filter(|line| {
             line["level"] == "WARN"
-                && line["fields"]["seal_id"] == "ministry"
-                && line["fields"]["message"] == "test-only seal: its documents are not official"
+                && line["fields"]["error_code"] == "render.posture.local-assurance"
+                && line["fields"]["pointer"] == "/assuranceProfile"
         })
         .count();
     drop(server);
-    let audit = fixture
-        .audit()
-        .into_iter()
-        .map(|entry| entry["record"].clone())
-        .collect();
+    let audit = fixture.audit();
     TrustSignals {
         json,
         header,
         ready,
         audit,
         startup_warnings,
+        posture,
+        signed_reason,
     }
 }
 
@@ -2665,9 +2992,12 @@ fn a_test_only_seal_says_so_in_every_answer_and_a_production_seal_adds_nothing()
     );
     assert_eq!(test_only.audit.len(), 4, "two calls, paired");
     for record in &test_only.audit {
-        assert_eq!(record["testOnly"], true, "{record}");
+        assert_eq!(record["record"]["testOnly"], true, "{record}");
+        assert_eq!(record["posture"], "development");
     }
     assert_eq!(test_only.startup_warnings, 1);
+    assert_eq!(test_only.posture.as_deref(), Some("development"));
+    assert!(test_only.signed_reason);
 
     let production = trust_signals(&transit_sealed());
     assert!(
@@ -2679,9 +3009,12 @@ fn a_test_only_seal_says_so_in_every_answer_and_a_production_seal_adds_nothing()
     assert_eq!(production.ready, serde_json::json!({"status": "ready"}));
     assert_eq!(production.audit.len(), 4);
     for record in &production.audit {
-        assert!(record.get("testOnly").is_none(), "{record}");
+        assert!(record["record"].get("testOnly").is_none(), "{record}");
+        assert_eq!(record["posture"], "production");
     }
     assert_eq!(production.startup_warnings, 0);
+    assert_eq!(production.posture, None);
+    assert!(!production.signed_reason);
 }
 
 // ----- The documented test seal -----
@@ -2765,6 +3098,7 @@ fn the_documented_test_seal_seals_with_a_keygen_key_and_a_test_root_leaf() {
     )
     .unwrap();
     let ran = Command::new("sh")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["-eu", "-c", &commands])
         .current_dir(&steps)
         .env("PATH", path)
@@ -2802,11 +3136,18 @@ fn the_documented_test_seal_seals_with_a_keygen_key_and_a_test_root_leaf() {
     .unwrap();
 
     let checked = Command::new(binary)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["check", "--bundle"])
         .arg(fixture.home.join("package"))
         .arg("--runtime-config")
         .arg(&fixture.runtime_path)
-        .args(["--environment", "--format", "json"])
+        .args([
+            "--environment",
+            "--format",
+            "json",
+            "--posture",
+            fixture_posture(&fixture),
+        ])
         .output()
         .unwrap();
     let report: serde_json::Value =
@@ -2818,7 +3159,10 @@ fn the_documented_test_seal_seals_with_a_keygen_key_and_a_test_root_leaf() {
             )
         });
     assert_eq!(checked.status.code(), Some(0), "{report}");
-    assert_eq!(report["diagnostics"], serde_json::json!([]), "{report}");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(diagnostics[0]["code"], "render.posture.local-assurance");
+    assert_eq!(diagnostics[0]["severity"], "warning");
 
     let server = start_server(&fixture);
     let body = seal_json(&fixture, &server);

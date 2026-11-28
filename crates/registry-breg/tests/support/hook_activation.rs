@@ -113,7 +113,7 @@ journeys:
     load_package(
         &path,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .unwrap()
@@ -175,7 +175,9 @@ async fn activated_setup(
     let pool = database.runtime_config.build_pool().unwrap();
     let audit =
         database.audit(AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into()).unwrap());
-    let lock_key = RegistryLockKey::derive("hook-proposal-registry").unwrap();
+    let lock_key = RegistryLockKey::derive("hook-proposal-registry")
+        .unwrap()
+        .for_posture(package.posture());
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
@@ -692,6 +694,7 @@ async fn classified_proposal_completion_preserves_registry_and_lease_fences() {
         CompletionFault::Database,
         CompletionFault::Package,
         CompletionFault::Maintenance,
+        CompletionFault::Posture,
         CompletionFault::UnreadableState,
     ] {
         classified_proposal_across_activation(CompletionKind::Refused, Some(fault)).await;
@@ -712,6 +715,7 @@ enum CompletionFault {
     Database,
     Package,
     Maintenance,
+    Posture,
     UnreadableState,
 }
 
@@ -819,6 +823,12 @@ async fn classified_proposal_across_activation(
             setup.database.admin.batch_execute("UPDATE registry_internal.registry_state
                 SET maintenance_status = 'failed', maintenance_target_package_digest = active_package_digest
                 WHERE singleton").await.unwrap();
+        }
+        Some(CompletionFault::Posture) => {
+            setup.database.admin.execute(
+                "UPDATE registry_internal.registry_state SET posture = 'production' WHERE singleton",
+                &[],
+            ).await.unwrap();
         }
         Some(CompletionFault::UnreadableState) => make_registry_state_unreadable(&setup).await,
         None => {}

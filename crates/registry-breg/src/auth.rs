@@ -13,10 +13,13 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
-use registry_platform_authcommon::{parse_bearer_token, validate_compact_access_token};
+use registry_platform_authcommon::{
+    parse_bearer_token, validate_compact_access_token, BearerParseError, FailedCheck, RefusalNote,
+};
 use registry_platform_oidc::{
-    actor_kind, grant_claims, is_access_token_typ_pair, Audience, ClaimNames, JwksFetcher,
-    OidcError, TokenVerifier, TokenVerifierConfig,
+    grant_claims, is_access_token_typ_pair, Audience, ClaimError, ClaimNames, DeclaredKinds,
+    GrantContextError, IssuerEntry, IssuerSet, IssuerSetError, JwksFetcher, OidcError,
+    TokenVerifier, TokenVerifierConfig,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -123,8 +126,9 @@ pub enum AuthenticationConfigError {
     InvalidClaimMapping,
     #[error(
         "the project names clients in requesterClients, trusted actors, or consent recipients \
-         that authentication.oidc.allowedClients does not list; list each of them in \
-         authentication.oidc.allowedClients, because the keyword unrestricted lists none"
+         that no authentication.oidc.issuers entry lists in allowedClients; list each of them \
+         in the allowedClients of the entry whose issuer signs its tokens, because the keyword \
+         unrestricted lists none"
     )]
     NamedClientNotListed,
     #[error("a contextual authority claim overlaps another configured claim role")]
@@ -155,21 +159,123 @@ pub enum AuthenticationError {
     MalformedCredential,
     #[error("the bearer credential was refused")]
     VerificationRefused,
-    #[error("the verified credential is missing the configured actor-kind claim")]
-    MissingActorKind,
     #[error("the verified credential has invalid authority claims")]
     InvalidClaims,
 }
 
-/// Production OIDC verifier plus the only claim mapping allowed to construct
-/// [`VerifiedRequestClaims`].
-pub struct RegistryAuthenticator {
-    verifier: TokenVerifier,
-    last_key_refusal_warning: Mutex<Option<Instant>>,
-    last_actor_kind_warning: Mutex<Option<Instant>>,
+impl AuthenticationError {
+    /// Pair the failure with the check that produced it. The check is
+    /// operator-side only: it reaches the refusal counter and log line, never
+    /// the response.
+    fn because(self, check: FailedCheck) -> Refusal {
+        Refusal {
+            error: self,
+            check,
+            remedy: None,
+            development_assertion: false,
+        }
+    }
+}
+
+/// A closed request failure and the check that failed. Every refusal built in
+/// this module names its check, so none reaches the recording layer without
+/// one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Refusal {
+    error: AuthenticationError,
+    check: FailedCheck,
+    /// The setting an operator changes to admit such a token, for the
+    /// refusal log line. It is fixed text, never a caller value, and never
+    /// reaches the response.
+    remedy: Option<&'static str>,
+    development_assertion: bool,
+}
+
+impl Refusal {
+    /// The note the recording layer counts and logs for this refusal.
+    fn note(self) -> RefusalNote {
+        let note = RefusalNote::new(self.check);
+        match self.remedy {
+            Some(remedy) => note.with_remedy(remedy),
+            None => note,
+        }
+    }
+}
+
+fn invalid_claims(check: FailedCheck) -> Refusal {
+    AuthenticationError::InvalidClaims.because(check)
+}
+
+/// One issuer the authenticator accepts tokens from: its id, the access-token
+/// profile it verifies, where its signing keys come from, and the actor kinds
+/// the operator declared for it.
+pub struct AuthenticatorIssuer {
+    id: String,
+    verifier: TokenVerifierConfig,
+    key_source: Arc<JwksFetcher>,
+    declared: DeclaredKinds,
+}
+
+impl AuthenticatorIssuer {
+    /// An issuer that declares no actor kind.
+    pub fn new(
+        id: impl Into<String>,
+        verifier: TokenVerifierConfig,
+        key_source: Arc<JwksFetcher>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            verifier,
+            key_source,
+            declared: DeclaredKinds::None,
+        }
+    }
+
+    /// This issuer with the actor kinds its entry declares.
+    #[must_use]
+    pub fn with_declared_kinds(self, declared: DeclaredKinds) -> Self {
+        Self { declared, ..self }
+    }
+
+    /// The issuer id the operator gave the entry.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Where this issuer's signing keys come from.
+    pub fn key_source(&self) -> &Arc<JwksFetcher> {
+        &self.key_source
+    }
+}
+
+impl fmt::Debug for AuthenticatorIssuer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticatorIssuer")
+            .field("id", &self.id)
+            .field("issuer", &"<redacted>")
+            .finish()
+    }
+}
+
+/// The rules of one issuer entry that apply after its verifier accepted a
+/// token.
+struct IssuerRules {
     issuer: String,
     audience: String,
     scope_claim: String,
+    /// The clock leeway the verifier applies to `exp` and `nbf`, reused as
+    /// the allowance for a task-grant token's `iat` ahead of this clock.
+    leeway: Duration,
+}
+
+/// Production OIDC verifiers plus the only claim mapping allowed to construct
+/// [`VerifiedRequestClaims`].
+pub struct RegistryAuthenticator {
+    peer_policy: registry_platform_httputil::PeerPolicy,
+    issuers: IssuerSet,
+    rules: BTreeMap<String, IssuerRules>,
+    last_key_refusal_warning: Mutex<Option<Instant>>,
     principal_claim: String,
     purpose_claim: Option<String>,
     direct_claims: BTreeMap<String, DirectClaimExpectation>,
@@ -177,20 +283,12 @@ pub struct RegistryAuthenticator {
     trusted_actors: BTreeMap<String, String>,
     recipients: CompiledRecipients,
     consent_decisions: BTreeMap<String, BTreeSet<String>>,
-    /// The clock leeway the verifier applies to `exp` and `nbf`, reused as
-    /// the allowance for a task-grant token's `iat` ahead of this clock.
-    leeway: Duration,
 }
 
-impl RegistryAuthenticator {
-    pub(crate) fn record_header_refusal(&self) {
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            registry_platform_oidc::AuthenticationStage::Header,
-            "BReg authentication refused"
-        );
-    }
+/// The issuer id [`RegistryAuthenticator::new`] gives its one issuer.
+const SINGLE_ISSUER_ID: &str = "issuer";
 
+impl RegistryAuthenticator {
     /// Bind one exact platform verifier profile and one exact authority mapping
     /// to the immutable compiled Registry served by this process.
     pub fn new(
@@ -199,20 +297,72 @@ impl RegistryAuthenticator {
         key_source: Arc<JwksFetcher>,
         claims: AuthorityClaimConfig,
     ) -> Result<Self, AuthenticationConfigError> {
-        validate_verifier_profile(&verifier_config)?;
-        let direct_claims = validate_claim_mapping(registry, &verifier_config, &claims)?;
-        let audience = verifier_config.audiences[0].clone();
-        let scope_claim = verifier_config.scope_claim.clone();
-        let issuer = verifier_config.issuer.clone();
-        let leeway = verifier_config.leeway;
+        Self::with_issuers(
+            registry,
+            vec![AuthenticatorIssuer::new(
+                SINGLE_ISSUER_ID,
+                verifier_config,
+                key_source,
+            )],
+            claims,
+        )
+    }
+
+    /// Bind the issuers a token may come from, each with its own exact
+    /// verifier profile, and one exact authority mapping to the immutable
+    /// compiled Registry served by this process. A token is verified only by
+    /// the issuer its `iss` names.
+    pub fn with_issuers(
+        registry: &CompiledRegistry,
+        issuers: Vec<AuthenticatorIssuer>,
+        claims: AuthorityClaimConfig,
+    ) -> Result<Self, AuthenticationConfigError> {
+        for issuer in &issuers {
+            validate_verifier_profile(&issuer.verifier)?;
+        }
+        let profiles = issuers
+            .iter()
+            .map(|issuer| &issuer.verifier)
+            .collect::<Vec<_>>();
+        let direct_claims = validate_claim_mapping(registry, &profiles, &claims)?;
+        let mut rules = BTreeMap::new();
+        let mut entries = Vec::with_capacity(issuers.len());
+        for issuer in issuers {
+            let AuthenticatorIssuer {
+                id,
+                verifier,
+                key_source,
+                declared,
+            } = issuer;
+            rules.insert(
+                id.clone(),
+                IssuerRules {
+                    issuer: verifier.issuer.clone(),
+                    audience: verifier.audiences[0].clone(),
+                    scope_claim: verifier.scope_claim.clone(),
+                    leeway: verifier.leeway,
+                },
+            );
+            entries.push(IssuerEntry::new(
+                id,
+                TokenVerifier::new(verifier, key_source),
+                declared,
+            ));
+        }
+        let issuers = IssuerSet::new(entries, claims.contextual_claims.clone()).map_err(
+            |error| match error {
+                IssuerSetError::InvalidClaimNames => AuthenticationConfigError::InvalidClaimMapping,
+                IssuerSetError::Empty | IssuerSetError::DuplicateIss { .. } => {
+                    AuthenticationConfigError::InvalidVerifierProfile
+                }
+            },
+        )?;
         let consent_decisions = crate::consent::feed_decisions(registry.entities());
         Ok(Self {
-            verifier: TokenVerifier::new(verifier_config, key_source),
+            peer_policy: registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+            issuers,
+            rules,
             last_key_refusal_warning: Mutex::new(None),
-            last_actor_kind_warning: Mutex::new(None),
-            issuer,
-            audience,
-            scope_claim,
             principal_claim: claims.principal_claim,
             purpose_claim: claims.purpose_claim,
             direct_claims,
@@ -220,8 +370,15 @@ impl RegistryAuthenticator {
             trusted_actors: claims.trusted_actors,
             recipients: registry.recipients().clone(),
             consent_decisions,
-            leeway,
         })
+    }
+
+    pub(crate) fn with_peer_policy(
+        mut self,
+        policy: registry_platform_httputil::PeerPolicy,
+    ) -> Self {
+        self.peer_policy = policy;
+        self
     }
 
     /// Verify and map one already-admitted compact bearer token.
@@ -229,19 +386,41 @@ impl RegistryAuthenticator {
         &self,
         token: &str,
     ) -> Result<VerifiedRequestClaims, AuthenticationError> {
+        self.authenticate_checked(token)
+            .await
+            .map(|(claims, _)| claims)
+            .map_err(|refusal| refusal.error)
+    }
+
+    /// Verify `token` with the issuer its `iss` names, without mapping its
+    /// claims. A schema test compares the scopes it carries with the mapped
+    /// claims.
+    #[cfg(feature = "tooling")]
+    pub(crate) async fn verify_token(
+        &self,
+        token: &str,
+    ) -> Result<registry_platform_oidc::VerifiedToken, OidcError> {
+        self.issuers
+            .verify(token)
+            .await
+            .map(|caller| caller.token)
+            .map_err(|refusal| refusal.error)
+    }
+
+    /// [`Self::authenticate`], with the check that refused the token. A
+    /// verified token comes with the scope claim of the issuer that verified
+    /// it.
+    pub(crate) async fn authenticate_checked(
+        &self,
+        token: &str,
+    ) -> Result<(VerifiedRequestClaims, &str), Refusal> {
         validate_compact_access_token(token).map_err(|_| {
-            self.record_header_refusal();
-            AuthenticationError::MalformedCredential
+            AuthenticationError::MalformedCredential.because(FailedCheck::CredentialMalformed)
         })?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                error.authentication_stage(),
-                "BReg authentication refused"
-            );
+        let caller = self.issuers.verify(token).await.map_err(|refusal| {
             // UnknownKid precedes signature verification and also covers denied
             // keys. It cannot establish rotation, regardless of the key source.
-            if matches!(error, OidcError::UnknownKid)
+            if matches!(refusal.error, OidcError::UnknownKid)
                 && admit_refusal_warning(&self.last_key_refusal_warning, Instant::now())
             {
                 tracing::warn!(
@@ -251,10 +430,21 @@ impl RegistryAuthenticator {
                                check issuer key configuration and key policy before changing trust"
                 );
             }
-            AuthenticationError::VerificationRefused
+            Refusal {
+                remedy: refusal.remedy,
+                ..AuthenticationError::VerificationRefused.because(refusal.failed_check())
+            }
         })?;
-        if !accepted_audience(verified.claims.aud.as_ref(), &self.audience) {
-            return Err(AuthenticationError::InvalidClaims);
+        let rules = self
+            .rules
+            .get(&*caller.issuer_id)
+            .ok_or_else(|| invalid_claims(FailedCheck::TokenIssuer))?;
+        let verified = &caller.token;
+        if registry_platform_oidc::refuses_development_assertion(verified, self.peer_policy) {
+            return Err(grant_context_check(GrantContextError::DevelopmentAssertion));
+        }
+        if !accepted_audience(verified.claims.aud.as_ref(), &rules.audience) {
+            return Err(invalid_claims(FailedCheck::TokenAudience));
         }
 
         let claims = &verified.claims.extra;
@@ -267,22 +457,25 @@ impl RegistryAuthenticator {
             subject.as_ref()
         } else {
             claims.get(&self.principal_claim)
-        })?;
+        })
+        .map_err(|error| error.because(FailedCheck::TokenClaims))?;
         let purpose = self
             .purpose_claim
             .as_deref()
             .map(|name| optional_direct_string(claims.get(name)))
-            .transpose()?
+            .transpose()
+            .map_err(|error| error.because(FailedCheck::TokenClaims))?
             .flatten();
         if verified.scopes.len() > MAX_SCOPE_VALUES {
-            return Err(AuthenticationError::InvalidClaims);
+            return Err(invalid_claims(FailedCheck::TokenClaims));
         }
         let scopes = verified
             .scopes
             .iter()
             .cloned()
             .map(validate_scope)
-            .collect::<Result<BTreeSet<_>, _>>()?;
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map_err(|error| error.because(FailedCheck::TokenClaims))?;
         let direct_claims = self
             .direct_claims
             .iter()
@@ -296,40 +489,41 @@ impl RegistryAuthenticator {
                     mapped_claim(value, expectation).map(|value| (name.clone(), value))
                 })
             })
-            .collect::<Result<BTreeMap<_, _>, _>>()?;
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .map_err(|error| error.because(FailedCheck::TokenClaims))?;
 
         let requester_client = verified
             .matched_client_id()
-            .map_err(|_| AuthenticationError::InvalidClaims)?
+            .map_err(|_| invalid_claims(FailedCheck::TokenClient))?
             .map(str::to_owned);
-        let actor_subject = optional_actor_subject(claims.get("act"), &self.issuer)?;
+        let actor_subject = optional_actor_subject(claims.get("act"), &rules.issuer)
+            .map_err(|error| error.because(FailedCheck::Delegation))?;
         if let Some(actor) = actor_subject.as_deref() {
             let client = requester_client
                 .as_deref()
-                .ok_or(AuthenticationError::InvalidClaims)?;
+                .ok_or_else(|| invalid_claims(FailedCheck::TokenClient))?;
             if self.trusted_actors.get(client).map(String::as_str) != Some(actor) {
-                return Err(AuthenticationError::InvalidClaims);
+                return Err(invalid_claims(FailedCheck::Delegation));
             }
         }
         // A token exchange copies the subject's claims, so a kind claim on a
         // delegated token describes the person, not the caller. The trusted
         // actor verified above is the caller, and it is always an agent.
-        let actor_kind = Some(if actor_subject.is_some() {
-            registry_platform_oidc::ActorKind::Agent
+        // Otherwise the kind is the one the issuer set settled, and a token
+        // that states none and has none declared is an unspecified caller: a
+        // profile that pins a kind refuses it.
+        let actor_kind = if actor_subject.is_some() {
+            Some(registry_platform_oidc::ActorKind::Agent)
         } else {
-            if !claims.contains_key(&self.contextual_claims.actor_kind) {
-                return Err(AuthenticationError::MissingActorKind);
-            }
-            actor_kind(&verified.claims, &self.contextual_claims)
-                .map_err(|_| AuthenticationError::InvalidClaims)?
-        });
+            caller.kind.kind()
+        };
         // The person is named by the configured principal claim, the same
         // claim every access profile reads. A review authority compares this
         // identity with its own caller principals, so it must not fall back
         // to `sub` when the deployment's principal lives in another claim.
         let human_identity = if actor_kind == Some(registry_platform_oidc::ActorKind::Human) {
             Some(registry_review_client::HumanIdentity {
-                issuer: self.issuer.clone(),
+                issuer: rules.issuer.clone(),
                 subject: principal.clone(),
             })
         } else {
@@ -337,25 +531,25 @@ impl RegistryAuthenticator {
         };
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|_| AuthenticationError::InvalidClaims)?
+            .map_err(|_| invalid_claims(FailedCheck::TokenTime))?
             .as_secs();
-        let grant = grant_claims(&verified.claims, &self.contextual_claims, now)
-            .map_err(|_| AuthenticationError::InvalidClaims)?;
+        let grant =
+            grant_claims(&verified.claims, &self.contextual_claims, now).map_err(|error| {
+                invalid_claims(match error {
+                    ClaimError::Expired => FailedCheck::TaskGrantExpired,
+                    _ => FailedCheck::TaskGrantClaims,
+                })
+            })?;
         if let Some(grant) = &grant {
             grant
-                .verify_context(&verified, &self.audience)
-                .map_err(|_| AuthenticationError::InvalidClaims)?;
-            if !task_grant_token_lifetime_is_short(
-                verified.claims.iat,
-                verified.claims.exp,
-                now,
-                self.leeway,
-            ) {
-                return Err(AuthenticationError::InvalidClaims);
-            }
+                .verify_context(verified, &rules.audience, self.peer_policy)
+                .map_err(grant_context_check)?;
+            task_grant_token_lifetime(verified.claims.iat, verified.claims.exp, now, rules.leeway)
+                .map_err(invalid_claims)?;
         }
         let grant_subjects = if grant.is_some() {
-            bounded_identity(claims.get("identity"))?
+            bounded_identity(claims.get("identity"))
+                .map_err(|error| error.because(FailedCheck::TaskGrantClaims))?
         } else {
             BTreeMap::new()
         };
@@ -372,7 +566,8 @@ impl RegistryAuthenticator {
                         mapped_claim(value, expectation).map(|value| (name.clone(), value))
                     })
                 })
-                .collect::<Result<BTreeMap<_, _>, _>>()?
+                .collect::<Result<BTreeMap<_, _>, _>>()
+                .map_err(|error| error.because(FailedCheck::TaskGrantClaims))?
         } else {
             direct_claims
         };
@@ -401,29 +596,39 @@ impl RegistryAuthenticator {
         })
         .and_then(|claims| claims.with_human_identity(human_identity))
         .and_then(|claims| claims.with_consent_claims(recipients, &self.consent_decisions))
-        .map_err(|_| AuthenticationError::InvalidClaims)
+        .map(|claims| (claims, rules.scope_claim.as_str()))
+        .map_err(|_| invalid_claims(FailedCheck::TokenClaims))
     }
 }
 
-/// A task-grant token must carry `iat` and `exp`, be issued for between 1 and
-/// [`MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS`], and carry an `iat` no later than
-/// `now` plus the verifier's clock leeway, so its issued lifetime also bounds
-/// the time it is honoured from this clock.
-fn task_grant_token_lifetime_is_short(
+/// A task-grant token must carry `iat` and `exp`, with `exp` after `iat` and
+/// `iat` no later than `now` plus the verifier's clock leeway. A token that
+/// fails any of those is a malformed grant token (`TaskGrantClaims`). One that
+/// is well formed but issued for more than
+/// [`MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS`] is refused as `TaskGrantLifetime`,
+/// so its issued lifetime also bounds the time it is honoured from this clock.
+fn task_grant_token_lifetime(
     issued_at: Option<i64>,
     expires_at: Option<i64>,
     now: u64,
     leeway: Duration,
-) -> bool {
+) -> Result<(), FailedCheck> {
     let latest_issued_at = now
         .checked_add(leeway.as_secs())
         .and_then(|latest| i64::try_from(latest).ok());
-    issued_at
-        .zip(expires_at)
-        .zip(latest_issued_at)
-        .filter(|((issued_at, _), latest_issued_at)| issued_at <= latest_issued_at)
-        .and_then(|((issued_at, expires_at), _)| expires_at.checked_sub(issued_at))
-        .is_some_and(|lifetime| (1..=MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS).contains(&lifetime))
+    let (Some(issued_at), Some(expires_at), Some(latest_issued_at)) =
+        (issued_at, expires_at, latest_issued_at)
+    else {
+        return Err(FailedCheck::TaskGrantClaims);
+    };
+    let lifetime = expires_at.saturating_sub(issued_at);
+    if issued_at > latest_issued_at || lifetime < 1 {
+        return Err(FailedCheck::TaskGrantClaims);
+    }
+    if lifetime > MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS {
+        return Err(FailedCheck::TaskGrantLifetime);
+    }
+    Ok(())
 }
 
 fn admit_refusal_warning(last_warning: &Mutex<Option<Instant>>, now: Instant) -> bool {
@@ -447,9 +652,7 @@ impl fmt::Debug for RegistryAuthenticator {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RegistryAuthenticator")
-            .field("issuer", &"<redacted>")
-            .field("audience", &"<redacted>")
-            .field("scope_claim", &self.scope_claim)
+            .field("issuers", &self.rules.keys())
             .field("principal_claim", &self.principal_claim)
             .field("purpose_claim", &self.purpose_claim)
             .field("direct_claims", &self.direct_claims.keys())
@@ -470,45 +673,47 @@ pub(crate) async fn authenticate_request(
 ) -> Response {
     request.extensions_mut().remove::<VerifiedRequestClaims>();
     let token = match bearer_token(request.headers()) {
-        Ok(Some(token)) => token,
-        Ok(None) | Err(_) => {
-            authenticator.record_header_refusal();
-            return authentication_refused();
+        Ok(token) => token,
+        Err(check) => return authentication_refused(RefusalNote::new(check)),
+    };
+    let (claims, scope_claim) = match authenticator.authenticate_checked(token).await {
+        Ok(verified) => verified,
+        Err(refusal) => {
+            return refusal.response();
         }
     };
-    let claims = match authenticator.authenticate(token).await {
-        Ok(claims) => claims,
-        Err(AuthenticationError::MissingActorKind) => {
-            // A caller can replay such a credential, so the warning is bounded
-            // the same way as an unknown key identifier.
-            if admit_refusal_warning(&authenticator.last_actor_kind_warning, Instant::now()) {
-                tracing::warn!(
-                    target: "registry_breg::auth",
-                    message = "verified credential is missing the configured actor-kind claim"
-                );
-            }
-            return authentication_refused();
+    let claims = match request
+        .extensions()
+        .get::<crate::correlation::RequestCorrelation>()
+    {
+        Some(correlation) => {
+            claims.with_scope_declaration(scope_claim, correlation.declared_scope_slot())
         }
-        Err(_) => return authentication_refused(),
+        None => claims,
     };
     request.extensions_mut().insert(claims);
     next.run(request).await
 }
 
-fn bearer_token(headers: &axum::http::HeaderMap) -> Result<Option<&str>, AuthenticationError> {
+/// The one bearer credential on a request, or the check it failed. A request
+/// with no credential, or one in another scheme, names the missing
+/// credential. A repeated or unreadable header, or a bearer that is not one
+/// well-formed token, names the malformed credential.
+pub(crate) fn bearer_token(headers: &axum::http::HeaderMap) -> Result<&str, FailedCheck> {
     let mut values = headers.get_all(AUTHORIZATION).iter();
     let Some(value) = values.next() else {
-        return Ok(None);
+        return Err(FailedCheck::CredentialMissing);
     };
     if values.next().is_some() {
-        return Err(AuthenticationError::MalformedCredential);
+        return Err(FailedCheck::CredentialMalformed);
     }
     let value = value
         .to_str()
-        .map_err(|_| AuthenticationError::MalformedCredential)?;
-    parse_bearer_token(value)
-        .map(Some)
-        .map_err(|_| AuthenticationError::MalformedCredential)
+        .map_err(|_| FailedCheck::CredentialMalformed)?;
+    parse_bearer_token(value).map_err(|error| match error {
+        BearerParseError::InvalidScheme => FailedCheck::CredentialMissing,
+        _ => FailedCheck::CredentialMalformed,
+    })
 }
 
 fn validate_verifier_profile(
@@ -554,17 +759,33 @@ fn admits_one_access_token_type(allowed_typ: &[String]) -> bool {
 /// authenticator, so an offline check refuses what startup refuses.
 pub(crate) fn check_claim_mapping(
     registry: &CompiledRegistry,
-    verifier: &TokenVerifierConfig,
+    verifiers: &[&TokenVerifierConfig],
     claims: &AuthorityClaimConfig,
 ) -> Result<(), AuthenticationConfigError> {
-    validate_claim_mapping(registry, verifier, claims).map(|_| ())
+    validate_claim_mapping(registry, verifiers, claims).map(|_| ())
 }
 
+/// Hold one authority mapping to the compiled access profiles and to every
+/// issuer profile a token may be verified by. A claim the mapping reads may
+/// not be any issuer's scope claim, and a client the project names must be
+/// listed by an issuer.
 fn validate_claim_mapping(
     registry: &CompiledRegistry,
-    verifier: &TokenVerifierConfig,
+    verifiers: &[&TokenVerifierConfig],
     claims: &AuthorityClaimConfig,
 ) -> Result<BTreeMap<String, DirectClaimExpectation>, AuthenticationConfigError> {
+    let scope_claims = verifiers
+        .iter()
+        .map(|verifier| verifier.scope_claim.as_str())
+        .collect::<BTreeSet<_>>();
+    let listed = |client: &str| {
+        verifiers.iter().any(|verifier| {
+            verifier
+                .allowed_clients
+                .iter()
+                .any(|allowed| allowed == client)
+        })
+    };
     claims
         .contextual_claims
         .validate()
@@ -592,10 +813,10 @@ fn validate_claim_mapping(
     ];
     if contextual_claims_with_distinct_roles.iter().any(|name| {
         *name == &claims.principal_claim
-            || *name == &verifier.scope_claim
+            || scope_claims.contains(name.as_str())
             || claims.purpose_claim.as_ref() == Some(*name)
     }) || contextual_purpose == &claims.principal_claim
-        || contextual_purpose == &verifier.scope_claim
+        || scope_claims.contains(contextual_purpose.as_str())
     {
         return Err(AuthenticationConfigError::ConflictingClaimMapping);
     }
@@ -610,22 +831,18 @@ fn validate_claim_mapping(
     {
         return Err(AuthenticationConfigError::InvalidClaimMapping);
     }
-    if claims
-        .trusted_actors
-        .keys()
-        .any(|client| !verifier.allowed_clients.contains(client))
-    {
+    if claims.trusted_actors.keys().any(|client| !listed(client)) {
         return Err(AuthenticationConfigError::NamedClientNotListed);
     }
     if !(valid_authority_claim_name(&claims.principal_claim) || claims.principal_claim == "sub")
-        || claims.principal_claim == verifier.scope_claim
+        || scope_claims.contains(claims.principal_claim.as_str())
     {
         return Err(AuthenticationConfigError::InvalidClaimMapping);
     }
     if let Some(purpose) = &claims.purpose_claim {
         if !valid_authority_claim_name(purpose)
             || purpose == &claims.principal_claim
-            || purpose == &verifier.scope_claim
+            || scope_claims.contains(purpose.as_str())
         {
             return Err(AuthenticationConfigError::InvalidClaimMapping);
         }
@@ -667,7 +884,7 @@ fn validate_claim_mapping(
         if profile
             .requester_clients
             .iter()
-            .any(|client| !verifier.allowed_clients.contains(client))
+            .any(|client| !listed(client))
         {
             return Err(AuthenticationConfigError::NamedClientNotListed);
         }
@@ -686,7 +903,7 @@ fn validate_claim_mapping(
             profile
                 .requester_clients
                 .iter()
-                .any(|client| !verifier.allowed_clients.contains(client))
+                .any(|client| !listed(client))
         }) || match &action.execution {
             crate::model::CompiledActionExecution::Immediate => false,
             crate::model::CompiledActionExecution::Proposal { proposal } => {
@@ -694,7 +911,7 @@ fn validate_claim_mapping(
                     profile
                         .requester_clients
                         .iter()
-                        .any(|client| !verifier.allowed_clients.contains(client))
+                        .any(|client| !listed(client))
                 })
             }
         }
@@ -721,12 +938,11 @@ fn validate_claim_mapping(
     }
     // A recipient's client that the verifier would refuse can never read under
     // consent, so a mismatch is a configuration error, not a silent denial.
-    if registry.recipients().clients().any(|client| {
-        !verifier
-            .allowed_clients
-            .iter()
-            .any(|allowed| allowed == client)
-    }) {
+    if registry
+        .recipients()
+        .clients()
+        .any(|client| !listed(client))
+    {
         return Err(AuthenticationConfigError::NamedClientNotListed);
     }
     if inventory
@@ -753,7 +969,7 @@ fn validate_claim_mapping(
                 return Err(AuthenticationConfigError::ConflictingClaimExpectation);
             }
         } else if !valid_authority_claim_name(name)
-            || name == &verifier.scope_claim
+            || scope_claims.contains(name.as_str())
             || claims.purpose_claim.as_ref() == Some(name)
         {
             return Err(AuthenticationConfigError::InvalidClaimMapping);
@@ -956,18 +1172,139 @@ fn mapped_scalar_claim(
     Ok(value)
 }
 
-pub(crate) fn authentication_refused() -> Response {
-    crate::correlation::problem_response(
-        StatusCode::UNAUTHORIZED,
-        "Unauthorized",
-        "The bearer credential is missing or refused.",
-        "authentication.refused",
-    )
+/// The check a task grant refused by its token context failed. A token with
+/// no usable verified client fails the client check, and a grant bound to
+/// another client or resource fails its binding.
+fn grant_context_check(error: GrantContextError) -> Refusal {
+    let check = match error {
+        GrantContextError::MissingVerifiedClient | GrantContextError::InvalidVerifiedClient => {
+            FailedCheck::TokenClient
+        }
+        GrantContextError::ClientMismatch | GrantContextError::ResourceMismatch => {
+            FailedCheck::TaskGrantBinding
+        }
+        GrantContextError::DevelopmentAssertion => {
+            return Refusal {
+                development_assertion: true,
+                ..invalid_claims(FailedCheck::TaskGrantClaims)
+            };
+        }
+        _ => FailedCheck::TaskGrantClaims,
+    };
+    invalid_claims(check)
+}
+
+impl Refusal {
+    /// The 401 for this refusal: its own code for a task grant issued in
+    /// development, the uniform authentication refusal otherwise. Both name
+    /// the `Bearer` scheme in `WWW-Authenticate`.
+    fn response(self) -> Response {
+        if self.development_assertion {
+            let mut response = crate::correlation::problem_response(
+                StatusCode::UNAUTHORIZED,
+                "Development task assertion",
+                "A production registry refuses task assertions issued in development.",
+                registry_platform_oidc::DEVELOPMENT_ASSERTION_CODE,
+            );
+            response.headers_mut().insert(
+                axum::http::header::WWW_AUTHENTICATE,
+                registry_platform_httpsec::bearer_challenge(),
+            );
+            return crate::correlation::attach_refusal_note(response, self.note());
+        }
+        authentication_refused(self.note())
+    }
+}
+
+/// The uniform 401 for a missing credential or a general authentication
+/// refusal. The answer is the same for every check, so a caller learns
+/// nothing about which one failed: it names the `Bearer` scheme in
+/// `WWW-Authenticate` and nothing about why. The note, with its remedy,
+/// reaches only the recording layer.
+pub(crate) fn authentication_refused(note: RefusalNote) -> Response {
+    let mut response = crate::api::refusal_problem_with_note(
+        crate::problem::ProblemCode::AuthenticationRefused,
+        note,
+    );
+    response.headers_mut().insert(
+        axum::http::header::WWW_AUTHENTICATE,
+        registry_platform_httpsec::bearer_challenge(),
+    );
+    response
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_grant_context_refusal_names_the_check_it_failed() {
+        for (error, check) in [
+            (
+                GrantContextError::MissingVerifiedClient,
+                FailedCheck::TokenClient,
+            ),
+            (
+                GrantContextError::InvalidVerifiedClient,
+                FailedCheck::TokenClient,
+            ),
+            (
+                GrantContextError::ClientMismatch,
+                FailedCheck::TaskGrantBinding,
+            ),
+            (
+                GrantContextError::ResourceMismatch,
+                FailedCheck::TaskGrantBinding,
+            ),
+        ] {
+            assert_eq!(
+                grant_context_check(error),
+                invalid_claims(check),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_development_assertion_preserves_the_task_grant_claims_metric_label() {
+        let refusal = grant_context_check(GrantContextError::DevelopmentAssertion);
+        assert_eq!(refusal.check, FailedCheck::TaskGrantClaims);
+        assert_eq!(refusal.response().status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn a_bearer_names_the_check_its_header_failed() {
+        let headers = |values: &[&'static str]| {
+            let mut headers = axum::http::HeaderMap::new();
+            for value in values {
+                headers.append(AUTHORIZATION, axum::http::HeaderValue::from_static(value));
+            }
+            headers
+        };
+        assert_eq!(bearer_token(&headers(&["Bearer a.b.c"])), Ok("a.b.c"));
+        for (values, check) in [
+            (&[][..], FailedCheck::CredentialMissing),
+            (&["Basic abc"][..], FailedCheck::CredentialMissing),
+            (
+                &["Bearer a", "Bearer b"][..],
+                FailedCheck::CredentialMalformed,
+            ),
+            (&["Bearer  a"][..], FailedCheck::CredentialMalformed),
+            (&["Bearer"][..], FailedCheck::CredentialMalformed),
+            (&["Bearer a b"][..], FailedCheck::CredentialMalformed),
+        ] {
+            assert_eq!(bearer_token(&headers(values)), Err(check), "{values:?}");
+        }
+        let mut unreadable = axum::http::HeaderMap::new();
+        unreadable.insert(
+            AUTHORIZATION,
+            axum::http::HeaderValue::from_bytes(b"Bearer \xff").unwrap(),
+        );
+        assert_eq!(
+            bearer_token(&unreadable),
+            Err(FailedCheck::CredentialMalformed)
+        );
+    }
 
     #[test]
     fn refusal_warnings_recover_poisoned_timestamps_and_preserve_rate_limits() {
@@ -1017,35 +1354,99 @@ mod tests {
         ));
     }
 
+    /// Every 401 the service answers carries the failed check. Only the two
+    /// runtime constructors and the generated OpenAPI example can name the
+    /// refusal. Adding another call site requires updating this list.
+    #[test]
+    fn only_the_noting_constructors_build_a_401() {
+        fn visit(root: &std::path::Path, dir: &std::path::Path, found: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).expect("source directory is readable") {
+                let path = entry.expect("directory entry is readable").path();
+                if path.is_dir() {
+                    visit(root, &path, found);
+                    continue;
+                }
+                // Judge the path below `src`, so where the checkout lives
+                // cannot exclude the files.
+                let name = path
+                    .strip_prefix(root)
+                    .expect("the file is below the source directory")
+                    .to_string_lossy()
+                    .into_owned();
+                if !name.ends_with(".rs")
+                    || name.contains("tests")
+                    || name == "problem.rs"
+                    || name == "compiler.rs"
+                {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("source file is readable");
+                let production = text
+                    .split("#[cfg(test)]\nmod tests {")
+                    .next()
+                    .unwrap_or_default();
+                for needle in [
+                    "StatusCode::UNAUTHORIZED",
+                    "ProblemCode::AuthenticationRefused",
+                ] {
+                    for _ in production.matches(needle) {
+                        found.push(format!(
+                            "{needle} in {}",
+                            path.file_name().expect("file name").to_string_lossy()
+                        ));
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        visit(&root, &root, &mut found);
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                "ProblemCode::AuthenticationRefused in artifacts.rs",
+                "ProblemCode::AuthenticationRefused in auth.rs",
+                "ProblemCode::AuthenticationRefused in mod.rs",
+                "StatusCode::UNAUTHORIZED in auth.rs",
+            ]
+        );
+    }
+
     #[test]
     fn task_grant_tokens_must_be_issued_for_at_most_fifteen_minutes() {
         let issued = 1_800_000_000;
         let now = 1_800_000_000;
         let leeway = Duration::from_secs(60);
-        assert!(task_grant_token_lifetime_is_short(
-            Some(issued),
-            Some(issued + 900),
-            now,
-            leeway
-        ));
-        assert!(task_grant_token_lifetime_is_short(
-            Some(issued),
-            Some(issued + 1),
-            now,
-            leeway
-        ));
+        assert_eq!(
+            task_grant_token_lifetime(Some(issued), Some(issued + 900), now, leeway),
+            Ok(())
+        );
+        assert_eq!(
+            task_grant_token_lifetime(Some(issued), Some(issued + 1), now, leeway),
+            Ok(())
+        );
         for (issued_at, expires_at) in [
             (Some(issued), Some(issued + 901)),
             (Some(issued - 604_200), Some(issued + 600)),
+            (Some(i64::MIN), Some(i64::MAX)),
+        ] {
+            assert_eq!(
+                task_grant_token_lifetime(issued_at, expires_at, now, leeway),
+                Err(FailedCheck::TaskGrantLifetime),
+                "iat {issued_at:?} and exp {expires_at:?} are too long"
+            );
+        }
+        for (issued_at, expires_at) in [
             (None, Some(issued + 600)),
             (Some(issued), None),
             (Some(issued), Some(issued)),
             (Some(issued + 1), Some(issued)),
-            (Some(i64::MIN), Some(i64::MAX)),
         ] {
-            assert!(
-                !task_grant_token_lifetime_is_short(issued_at, expires_at, now, leeway),
-                "iat {issued_at:?} and exp {expires_at:?} are refused"
+            assert_eq!(
+                task_grant_token_lifetime(issued_at, expires_at, now, leeway),
+                Err(FailedCheck::TaskGrantClaims),
+                "iat {issued_at:?} and exp {expires_at:?} are malformed"
             );
         }
     }
@@ -1056,29 +1457,22 @@ mod tests {
         let leeway = Duration::from_secs(60);
         let at = |offset: i64| i64::try_from(now).expect("test clock fits i64") + offset;
         for issued_at in [at(86_400), at(61)] {
-            assert!(
-                !task_grant_token_lifetime_is_short(
-                    Some(issued_at),
-                    Some(issued_at + 900),
-                    now,
-                    leeway
-                ),
+            assert_eq!(
+                task_grant_token_lifetime(Some(issued_at), Some(issued_at + 900), now, leeway),
+                Err(FailedCheck::TaskGrantClaims),
                 "iat {issued_at} later than now plus leeway is refused"
             );
         }
         for issued_at in [at(59), at(60)] {
-            assert!(
-                task_grant_token_lifetime_is_short(
-                    Some(issued_at),
-                    Some(issued_at + 900),
-                    now,
-                    leeway
-                ),
+            assert_eq!(
+                task_grant_token_lifetime(Some(issued_at), Some(issued_at + 900), now, leeway),
+                Ok(()),
                 "iat {issued_at} within the leeway is accepted"
             );
         }
-        assert!(
-            !task_grant_token_lifetime_is_short(Some(at(0)), Some(at(900)), u64::MAX, leeway),
+        assert_eq!(
+            task_grant_token_lifetime(Some(at(0)), Some(at(900)), u64::MAX, leeway),
+            Err(FailedCheck::TaskGrantClaims),
             "a clock that cannot bound iat refuses the token"
         );
     }

@@ -479,14 +479,16 @@ pub(crate) fn https_url(value: &str) -> bool {
         })
 }
 
-/// An `https` URL, or `http` to 127.0.0.1, without user information, query
-/// or fragment. A facts document may describe a development issuer.
+/// An `https` URL, or `http` to a loopback address literal, without user
+/// information, query or fragment. A facts document may describe a development issuer.
 fn issuer_url(value: &str) -> bool {
     https_url(value)
         || (Url::new(value).is_ok()
             && url::Url::parse(value).is_ok_and(|url| {
                 url.scheme() == "http"
-                    && url.host_str() == Some("127.0.0.1")
+                    && url.host_str().is_some_and(|host| {
+                        registry_platform_loopback::loopback_literal(host).is_some()
+                    })
                     && url.username().is_empty()
                     && url.password().is_none()
                     && url.query().is_none()
@@ -570,7 +572,7 @@ fn check(document: &Document, facts: &IdentityFacts) -> Vec<Diagnostic> {
         error(
             "/issuer",
             "identity.facts.invalid-issuer",
-            "the issuer is neither https nor http to 127.0.0.1, or carries user information, a query or a fragment",
+            "the issuer is neither https nor http to a loopback host, or carries user information, a query or a fragment",
             "Write the issuer URL the product trusts.",
         );
     }

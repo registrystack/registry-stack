@@ -30,10 +30,18 @@ fn wallet_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 #[test]
 fn wallet_check_uses_selected_optional_binary_and_json_report_flag() {
     let (generation, binary) = wallet_fixture();
+    let script = fs::read_to_string(&binary).unwrap();
+    let script = script.replace(
+        r#"printf '%s\n' "$@""#,
+        r#"printf '%s\n' "$@" > "$0.argv"
+printf '%s\n' '{"apiVersion":"id.registrystack.org/formats/evidence/ctl-report/v1alpha1","kind":"EvidenceCtlReport","command":"check","ok":true,"status":"complete","diagnostics":[]}'"#,
+    );
+    fs::write(&binary, script).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .env("RSTACK_GENERATION_DIR", generation.path())
         .env("RSTACK_RELEASE_TAG", "v0.44.0")
-        .env("RSTACK_EVIDENCE_OID4VCI_BIN", binary)
+        .env("RSTACK_EVIDENCE_OID4VCI_BIN", &binary)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args([
             "--format",
             "json",
@@ -48,9 +56,38 @@ fn wallet_check_uses_selected_optional_binary_and_json_report_flag() {
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     assert_eq!(
-        output.stdout,
-        b"check\n--runtime-config\nruntime.yaml\n--format\njson\n--environment\n"
+        fs::read(binary.with_extension("argv")).unwrap(),
+        b"check\n--runtime-config\nruntime.yaml\n--format\njson\n--environment\n--posture\nproduction\n"
     );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["posture"],
+        serde_json::json!({"value":"production","source":"default"})
+    );
+}
+
+#[test]
+fn wallet_check_forwards_the_flag_and_environment_postures() {
+    let (_generation, binary) = wallet_fixture();
+    for flag in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
+        command
+            .args(["oid4vci", "--oid4vci-bin"])
+            .arg(&binary)
+            .args(["check", "--runtime-config", "runtime.yaml"])
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if flag {
+            command.args(["--posture", "development"]);
+        } else {
+            command.env("REGISTRY_STACK_POSTURE", "development");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            output.stdout.ends_with(b"--posture\ndevelopment\n"),
+            "{output:?}"
+        );
+    }
 }
 
 #[test]

@@ -2691,7 +2691,10 @@ async fn terminal_retention_keeps_spent_idempotency_keys_across_payload_rotation
                     [0x22; 32],
                 )
                 .unwrap(),
-                audit: AuditWriter::from_line_sink(Box::new(std::io::sink())),
+                audit: AuditWriter::from_line_sink(
+                    Box::new(std::io::sink()),
+                    registry_platform_config::Posture::Production,
+                ),
                 audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                     vec![0x33; 32],
                 ))
@@ -2886,7 +2889,10 @@ async fn audit_failure_prevents_admission_and_payload_release() {
         StoreSecurity {
             database_id: h.namespace.clone(),
             keys: StateKeys::new(1, BTreeMap::from([(1, [0x11; 32])]), [0x22; 32]).unwrap(),
-            audit: AuditWriter::from_line_sink(Box::new(Fails)),
+            audit: AuditWriter::from_line_sink(
+                Box::new(Fails),
+                registry_platform_config::Posture::Production,
+            ),
             audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                 vec![0x33; 32],
             ))
@@ -2949,7 +2955,10 @@ async fn changing_admission_key_cannot_reopen_a_spent_identity() {
         StoreSecurity {
             database_id: h.namespace.clone(),
             keys: StateKeys::new(1, BTreeMap::from([(1, [0x11; 32])]), [0x99; 32]).unwrap(),
-            audit: AuditWriter::from_line_sink(Box::new(std::io::sink())),
+            audit: AuditWriter::from_line_sink(
+                Box::new(std::io::sink()),
+                registry_platform_config::Posture::Production,
+            ),
             audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                 vec![0x33; 32],
             ))
@@ -2965,7 +2974,10 @@ async fn changing_admission_key_cannot_reopen_a_spent_identity() {
         StoreSecurity {
             database_id: h.namespace.clone(),
             keys: StateKeys::new(1, BTreeMap::from([(1, [0x55; 32])]), [0x22; 32]).unwrap(),
-            audit: AuditWriter::from_line_sink(Box::new(std::io::sink())),
+            audit: AuditWriter::from_line_sink(
+                Box::new(std::io::sink()),
+                registry_platform_config::Posture::Production,
+            ),
             audit_profile: AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
                 vec![0x33; 32],
             ))

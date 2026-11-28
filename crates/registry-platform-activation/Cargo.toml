@@ -19,6 +19,7 @@ schema = ["dep:schemars"]
 [dependencies]
 schemars = { workspace = true, optional = true, features = ["chrono04", "uuid1"] }
 chrono = { workspace = true, features = ["serde"] }
+registry-platform-posture.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio-postgres.workspace = true

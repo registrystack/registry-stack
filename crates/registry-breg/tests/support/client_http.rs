@@ -42,7 +42,7 @@ impl ClientHttp {
                 .await
                 .expect("SDK fixture HTTP server serves the real router");
         });
-        let config = BaseRegistryClientConfig::new(base_url.parse().unwrap());
+        let config = BaseRegistryClientConfig::new_without_peer_policy(base_url.parse().unwrap());
         let client = BaseRegistryClient::new(config).expect("loopback SDK config is valid");
         Self {
             client,

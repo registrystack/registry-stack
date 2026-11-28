@@ -45,7 +45,7 @@ use registry_evidence_client::{
     AssuranceProfile, AudienceScopedRequest, BearerToken, ConceptForm, DefinitionCardinality,
     DefinitionKind, EvidenceClient, EvidenceClientConfig, EvidenceClientError,
     EvidenceDefinitionsDocument, EvidenceRequestSpec, EvidenceResponseFormat, OAuthErrorCode,
-    PrivateKeyJwt, PrivateKeyJwtConfig, PublicValue, SelectorField, SelectorValue,
+    PeerPolicy, PrivateKeyJwt, PrivateKeyJwtConfig, PublicValue, SelectorField, SelectorValue,
     SelectorValueOrigin, StaticToken, SubjectContinuity, SubjectExpectations, SubjectRequest,
     TokenError, TokenProvider, TransportKind, VerificationError, VerifiedAudienceScopedEvidence,
     EVIDENCE_DEFINITIONS_SCHEMA_V1,
@@ -489,7 +489,7 @@ async fn a_response_under_the_wrong_media_type_is_refused() {
             )
             .mount(&replay)
             .await;
-        let replayed = EvidenceClient::new(EvidenceClientConfig::new(
+        let replayed = EvidenceClient::new(EvidenceClientConfig::new_without_peer_policy(
             Url::parse(&replay.uri())?,
             Arc::new(StaticToken::new(deployment.token())?),
             deployment.runtime.jwks().clone(),
@@ -618,9 +618,12 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     fs::set_permissions(&profile_path, fs::Permissions::from_mode(0o600))
         .expect("the profile is owner-only");
 
-    let client =
-        EvidenceClient::from_profile_path_with_key(&profile_path, issuer.client_key.clone())
-            .expect("the local profile and in-memory registered key configure the client");
+    let client = EvidenceClient::from_profile_path_with_key(
+        &profile_path,
+        issuer.client_key.clone(),
+        PeerPolicy::AcceptDevelopmentPeer,
+    )
+    .expect("the local profile and in-memory registered key configure the client");
     let request = || {
         AudienceScopedRequest::new(
             "adult-status",
@@ -794,6 +797,7 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     let reviewed_client = EvidenceClient::from_profile_path_with_key(
         &reviewed_profile_path,
         issuer.client_key.clone(),
+        PeerPolicy::AcceptDevelopmentPeer,
     )
     .expect("the reviewed profile configures the client");
     let fresh_candidate = reviewed_client
@@ -816,9 +820,12 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
         "responseFormat": "signed-jws"
     }}});
     fs::write(&profile_path, serde_json::to_vec(&pinned_profile).unwrap()).unwrap();
-    let pinned_client =
-        EvidenceClient::from_profile_path_with_key(&profile_path, issuer.client_key.clone())
-            .expect("a definition pin configures the client independently of service identity");
+    let pinned_client = EvidenceClient::from_profile_path_with_key(
+        &profile_path,
+        issuer.client_key.clone(),
+        PeerPolicy::AcceptDevelopmentPeer,
+    )
+    .expect("a definition pin configures the client independently of service identity");
     pinned_client
         .request(request())
         .await
@@ -826,9 +833,12 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     pinned_profile["expected"]["definitions"][&definition.handle]["configurationRevision"] =
         json!(format!("sha256:{}", "0".repeat(64)));
     fs::write(&profile_path, serde_json::to_vec(&pinned_profile).unwrap()).unwrap();
-    let drifted_client =
-        EvidenceClient::from_profile_path_with_key(&profile_path, issuer.client_key.clone())
-            .expect("the older pin is valid configuration");
+    let drifted_client = EvidenceClient::from_profile_path_with_key(
+        &profile_path,
+        issuer.client_key.clone(),
+        PeerPolicy::AcceptDevelopmentPeer,
+    )
+    .expect("the older pin is valid configuration");
     assert!(
         matches!(
             drifted_client.request(request()).await,
@@ -967,13 +977,18 @@ async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_ev
     unpinned.oauth.resource = None;
     unpinned.oauth.scopes = None;
     assert!(matches!(
-        EvidenceClient::from_profile_with_authorization(unpinned, exchange(TOKEN_AUDIENCE)),
+        EvidenceClient::from_profile_with_authorization(
+            unpinned,
+            exchange(TOKEN_AUDIENCE),
+            PeerPolicy::AcceptDevelopmentPeer,
+        ),
         Err(EvidenceClientError::Configuration { .. })
     ));
     assert_eq!(issuer.issued_credential_count(), before);
     let mismatched = EvidenceClient::from_profile_with_authorization(
         profile.clone(),
         exchange("urn:registry:other"),
+        PeerPolicy::AcceptDevelopmentPeer,
     )
     .expect("the mismatch is checked against discovery, not guessed at construction");
     assert!(matches!(
@@ -986,8 +1001,12 @@ async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_ev
         "a mismatched resource must fail before token acquisition"
     );
 
-    let client = EvidenceClient::from_profile_with_authorization(profile, exchange(TOKEN_AUDIENCE))
-        .expect("the exchange-backed profile constructs");
+    let client = EvidenceClient::from_profile_with_authorization(
+        profile,
+        exchange(TOKEN_AUDIENCE),
+        PeerPolicy::AcceptDevelopmentPeer,
+    )
+    .expect("the exchange-backed profile constructs");
     let verified = client
         .request(request())
         .await
@@ -1434,6 +1453,7 @@ impl Deployment {
             token_provider,
             self.runtime.jwks().clone(),
             Vec::new(),
+            PeerPolicy::AcceptDevelopmentPeer,
         ))
         .expect("the client configuration is usable")
     }
@@ -1448,6 +1468,7 @@ impl Deployment {
             Arc::new(StaticToken::new(access_token).expect("the credential is header-safe")),
             self.runtime.jwks().clone(),
             Vec::new(),
+            PeerPolicy::AcceptDevelopmentPeer,
         );
         if let Some(maximum_response_bytes) = maximum_response_bytes {
             config = config.with_maximum_response_bytes(maximum_response_bytes);
@@ -1500,6 +1521,23 @@ impl Drop for Deployment {
         let _ = fs::set_permissions(&self.runtime_path, fs::Permissions::from_mode(0o644));
         unseal(&self.bundle_root);
     }
+}
+
+#[tokio::test]
+async fn the_default_client_refuses_the_development_deployment() {
+    let deployment = start(resolved_source_answer()).await;
+    let client = EvidenceClient::new(EvidenceClientConfig::new_without_peer_policy(
+        deployment.base_url.clone(),
+        Arc::new(StaticToken::new(deployment.token()).unwrap()),
+        deployment.runtime.jwks().clone(),
+        Vec::new(),
+    ))
+    .unwrap();
+
+    assert!(matches!(
+        client.discover().await,
+        Err(EvidenceClientError::DevelopmentPeer)
+    ));
 }
 
 /// Stage, seal, load, and serve one deployment whose fixed source answers with
@@ -1694,9 +1732,15 @@ async fn start_trusting_with_request_burst_jwks_and_task_authority(
     seal(&bundle_root);
 
     let runtime = Arc::new(
-        EvidenceRuntime::initialize(&runtime_path)
-            .await
-            .expect("the staged local deployment initializes"),
+        EvidenceRuntime::initialize(
+            &runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .await
+        .expect("the staged local deployment initializes"),
     );
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let served = Arc::clone(&runtime);
@@ -2427,6 +2471,7 @@ fn start_stock_token_issuer_with_authorities(authority_issuers: &[&str]) -> Stoc
                 ("evidence_audience".to_owned(), json!(RELYING_AUDIENCE)),
             ]),
             token_attributes: vec!["evidence_tags".to_owned(), "evidence_audience".to_owned()],
+            unit: None,
             access_token_lifetime_seconds: 300,
             token_exchange: Some(TokenExchangeClient {
                 assertion_resource_server_id: TASK_AUTHORITY_RESOURCE_ID.to_owned(),

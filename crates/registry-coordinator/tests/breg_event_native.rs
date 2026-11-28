@@ -13,7 +13,7 @@ use registry_breg_client::{
     BRegRecordFormat, BRegRecordOptions,
 };
 use registry_coordinator::{deployment, runtime::RuntimeConfig};
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
+use registry_platform_crypto::delivery_signature::{sign, DeliveryKey, DeliveryKeys};
 use serde_json::{json, Value};
 use std::{
     path::Path,
@@ -23,12 +23,14 @@ use std::{
 };
 
 const TARGET: &str = "/v1/events/proposal-event-proof/submitted";
+const OTHER_TARGET: &str = "/v1/events/proposal-event-proof/other-submitted";
 const KEY: &[u8] = &[0x5a; 32];
 type Delivery = (HeaderMap, Vec<u8>, u16);
 #[derive(Clone, Default)]
 struct Relay {
     destination: Arc<Mutex<Option<String>>>,
     deliveries: Arc<Mutex<Vec<Delivery>>>,
+    wrong_trigger: Arc<Mutex<Option<(u16, Value)>>>,
 }
 async fn forward(
     State(relay): State<Relay>,
@@ -42,7 +44,18 @@ async fn forward(
         .unwrap()
         .clone()
         .expect("ingress started before Submit");
-    let response = reqwest::Client::new()
+    let client = reqwest::Client::new();
+    let refused = client
+        .post(format!("{origin}{OTHER_TARGET}"))
+        .headers(headers.clone())
+        .body(body.clone())
+        .send()
+        .await
+        .unwrap();
+    let status = refused.status().as_u16();
+    let problem = refused.json().await.unwrap_or(Value::Null);
+    *relay.wrong_trigger.lock().unwrap() = Some((status, problem));
+    let response = client
         .post(format!("{origin}{TARGET}"))
         .headers(headers.clone())
         .body(body.clone())
@@ -137,34 +150,13 @@ async fn start(config: &Path, origin: &str) -> Process {
     }
 }
 fn refresh_signature(headers: &mut HeaderMap, body: &[u8]) {
-    headers.insert(
-        "x-registry-delivery-time",
-        chrono::Utc::now()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            .parse()
-            .unwrap(),
-    );
-    let value = |name| headers.get(name).unwrap().to_str().unwrap();
-    let signature = sign_v1(
-        KEY,
-        SignatureFields {
-            id: value("ce-id"),
-            source: value("ce-source"),
-            event_type: value("ce-type"),
-            time: value("ce-time"),
-            data_schema: value("ce-dataschema"),
-            generation: value("x-registry-event-generation"),
-            attempt: value("x-registry-delivery-attempt"),
-            delivery_time: value("x-registry-delivery-time"),
-            method: "POST",
-            request_target: TARGET,
-            content_type: "application/json",
-            idempotency_key: value("idempotency-key"),
-            body,
-        },
-    )
-    .unwrap();
-    headers.insert("x-registry-signature", signature.parse().unwrap());
+    headers.remove("content-length");
+    let id = headers["webhook-id"].to_str().unwrap();
+    let timestamp = chrono::Utc::now().timestamp().try_into().unwrap();
+    let keys = DeliveryKeys::new(DeliveryKey::new(KEY).unwrap(), None).unwrap();
+    let signature = sign(&keys, id, timestamp, body).unwrap();
+    headers.insert("webhook-timestamp", timestamp.to_string().parse().unwrap());
+    headers.insert("webhook-signature", signature.parse().unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -196,7 +188,7 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
     let projection = json!({"type":"object","required":["proposalId","revision","transition"],
         "properties":{"proposalId":schema["properties"]["proposalId"],
             "revision":schema["properties"]["revision"],"transition":schema["properties"]["transition"]}});
-    let workflow = json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject",
+    let mut workflow = json!({"apiVersion":"id.registrystack.org/formats/coordinator/project/v1alpha1","kind":"CoordinatorProject",
         "project":{"id":"proposal-event-proof","version":"1"},
         "workflow":{"input":{"type":"object","additionalProperties":false,"required":["proposalId"],"properties":{"proposalId":{"type":"string","format":"uuid"}}},
             "eventTriggers":{"submitted":{"source":"registry","eventType":"proposal.submitted","dataSchema":"https://id.registrystack.org/contracts/breg/proposal-event/v1",
@@ -204,6 +196,8 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
                 "input":{"type":"fields","fields":{"proposalId":{"type":"input","path":"/data/proposalId"}}}}},
             "deadlineSeconds":300,"start":"observed","steps":{"observed":{"type":"finish","outcome":"observed","output":{"type":"input"}}},
             "outcomes":{"observed":{"type":"object","additionalProperties":false,"required":["proposalId"],"properties":{"proposalId":{"type":"string","format":"uuid"}}}}}});
+    workflow["workflow"]["eventTriggers"]["other-submitted"] =
+        workflow["workflow"]["eventTriggers"]["submitted"].clone();
     std::fs::write(
         project.join("workflow.yaml"),
         serde_norway::to_string(&workflow).unwrap(),
@@ -233,6 +227,7 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         ("admission-key", 72),
         ("audit-key", 73),
         ("event-key", 0x5a),
+        ("other-event-key", 0x5b),
     ] {
         support::private_file(&root.as_path().join(name), &[byte; 32]);
     }
@@ -253,11 +248,11 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         .unwrap()
         .remove("notices");
     runtime["connections"]["applications"]["profile"] = json!("reader");
-    runtime["database"] = json!({"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url"});
-    runtime["eventSources"] = json!({"registry":{"source":"urn:registrystack:registry:coordinator-action-proof:instance:coordinator-action-proof","signingKeyRef":"secret:file/event-key"}});
+    runtime["database"] = json!({"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url","transport":"loopback-plaintext"});
+    runtime["eventSources"] = json!({"registry":{"source":"urn:registrystack:registry:coordinator-action-proof:instance:coordinator-action-proof","triggers":{"proposal-event-proof":{"submitted":{"hmacSha256KeyRef":"secret:file/event-key"},"other-submitted":{"hmacSha256KeyRef":"secret:file/other-event-key"}}}}});
     runtime["deployment"] = json!({"databaseId":"native-event-proof","runtimeRole":role,"packages":[{"root":package,"expectedDigest":digest}],
-        "listener":{"bind":address.to_string(),"tlsTermination":"development-loopback"},
-        "authentication":{"issuer":issuer.issuer(),"audience":"urn:coordinator:native-event","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},
+        "listener":{"bind":address.to_string(),"tlsTermination":"loopback-plaintext"},
+        "authentication":{"issuers":{"main":{"issuer":issuer.issuer(),"audience":"urn:coordinator:native-event","scopeClaim":"scope","jwksSource":{"type":"uri","uri":issuer.jwks_uri()},"allowedClients":"from-policies"}},
             "policies":{"application-reader":{"subjects":["coordinator-reader"],"requiredScopes":["coordinator:operate"],"workflows":["proposal-event-proof"],"actions":["status","inspect"],"operator":true}}},
         "auditFile":root.as_path().join("audit/events.jsonl"),"auditKeyRef":"secret:file/audit-key","activeStateKey":1,"stateKeys":{"1":{"keyRef":"secret:file/state-key"}},"admissionKeyRef":"secret:file/admission-key"});
     let owned = OwnedCoordinator {
@@ -350,6 +345,17 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let (headers, body, status) = relay.deliveries.lock().unwrap()[0].clone();
+    let (wrong_status, problem) = relay.wrong_trigger.lock().unwrap().take().unwrap();
+    assert_eq!(wrong_status, 401);
+    assert_eq!(problem["code"], "event.unauthenticated");
+    let log = std::fs::read_to_string(config.with_extension("log")).unwrap();
+    assert!(log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|entry| {
+            entry["fields"]["trace_id"] == problem["traceId"]
+                && entry["fields"]["failed_check"] == "delivery-signature"
+        }));
     assert_eq!(status, 204, "native producer signature passes real ingress");
     let event: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(event["data"]["proposalId"], proposal);
@@ -405,7 +411,7 @@ async fn native_proposal_event_admits_one_run_without_conferring_apply_authority
         "authenticated changed event identity conflicts"
     );
     let mut unauthenticated = headers.clone();
-    unauthenticated.remove("x-registry-signature");
+    unauthenticated.remove("webhook-signature");
     assert_eq!(
         http.post(format!("{origin}{TARGET}"))
             .headers(unauthenticated)

@@ -164,6 +164,10 @@ class PostgresRunnerTests(unittest.TestCase):
                     ["build", "--locked", "-p", "registry-evidencectl", "--bin", "evidencectl", "--message-format=json"],
                 ))
                 continue
+            command = " ".join(["cargo", *call])
+            if command in VALIDATOR.POSTGRES_POSTURE_COMMANDS:
+                commands.append(command)
+                continue
             self.assertEqual(["test", "--locked", "-p"], call[:3])
             self.assertIn(call[3], VALIDATOR.POSTGRES_TEST_PACKAGES)
             self.assertEqual("--features", call[4])
@@ -231,8 +235,8 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertEqual(default, explicit)
         self.assertEqual(expected, self.inventory(ordinary) + self.inventory(actions))
         self.assertFalse(self.inventory(ordinary) & self.inventory(actions))
-        self.assertEqual(10, len(ordinary))
-        self.assertEqual(11, len(default))
+        self.assertEqual(12, len(ordinary))
+        self.assertEqual(13, len(default))
         self.assertEqual([shlex.split(
             "test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_actions"
         )], actions)
@@ -294,6 +298,8 @@ class PostgresRunnerTests(unittest.TestCase):
             evidence = Counter(
                 command for command in inventory if "postgres_action_evidence" in command
             )
+            for command in VALIDATOR.POSTGRES_POSTURE_COMMANDS:
+                self.assertEqual(int(lane == shard_lanes[0]), inventory[command])
             if lane == shard_lanes[0]:
                 self.assertEqual(3, len(builds))
                 self.assertEqual(3, sum(evidence.values()))
@@ -413,6 +419,7 @@ class PostgresRunnerTests(unittest.TestCase):
                 '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n',
                 '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n' * 2,
             ),
+            source.replace("      posture_tests::\n", "      posture_tests::other_posture -- --exact\n"),
             source.replace(' -- --test-threads=2\n', '\n'),
         )):
             with self.subTest(mutation=index), tempfile.TemporaryDirectory() as directory:

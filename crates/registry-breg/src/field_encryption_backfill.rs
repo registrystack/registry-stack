@@ -80,6 +80,7 @@ const AUDIT_OPERATION_ID: &str = "field-encryption-erase-history";
 
 /// Read-only preflight over the database a reviewed backfill would target.
 pub struct FieldEncryptionBackfillPreflightRequest<'a> {
+    pub posture: registry_platform_config::Posture,
     /// The identity the database must already hold: the backfill's predecessor.
     /// The preflight refuses when the active revision is anything else, so its
     /// counts always describe the state the apply would start from.
@@ -248,7 +249,7 @@ pub async fn preflight_field_encryption_backfill(
         .execute("SELECT set_config('TimeZone', 'UTC', true)", &[])
         .await
         .map_err(|_| FieldEncryptionBackfillPreflightError::Unavailable)?;
-    verify_ready_identity(&transaction, request.expected).await?;
+    verify_ready_identity(&transaction, request.expected, request.posture).await?;
 
     let mut steps = Vec::new();
     let mut reindex_steps = Vec::new();
@@ -769,7 +770,7 @@ pub async fn erase_field_encryption_history(
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
     lock_registry(&transaction, request.lock_key).await?;
-    verify_ready_identity(&transaction, request.expected).await?;
+    verify_ready_identity(&transaction, request.expected, request.lock_key.posture()).await?;
     let rebaseline_request = HistoryRebaselineRequest {
         expected: request.expected,
         migration_role: request.migration_role,
@@ -836,7 +837,7 @@ async fn scrub_plaintext_proposal_snapshots(
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
     lock_registry(&transaction, request.lock_key).await?;
-    verify_ready_identity(&transaction, request.expected).await?;
+    verify_ready_identity(&transaction, request.expected, request.lock_key.posture()).await?;
     let head = lock_history_head(&transaction)
         .await
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
@@ -1168,7 +1169,7 @@ async fn pending_erase_targets(
         .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
     set_local_timeouts(&transaction, request.timeouts).await?;
     lock_registry(&transaction, request.lock_key).await?;
-    verify_ready_identity(&transaction, request.expected).await?;
+    verify_ready_identity(&transaction, request.expected, request.lock_key.posture()).await?;
     verify_retained_revision_indexes(&transaction).await?;
     let rows = transaction
         .query(

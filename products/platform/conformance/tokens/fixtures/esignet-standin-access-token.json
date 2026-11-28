@@ -1,0 +1,48 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "esignet-standin-access-token",
+  "class": "negative",
+  "provider": "thunderid",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "ThunderID 1.1.0",
+    "note": "Observed from a ThunderID 1.1.0 issuer on 27 November 2026. Header members and claim names are the observed ones. Claim values are synthetic. Signed by the corpus test key. Token of the stand-in for eSignet, client portal."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "at+jwt",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "aci": "synthetic-aci",
+    "aud": "portal",
+    "client_id": "portal",
+    "exp": {
+      "offsetSeconds": 900
+    },
+    "grant_type": "authorization_code",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "iss": "https://standin.example.test",
+    "jti": "synthetic-jti-0042",
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "scope": "openid email profile",
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "tfid": "synthetic-tfid"
+  },
+  "omits": [
+    "azp",
+    "registry_actor_kind"
+  ],
+  "notes": "This token is from a second ThunderID that stands in for eSignet. Its tokens are the subject of the exchange and never reach a product. The documented eSignet fixtures (esignet-id-token, esignet-access-token) keep eSignet's own shape from its documentation. The issuer is a literal. A product trusts one configured issuer."
+}

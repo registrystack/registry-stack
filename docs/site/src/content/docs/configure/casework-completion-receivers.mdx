@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -29,23 +29,44 @@ Casework sends a POST with a JSON body that carries exactly these business field
 The body contains event, request and result identifiers and a completion time.
 It carries no review decision and no source record payload.
 
-The request carries these headers:
+Casework sends `Accept: application/json` and `Content-Type: application/json` with these delivery headers:
 
-- `Idempotency-Key` is the string form of `eventId`.
-- `Registry-Recipient-Binding` is the producer's configured recipient binding.
-- The destination presents either `Authorization: Bearer <secret>` or the configured named secret header.
+- `registry-recipient-binding` identifies the producer's configured recipient.
+- `webhook-id` is the string form of `eventId`.
+- `webhook-timestamp` is the attempt time in Unix seconds, in decimal.
+- `webhook-signature` carries one or two space-separated `v1,<base64>` signatures, with the current key first.
 
-Compare the expected secret and recipient before you accept a wake.
-Make sure your HTTP framework logs redact credential headers.
+Check each delivery in this order.
 
-{/* Evidence: crates/registry-casework/src/runtime.rs deliver_review_completion;
-    crates/registry-casework/src/config.rs ReviewCompletionAuthConfig */}
+1. Match `registry-recipient-binding` to your configured recipient and select its signing keys.
+   Require a single header value for the binding and for each of the three `webhook-*` headers.
+   Return the same 401 response for an unknown binding and a bad signature.
+   This unsigned binding only selects keys.
+   Use distinct keys for each recipient so a substituted binding selects a different key.
+2. Read the raw body with a size limit.
+3. Verify the Standard Webhooks HMAC-SHA256 signature over the exact bytes of `webhook-id + "." + webhook-timestamp + "." + body`.
+   Give a Standard Webhooks library the raw key bytes.
+   Accept a valid signature for either configured key and require the signed timestamp to be within 300 seconds of your clock in either direction.
+4. Require the `application/json` content type.
+5. Parse the JSON strictly as the five fields above.
+   Require the `review.completed` type, valid UUIDs and a valid completion timestamp.
+   Refuse duplicate, unknown or missing members.
+6. Require `eventId` to equal `webhook-id`.
+
+For canonical hook envelopes, the maintained Rust verifier is `registry_platform_hooks::receiver::verify_hook_delivery`.
+For the Casework completion body shown above, use `registry_platform_crypto::delivery_signature::verify` and then parse the authenticated bytes as described in steps 4 through 6.
+See the receiver procedure and tested example in the [delivery signing reference](../../reference/delivery-signing/).
+
+{/* Evidence: crates/registry-casework/src/runtime.rs deliver_review_completion, review_completion_signs_the_exact_bytes_it_sends;
+    crates/registry-casework/tests/review_payment_fixture_postgres.rs receive_completion;
+    crates/registry-platform-crypto/src/delivery_signature.rs verify;
+    crates/registry-platform-hooks/src/receiver.rs verify_hook_delivery */}
 
 ### Acknowledgement
 
 Any 2xx response acknowledges delivery.
 Casework decides from the status line and drops the response without reading its body, including an unfinished stream.
-Use an empty 204 for compatibility with releases through 0.43.0, which required that response.
+An empty 204 response is sufficient.
 Casework does not follow redirects.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs completion_acknowledged */}
@@ -53,9 +74,9 @@ Casework does not follow redirects.
 ### At-least-once delivery
 
 Delivery is at-least-once: after a lost acknowledgement Casework can send again.
-The same `eventId`, payload, recipient binding and idempotency key survive retries.
-Receivers must durably deduplicate by `eventId` before they acknowledge.
-This does not provide exactly-once delivery or exactly-once business effects.
+The same `webhook-id`, payload and recipient binding survive retries.
+Casework signs each attempt with its own timestamp.
+Store the verified event ID and payload durably before acknowledging, and use the event ID to deduplicate retries.
 
 {/* Evidence: crates/registry-casework/tests/review_postgres.rs at_least_once_completion_durably_deduplicates_after_lost_ack_and_exhausts_bounded_retries */}
 
@@ -80,70 +101,25 @@ A stale lease owner cannot settle or log another owner's attempt as exhausted.
     crates/registry-casework/tests/review_postgres.rs completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner */}
 {/* TODO[evidence]: defaults 5000, 30 and 12 are in default_review_completion_* functions; no test asserts the default values */}
 
-## Durable receiver examples
+## Persist the wake
 
-Create an adopter-owned inbox in the receiver database:
+Create an inbox in your receiver database.
 
 ```sql
 CREATE TABLE completion_inbox (
   event_id uuid PRIMARY KEY,
-  payload text NOT NULL
+  payload jsonb NOT NULL
 );
 ```
 
-These framework-neutral handlers assume your HTTP adapter has bounded the JSON body, rejected duplicate members, checked the five fields and their UUID and time types, and normalised header names to lowercase.
-Pass an operator-resolved secret and recipient; never use event fields to select credentials or authority.
-Return 503 when the database cannot commit.
-Keep inbox entries until your own reconciliation is complete and your replay policy permits erasure.
+After verification, insert the event under its verified `webhook-id` in a transaction.
+If the ID already exists, compare the stored payload and acknowledge an identical event.
+Return 409 if the payload differs.
+Acknowledge only after the transaction commits.
+Return 503 if the database cannot confirm the commit.
 
-Python with a psycopg connection:
-
-```python
-import hmac
-import json
-
-
-def receive_completion(headers, event, db, secret, recipient):
-    if not hmac.compare_digest(headers.get("authorization", ""), "Bearer " + secret):
-        return 401
-    if headers.get("registry-recipient-binding") != recipient:
-        return 403
-    if event["type"] != "review.completed" or headers.get("idempotency-key") != event["eventId"]:
-        return 400
-    payload = json.dumps(event, sort_keys=True, separators=(",", ":"))
-    with db.transaction():
-        db.execute("INSERT INTO completion_inbox VALUES (%s,%s) ON CONFLICT DO NOTHING",
-                   (event["eventId"], payload))
-        stored = db.execute("SELECT payload FROM completion_inbox WHERE event_id=%s",
-                            (event["eventId"],)).fetchone()[0]
-        if stored != payload:
-            return 409
-    return 204  # The commit completed before acknowledgement.
-```
-
-Node with a `pg` pool (the SQL statement autocommits before its promise resolves):
-
-```javascript
-const { timingSafeEqual } = require('node:crypto');
-
-async function receiveCompletion(headers, event, pool, secret, recipient) {
-  const got = Buffer.from(headers.authorization ?? '');
-  const expected = Buffer.from(`Bearer ${secret}`);
-  if (got.length !== expected.length || !timingSafeEqual(got, expected)) return 401;
-  if (headers['registry-recipient-binding'] !== recipient) return 403;
-  if (event.type !== 'review.completed' || headers['idempotency-key'] !== event.eventId) return 400;
-  const payload = JSON.stringify({ type: event.type, eventId: event.eventId,
-    requestId: event.requestId, resultId: event.resultId, completedAt: event.completedAt });
-  await pool.query('INSERT INTO completion_inbox VALUES ($1,$2) ON CONFLICT DO NOTHING',
-    [event.eventId, payload]);
-  const stored = await pool.query('SELECT payload FROM completion_inbox WHERE event_id=$1',
-    [event.eventId]);
-  return stored.rows[0].payload === payload ? 204 : 409;
-}
-```
-
-A database error must reach your HTTP adapter as a safe 503; do not acknowledge an uncertain insert.
-For named-header authentication, compare the configured header's raw value with the secret instead of constructing a bearer value.
+Keep inbox entries through your reconciliation and retry window.
+Retries carry fresh signatures, so a 300-second signature window alone cannot bound inbox retention.
 
 ## Read the result
 

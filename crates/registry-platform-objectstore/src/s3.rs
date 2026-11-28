@@ -10,8 +10,12 @@ use quick_xml::{events::Event, Reader};
 use registry_platform_config::{
     ObjectStorageConfig, ProtectedSecret, SecretReference, SecretResolver,
 };
+use registry_platform_httputil::client::transport_protects_the_credential;
 use registry_platform_httputil::{
-    read_bounded, validate_response_headers, BoundedReadError, OutboundClientBuilder,
+    read_bounded,
+    select::{select_credential_destination, SelectedDestination},
+    validate_response_headers, BoundedReadError, DestinationClient, OutboundClientBuilder,
+    PeerPolicy, ResponseHeaderError,
 };
 use reqwest::{
     header::{HeaderMap, HeaderValue},
@@ -30,6 +34,11 @@ const MAXIMUM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Storage failures carry no URLs, object keys, credentials or backend responses.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum ObjectStoreError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     #[error("object storage configuration is invalid")]
     InvalidConfiguration,
     #[error("object storage secret resolution failed")]
@@ -82,7 +91,9 @@ impl ObjectNamespace {
 /// Validated, unresolved storage settings. Debug never reveals deployment values.
 #[derive(Clone)]
 pub struct S3Settings {
+    peer_policy: PeerPolicy,
     bucket_url: Url,
+    destination: SelectedDestination,
     region: String,
     access_key_id_ref: SecretReference,
     secret_access_key_ref: SecretReference,
@@ -92,16 +103,19 @@ pub struct S3Settings {
 }
 
 impl S3Settings {
+    /// Refuses development peers. Use [`Self::from_config`] to choose the policy.
+    pub fn from_config_without_peer_policy(config: &ObjectStorageConfig) -> Result<Self> {
+        Self::from_config(config, PeerPolicy::RefuseDevelopmentPeer)
+    }
+
     /// Refuse what the shared block's decode does not: a non-loopback
-    /// `http` URL, a URL with a path, query or fragment, a malformed bucket
-    /// or region name, and a virtual-hosted bucket on an IP address host.
-    pub fn from_config(config: &ObjectStorageConfig) -> Result<Self> {
+    /// `http` URL, a bucket URL the credential destination selector refuses
+    /// (the store signs every request), a URL with a path, query or
+    /// fragment, a malformed bucket or region name, and virtual-hosted
+    /// buckets over HTTP or on IP hosts.
+    pub fn from_config(config: &ObjectStorageConfig, peer_policy: PeerPolicy) -> Result<Self> {
         let text = config.url.as_str();
         let mut url = Url::parse(text).map_err(|_| ObjectStoreError::InvalidConfiguration)?;
-        let loopback = url
-            .host_str()
-            .and_then(|host| host.trim_matches(['[', ']']).parse::<IpAddr>().ok())
-            .is_some_and(|ip| ip.is_loopback());
         let bucket = config.bucket.as_str();
         let region = config.region.as_str();
         if text.len() > MAXIMUM_URL_BYTES
@@ -111,7 +125,7 @@ impl S3Settings {
             || url.fragment().is_some()
             || url.path() != "/"
             || url.host_str().is_none()
-            || !(url.scheme() == "https" || (url.scheme() == "http" && loopback))
+            || !transport_protects_the_credential(&url)
             || !(3..=63).contains(&bucket.len())
             || !bucket
                 .bytes()
@@ -131,9 +145,10 @@ impl S3Settings {
         if config.path_style {
             url.set_path(&format!("/{bucket}"));
         } else {
-            if url
-                .host_str()
-                .is_none_or(|host| host.parse::<IpAddr>().is_ok() || host.contains(':'))
+            if url.scheme() == "http"
+                || url
+                    .host_str()
+                    .is_none_or(|host| host.parse::<IpAddr>().is_ok() || host.contains(':'))
             {
                 return Err(ObjectStoreError::InvalidConfiguration);
             }
@@ -143,8 +158,14 @@ impl S3Settings {
             )))
             .map_err(|_| ObjectStoreError::InvalidConfiguration)?;
         }
+        // The bucket URL is what the client dials, so a virtual-hosted
+        // bucket is selected under its own host name.
+        let destination = select_credential_destination(&url, None, &[])
+            .map_err(|_| ObjectStoreError::InvalidConfiguration)?;
         Ok(Self {
+            peer_policy,
             bucket_url: url,
+            destination,
             region: region.to_owned(),
             access_key_id_ref: config.access_key_id_ref.clone(),
             secret_access_key_ref: config.secret_access_key_ref.clone(),
@@ -194,7 +215,8 @@ impl S3Settings {
         }
         let mut builder = OutboundClientBuilder::new()
             .timeout(self.timeout)
-            .connect_timeout(connect_timeout(self.timeout));
+            .connect_timeout(connect_timeout(self.timeout))
+            .destination(&self.destination);
         if let Some(reference) = &self.ca_bundle_ref {
             builder =
                 builder.trusted_root_certificates(resolve(reference)?.expose_secret().to_vec());
@@ -202,6 +224,7 @@ impl S3Settings {
         let scope = hex::encode(Sha256::digest(scope_input.as_bytes()));
         let binding_digest = binding_digest(namespace, &self.bucket_url, &self.region, &scope)?;
         let store = S3ObjectStore {
+            peer_policy: self.peer_policy,
             client: builder
                 .try_build()
                 .map_err(|_| ObjectStoreError::InvalidConfiguration)?,
@@ -259,7 +282,8 @@ fn binding_digest(
 /// writes and deletes are reconciled by the caller's durable pending-operation
 /// records using the same deterministic key.
 pub struct S3ObjectStore {
-    client: reqwest::Client,
+    peer_policy: PeerPolicy,
+    client: DestinationClient,
     namespace: ObjectNamespace,
     bucket_url: Url,
     region: String,
@@ -294,6 +318,7 @@ impl S3ObjectStore {
         let binding_digest =
             binding_digest(self.namespace, &self.bucket_url, &self.region, &scope)?;
         Ok(Self {
+            peer_policy: self.peer_policy,
             client: self.client.clone(),
             namespace: self.namespace,
             bucket_url: self.bucket_url.clone(),
@@ -397,15 +422,20 @@ impl S3ObjectStore {
     async fn send(&self, method: Method, url: Url, body: Vec<u8>) -> Result<reqwest::Response> {
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let headers = self.signed_headers(&method, &url, &body, &timestamp)?;
+        let mut request = reqwest::Request::new(method, url);
+        *request.headers_mut() = headers;
+        *request.body_mut() = Some(body.into());
         let response = self
             .client
-            .request(method, url)
-            .headers(headers)
-            .body(body)
-            .send()
+            .execute(request)
             .await
             .map_err(|_| ObjectStoreError::Unavailable)?;
-        validate_response_headers(response.headers()).map_err(|_| ObjectStoreError::Unavailable)?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => ObjectStoreError::DevelopmentPeer,
+                _ => ObjectStoreError::Unavailable,
+            },
+        )?;
         Ok(response)
     }
 

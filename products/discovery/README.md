@@ -34,9 +34,9 @@ and still validate historical Relay descriptions. Current Rust publication,
 index, query, and client contracts support Evidence only. Operators must remove
 Relay origins and rebuild a mixed pre-retirement index before starting a current
 runtime.
-Starting with Registry Stack v0.26.1, install the Node.js package as
-`@registrystack/client@<version>` or the Python package as
-`registry-stack-client==<version>`, using the SDK version selected by the recommended Stack distribution.
+Use the SDK version selected by the recommended Stack distribution. For v0.49.0
+and later, install the Node.js package as `@registrystack/client-node@<version>`.
+The unified Python package is `registry-stack-client==<version>` from v0.26.1.
 Discovery and discoveryctl can also ship together under an independent
 `discovery/vX.Y.Z` release. A newer compatible Discovery patch does not require
 republishing the SDK; use a combination named in the distribution or release notes. The Python distribution imports as `registry_client`.
@@ -58,7 +58,25 @@ authority, and does not make Discovery a native-provider proxy. Endpoint and
 request handling follow the shared
 [`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
 
-## Independent release installation
+## Start a development run
+
+Install the product with `rstack install` or set the binary overrides for a source build.
+See [Build from source](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#build-from-source) for the override names.
+
+```sh
+discoveryctl init ./discovery
+rstack dev start ./discovery
+```
+
+Copy the run ID and loopback URL from the report. Read the local index with curl.
+Set `RUN` and `ORIGIN` to those reported values before running the commands.
+
+```sh
+curl --fail "$ORIGIN/v1/services"
+rstack dev stop "$RUN"
+```
+
+## Install a deployment you operate
 
 For a published Discovery unit release, download its `discovery-vX.Y.Z-install.sh`
 from the `discovery/vX.Y.Z` GitHub Release, authenticate its checksum chain as

@@ -25,9 +25,12 @@ use registry_payment_protocol::{
     RegistryReceipt, RequestCollection,
 };
 use registry_payment_simulator_connector::{ConnectorError, Observation, SimulatorClient};
+use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::client::BearerToken;
-use registry_platform_httputil::{read_bounded, validate_response_headers, ServiceBaseUrl};
+use registry_platform_httputil::{
+    read_bounded, validate_response_headers, PeerPolicy, ServiceBaseUrl,
+};
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
@@ -38,8 +41,9 @@ pub trait ProviderPort: Send + Sync {
         &self,
         binding: &PaymentBinding,
         bill: &BillSnapshot,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
     ) -> Result<CollectionProviderCommand, ConnectorError> {
-        bill.provider_command(binding)
+        bill.provider_command(binding, development)
             .map_err(|_| ConnectorError::Configuration)
     }
 
@@ -98,6 +102,8 @@ pub struct ProviderSubmission {
 }
 
 pub struct SyntheticProvider {
+    peer_policy: PeerPolicy,
+    development: Option<registry_platform_config::DevelopmentWitness>,
     resolver: Arc<SecretResolver>,
     mappings: Option<Arc<PaymentMappingRegistry>>,
 }
@@ -106,7 +112,23 @@ impl SyntheticProvider {
         resolver: Arc<SecretResolver>,
         mappings: Option<Arc<PaymentMappingRegistry>>,
     ) -> Self {
-        Self { resolver, mappings }
+        Self {
+            resolver,
+            mappings,
+            peer_policy: PeerPolicy::RefuseDevelopmentPeer,
+            development: None,
+        }
+    }
+    pub fn with_peer_policy(mut self, peer_policy: PeerPolicy) -> Self {
+        self.peer_policy = peer_policy;
+        self
+    }
+    pub fn with_development(
+        mut self,
+        development: Option<registry_platform_config::DevelopmentWitness>,
+    ) -> Self {
+        self.development = development;
+        self
     }
     fn token(&self, binding: &PaymentBinding) -> Result<BearerToken, ConnectorError> {
         let secret = self
@@ -139,10 +161,14 @@ impl ProviderPort for SyntheticProvider {
         &self,
         binding: &PaymentBinding,
         bill: &BillSnapshot,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
     ) -> Result<CollectionProviderCommand, ConnectorError> {
-        let CollectionProvider::Http { settings, .. } = &binding.provider else {
+        let CollectionProvider::Http { settings, .. } = binding
+            .provider(development)
+            .map_err(|_| ConnectorError::Configuration)?
+        else {
             return bill
-                .provider_command(binding)
+                .provider_command(binding, development)
                 .map_err(|_| ConnectorError::Configuration);
         };
         let mapping = self.mapping(binding)?;
@@ -175,7 +201,12 @@ impl ProviderPort for SyntheticProvider {
                 ..
             },
             CollectionProviderCommand::Http(command),
-        ) = (&binding.provider, command)
+        ) = (
+            binding
+                .provider(self.development.as_ref())
+                .map_err(|_| ConnectorError::Configuration)?,
+            command,
+        )
         else {
             return Ok(ProviderPreflight::Direct);
         };
@@ -230,13 +261,14 @@ impl ProviderPort for SyntheticProvider {
         let mapping = self.mapping(binding)?;
         let intent = command.intent.clone();
         let settings = settings.clone();
+        let peer_policy = self.peer_policy;
         Ok(ProviderPreflight::Prepared(PreparedProviderSend::new(
             async move {
                 let response = client
                     .execute(request)
                     .await
                     .map_err(|_| ConnectorError::Unknown)?;
-                validate_response_headers(response.headers())
+                validate_response_headers(response.headers(), peer_policy)
                     .map_err(|_| ConnectorError::Unknown)?;
                 let status = response.status().as_u16();
                 let body = read_bounded(response, 131_072)
@@ -280,7 +312,12 @@ impl ProviderPort for SyntheticProvider {
         binding: &PaymentBinding,
         command: &CollectionProviderCommand,
     ) -> Result<ProviderSubmission, ConnectorError> {
-        match (&binding.provider, command) {
+        match (
+            binding
+                .provider(self.development.as_ref())
+                .map_err(|_| ConnectorError::Configuration)?,
+            command,
+        ) {
             (
                 CollectionProvider::Simulator {
                     connection: provider,
@@ -325,7 +362,12 @@ impl ProviderPort for SyntheticProvider {
         transfer: &str,
         acceptance: Option<&ProviderAcceptance>,
     ) -> Result<Observation, ConnectorError> {
-        match (&binding.provider, command) {
+        match (
+            binding
+                .provider(self.development.as_ref())
+                .map_err(|_| ConnectorError::Configuration)?,
+            command,
+        ) {
             (
                 CollectionProvider::Simulator {
                     connection: provider,
@@ -488,7 +530,7 @@ impl SyntheticProvider {
                 ConnectorError::Unavailable
             }
         })?;
-        validate_response_headers(response.headers()).map_err(|_| {
+        validate_response_headers(response.headers(), self.peer_policy).map_err(|_| {
             if prepared.method == PaymentHttpMethod::Post {
                 ConnectorError::Unknown
             } else {
@@ -508,7 +550,10 @@ impl SyntheticProvider {
 }
 
 fn http_settings(binding: &PaymentBinding) -> Result<&serde_json::Value, ConnectorError> {
-    match &binding.provider {
+    match binding
+        .provider(None)
+        .map_err(|_| ConnectorError::Configuration)?
+    {
         CollectionProvider::Http { settings, .. } => Ok(settings),
         _ => Err(ConnectorError::Configuration),
     }
@@ -562,7 +607,7 @@ fn validate_http_observation(
         || payer_values.len() != 2
         || !payer_values.contains(payer_id)
         || !payer_values.contains(payer_address)
-        || !matches!(&binding.provider, CollectionProvider::Http { .. })
+        || !matches!(binding.provider(None), Ok(CollectionProvider::Http { .. }))
     {
         return Err(ConnectorError::Protocol);
     }
@@ -600,7 +645,9 @@ impl PaymentService {
         registry: Arc<dyn RegistryPort>,
         provider: Arc<dyn ProviderPort>,
     ) -> Result<Self, Error> {
-        config.validate().map_err(|_| Error::Unavailable)?;
+        config
+            .validate(store.development.as_ref())
+            .map_err(|_| Error::Unavailable)?;
         Ok(Self {
             config,
             store,
@@ -623,17 +670,28 @@ impl PaymentService {
             .await
     }
 
-    fn connection(&self, id: &str, caller: &Caller) -> Result<&PaymentConnection, Error> {
-        let connection = self
-            .config
-            .connections
-            .iter()
-            .find(|c| c.id == id)
-            .ok_or(Error::NotFound)?;
-        if !connection.allowed_clients.contains(&caller.client_id)
-            || !caller.scopes.contains(&connection.required_scope)
-        {
-            return Err(Error::Forbidden);
+    fn connection(&self, id: &str, caller: &Caller) -> Result<&PaymentConnection, PaymentFailure> {
+        let connection =
+            self.config
+                .connections
+                .iter()
+                .find(|c| c.id == id)
+                .ok_or(PaymentFailure::refused(
+                    Error::NotFound,
+                    FailedCheck::Visibility,
+                ))?;
+        if !connection.allowed_clients.contains(&caller.client_id) {
+            return Err(PaymentFailure::refused(
+                Error::Forbidden,
+                FailedCheck::RequesterClient,
+            ));
+        }
+        if !caller.scopes.contains(&connection.required_scope) {
+            return Err(PaymentFailure::scope_refused(
+                &connection.id,
+                &connection.required_scope,
+                &caller.scope_claim,
+            ));
         }
         Ok(connection)
     }
@@ -642,13 +700,16 @@ impl PaymentService {
         attempt: &Attempt,
         connection: &PaymentConnection,
         principal: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<(), PaymentFailure> {
         if attempt.connection != connection.id
             || attempt.principal != principal
             || attempt.bill.institution_id != connection.institution_id
             || attempt.bill.service_id != connection.service_id
         {
-            return Err(Error::NotFound);
+            return Err(PaymentFailure::refused(
+                Error::NotFound,
+                FailedCheck::Ownership,
+            ));
         }
         Ok(())
     }
@@ -659,7 +720,7 @@ impl PaymentService {
         caller: &Caller,
         key: &str,
         request: &RequestCollection,
-    ) -> Result<CollectionAccepted, Error> {
+    ) -> Result<CollectionAccepted, PaymentFailure> {
         let connection = self.connection(id, caller)?;
         validate_key(key)?;
         request.validate().map_err(|_| Error::InvalidRequest)?;
@@ -701,11 +762,15 @@ impl PaymentService {
                 || view.state != BillState::DueUnbound
                 || view.attempt_id.is_some()
             {
-                return Err(Error::Conflict);
+                return Err(Error::Conflict.into());
             }
             let provider_command = self
                 .provider
-                .prepare(&connection.binding, &view.snapshot)
+                .prepare(
+                    &connection.binding,
+                    &view.snapshot,
+                    self.store.development.as_ref(),
+                )
                 .map_err(|_| Error::Unavailable)?;
             let provider_command_digest =
                 matches!(&provider_command, CollectionProviderCommand::Http(_))
@@ -719,7 +784,7 @@ impl PaymentService {
                 binding: connection.binding.clone(),
                 binding_revision: connection
                     .binding
-                    .revision()
+                    .revision(self.store.development.as_ref())
                     .map_err(|_| Error::Unavailable)?,
                 provider_command,
                 provider_command_digest,
@@ -761,7 +826,7 @@ impl PaymentService {
             .read_bill(&attempt.binding, attempt.bill.bill_id)
             .await?;
         if !bill.matches_binding(&attempt) || bill.state != BillState::AttemptBound {
-            return Err(Error::Conflict);
+            return Err(Error::Conflict.into());
         }
         let preflight = self
             .provider
@@ -769,7 +834,7 @@ impl PaymentService {
             .await
             .map_err(|_| Error::Unavailable)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        attempt.may_dispatch(now)?;
+        attempt.may_dispatch(now, self.store.development.as_ref())?;
         if attempt.first_send_at.is_none() {
             attempt.first_send_at = Some(now);
         }
@@ -789,7 +854,7 @@ impl PaymentService {
                     .save(&attempt, "provider.unknown")
                     .await
                     .map_err(|_| Error::OutcomeUnknown)?;
-                return Err(Error::OutcomeUnknown);
+                return Err(Error::OutcomeUnknown.into());
             }
         };
         attempt.transfer_id = Some(submission.transfer_id);
@@ -863,7 +928,7 @@ impl PaymentService {
         caller: &Caller,
         key: &str,
         request: &RequestCollection,
-    ) -> Result<CollectionAccepted, Error> {
+    ) -> Result<CollectionAccepted, PaymentFailure> {
         let connection = self.connection(id, caller)?;
         validate_key(key)?;
         request.validate().map_err(|_| Error::InvalidRequest)?;
@@ -873,10 +938,14 @@ impl PaymentService {
             .lookup_command(id, &principal, "request", key, &digest(request)?)
             .await?
             .ok_or(Error::ReceiptUnresolved)?;
-        let attempt = self.store.get(saved).await?;
+        let attempt = self
+            .store
+            .get(saved)
+            .await
+            .map_err(PaymentFailure::concealing)?;
         Self::authorize(&attempt, connection, &principal)?;
         if attempt.transfer_id.is_none() {
-            return Err(Error::ReceiptUnresolved);
+            return Err(Error::ReceiptUnresolved.into());
         }
         Ok(attempt.acceptance())
     }
@@ -886,7 +955,7 @@ impl PaymentService {
         id: &str,
         caller: &Caller,
         collection: Uuid,
-    ) -> Result<CollectionStatus, Error> {
+    ) -> Result<CollectionStatus, PaymentFailure> {
         let connection = self.connection(id, caller)?;
         let principal = principal(caller)?;
         let _permit = self
@@ -894,7 +963,11 @@ impl PaymentService {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Unavailable)?;
-        let initial = self.store.get(collection).await?;
+        let initial = self
+            .store
+            .get(collection)
+            .await
+            .map_err(PaymentFailure::concealing)?;
         Self::authorize(&initial, connection, &principal)?;
         let mut lock_client = self
             .store
@@ -938,7 +1011,7 @@ impl PaymentService {
             .as_ref()
             .is_some_and(|old| observation.observed_at < old.observed_at)
         {
-            return Err(Error::ProviderProtocol);
+            return Err(Error::ProviderProtocol.into());
         }
         attempt.observation = Some(observation);
         self.store.save(&attempt, "provider.observed").await?;
@@ -951,7 +1024,7 @@ impl PaymentService {
         caller: &Caller,
         key: &str,
         collection: Uuid,
-    ) -> Result<RegistryReceipt, Error> {
+    ) -> Result<RegistryReceipt, PaymentFailure> {
         let connection = self.connection(id, caller)?;
         validate_key(key)?;
         let principal = principal(caller)?;
@@ -960,7 +1033,11 @@ impl PaymentService {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Unavailable)?;
-        let initial = self.store.get(collection).await?;
+        let initial = self
+            .store
+            .get(collection)
+            .await
+            .map_err(PaymentFailure::concealing)?;
         Self::authorize(&initial, connection, &principal)?;
         self.store
             .claim_command(
@@ -991,25 +1068,29 @@ impl PaymentService {
         }
         let status = attempt.status();
         if status.state != CollectionState::Confirmed {
-            return Err(Error::Conflict);
+            return Err(Error::Conflict.into());
         }
         let reference = status.provider_reference.ok_or(Error::Conflict)?;
-        match &attempt.binding.provider {
+        match attempt
+            .binding
+            .provider(self.store.development.as_ref())
+            .map_err(|_| Error::Unavailable)?
+        {
             CollectionProvider::Simulator { .. }
                 if status.simulation && reference.starts_with("SIM-") => {}
             CollectionProvider::Mifos { .. } if !status.simulation => {
                 // Released PH-EE Operations `SUCCESS` is only a provider
                 // observation. It cannot satisfy the BReg Action that advances
                 // this bill to `paid` and authorizes service issuance.
-                return Err(Error::RecoveryHeld);
+                return Err(Error::RecoveryHeld.into());
             }
             CollectionProvider::Http { .. } if !status.simulation => {
-                return Err(Error::RecoveryHeld);
+                return Err(Error::RecoveryHeld.into());
             }
             CollectionProvider::Simulator { .. }
             | CollectionProvider::Mifos { .. }
             | CollectionProvider::Http { .. } => {
-                return Err(Error::Conflict);
+                return Err(Error::Conflict.into());
             }
         }
         let receipt = RegistryReceipt {
@@ -1038,7 +1119,7 @@ impl PaymentService {
             return Ok(receipt);
         }
         if !view.matches_binding(&attempt) || view.state != BillState::AttemptBound {
-            return Err(Error::Conflict);
+            return Err(Error::Conflict.into());
         }
         if attempt.report_action.is_none() {
             let mut inputs = binding_inputs(&attempt)?;
@@ -1065,7 +1146,7 @@ impl PaymentService {
             self.store.save(&attempt, "receipt.prepared").await?;
         }
         if attempt.receipt_digest.as_ref() != Some(&receipt_digest) {
-            return Err(Error::RecoveryHeld);
+            return Err(Error::RecoveryHeld.into());
         }
         let result = self
             .registry
@@ -1081,7 +1162,7 @@ impl PaymentService {
             .await
             .map_err(|_| Error::OutcomeUnknown)?;
         if !observed.matches_receipt(&attempt, &receipt, &receipt_digest) {
-            return Err(result.err().unwrap_or(Error::OutcomeUnknown));
+            return Err(result.err().unwrap_or(Error::OutcomeUnknown).into());
         }
         attempt.receipt = Some(receipt.clone());
         self.store
@@ -1120,6 +1201,69 @@ fn validate_key(key: &str) -> Result<(), Error> {
         Ok(())
     } else {
         Err(Error::InvalidRequest)
+    }
+}
+
+/// A payment error and, when the caller was refused, the check it failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaymentFailure {
+    pub code: Error,
+    pub check: Option<FailedCheck>,
+    /// For a scope refusal, the values the operator declared. Never read from
+    /// the caller's token.
+    pub declared: Option<DeclaredScope>,
+}
+
+impl PaymentFailure {
+    pub(crate) fn refused(code: Error, check: FailedCheck) -> Self {
+        Self {
+            code,
+            check: Some(check),
+            declared: None,
+        }
+    }
+
+    /// A caller that lacks the scope the connection requires. The recording
+    /// layer names the connection and its declared scope on the log line.
+    pub(crate) fn scope_refused(
+        connection_id: &str,
+        required_scope: &str,
+        scope_claim: &str,
+    ) -> Self {
+        Self {
+            declared: Some(
+                DeclaredScope::new(scope_claim)
+                    .with_required_scope(required_scope)
+                    .with_access_profile(connection_id),
+            ),
+            ..Self::refused(Error::Forbidden, FailedCheck::Scope)
+        }
+    }
+
+    /// A lookup that found nothing is a refusal for the check that conceals
+    /// existence; any other error carries no check.
+    pub(crate) fn concealing(code: Error) -> Self {
+        if code == Error::NotFound {
+            Self::refused(code, FailedCheck::Visibility)
+        } else {
+            code.into()
+        }
+    }
+}
+
+impl From<Error> for PaymentFailure {
+    fn from(code: Error) -> Self {
+        Self {
+            code,
+            check: None,
+            declared: None,
+        }
+    }
+}
+
+impl PartialEq<Error> for PaymentFailure {
+    fn eq(&self, other: &Error) -> bool {
+        self.code == *other
     }
 }
 

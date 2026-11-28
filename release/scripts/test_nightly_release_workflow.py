@@ -19,7 +19,7 @@ class NightlyWorkflowTest(unittest.TestCase):
     def test_only_main_scheduler_or_manual_selection(self):
         trigger = self.workflow.get("on", self.workflow.get(True))
         self.assertEqual(set(trigger), {"schedule", "workflow_dispatch"})
-        self.assertIsNone(trigger["workflow_dispatch"])
+        self.assertEqual(set(trigger["workflow_dispatch"]), {"inputs"})
         self.assertEqual(self.workflow["concurrency"]["cancel-in-progress"], False)
         self.assertIn("nightly_release.py plan", self.text)
         self.assertIn("wait-for-ci", self.text)
@@ -173,6 +173,55 @@ class NightlyWorkflowTest(unittest.TestCase):
             "cargo build --release --locked -p registry-rstack --bin rstack "
             '--target "${target}"',
             recipe,
+        )
+
+    def test_arm64_images_are_opt_in_and_amd64_stays_the_default(self):
+        trigger = self.workflow.get("on", self.workflow.get(True))
+        inputs = trigger["workflow_dispatch"]["inputs"]
+        self.assertEqual({"arm64_images"}, set(inputs))
+        self.assertEqual("boolean", inputs["arm64_images"]["type"])
+        self.assertIs(False, inputs["arm64_images"]["default"])
+        self.assertIs(False, inputs["arm64_images"]["required"])
+        # The input says when it does nothing, since the planner skips a commit
+        # a nightly already published and refuses any ref but protected main.
+        description = inputs["arm64_images"]["description"]
+        self.assertIn("no nightly has published this commit", description)
+        self.assertIn("protected main", description)
+        # Only the opt-in job selects a non-default image platform. The image
+        # job the scheduled run uses keeps the amd64 default.
+        selecting = {
+            name
+            for name, job in self.jobs.items()
+            if "RELEASE_IMAGE_PLATFORM" in str(job)
+        }
+        self.assertEqual({"arm64-images"}, selecting)
+        self.assertNotIn("RELEASE_IMAGE_PLATFORM", str(self.jobs["images"]))
+        # Images build natively per architecture, never through emulation.
+        self.assertNotIn("qemu", self.text.lower())
+        self.assertNotIn("binfmt", self.text.lower())
+
+    def test_arm64_image_job_builds_native_layouts_outside_the_publication_path(self):
+        job = self.jobs["arm64-images"]
+        self.assertEqual("ubuntu-24.04-arm", job["runs-on"])
+        self.assertIn("inputs.arm64_images", job["if"])
+        self.assertIn("needs.select.outputs.skip != 'true'", job["if"])
+        self.assertEqual({"select", "arm64"}, set(job["needs"]))
+        self.assertNotIn("permissions", job)
+        for later in ("prepare", "attest", "publish"):
+            self.assertNotIn("arm64-images", self.jobs[later]["needs"])
+        text = str(job)
+        self.assertIn("release/scripts/build-release-image.sh", text)
+        self.assertIn("linux/arm64", text)
+        self.assertIn("nightly-arm64-${{ github.run_id }}", text)
+        # The layouts stay out of the artifacts the payload assembly downloads.
+        uploads = [
+            step["with"]["name"]
+            for step in job["steps"]
+            if step.get("uses", "").startswith("actions/upload-artifact@")
+        ]
+        self.assertEqual(
+            ["arm64-image-layouts-${{ github.run_id }}-${{ github.run_attempt }}"],
+            uploads,
         )
 
     def test_no_numbered_release_promotion_or_mutable_image_alias(self):

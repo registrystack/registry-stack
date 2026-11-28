@@ -131,8 +131,9 @@ function acceptsExpectedEvidence(candidate) {
     && resolution.mappingAuthorityId === expectedResolution.mappingAuthorityId;
 }
 
-test('search, resolve, and inert exact selection use the Rust client', async () => {
+test('search, resolve, and inert exact selection accept a development peer unless explicitly refused', async (t) => {
   const server = http.createServer((request, response) => {
+    response.setHeader('registry-posture', 'development');
     response.setHeader('content-type', 'application/json');
     if (request.method === 'GET' && request.url.startsWith('/v1/services')) {
       response.end(JSON.stringify({
@@ -161,8 +162,26 @@ test('search, resolve, and inert exact selection use the Rust client', async () 
     response.end();
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  const client = new DiscoveryClient(`http://127.0.0.1:${address.port}/`);
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${server.address().port}/`;
+  for (const [options, refuse] of [
+    [baseUrl, false], [{ baseUrl }, false],
+    [{ baseUrl, refuseDevelopmentPeer: false }, false],
+    [{ baseUrl, refuseDevelopmentPeer: true }, true],
+  ]) {
+    const client = new DiscoveryClient(options);
+    const response = client.searchEvidenceServices({ evidenceTypeId: 'urn:example:evidence-type' });
+    if (refuse) {
+      await assert.rejects(response, (error) => error.kind === 'development-peer');
+    } else {
+      assert.equal((await response).items.length, 1);
+    }
+  }
+  assert.throws(
+    () => new DiscoveryClient({ baseUrl, allowDevelopmentPeer: true }),
+    (error) => error.kind === 'configuration',
+  );
+  const client = new DiscoveryClient(baseUrl);
 
   const found = await client.searchEvidenceServices({
     evidenceTypeId: 'urn:example:evidence-type',
@@ -193,7 +212,6 @@ test('search, resolve, and inert exact selection use the Rust client', async () 
   );
   assert.equal(validateSelectionStructure(selection).recordId, 'record-a');
 
-  await new Promise((resolve) => server.close(resolve));
   assert.equal(JSON.parse(JSON.stringify(selection)).recordId, 'record-a');
 });
 

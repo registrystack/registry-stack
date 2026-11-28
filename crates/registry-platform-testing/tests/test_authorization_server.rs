@@ -323,7 +323,7 @@ async fn verifier(server: &TestAuthorizationServer, audience: &str) -> TokenVeri
             request_timeout: Duration::from_secs(5),
             outage_tolerance: Duration::from_secs(900),
         },
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let mut config = server.verifier_config(vec![audience.to_owned()]);
     config.allowed_clients = vec![CHAT_HOST.to_owned(), GATEWAY.to_owned()];

@@ -432,7 +432,7 @@ fn runtime_yaml(base_url: &str) -> String {
         "allowedPrivateCidrs": ["192.168.0.0/16"],
         "store": {
             "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "testOnlyPlaintext": true
+            "transport": "loopback-plaintext"
         }
     });
     serde_json::to_string_pretty(&config).expect("the runtime config renders")
@@ -457,7 +457,7 @@ fn direct_breg_runtime_yaml(
         "allowedPrivateCidrs": ["192.168.0.0/16"],
         "store": {
             "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "testOnlyPlaintext": true
+            "transport": "loopback-plaintext"
         },
         "destinations": {
             "breg-test": {
@@ -594,7 +594,7 @@ impl JobFixture {
 pub fn reply_page() -> Value {
     json!({
         "data": [
-            {"id": "a", "answers": {"age": "045", "secret": "never-projected"}},
+            {"id": "a", "answers": {"age": "0457193", "secret": "never-projected"}},
             {"id": "b", "answers": {"age": "007", "secret": "never-projected"}}
         ],
         "nextCursor": "p2"
@@ -831,7 +831,7 @@ triggers:
             },
             "store": {
                 "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-                "testOnlyPlaintext": true
+                "transport": "loopback-plaintext"
             }
         });
         std::fs::write(
@@ -846,4 +846,81 @@ triggers:
             runtime,
         }
     }
+}
+
+/// A disposable PostgreSQL database URL with a numeric loopback host.
+#[cfg(feature = "postgres-test")]
+pub fn test_database_url() -> String {
+    let url = std::env::var("ADAPTER_TEST_DATABASE_URL")
+        .expect("ADAPTER_TEST_DATABASE_URL must name a numeric loopback host");
+    validate_test_database_url(&url);
+    url
+}
+
+#[cfg(feature = "postgres-test")]
+pub fn validate_test_database_url(url: &str) {
+    use tokio_postgres::config::Host;
+
+    assert!((url.starts_with("postgresql://") || url.starts_with("postgres://"))
+             && url.parse::<tokio_postgres::Config>().is_ok_and(|config| {
+        let hosts = config.get_hosts();
+        !hosts.is_empty() && hosts.iter().all(|host| {
+            matches!(host, Host::Tcp(name) if registry_platform_loopback::loopback_literal(name).is_some())
+        }) && config.get_hostaddrs().iter().all(|address| registry_platform_loopback::loopback_address(*address))
+    }), "ADAPTER_TEST_DATABASE_URL must name a numeric loopback host");
+}
+
+/// A value-free command emits only the posture declaration and its expected
+/// acknowledgement, when the fixture opts in to anonymous HTTPS.
+pub fn assert_posture_logs(stderr: &[u8], label: &str, anonymous_https_pointer: Option<&str>) {
+    let stderr = std::str::from_utf8(stderr).expect("JSON log text is UTF-8");
+    let mut lines = stderr.lines();
+    let event: Value = serde_json::from_str(lines.next().expect("startup records posture"))
+        .unwrap_or_else(|_| panic!("{label}: startup must log JSON"));
+    assert_eq!(event["level"], "INFO", "{label}");
+    let fields = event["fields"].as_object().expect("startup log fields");
+    assert_eq!(fields.len(), 5, "{label}: unexpected startup fields");
+    assert_eq!(fields["message"], "posture declared", "{label}");
+    assert!(
+        matches!(
+            fields["posture"].as_str(),
+            Some("production" | "development")
+        ),
+        "{label}"
+    );
+    assert!(
+        matches!(
+            fields["posture_source"].as_str(),
+            Some("default" | "flag" | "environment")
+        ),
+        "{label}"
+    );
+    assert!(fields["development_settings"].is_u64(), "{label}");
+    assert_eq!(
+        fields["explicit_production_settings"],
+        u64::from(anonymous_https_pointer.is_some()),
+        "{label}"
+    );
+    if let Some(pointer) = anonymous_https_pointer {
+        let acknowledgement: Value = serde_json::from_str(
+            lines
+                .next()
+                .expect("startup records the HTTPS acknowledgement"),
+        )
+        .unwrap_or_else(|_| panic!("{label}: acknowledgement must log JSON"));
+        assert_eq!(acknowledgement["level"], "INFO", "{label}");
+        assert_eq!(
+            acknowledgement["fields"],
+            json!({
+                "message": "explicit production setting in use",
+                "setting_code": "adapter.posture.anonymous-https",
+                "pointer": pointer
+            }),
+            "{label}"
+        );
+    }
+    assert!(
+        lines.next().is_none(),
+        "{label}: unexpected additional logs"
+    );
 }

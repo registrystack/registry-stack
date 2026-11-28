@@ -64,7 +64,7 @@ function inputError(kind) {
   });
 }
 
-function plainDataObject(value, expectedFields) {
+function plainDataObject(value, expectedFields, optionalFields = []) {
   if (value === null || typeof value !== 'object' || Array.isArray(value) || isProxy(value)) {
     throw inputError('invalid-request');
   }
@@ -72,10 +72,10 @@ function plainDataObject(value, expectedFields) {
   if (prototype !== Object.prototype && prototype !== null) throw inputError('invalid-request');
   const keys = Reflect.ownKeys(value);
   if (keys.some((key) => typeof key !== 'string')
-    || keys.length !== expectedFields.length
-    || keys.some((key) => !expectedFields.includes(key))) throw inputError('invalid-request');
+    || keys.some((key) => !expectedFields.includes(key) && !optionalFields.includes(key))
+    || expectedFields.some((field) => !keys.includes(field))) throw inputError('invalid-request');
   const result = Object.create(null);
-  for (const field of expectedFields) {
+  for (const field of keys) {
     const descriptor = Object.getOwnPropertyDescriptor(value, field);
     if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
       throw inputError('invalid-request');
@@ -107,15 +107,24 @@ function hookHeaders(value) {
 
 function verifyHookDelivery(value) {
   try {
-    const input = plainDataObject(value, ['method', 'path', 'headers', 'body', 'key']);
-    if (typeof input.method !== 'string' || typeof input.path !== 'string'
-      || !Buffer.isBuffer(input.body) || !Buffer.isBuffer(input.key)
-      || isSharedArrayBuffer(input.body.buffer) || isSharedArrayBuffer(input.key.buffer)) {
+    const input = plainDataObject(
+      value,
+      ['headers', 'body', 'key'],
+      ['previousKey', 'maxSkewSeconds', 'callerEnforcedFreshness'],
+    );
+    if (!Buffer.isBuffer(input.body) || !Buffer.isBuffer(input.key)
+      || isSharedArrayBuffer(input.body.buffer) || isSharedArrayBuffer(input.key.buffer)
+      || (input.previousKey !== undefined && (!Buffer.isBuffer(input.previousKey)
+        || isSharedArrayBuffer(input.previousKey.buffer)))
+      || (input.maxSkewSeconds !== undefined && !Number.isSafeInteger(input.maxSkewSeconds))
+      || (input.callerEnforcedFreshness !== undefined
+        && typeof input.callerEnforcedFreshness !== 'boolean')) {
       throw inputError('invalid-request');
     }
     input.headers = hookHeaders(input.headers);
     input.body = Buffer.from(input.body);
     input.key = Buffer.from(input.key);
+    if (input.previousKey !== undefined) input.previousKey = Buffer.from(input.previousKey);
     return native.verifyHookDelivery(input);
   } catch (error) {
     throw normalize(error, 'invalid-request');

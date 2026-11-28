@@ -39,10 +39,14 @@ pub(super) fn source_router(
             AuditKeyHasher::Keyed(keying),
             fx.audit.clone(),
             7,
+            &authenticator(),
         )
         .with_hooks(fx.hooks.clone()),
     );
     router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
         service,
         authenticator: Arc::new(authenticator_with_busy_profiles(profiles.clone())),
     })

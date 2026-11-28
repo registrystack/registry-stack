@@ -440,9 +440,10 @@ and digest. No registry account is required for these public image pulls.
 
 Registry Stack v0.22.0 through v0.26.0 promoted separate Evidence, Relay, and,
 from v0.23.0, Discovery client projects. Those immutable versions remain
-supported release history. Starting with v0.26.1, a release promotes only the
-unified user-facing clients: `@registrystack/client` on npm and
-`registry-stack-client` on PyPI. Their product namespaces carry the
+supported release history. Starting with v0.26.1, releases promote unified native Node and Python
+clients. The Python package is `registry-stack-client` on PyPI. From v0.49.0,
+the Node package is `@registrystack/client-node`, and the separate Fetch-based
+browser and edge package is `@registrystack/client`. Their product namespaces carry the
 version-selected APIs: `discovery`, `evidence`, and `breg` from v0.26.1,
 `casework` from v0.30.0, `messaging` from v0.38.0, and `scheduling` from
 v0.40.0. The client roster selects `coordinator` from v0.44.0; this is
@@ -470,13 +471,14 @@ of releases through v0.26.0, but later releases do not select them.
 
 npm does not provide a pending trusted publisher for an uncreated package.
 Each package identity therefore needs a one-time bootstrap before its first
-release. Before the first v0.26.1-or-later candidate, provision only these four
-new identities:
+release. Before the first v0.49.0-or-later candidate, provision the four
+new native package identities. The browser package uses the existing
+`@registrystack/client` identity.
 
-1. Create inert `0.0.0` packages for `@registrystack/client` and its
-   `@registrystack/client-darwin-arm64`,
-   `@registrystack/client-linux-arm64-gnu`, and
-   `@registrystack/client-linux-x64-gnu` implementation packages. Give every
+1. Create inert `0.0.0` packages for `@registrystack/client-node` and its
+   `@registrystack/client-node-darwin-arm64`,
+   `@registrystack/client-node-linux-arm64-gnu`, and
+   `@registrystack/client-node-linux-x64-gnu` implementation packages. Give every
    bootstrap package only a README, `package.json`, and Apache-2.0 license. Do
    not include executable code or product-specific package identities.
 2. Publish each package with `npm publish --access public --tag bootstrap` and
@@ -1401,7 +1403,8 @@ Publication:
 5. Reconciles the exact version-appropriate client wheels on PyPI and root and
    platform packages on npm. v0.22.0 through v0.26.0 use the historical
    product projects. v0.26.1 and later use only `registry-stack-client` and
-   `@registrystack/client` plus its three platform implementation packages.
+   `@registrystack/client-node` plus its three platform implementation packages
+   and the Fetch-based `@registrystack/client` package.
    Absent packages use trusted short-lived credentials; existing packages must
    match the candidate bytes.
 6. Rechecks the full asset inventory, checksum signature, image digests, and

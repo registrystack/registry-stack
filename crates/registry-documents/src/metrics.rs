@@ -39,6 +39,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use registry_platform_authcommon::{record_refusal, DeclaredScope, RefusalNote, RefusalRecorder};
 use registry_platform_metrics::{
     sample_error_class, CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline,
     CLASS_NO_TIME_LEFT, CLASS_POOL, CONTENT_TYPE as METRICS_CONTENT_TYPE,
@@ -154,6 +155,9 @@ pub struct QueueDepth {
 pub struct Metrics {
     requests: CounterVec,
     sample_failures: CounterVec,
+    /// Counts and logs each refusal by the check it failed; its counter is
+    /// `documents_request_refusals_total`.
+    refusals: RefusalRecorder,
     started: Instant,
     /// Seconds after `started` at which each worker last completed a pass.
     last_success: [AtomicU64; 1],
@@ -183,6 +187,7 @@ impl Default for Metrics {
                 LabelSpace::closed_zero_filled(&["sample"], &samples).expect(DECLARATION),
             )
             .expect(DECLARATION),
+            refusals: RefusalRecorder::new("documents").expect(DECLARATION),
             started: Instant::now(),
             last_success: [AtomicU64::new(0)],
         }
@@ -204,6 +209,18 @@ impl Metrics {
             &self.requests,
             &[route, method_label(method), status_class(status)],
         );
+    }
+
+    /// Count one refusal under the check it failed and write the log line
+    /// the recorder admits.
+    pub fn record_refusal(&self, note: RefusalNote) {
+        record_refusal!(self.refusals, note);
+    }
+
+    /// As [`Self::record_refusal`], and a scope refusal's line also names the
+    /// values the deployment declared for it.
+    pub fn record_refusal_declaring(&self, note: RefusalNote, declared: Option<&DeclaredScope>) {
+        record_refusal!(self.refusals, note, declared = declared);
     }
 
     /// Record that `worker` just completed a pass.
@@ -231,6 +248,7 @@ impl Metrics {
         let mut out = Exposition::new();
         self.requests.write(&mut out).expect(DECLARATION);
         self.sample_failures.write(&mut out).expect(DECLARATION);
+        self.refusals.counter().write(&mut out).expect(DECLARATION);
         write_queue(
             &mut out,
             "documents_verification_jobs",
@@ -347,7 +365,9 @@ fn status_class(status: StatusCode) -> &'static str {
 }
 
 /// Count every answered request on the serving listener under the route
-/// template it matched.
+/// template it matched, and every refusal under the check it failed. The
+/// refusal rides the response's extensions, which are never serialized, so
+/// recording it cannot change a byte of the answer.
 pub async fn count_requests(
     State(metrics): State<Arc<Metrics>>,
     request: Request<axum::body::Body>,
@@ -361,6 +381,9 @@ pub async fn count_requests(
     let method = request.method().clone();
     let response = next.run(request).await;
     metrics.record_request(&route, &method, response.status());
+    if let Some(note) = response.extensions().get::<RefusalNote>() {
+        metrics.record_refusal_declaring(*note, response.extensions().get::<DeclaredScope>());
+    }
     response
 }
 
@@ -516,6 +539,7 @@ pub async fn serve_metrics(State(state): State<MetricsState>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_authcommon::FailedCheck;
 
     fn depth(by_state: &[(&str, i64)], oldest: i64) -> QueueDepth {
         QueueDepth {
@@ -547,6 +571,29 @@ mod tests {
         assert!(text.contains(
             "documents_http_requests_total{route=\"unmatched\",method=\"other\",status=\"2xx\"} 1"
         ));
+    }
+
+    #[test]
+    fn the_refusal_counter_lists_every_check_from_zero_and_counts_by_check() {
+        let metrics = Metrics::default();
+        let text = metrics.render(&Sampled::default());
+        for check in FailedCheck::ALL {
+            assert!(
+                text.contains(&format!(
+                    "documents_request_refusals_total{{check=\"{}\"}} 0",
+                    check.as_str()
+                )),
+                "{}",
+                check.as_str()
+            );
+        }
+        metrics.record_refusal(RefusalNote::new(FailedCheck::Scope));
+        metrics.record_refusal(RefusalNote::new(FailedCheck::Scope));
+        metrics.record_refusal(RefusalNote::new(FailedCheck::Visibility));
+        let text = metrics.render(&Sampled::default());
+        assert!(text.contains("documents_request_refusals_total{check=\"scope\"} 2"));
+        assert!(text.contains("documents_request_refusals_total{check=\"visibility\"} 1"));
+        assert!(text.contains("documents_request_refusals_total{check=\"ownership\"} 0"));
     }
 
     #[test]

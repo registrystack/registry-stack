@@ -12,6 +12,8 @@
 //!   reports the package digest and renders every template's sample.
 //! - `preview` renders one template version with given data, offline, and
 //!   in JSON prints the exact bytes the runtime's preview route answers.
+//! - `provision` creates the roles and the database the runtime file names,
+//!   or with `--print-sql` prints the SQL that does.
 //! - `plan` reads the configured package, activation ledger, schema, and
 //!   runtime role without writing; `apply` performs that activation with
 //!   migration authority; `status` reads the resulting history with the
@@ -25,10 +27,8 @@
 //! - `retention erase-expired` reports what the configured retention
 //!   periods say had expired by `--before`, and with `--apply` erases it,
 //!   with the migration credential. A cutoff in the future is refused.
-//! - `dev` runs the package in the foreground against PostgreSQL and Mailpit
-//!   in Docker and a mock HTTP gateway, with the runtime in this process,
-//!   and removes its containers on Ctrl-C; `dev token` writes a bearer
-//!   header file for a client an access profile names.
+//!
+//! Use `rstack dev` to run a local Messaging project.
 //!
 //! Exit codes: 0 when the command succeeds, 1 when the configuration,
 //! package, preview, message action, or retention cutoff is refused, 2 for a usage error, and
@@ -44,6 +44,7 @@
 //! successful `preview` is the one exception: it prints the exact bytes the
 //! runtime's preview route answers.
 
+use registry_platform_config::DeclaredPosture;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
@@ -78,8 +79,8 @@ use uuid::Uuid;
 
 #[cfg(test)]
 mod cli_contract_tests;
-mod dev;
 mod identity_facts;
+mod provision;
 mod report;
 mod selected_binary;
 mod starter;
@@ -91,7 +92,8 @@ use report::{DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
 #[command(
     name = "messagingctl",
     version = registry_platform_buildinfo::DISPLAY_VERSION,
-    about = "Registry Messaging adopter and local operator tooling"
+    about = "Registry Messaging adopter and local operator tooling",
+    after_help = "Use rstack dev to run a local Messaging project."
 )]
 struct Cli {
     /// Emit the selected command's report in this format.
@@ -117,6 +119,8 @@ enum Command {
     Check(CheckArgs),
     /// Render one template version with the given data, offline.
     Preview(PreviewArgs),
+    /// Create the roles and the database the runtime file names, or print the SQL.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Report what activating the configured package would change, without writing.
     Plan(ActivationArgs),
     /// Apply schema changes and record the configured package as active.
@@ -129,17 +133,6 @@ enum Command {
     /// Erase what the retention periods say has expired.
     #[command(subcommand)]
     Retention(RetentionCommand),
-    /// Run an authoring project locally with PostgreSQL, Mailpit, and a mock HTTP
-    /// gateway in Docker, until Ctrl-C.
-    ///
-    /// The session pulls and runs the pinned images
-    /// docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
-    /// and
-    /// ghcr.io/axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d,
-    /// the Docker Official Images reference and upstream GHCR mirror of postgres:17.11 and
-    /// axllent/mailpit:v1.31.2 at those digests. Each publishes on 127.0.0.1
-    /// only, and the session removes both when it stops.
-    Dev(dev::DevArgs),
     /// Call the Messaging HTTP API with a saved connection or an explicit URL.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage saved Messaging API connections.
@@ -161,6 +154,12 @@ enum GenerateCommand {
 
 #[derive(Debug, Args)]
 struct GenerateIdentityFactsArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file: its authentication.oidc block and the
     /// package it names state the facts.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
@@ -168,6 +167,10 @@ struct GenerateIdentityFactsArgs {
     /// New YAML file to create. Existing files are never overwritten.
     #[arg(long, value_name = "FILE")]
     output: PathBuf,
+    /// The id under authentication.oidc.issuers to describe. Required when
+    /// the runtime declares more than one issuer.
+    #[arg(long, value_name = "ISSUER_ID")]
+    issuer: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -182,6 +185,12 @@ struct GenerateTemplatesArgs {
 
 #[derive(Debug, Args)]
 struct ServeArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file passed unchanged to the Messaging runtime.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -199,6 +208,12 @@ enum RetentionCommand {
 
 #[derive(Debug, Args)]
 struct EraseExpiredArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -233,6 +248,12 @@ enum MessagesCommand {
 
 #[derive(Debug, Args)]
 struct ListArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -247,6 +268,12 @@ struct ListArgs {
 
 #[derive(Debug, Args)]
 struct MessageArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -341,6 +368,12 @@ struct PackageArgs {
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("source").required(true).multiple(false)))]
 struct PackageSource {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE", group = "source")]
     runtime_config: Option<PathBuf>,
@@ -360,12 +393,18 @@ struct PackageSource {
     ArgGroup::new("checked")
         .required(true)
         .multiple(true)
-        .args(["runtime_config", "package", "project", "dev_state"])
+        .args(["runtime_config", "package", "project"])
 ))]
 struct CheckArgs {
-    /// Generated development session state. Checked offline without secrets.
-    #[arg(long, value_name = "FILE", conflicts_with_all = ["runtime_config", "package", "project"])]
-    dev_state: Option<PathBuf>,
+    /// Check under the production posture.
+    #[arg(long)]
+    production: bool,
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
@@ -381,6 +420,7 @@ struct CheckArgs {
     #[arg(long, requires = "runtime_config")]
     environment: bool,
     /// Exit 1 when a warning is reported.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
 }
@@ -417,6 +457,12 @@ struct ApplyArgs {
 
 #[derive(Debug, Args)]
 struct ActivationArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -465,6 +511,9 @@ struct Outcome {
     exit: u8,
     view: View,
     raw_json: Option<Vec<u8>>,
+    /// The explicit production settings a checked runtime file states,
+    /// written after `posture` when set.
+    explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 }
 
 #[derive(Clone, Copy)]
@@ -483,8 +532,6 @@ enum View {
     MessageShow,
     MessageAction,
     Retention,
-    Dev,
-    DevToken,
 }
 
 impl Outcome {
@@ -494,6 +541,7 @@ impl Outcome {
             exit: 0,
             view,
             raw_json: None,
+            explicit_settings: None,
         }
     }
 
@@ -514,6 +562,7 @@ impl Outcome {
             exit,
             view: View::Check,
             raw_json: None,
+            explicit_settings: None,
         }
     }
 
@@ -535,6 +584,7 @@ impl Outcome {
             exit,
             view: View::Diagnostics,
             raw_json: None,
+            explicit_settings: None,
         }
     }
 }
@@ -651,14 +701,6 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
             "message",
             "Run messagingctl messages show MESSAGE_ID before acting again.",
         ),
-        "dev.refused" => (
-            "dev-session",
-            "Correct the project or request the message names, then retry.",
-        ),
-        "dev.failed" | "dev.interrupted" => (
-            "dev-session",
-            "Restore Docker or the file the message names, then rerun messagingctl dev.",
-        ),
         _ if exit == OPERATIONAL_FAILURE_EXIT => (
             "runtime-dependency",
             "Restore the file, secret, database, or service the message names, then retry.",
@@ -740,9 +782,56 @@ where
         }
     };
     let command = command_path(&cli.command);
+    let (flag, production) = match &cli.command {
+        Command::Serve(args) => (Some(&args.posture), false),
+        Command::Provision(args) => (Some(&args.posture), false),
+        Command::Generate(GenerateCommand::IdentityFacts(args)) => (Some(&args.posture), false),
+        Command::Check(args) => (Some(&args.posture), args.production),
+        Command::Preview(args) => (Some(&args.source.posture), false),
+        Command::Plan(args) | Command::Status(args) => (Some(&args.posture), false),
+        Command::Apply(args) => (Some(&args.activation.posture), false),
+        Command::Messages(args) => (
+            Some(match args {
+                MessagesCommand::List(args) => &args.posture,
+                MessagesCommand::Show(args) => &args.posture,
+                MessagesCommand::Retry(args) | MessagesCommand::Cancel(args) => {
+                    &args.target.posture
+                }
+                MessagesCommand::Settle(args) => &args.action.target.posture,
+            }),
+            false,
+        ),
+        Command::Retention(RetentionCommand::EraseExpired(args)) => (Some(&args.posture), false),
+        _ => (None, false),
+    };
+    let posture = if let Some(flag) = flag {
+        let flag = flag.as_deref();
+        if production && flag == Some("development") {
+            let outcome = posture_refusal(
+                "platform.posture.conflict",
+                "--production and --posture development contradict each other",
+                "Use one of them.",
+            );
+            return finish(&outcome, command, cli.format, stdout, stderr);
+        }
+        let flag = flag.or(production.then_some("production"));
+        match registry_platform_config::declared(flag) {
+            Ok(declared) => Some(declared),
+            Err(error) => {
+                let outcome =
+                    posture_refusal(error.code(), error.message(), error.suggested_action());
+                return finish(&outcome, command, cli.format, stdout, stderr);
+            }
+        }
+    } else {
+        None
+    };
+    let declared = posture.unwrap_or(registry_messaging::config::DEFAULT_POSTURE);
     let outcome = match cli.command {
-        Command::Serve(args) => return serve(args, cli.format, format_requested, stdout, stderr),
-        Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
+        Command::Serve(args) => {
+            return serve(args, declared, cli.format, format_requested, stdout, stderr)
+        }
+        Command::Provision(args) => return provision(&args, cli.format, declared),
         Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
         Command::Api(args) => return api(*args, format_requested, stderr),
         Command::Connection { command } => {
@@ -751,16 +840,18 @@ where
         Command::Init(args) => init(&args.directory),
         Command::Package(args) => package(&args),
         Command::Generate(GenerateCommand::Templates(args)) => generate_templates(&args),
-        Command::Generate(GenerateCommand::IdentityFacts(args)) => generate_identity_facts(&args),
-        Command::Check(args) => check(&args),
-        Command::Preview(args) => preview(&args),
-        Command::Plan(args) => plan(&args.runtime_config),
-        Command::Apply(args) => apply(&args),
-        Command::Status(args) => status(&args.runtime_config),
-        Command::Messages(command) => messages(&command),
-        Command::Retention(RetentionCommand::EraseExpired(args)) => erase_expired(&args),
+        Command::Generate(GenerateCommand::IdentityFacts(args)) => {
+            generate_identity_facts(&args, declared)
+        }
+        Command::Check(args) => check(&args, declared),
+        Command::Preview(args) => preview(&args, declared),
+        Command::Plan(args) => plan(&args.runtime_config, declared),
+        Command::Apply(args) => apply(&args, declared),
+        Command::Status(args) => status(&args.runtime_config, declared),
+        Command::Messages(command) => messages(&command, declared),
+        Command::Retention(RetentionCommand::EraseExpired(args)) => erase_expired(&args, declared),
     };
-    finish(&outcome, command, cli.format, stdout, stderr)
+    finish_with_posture(&outcome, command, cli.format, stdout, stderr, posture)
 }
 
 /// The subcommand path a parsed invocation selected, as its report names it.
@@ -773,6 +864,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Generate(GenerateCommand::IdentityFacts(_)) => "generate identity-facts",
         Command::Check(_) => "check",
         Command::Preview(_) => "preview",
+        Command::Provision(_) => "provision",
         Command::Plan(_) => "plan",
         Command::Apply(_) => "apply",
         Command::Status(_) => "status",
@@ -782,11 +874,32 @@ fn command_path(command: &Command) -> &'static str {
         Command::Messages(MessagesCommand::Settle(_)) => "messages settle",
         Command::Messages(MessagesCommand::Cancel(_)) => "messages cancel",
         Command::Retention(RetentionCommand::EraseExpired(_)) => "retention erase-expired",
-        Command::Dev(args) => dev::command_path(args),
         Command::Api(_) => "api",
         Command::Connection { .. } => "connection",
         Command::RstackDev(_) => "rstack-dev",
     }
+}
+
+/// Runs the shared `provision` command, which writes its own report and sets
+/// its own exit code. The global `--format` selects its report as it selects
+/// every other command's.
+fn provision(
+    args: &registry_platform_provision::ProvisionArgs,
+    format: OutputFormat,
+    declared: registry_platform_config::DeclaredPosture,
+) -> ExitCode {
+    let shared = match format {
+        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+    };
+    registry_platform_provision::run_provision(
+        "messagingctl",
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        args,
+        shared,
+        declared,
+        |path| provision::load(path, declared),
+    )
 }
 
 fn api(
@@ -847,6 +960,7 @@ fn connection(
 
 fn serve(
     args: ServeArgs,
+    declared: DeclaredPosture,
     format: OutputFormat,
     format_requested: bool,
     stdout: &mut dyn io::Write,
@@ -887,6 +1001,7 @@ fn serve(
     command
         .arg("--runtime-config")
         .arg(args.runtime_config)
+        .args(["--posture", declared.posture.as_str()])
         .arg("serve");
     replace_with_service(command, "messaging", stderr)
 }
@@ -1001,7 +1116,7 @@ fn generate_templates(args: &GenerateTemplatesArgs) -> Outcome {
     }
 }
 
-fn generate_identity_facts(args: &GenerateIdentityFactsArgs) -> Outcome {
+fn generate_identity_facts(args: &GenerateIdentityFactsArgs, declared: DeclaredPosture) -> Outcome {
     // Refuse before reading anything when the output cannot be created.
     if args.output.exists() {
         return Outcome::refused(
@@ -1011,7 +1126,7 @@ fn generate_identity_facts(args: &GenerateIdentityFactsArgs) -> Outcome {
             "the output file already exists; generate never overwrites".to_owned(),
         );
     }
-    let config = match load_runtime(&args.runtime_config) {
+    let config = match load_runtime(&args.runtime_config, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1019,15 +1134,20 @@ fn generate_identity_facts(args: &GenerateIdentityFactsArgs) -> Outcome {
         Ok(loaded) => loaded,
         Err(error) => return config_refusal(&error),
     };
-    let facts = match identity_facts::facts(&config, &loaded) {
+    let facts = match identity_facts::facts(&config, &loaded, args.issuer.as_deref()) {
         Ok(facts) => facts,
         Err(error) => {
-            return Outcome::refused(
-                DOMAIN_REFUSAL_EXIT,
-                "identity.facts.unstatable",
-                "/",
-                error.to_string(),
-            )
+            return match error.issuer_code() {
+                Some(code) => {
+                    Outcome::refused(DOMAIN_REFUSAL_EXIT, code, "--issuer", error.to_string())
+                }
+                None => Outcome::refused(
+                    DOMAIN_REFUSAL_EXIT,
+                    "identity.facts.unstatable",
+                    "/",
+                    error.to_string(),
+                ),
+            }
         }
     };
     match identity_facts::write(&facts, &args.output) {
@@ -1091,10 +1211,13 @@ fn init(directory: &Path) -> Outcome {
 /// Load the package as `messaging serve` does: from the runtime
 /// configuration, which also verifies a pinned digest and the admitted
 /// clients, or from a bare package directory.
-fn load(source: &PackageSource) -> Result<(Option<RuntimeConfig>, LoadedPackage), Outcome> {
+fn load(
+    source: &PackageSource,
+    declared: DeclaredPosture,
+) -> Result<(Option<RuntimeConfig>, LoadedPackage), Outcome> {
     match (&source.runtime_config, &source.package, &source.project) {
         (Some(path), _, _) => {
-            let config = load_runtime(path)?;
+            let config = load_runtime(path, declared)?;
             let package = config
                 .load_package()
                 .map_err(|error| config_refusal(&error))?;
@@ -1151,10 +1274,12 @@ fn package_load_report(root: &Path, error: &PackageLoadError) -> Report {
 
 /// Read the runtime file at `path` as `messaging serve` does. A refusal of
 /// the file itself reports every rule it breaks, each at its position.
-fn load_runtime(path: &Path) -> Result<RuntimeConfig, Outcome> {
-    RuntimeConfig::load(path).map_err(|error| match startup_report(path, &error) {
-        Some(report) => Outcome::diagnosed(refusal_exit(&error), &report),
-        None => config_refusal(&error),
+fn load_runtime(path: &Path, declared: DeclaredPosture) -> Result<RuntimeConfig, Outcome> {
+    RuntimeConfig::load(path, declared).map_err(|error| {
+        match startup_report(path, &error, declared) {
+            Some(report) => Outcome::diagnosed(refusal_exit(&error), &report),
+            None => config_refusal(&error),
+        }
     })
 }
 
@@ -1195,24 +1320,7 @@ fn config_refusal(error: &RuntimeConfigError) -> Outcome {
 /// Check a runtime configuration offline (CFG-CHECK-1), a package, or an
 /// authoring project, and report what the runtime would serve, rendering
 /// each template's sample in every locale it declares.
-fn check(args: &CheckArgs) -> Outcome {
-    if let Some(path) = &args.dev_state {
-        return match dev::check_session_file(path) {
-            Ok(report) if args.deny_warnings && report.warning_count() > 0 => {
-                Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &report)
-            }
-            Ok(report) => Outcome::new(
-                json!({
-                    "ok": true,
-                    "devState": path,
-                    "filesChecked": report.files_checked().unwrap_or(1),
-                    "diagnostics": report.to_json_value(),
-                }),
-                View::Check,
-            ),
-            Err(failure) => Outcome::diagnosed(failure.exit, &failure.report),
-        };
-    }
+fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
     let given = match (&args.package, &args.project) {
         (Some(root), _) => Some((root, load_package(root))),
         (None, Some(root)) => Some((root, load_project(root))),
@@ -1225,7 +1333,10 @@ fn check(args: &CheckArgs) -> Outcome {
                 if args.project.is_some() {
                     registry_platform_config::apply_check_acceptances(root, &mut warnings);
                 }
-                if warnings.has_errors() || (args.deny_warnings && warnings.warning_count() > 0) {
+                if warnings.has_errors()
+                    || (args.deny_warnings
+                        && registry_platform_config::has_denied_warnings(warnings.diagnostics()))
+                {
                     return Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &warnings);
                 }
                 match package_report(&loaded) {
@@ -1287,7 +1398,18 @@ fn check(args: &CheckArgs) -> Outcome {
         (None, Some(_)) => CheckedAgainst::Nothing,
         (None, None) => CheckedAgainst::NamedPackage,
     };
-    let runtime = check_runtime_file(&absolute, against, args.environment);
+    let runtime = check_runtime_file(&absolute, against, args.environment, declared);
+    // The settings the operator stated on purpose are facts for a reviewer,
+    // not findings, so they never change the verdict. An empty list says none
+    // were stated, and a file that did not load reports no list.
+    let named = path.display().to_string();
+    let settings = runtime.config().map(|_| {
+        runtime
+            .explicit_settings()
+            .iter()
+            .map(|found| registry_cli_report::ExplicitSettingLine::from_found(found, Some(&named)))
+            .collect::<Vec<_>>()
+    });
     let mut report = runtime_report(path, &absolute, &runtime);
     if let Some((refused_exit, mut combined)) = refused.take() {
         combined.extend(report);
@@ -1299,19 +1421,25 @@ fn check(args: &CheckArgs) -> Outcome {
         } else {
             refused_exit
         };
-        return Outcome::diagnosed(exit, &combined);
+        let mut outcome = Outcome::diagnosed(exit, &combined);
+        outcome.explicit_settings = settings;
+        return outcome;
     }
     if let Some(root) = &args.project {
         registry_platform_config::apply_check_acceptances(root, &mut report);
     }
-    let denied = report.has_errors() || (args.deny_warnings && report.warning_count() > 0);
+    let denied = report.has_errors()
+        || (args.deny_warnings
+            && registry_platform_config::has_denied_warnings(report.diagnostics()));
     if denied {
         let exit = if runtime.unavailable {
             OPERATIONAL_FAILURE_EXIT
         } else {
             DOMAIN_REFUSAL_EXIT
         };
-        return Outcome::diagnosed(exit, &report);
+        let mut outcome = Outcome::diagnosed(exit, &report);
+        outcome.explicit_settings = settings;
+        return outcome;
     }
     let package = given
         .as_ref()
@@ -1341,7 +1469,9 @@ fn check(args: &CheckArgs) -> Outcome {
             checked["retention"] = config.retention.report();
         }
     }
-    Outcome::new(checked, View::Check)
+    let mut outcome = Outcome::new(checked, View::Check);
+    outcome.explicit_settings = settings;
+    outcome
 }
 
 /// The findings of an offline runtime check, each naming the file as its
@@ -1412,8 +1542,8 @@ fn package_report(loaded: &LoadedPackage) -> Result<Value, Outcome> {
     }))
 }
 
-fn preview(args: &PreviewArgs) -> Outcome {
-    let (_, loaded) = match load(&args.source) {
+fn preview(args: &PreviewArgs, declared: DeclaredPosture) -> Outcome {
+    let (_, loaded) = match load(&args.source, declared) {
         Ok(loaded) => loaded,
         Err(refused) => return refused,
     };
@@ -1460,6 +1590,7 @@ fn preview(args: &PreviewArgs) -> Outcome {
         exit: 0,
         view: View::Preview,
         raw_json: Some(bytes),
+        explicit_settings: None,
     }
 }
 
@@ -1530,8 +1661,8 @@ fn async_runtime() -> Result<tokio::runtime::Runtime, Outcome> {
         })
 }
 
-fn plan(path: &Path) -> Outcome {
-    let config = match load_runtime(path) {
+fn plan(path: &Path, declared: DeclaredPosture) -> Outcome {
+    let config = match load_runtime(path, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1563,6 +1694,7 @@ fn plan(path: &Path) -> Outcome {
                     exit: DOMAIN_REFUSAL_EXIT,
                     view: View::Activation,
                     raw_json: None,
+                    explicit_settings: None,
                 }
             } else {
                 Outcome::new(report, View::Activation)
@@ -1572,9 +1704,9 @@ fn plan(path: &Path) -> Outcome {
     }
 }
 
-fn apply(args: &ApplyArgs) -> Outcome {
+fn apply(args: &ApplyArgs, declared: DeclaredPosture) -> Outcome {
     let path = &args.activation.runtime_config;
-    let config = match load_runtime(path) {
+    let config = match load_runtime(path, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1613,8 +1745,8 @@ fn apply(args: &ApplyArgs) -> Outcome {
     }
 }
 
-fn status(path: &Path) -> Outcome {
-    let config = match load_runtime(path) {
+fn status(path: &Path, declared: DeclaredPosture) -> Outcome {
+    let config = match load_runtime(path, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1623,18 +1755,30 @@ fn status(path: &Path) -> Outcome {
         Err(refused) => return refused,
     };
     match runtime.block_on(activation_status(&config)) {
-        Ok(status) => Outcome::new(
-            json!({
-                "ok": true,
-                "runtimeConfig": path,
-                "active": status.active,
-                "history": status.history,
-                "schemaVersion": status.schema_version,
-                "runtimeRoleMode": status.runtime_role_mode,
-                "grantsCurrent": status.grants_current,
-            }),
-            View::Activation,
-        ),
+        Ok(status) => {
+            let finding = status.active.as_ref()
+                .and_then(|active| registry_messaging::activation::posture_mismatch(active.posture, declared.posture))
+                .map(|error| match error {
+                    ActivationError::PostureMismatch { message, action } => json!({
+                        "severity": "warning", "code": registry_messaging::activation::POSTURE_MISMATCH,
+                        "path": "/database", "message": message, "suggestedAction": action,
+                    }),
+                    _ => unreachable!("posture_mismatch only reports a posture mismatch"),
+                });
+            Outcome::new(
+                json!({
+                    "ok": true,
+                    "runtimeConfig": path,
+                    "active": status.active,
+                    "history": status.history,
+                    "schemaVersion": status.schema_version,
+                    "runtimeRoleMode": status.runtime_role_mode,
+                    "grantsCurrent": status.grants_current,
+                    "diagnostics": finding.into_iter().collect::<Vec<_>>(),
+                }),
+                View::Activation,
+            )
+        }
         Err(error) => apply_failure(error),
     }
 }
@@ -1643,6 +1787,26 @@ fn status(path: &Path) -> Outcome {
 fn apply_failure(error: RuntimeError) -> Outcome {
     match error {
         RuntimeError::Config(error) => config_refusal(&error),
+        RuntimeError::DatabaseTransport(error) => {
+            let mut outcome = Outcome::refused(
+                DOMAIN_REFUSAL_EXIT,
+                error.code(),
+                "/database/transport",
+                error.to_string(),
+            );
+            outcome.report["diagnostics"][0]["suggestedAction"] = json!(error.suggested_action());
+            outcome
+        }
+        RuntimeError::Activation(ActivationError::PostureMismatch { message, action }) => {
+            let mut outcome = Outcome::refused(
+                DOMAIN_REFUSAL_EXIT,
+                registry_messaging::activation::POSTURE_MISMATCH,
+                "/database",
+                message.to_owned(),
+            );
+            outcome.report["diagnostics"][0]["suggestedAction"] = json!(action);
+            outcome
+        }
         RuntimeError::Activation(ActivationError::Refused(refusals)) => {
             activation_refused(refusals)
         }
@@ -1715,6 +1879,7 @@ fn activation_refused(refusals: Vec<ActivationRefusal>) -> Outcome {
         exit: DOMAIN_REFUSAL_EXIT,
         view: View::Activation,
         raw_json: None,
+        explicit_settings: None,
     }
 }
 
@@ -1745,14 +1910,14 @@ fn audit_unconfirmed(error: &RuntimeError) -> Outcome {
     )
 }
 
-fn messages(command: &MessagesCommand) -> Outcome {
+fn messages(command: &MessagesCommand, declared: DeclaredPosture) -> Outcome {
     let path = match command {
         MessagesCommand::List(args) => &args.runtime_config,
         MessagesCommand::Show(args) => &args.runtime_config,
         MessagesCommand::Retry(args) | MessagesCommand::Cancel(args) => &args.target.runtime_config,
         MessagesCommand::Settle(args) => &args.action.target.runtime_config,
     };
-    let config = match load_runtime(path) {
+    let config = match load_runtime(path, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1813,11 +1978,11 @@ fn future_cutoff() -> Outcome {
 /// Report, and with `--apply` erase, what had expired by the cutoff. A
 /// future cutoff is refused before the configuration is read, and again
 /// against the database's clock.
-fn erase_expired(args: &EraseExpiredArgs) -> Outcome {
+fn erase_expired(args: &EraseExpiredArgs, declared: DeclaredPosture) -> Outcome {
     if args.before > chrono::Utc::now() {
         return future_cutoff();
     }
-    let config = match load_runtime(&args.runtime_config) {
+    let config = match load_runtime(&args.runtime_config, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -2082,11 +2247,31 @@ fn finish(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> ExitCode {
+    finish_with_posture(outcome, command, format, stdout, stderr, None)
+}
+
+fn posture_refusal(code: &str, message: &str, action: &str) -> Outcome {
+    let mut outcome = Outcome::refused(USAGE_EXIT, code, "/posture", message.to_owned());
+    outcome.report["diagnostics"][0]["suggestedAction"] = json!(action);
+    outcome
+}
+
+fn finish_with_posture(
+    outcome: &Outcome,
+    command: &str,
+    format: OutputFormat,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+    posture: Option<DeclaredPosture>,
+) -> ExitCode {
     let written = match (format, &outcome.raw_json) {
         (OutputFormat::Json, Some(bytes)) => stdout.write_all(bytes),
-        (OutputFormat::Json, None) => {
-            report::write(&completed(&outcome.report, command, outcome.exit), stdout)
-        }
+        (OutputFormat::Json, None) => report::write_with_posture(
+            &completed(&outcome.report, command, outcome.exit),
+            stdout,
+            posture,
+            outcome.explicit_settings.clone(),
+        ),
         (OutputFormat::Human, _) => render_human(outcome, command, stdout, stderr),
     };
     match written {
@@ -2165,7 +2350,11 @@ fn render_human(
         View::GenerateTemplates => render_generate_templates(report, stdout),
         View::GenerateIdentityFacts => render_generate_identity_facts(report, stdout),
         View::Check | View::Diagnostics => {
-            render_check(report, stdout)?;
+            render_check(
+                report,
+                outcome.explicit_settings.as_deref().unwrap_or_default(),
+                stdout,
+            )?;
             if report.get("filesChecked").is_some() && !warned {
                 writeln!(stdout, "{}", shared_report(report).summary())?;
             }
@@ -2177,8 +2366,6 @@ fn render_human(
         View::MessageShow => render_message_show(report, stdout),
         View::MessageAction => render_message_action(report, stdout),
         View::Retention => render_retention(report, stdout),
-        View::Dev => render_dev(report, stdout),
-        View::DevToken => render_dev_token(report, stdout),
     }
 }
 
@@ -2215,42 +2402,6 @@ fn render_generate_identity_facts(report: &Value, stdout: &mut dyn io::Write) ->
     writeln!(stdout, "claims: {}", report["claims"])
 }
 
-fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    if report["state"] == json!("stopped") {
-        writeln!(stdout, "stopped; the session's containers are removed")?;
-        return writeln!(
-            stdout,
-            "session directory: {}",
-            text(&report["sessionDirectory"])
-        );
-    }
-    writeln!(stdout, "ready")?;
-    for (label, key) in [
-        ("api", "api"),
-        ("metrics", "metrics"),
-        ("mailpit", "mailpit"),
-        ("mock gateway", "mockGateway"),
-        ("runtime config", "runtimeConfig"),
-        ("log", "log"),
-    ] {
-        writeln!(stdout, "  {label}: {}", text(&report[key]))?;
-    }
-    writeln!(
-        stdout,
-        "next: rstack messaging dev token --client CLIENT, then rstack messaging api PATH --url URL --header @FILE; Ctrl-C stops the session"
-    )
-}
-
-fn render_dev_token(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    writeln!(stdout, "header file: {}", text(&report["headerFile"]))?;
-    writeln!(
-        stdout,
-        "valid for {} seconds; send with curl -H @{}",
-        report["expiresInSeconds"],
-        text(&report["headerFile"])
-    )
-}
-
 fn render_init(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     writeln!(stdout, "created: {}", text(&report["directory"]))?;
     for file in report["created"].as_array().into_iter().flatten() {
@@ -2262,10 +2413,11 @@ fn render_init(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     Ok(())
 }
 
-fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
-    if let Some(path) = report["devState"].as_str() {
-        return writeln!(stdout, "ok: {path}");
-    }
+fn render_check(
+    report: &Value,
+    settings: &[registry_cli_report::ExplicitSettingLine],
+    stdout: &mut dyn io::Write,
+) -> io::Result<()> {
     match report["runtimeConfig"].as_str() {
         Some(path) => writeln!(stdout, "ok: {path}")?,
         None => writeln!(stdout, "ok: {}", text(&report["project"]))?,
@@ -2323,6 +2475,15 @@ fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
             retention["receiptRetentionDays"]
         )?;
     }
+    for setting in settings {
+        writeln!(
+            stdout,
+            "Explicit production setting {} at {}. {}.",
+            setting.code,
+            setting.pointer.as_deref().unwrap_or_default(),
+            setting.summary
+        )?;
+    }
     Ok(())
 }
 
@@ -2377,6 +2538,18 @@ fn render_activation(report: &Value, stdout: &mut dyn io::Write) -> io::Result<(
     }
     if let Some(mode) = report.get("runtimeRoleMode").and_then(Value::as_str) {
         writeln!(stdout, "runtime role mode: {mode}")?;
+    }
+    if let Some(diagnostics) = report["diagnostics"].as_array() {
+        for finding in diagnostics {
+            writeln!(
+                stdout,
+                "{}[{}] {}",
+                text(&finding["severity"]),
+                text(&finding["code"]),
+                text(&finding["message"])
+            )?;
+            writeln!(stdout, "  next: {}", text(&finding["suggestedAction"]))?;
+        }
     }
     Ok(())
 }
@@ -2556,9 +2729,11 @@ database:
   migrationUrlRef: secret:env/MESSAGING_MIGRATION_URL
 authentication:
   oidc:
-    issuer: https://identity.example.test
-    audience: urn:example:messaging
-    allowedClients: [operations-console]
+    issuers:
+      main:
+        issuer: https://identity.example.test
+        audience: urn:example:messaging
+        allowedClients: [operations-console]
 audit:
   path: {root}/audit/messaging.jsonl
   hashKeyRef: secret:env/MESSAGING_AUDIT_KEY
@@ -2638,6 +2813,122 @@ audit:
         assert!(stderr.is_empty());
         assert!(
             stdout.ends_with("0 errors, 0 warnings in 2 files\n"),
+            "{stdout}"
+        );
+    }
+
+    #[test]
+    fn a_check_lists_the_explicit_production_settings_the_runtime_states() {
+        let (_root, path) = project("");
+        let (exit, report) = check_json(&path);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert_eq!(report["explicitProductionSettings"], json!([]));
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let marker = "        allowedClients: [operations-console]\n";
+        assert!(text.contains(marker), "{text}");
+        std::fs::write(
+            &path,
+            text.replace(
+                marker,
+                &format!("{marker}        accessTokenType: JWT\n        scopeClaim: scp\n"),
+            ),
+        )
+        .unwrap();
+        let (exit, report) = check_json(&path);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        let settings = report["explicitProductionSettings"].as_array().unwrap();
+        let listed: Vec<(&str, &str)> = settings
+            .iter()
+            .map(|line| {
+                (
+                    line["code"].as_str().unwrap(),
+                    line["pointer"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (
+                    "platform.posture.jwt-access-token",
+                    "/authentication/oidc/issuers/main/accessTokenType"
+                ),
+                (
+                    "platform.posture.scope-claim",
+                    "/authentication/oidc/issuers/main/scopeClaim"
+                ),
+            ]
+        );
+        assert!(settings.iter().all(|line| line["line"].is_u64()));
+        assert!(settings
+            .iter()
+            .all(|line| line["file"] == json!(path.display().to_string())));
+        // A setting is a fact for the reviewer, never a finding.
+        assert_eq!(report["diagnostics"], json!([]));
+
+        let (exit, stdout, _) = run(&[
+            OsStr::new("check"),
+            OsStr::new("--runtime-config"),
+            path.as_os_str(),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(
+            stdout.contains("Explicit production setting platform.posture.jwt-access-token at /authentication/oidc/issuers/main/accessTokenType."),
+            "{stdout}"
+        );
+    }
+
+    #[test]
+    fn a_check_writes_the_explicit_production_settings_after_the_posture_even_when_refused() {
+        fn raw_check(path: &Path) -> (ExitCode, String) {
+            let (exit, stdout, _) = run(&[
+                OsStr::new("--format"),
+                OsStr::new("json"),
+                OsStr::new("check"),
+                OsStr::new("--runtime-config"),
+                path.as_os_str(),
+            ]);
+            (exit, stdout)
+        }
+        fn assert_after_posture(stdout: &str) {
+            assert_eq!(
+                stdout.matches("\"explicitProductionSettings\"").count(),
+                1,
+                "{stdout}"
+            );
+            let posture = stdout.find("\"posture\"").expect("a posture member");
+            let settings = stdout
+                .find("\"explicitProductionSettings\"")
+                .expect("the settings member");
+            assert!(posture < settings, "{stdout}");
+        }
+
+        let (_root, path) = project("");
+        let marker = "        allowedClients: [operations-console]\n";
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(marker), "{text}");
+
+        let (exit, stdout) = raw_check(&path);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}");
+        assert_after_posture(&stdout);
+
+        // A refused file that states a setting still lists it.
+        std::fs::write(
+            &path,
+            text.replace(
+                marker,
+                "        allowedClients: [unknown-client]\n        accessTokenType: JWT\n",
+            ),
+        )
+        .unwrap();
+        let (exit, stdout) = raw_check(&path);
+        assert_ne!(exit, ExitCode::SUCCESS, "{stdout}");
+        assert_after_posture(&stdout);
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["ok"], false, "{stdout}");
+        assert_eq!(
+            report["explicitProductionSettings"][0]["code"], "platform.posture.jwt-access-token",
             "{stdout}"
         );
     }
@@ -2802,7 +3093,7 @@ audit:
         let document = runtime(
             &safe_root,
             "providers:\n  mail-relay:\n    type: smtp\n    host: 127.0.0.1\n    \
-             port: 1025\n    tls: development-loopback\n",
+             port: 1025\n    tls: loopback-plaintext\n",
         )
         .replace(
             "tlsTermination: development-loopback",
@@ -2820,18 +3111,34 @@ audit:
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     }
 
-    // A test feature admits the plaintext relay whatever the listener, so
-    // only a build without one can observe the refusal.
-    #[cfg(not(feature = "postgres-test"))]
     #[test]
-    fn a_plaintext_loopback_relay_is_refused_behind_a_production_listener() {
+    fn a_plaintext_loopback_relay_is_admitted_behind_a_tls_edge() {
         let (_root, path) = loopback_relay_project("operator-controlled-upstream");
         let (exit, report) = check_json(&path);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    }
+
+    #[test]
+    fn a_retired_smtp_mode_names_loopback_plaintext() {
+        let (_root, path) = loopback_relay_project("operator-controlled-upstream");
+        let document = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            document.replace("tls: loopback-plaintext", "tls: development-loopback"),
+        )
+        .unwrap();
+        let (exit, report) = check_json(&path);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report}");
-        let message = report["diagnostics"][0]["message"].as_str().unwrap();
+        assert_eq!(
+            report["diagnostics"][0]["path"],
+            "/providers/mail-relay/tls"
+        );
         assert!(
-            message.contains("development-loopback listener"),
-            "{message}"
+            report["diagnostics"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("loopback-plaintext"),
+            "{report}"
         );
     }
 
@@ -2969,7 +3276,13 @@ audit:
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
         report["project"] = json!(relative);
         let mut written = Vec::new();
-        report::write(&report, &mut written).unwrap();
+        report::write_with_posture(
+            &report,
+            &mut written,
+            Some(registry_messaging::config::DEFAULT_POSTURE),
+            None,
+        )
+        .unwrap();
         let committed = std::fs::read_to_string(
             root.join("products/messaging/examples/formats/ctl-report.json"),
         )
@@ -3282,6 +3595,36 @@ audit:
             report["filesChecked"],
             1 + load_project(&directory).unwrap().files.len()
         );
+
+        let original = std::fs::read_to_string(&runtime_config).unwrap();
+        let development = original.replace(
+            "database:\n",
+            "database:\n  transport: private-network-plaintext\n",
+        );
+        std::fs::write(&runtime_config, development).unwrap();
+        let (exit, report) = json_run(&[
+            OsStr::new("check"),
+            OsStr::new("--project"),
+            directory.as_os_str(),
+            OsStr::new("--runtime-config"),
+            runtime_config.as_os_str(),
+            OsStr::new("--deny-warnings"),
+            OsStr::new("--posture"),
+            OsStr::new("development"),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| {
+                    finding["code"] == "platform.posture.database-private-plaintext"
+                        && finding["severity"] == "warning"
+                }),
+            "{report}"
+        );
+        std::fs::write(&runtime_config, original).unwrap();
 
         // Alone, the file is checked against the package its package.root
         // names, which this machine does not hold.

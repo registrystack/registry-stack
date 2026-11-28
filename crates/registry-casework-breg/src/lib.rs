@@ -221,7 +221,8 @@ impl BregContextProvider {
             )?;
         } else if matches!(
             metadata,
-            Err(BaseRegistryClientError::Protocol { status: 200, .. })
+            Err(BaseRegistryClientError::Protocol { status: 200, .. }
+                | BaseRegistryClientError::DevelopmentPeer)
         ) {
             return Err(ReviewContextError::VersionUnavailable);
         }
@@ -593,7 +594,8 @@ impl ReviewContextProvider for BregContextProvider {
             )?;
         } else if matches!(
             metadata,
-            Err(BaseRegistryClientError::Protocol { status: 200, .. })
+            Err(BaseRegistryClientError::Protocol { status: 200, .. }
+                | BaseRegistryClientError::DevelopmentPeer)
         ) {
             return Err(ReviewContextError::VersionUnavailable);
         }
@@ -739,6 +741,9 @@ fn map_error(error: BaseRegistryClientError) -> ReviewContextError {
         | BaseRegistryClientError::UnrecognizedProblem {
             status: 500..=599, ..
         } => ReviewContextError::Unavailable,
+        BaseRegistryClientError::Protocol { .. } | BaseRegistryClientError::DevelopmentPeer => {
+            ReviewContextError::Invalid
+        }
         _ => ReviewContextError::Invalid,
     }
 }
@@ -774,9 +779,11 @@ mod version_tests {
                 schema,
                 schema_bytes: "{}".into(),
             },
-            client: BaseRegistryClient::new(registry_breg_client::BaseRegistryClientConfig::new(
-                "http://127.0.0.1/".parse().unwrap(),
-            ))
+            client: BaseRegistryClient::new(
+                registry_breg_client::BaseRegistryClientConfig::new_without_peer_policy(
+                    "http://127.0.0.1/".parse().unwrap(),
+                ),
+            )
             .unwrap(),
             status_profile: "status".into(),
             task_grant_profile: None,

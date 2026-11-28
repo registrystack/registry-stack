@@ -108,6 +108,47 @@ condition input. When `requiredConditionKeys` is empty, omit `preconditions`.
 The [immediate Action API contract](../../reference/breg-api/#immediate-actions) gives the request
 rules.
 
+### Write in one call with `concurrency: current-revision`
+
+An Action that declares `concurrency: current-revision` sends no condition. The caller invokes it
+in one request with no `preconditions`, and the descriptor's `requiredConditionKeys` is empty.
+BReg evaluates the commit guards against the Record it locks for the write, and patches that same
+row, so a concurrent update is never overwritten.
+
+```yaml
+approve-application:
+  execution: {mode: immediate, concurrency: current-revision}
+  inputs:
+    - {id: application, apiName: applicationId, type: reference, target: application, required: true, classification: internal}
+  commitGuards:
+    targets:
+      - {input: application, field: status, equals: submitted, reason: not-submitted}
+  plan:
+    type: fixed
+    effects:
+      - id: approve
+        target: {fromInput: application}
+        operation: patch
+        set:
+          status: {value: approved}
+```
+
+The guard is the only protection against a stale write, so `bregctl check` holds the Action to
+these rules:
+
+- Every Record the Action patches needs an `equals` or `isNull` guard that the Action's own write
+  makes false. Here the guard wants `submitted` and the write sets `approved`, so a second call
+  finds the guard false and answers `412`.
+- A patch sets constants with `value` or clears a field. It cannot write a value from `fromInput`
+  or `fromEffect` into an existing Record, because a value the caller chose from a stale view would
+  overwrite a concurrent update. A create effect can still take caller values.
+- A `revision: unchanged` guard is refused, because it needs the condition this mode removes.
+- A function plan that writes an existing Record is refused.
+- A Proposal cannot declare `concurrency`.
+
+Omit `concurrency` for the default, which asks the caller for a condition. Turning `current-revision`
+on for an existing Action is a reviewed change, because it alters what protects the Record.
+
 A Record type can require a Proposal for an operation:
 
 ```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
@@ -395,7 +436,7 @@ The webhook receiver example shows durable acceptance and deduplication for an a
 
 ### Shift a date guard by an offset
 
-A date guard may shift the registry-local date by a signed whole-day offset:
+A date guard may shift the registry-local date by a signed whole-day offset, or by a signed whole number of calendar months:
 
 ```yaml
 commitGuards:
@@ -407,6 +448,20 @@ commitGuards:
 ```
 
 An absent or zero `currentDateOffsetDays` compares with today.
+Use `currentDateOffsetMonths` instead when the window is a calendar span, such as a licence that must be valid for three more months:
+
+```yaml
+commitGuards:
+  targets:
+    - input: licence
+      field: valid-through
+      currentDate: on-or-after
+      currentDateOffsetMonths: 3
+```
+
+A month offset keeps the day of the month and clamps to the last day of a shorter month, so January 31 plus one month is February 28, or February 29 in a leap year.
+`currentDateOffsetMonths` requires `currentDate`, accepts -12000 through 12000, and cannot be combined with `currentDateOffsetDays` on the same guard.
+A shift that leaves the years 1 through 9999 fails the guard closed.
 The bounded offset applies to the same local date for advisory availability and for commit or Proposal Apply re-evaluation.
 
 A Proposal Plan evaluates `today()` once, when the Proposal starts.
@@ -414,9 +469,10 @@ Its commit guards check `currentDate` again when the Proposal is applied.
 If approval crosses midnight or takes days, the date the Plan used and the date the guard compares against are different days.
 Write the guard offset with that gap in mind.
 
-{/* Evidence: crates/registry-breg/src/model.rs current_date_offset_days;
-    crates/registry-breg/src/immediate_actions.rs current_date_offset_days;
-    crates/registry-breg/tests/immediate_action_requirements.rs current_date_offset_days. */}
+{/* Evidence: crates/registry-breg/src/model.rs current_date_offset_days and current_date_offset_months;
+    crates/registry-breg/src/immediate_actions.rs current_date_offset_days and current_date_offset_months;
+    crates/registry-breg/src/commit_guard.rs shift_date;
+    crates/registry-breg/tests/immediate_action_requirements.rs current_date_offset_days and current_date_offset_months. */}
 
 ### Compare a stored field with an input
 
@@ -483,9 +539,26 @@ It returns the observed target revision with `available: true`, or with `availab
 A guard may declare an optional, stable LocalId `reason` of at most 64 characters.
 The response exposes it as `guardReason` only when every guard fact and every row-boundary fact for the selected target is readable.
 The generic `reason` remains `guard-not-satisfied`.
+A guard with a `reason` may also declare a `label`, the sentence a person sees when that guard refuses.
+`label` is constant display text of at most 256 bytes and is refused without a `reason`:
+
+```yaml
+commitGuards:
+  targets:
+    - input: application
+      field: status
+      equals: submitted
+      reason: not-submitted
+      label: Only a submitted application can be approved.
+```
+
+The label travels exactly where `guardReason` travels, and nowhere else.
+An immediate Action refusal and a Proposal Submit or Apply refusal answer `412 action.guard_failed` with the label as `detail`, and the availability response carries it as `guardLabel`.
+The answer for a guard whose facts the caller cannot read stays the fixed `precondition.failed` body, so a label never discloses a hidden guard.
+A label is presentation copy: rewording one needs no reviewed migration and does not change the Action revision a frozen Proposal binds.
 
 If a declared input needed by a guard is absent, `available` is `null`, the reason is `input-required`, and `missingInputs` names only declared API input names.
-If a guard or row boundary depends on a fact the caller cannot read, or the profile lacks Get authority for the target Record type, the answer is `available: null` with `observedRevision: null`, `not-disclosed`, and no `guardReason` or `missingInputs`:
+If a guard or row boundary depends on a fact the caller cannot read, or the profile lacks Get authority for the target Record type, the answer is `available: null` with `observedRevision: null`, `not-disclosed`, and no `guardReason`, `guardLabel`, or `missingInputs`:
 
 ```json
 {

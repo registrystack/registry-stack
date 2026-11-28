@@ -4,7 +4,7 @@
 //! configuration, confirms the database answers over the runtime
 //! credential and that its activation ledger names the deployed package
 //! for this deployment, opens the audit journal, activates content storage and the
-//! content verifier, loads the token issuer's signing keys, binds the
+//! content verifier, loads each token issuer's signing keys, binds the
 //! listener, suspends every version verified under another verifier
 //! binding, and serves the HTTP surface beside the content verification
 //! worker, the erasure worker, and the cleanup pass.
@@ -32,6 +32,7 @@ use std::time::Duration;
 use clap::{Arg, Command};
 use registry_documents_core::AccessProfiles;
 use registry_platform_audit::{AuditProfile, AuditWriter};
+use registry_platform_config::{DeclaredPosture, PostureReport};
 use registry_platform_dispatch::postgres::{DispatchWorker, Dispatcher, WorkerConfig};
 use registry_platform_yaml::Report;
 use thiserror::Error;
@@ -42,8 +43,8 @@ use crate::activation::{self, ActivationError, ApplyRequest};
 use crate::audit::DocumentsAudit;
 use crate::auth::DocumentsAuthenticator;
 use crate::config::{
-    check_runtime_file, describe_secret_failure, startup_report, Erasure, RuntimeConfig,
-    RuntimeConfigError,
+    check_runtime_file_with_posture, describe_secret_failure, startup_report_with_posture, Erasure,
+    RuntimeConfig, RuntimeConfigError, DEFAULT_POSTURE,
 };
 use crate::content::{pinned_storage, ContentStorage, StorageError};
 use crate::erasure::{
@@ -64,6 +65,7 @@ use crate::verification::{
     Graces, ReplayError, ReplayFailure, ReplayRefusal, Replayed, VerdictSource, VerificationStore,
     VerificationTransport,
 };
+use registry_platform_httpsec::refusal_detail::name_failed_check;
 
 /// The most verification attempts one process runs at once.
 const WORKER_CONCURRENCY: NonZeroUsize = match NonZeroUsize::new(4) {
@@ -93,6 +95,13 @@ pub fn command() -> Command {
                 .help("Runtime configuration file")
                 .required(true),
         )
+        .arg(
+            Arg::new("posture")
+                .long("posture")
+                .global(true)
+                .value_name("POSTURE")
+                .help("Declared posture: development or production. Unset means production."),
+        )
         .subcommand_required(true)
         .subcommand(Command::new("serve").about("Run the Document Store HTTP service"))
 }
@@ -112,7 +121,10 @@ pub fn operational_log_level(value: Option<&str>) -> Result<LevelFilter, Runtime
 }
 
 /// Run the parsed command.
-pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
+pub async fn run(
+    matches: &clap::ArgMatches,
+    declared: DeclaredPosture,
+) -> Result<(), RuntimeError> {
     let path = matches
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
@@ -122,7 +134,10 @@ pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
             // handler refuses startup.
             let shutdown =
                 registry_platform_httpsec::shutdown_signal().map_err(RuntimeError::Signal)?;
-            prepare(path).await?.serve_until(shutdown).await
+            prepare_with(Path::new(path), None, declared)
+                .await?
+                .serve_until(shutdown)
+                .await
         }
         _ => Err(RuntimeError::Arguments),
     }
@@ -130,10 +145,12 @@ pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
 
 /// The runtime document at `path`, or a refusal that reports every rule it
 /// breaks, each at its position, rather than only the first.
-fn load_config(path: &Path) -> Result<RuntimeConfig, RuntimeError> {
-    RuntimeConfig::load(path).map_err(|error| match startup_report(path, &error) {
-        Some(report) => RuntimeError::ConfigurationRefused(report),
-        None => RuntimeError::Config(error),
+fn load_config(path: &Path, declared: DeclaredPosture) -> Result<RuntimeConfig, RuntimeError> {
+    RuntimeConfig::load_with_posture(path, declared).map_err(|error| {
+        match startup_report_with_posture(path, &error, declared) {
+            Some(report) => RuntimeError::ConfigurationRefused(report),
+            None => RuntimeError::Config(error),
+        }
     })
 }
 
@@ -150,7 +167,13 @@ fn check_against_project(
     if findings.is_empty() {
         return Ok(());
     }
-    let report = check_runtime_file(path, true, Some(&package.project)).report;
+    let report = check_runtime_file_with_posture(
+        path,
+        true,
+        Some(&package.project),
+        config.declared_posture(),
+    )
+    .report;
     Err(if report.is_empty() {
         RuntimeError::Config(RuntimeConfigError::Refused(findings))
     } else {
@@ -269,7 +292,15 @@ impl std::fmt::Debug for Prepared {
 /// schema, open the audit journal, activate content
 /// storage and the verifier, and bind the listener.
 pub async fn prepare(path: impl AsRef<Path>) -> Result<Prepared, RuntimeError> {
-    prepare_with(path.as_ref(), None).await
+    prepare_with(path.as_ref(), None, DEFAULT_POSTURE).await
+}
+
+/// Prepare a deployment under a posture already resolved by the caller.
+pub async fn prepare_with_posture(
+    path: impl AsRef<Path>,
+    declared: DeclaredPosture,
+) -> Result<Prepared, RuntimeError> {
+    prepare_with(path.as_ref(), None, declared).await
 }
 
 /// As [`prepare`], with the content verifier replaced by `verifier`, so a
@@ -278,24 +309,26 @@ pub async fn prepare(path: impl AsRef<Path>) -> Result<Prepared, RuntimeError> {
 pub async fn prepare_with_verifier(
     path: impl AsRef<Path>,
     verifier: Arc<dyn VerdictSource>,
+    declared: DeclaredPosture,
 ) -> Result<Prepared, RuntimeError> {
-    prepare_with(path.as_ref(), Some(verifier)).await
+    prepare_with(path.as_ref(), Some(verifier), declared).await
 }
 
 async fn prepare_with(
     path: &Path,
     verifier: Option<Arc<dyn VerdictSource>>,
+    declared: DeclaredPosture,
 ) -> Result<Prepared, RuntimeError> {
-    let config = load_config(path)?;
+    let config = load_config(path, declared)?;
+    let posture = config
+        .posture
+        .clone()
+        .unwrap_or_else(|| PostureReport::new(declared));
+    posture.log_startup();
     let secrets = Arc::new(config.secret_resolver()?);
     let package = load_package(&config)?;
     check_against_project(path, &config, &package)?;
-    let store = PostgresStore::connect_runtime(&config.database, &secrets).map_err(|source| {
-        RuntimeError::Database {
-            stage: "runtime database configuration",
-            source,
-        }
-    })?;
+    let store = runtime_store(&config, &secrets)?;
     store
         .ping()
         .await
@@ -309,15 +342,26 @@ async fn prepare_with(
     let audit = open_audit(&config, &secrets, None).await?;
     let ceiling = config.storage.maximum_document_bytes();
     let storage = Arc::new(
-        ContentStorage::activate(&config.storage, &database_id, Arc::clone(&secrets))
-            .await
-            .map_err(RuntimeError::Storage)?,
+        ContentStorage::activate(
+            &config.storage,
+            &database_id,
+            Arc::clone(&secrets),
+            config.peer_policy(),
+        )
+        .await
+        .map_err(RuntimeError::Storage)?,
     );
     check_storage_pin(&store, &storage).await?;
     let verifier = match verifier {
         Some(verifier) => verifier,
-        None => activate_verifier(&config.content_verification, ceiling, &secrets)
-            .map_err(|error| RuntimeError::Verifier(error.to_string()))?,
+        None => activate_verifier(
+            &config.content_verification,
+            config.development.as_ref(),
+            ceiling,
+            &secrets,
+            config.peer_policy(),
+        )
+        .map_err(|error| RuntimeError::Verifier(error.to_string()))?,
     };
     let schema = store
         .current_schema()
@@ -378,7 +422,7 @@ async fn prepare_with(
         audit: audit.clone(),
     };
     let project = Arc::new(package.project);
-    let keys = config.jwks_fetcher(&secrets).await?;
+    let sources = config.issuer_sources(&secrets, &project).await?;
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(RuntimeError::Listen)?;
@@ -389,11 +433,14 @@ async fn prepare_with(
             tokio::net::TcpListener::bind(metrics_listener.bind.socket_addr())
                 .await
                 .map_err(RuntimeError::Listen)?,
-            metrics_router(MetricsState {
-                metrics: Arc::clone(&metrics),
-                sampler: sampler.clone(),
-                budget: crate::metrics::SCRAPE_BUDGET,
-            }),
+            metrics_router(
+                MetricsState {
+                    metrics: Arc::clone(&metrics),
+                    sampler: sampler.clone(),
+                    budget: crate::metrics::SCRAPE_BUDGET,
+                },
+                posture.posture(),
+            ),
         )),
         None => None,
     };
@@ -411,12 +458,10 @@ async fn prepare_with(
             "versions verified under another verifier binding were suspended for verification again"
         );
     }
-    let authenticator = Arc::new(DocumentsAuthenticator::new(
-        config.verifier_profile(),
-        keys,
-        AccessProfiles::new(&project),
-        config.binds_assertion_issuers(),
-    ));
+    let authenticator = Arc::new(
+        DocumentsAuthenticator::new(sources, AccessProfiles::new(&project))
+            .map_err(|_| config.issuer_set_refusal())?,
+    );
     let service = Arc::new(DocumentService::new(
         store,
         project,
@@ -435,6 +480,7 @@ async fn prepare_with(
     Ok(Prepared {
         listener,
         routes: DocumentRoutes {
+            posture,
             service,
             authenticator,
             readiness,
@@ -457,11 +503,15 @@ fn runtime_store(
     config: &RuntimeConfig,
     secrets: &registry_platform_config::SecretResolver,
 ) -> Result<PostgresStore, RuntimeError> {
-    PostgresStore::connect_runtime(&config.database, secrets).map_err(|source| {
-        RuntimeError::Database {
-            stage: "runtime database configuration",
-            source,
-        }
+    PostgresStore::connect_runtime_with_posture(
+        &config.database,
+        secrets,
+        config.declared_posture().posture,
+        config.development.as_ref(),
+    )
+    .map_err(|source| RuntimeError::Database {
+        stage: "runtime database configuration",
+        source,
     })
 }
 
@@ -507,13 +557,16 @@ pub async fn apply_activation(
             stage: "runtime role read",
             source,
         })?;
-    let migration =
-        PostgresStore::connect_migration(&config.database, &secrets).map_err(|source| {
-            RuntimeError::Database {
-                stage: "migration database configuration",
-                source,
-            }
-        })?;
+    let migration = PostgresStore::connect_migration_with_posture(
+        &config.database,
+        &secrets,
+        config.declared_posture().posture,
+        config.development.as_ref(),
+    )
+    .map_err(|source| RuntimeError::Database {
+        stage: "migration database configuration",
+        source,
+    })?;
     let audit = open_audit(config, &secrets, Some(OPERATOR_PROCESS)).await?;
     Ok(activation::apply(
         &migration,
@@ -751,7 +804,7 @@ async fn open_audit(
             .for_process(process)
             .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     }
-    let writer = AuditWriter::open(destination)
+    let writer = AuditWriter::open(destination, config.declared_posture().posture)
         .await
         .map_err(|error| RuntimeError::AuditJournal(error.to_string()))?;
     Ok(DocumentsAudit::new(writer, profile.key_hasher()))
@@ -807,11 +860,14 @@ impl Prepared {
     /// `budget`, for tests that hold a lock the reads wait on.
     #[cfg(feature = "postgres-test")]
     pub fn metrics_app_within(&self, budget: Duration) -> axum::Router {
-        metrics_router(MetricsState {
-            metrics: Arc::clone(&self.metrics),
-            sampler: self.sampler.clone(),
-            budget,
-        })
+        metrics_router(
+            MetricsState {
+                metrics: Arc::clone(&self.metrics),
+                sampler: self.sampler.clone(),
+                budget,
+            },
+            self.routes.posture.posture(),
+        )
     }
 
     /// The document operations this runtime serves.
@@ -826,6 +882,18 @@ impl Prepared {
     pub fn with_audit(mut self, audit: crate::audit::DocumentsAudit) -> Self {
         self.routes.readiness.watch_audit(audit.clone());
         self.routes.service = Arc::new(self.routes.service.with_audit(audit));
+        self
+    }
+
+    /// This runtime serving under the posture `declared`, so a suite can see
+    /// the answers of a posture it was not started under.
+    #[cfg(feature = "postgres-test")]
+    #[must_use]
+    pub fn with_declared_posture(
+        mut self,
+        declared: registry_platform_config::DeclaredPosture,
+    ) -> Self {
+        self.routes.posture = registry_platform_config::PostureReport::new(declared);
         self
     }
 
@@ -879,6 +947,19 @@ impl Prepared {
         registry_platform_hooks::delivery::DeliveryError,
     > {
         self.hook_delivery.deliver_once().await
+    }
+
+    /// Exercise the shared operator replay against a replay-enabled test delivery.
+    #[cfg(feature = "postgres-test")]
+    pub async fn replay_hook_for_test(
+        &self,
+        event_id: uuid::Uuid,
+        compiled_delivery_id: &str,
+        generation: i64,
+    ) -> Result<i64, registry_platform_hooks::delivery::DeliveryError> {
+        self.hook_delivery
+            .replay_for_test(event_id, compiled_delivery_id, generation)
+            .await
     }
 
     /// One drain of the content verification worker per call, stopping
@@ -978,10 +1059,13 @@ impl Prepared {
 /// The serving router with every answered request counted under the route
 /// template it matched. It never answers `/metrics`.
 fn serving_app(routes: DocumentRoutes, metrics: Arc<Metrics>) -> axum::Router {
-    router(routes).layer(axum::middleware::from_fn_with_state(
-        metrics,
-        count_requests,
-    ))
+    let posture = routes.posture.posture();
+    router(routes)
+        .layer(axum::middleware::from_fn_with_state(
+            metrics,
+            count_requests,
+        ))
+        .layer(name_failed_check(posture))
 }
 
 /// Serve the metrics listener until `stopped` turns true, then give it
@@ -1184,6 +1268,108 @@ fn activation_message(error: &ActivationError) -> String {
     match error.code() {
         Some(code) => format!("the Document Store database was refused ({code}): {error}"),
         None => error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod peer_policy_tests {
+    use super::*;
+    use registry_platform_config::{Posture, PostureSource};
+    use registry_platform_objectstore::{ObjectStoreError, Verdict, VerifierError};
+    use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn storage_and_verifier_follow_the_runtime_posture() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let app = axum::Router::new()
+                .route(
+                    "/v1/verify",
+                    axum::routing::post(|| async {
+                        (
+                            [("registry-posture", "development")],
+                            axum::Json(serde_json::json!({"verdict":"approved"})),
+                        )
+                    }),
+                )
+                .fallback(|| async {
+                    (
+                        [("registry-posture", "development")],
+                        "<VersioningConfiguration></VersioningConfiguration>",
+                    )
+                });
+            axum::serve(listener, app).await.unwrap();
+        });
+        let root = tempfile::tempdir().unwrap();
+        for name in ["s3-access", "s3-key", "content-verifier-authorization"] {
+            let path = root.path().join(name);
+            std::fs::write(&path, "synthetic-credential").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
+        let runtime = include_str!("../../../products/documents/examples/starter/runtime.example.yaml")
+            .replace("/run/secrets/registry-documents", root.path().to_str().unwrap())
+            .replace("https://scanner.example.test", &endpoint)
+            .replace("  type: database\n  maximumDocumentBytes:", &format!(
+                "  type: s3\n  url: {endpoint}\n  bucket: synthetic-documents\n  region: us-east-1\n  accessKeyIdRef: secret:file/s3-access\n  secretAccessKeyRef: secret:file/s3-key\n  maximumDocumentBytes:"
+            ));
+        let file = root.path().join("runtime.yaml");
+        std::fs::write(&file, runtime).unwrap();
+        let bytes = b"synthetic document".to_vec();
+        let digest = hex::encode(Sha256::digest(&bytes));
+        for posture in [Posture::Production, Posture::Development] {
+            let config = RuntimeConfig::load_with_posture(
+                &file,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let secrets = Arc::new(config.secret_resolver().unwrap());
+            let storage = ContentStorage::activate(
+                &config.storage,
+                "synthetic-documents",
+                secrets.clone(),
+                config.peer_policy(),
+            )
+            .await;
+            let verifier = activate_verifier(
+                &config.content_verification,
+                config.development.as_ref(),
+                config.storage.maximum_document_bytes(),
+                &secrets,
+                config.peer_policy(),
+            )
+            .unwrap();
+            let verdict = verifier
+                .verdict(&digest, "application/pdf", bytes.clone())
+                .await;
+            match posture {
+                Posture::Production => {
+                    assert!(
+                        matches!(
+                            storage,
+                            Err(StorageError::Object(ObjectStoreError::DevelopmentPeer))
+                        ),
+                        "{storage:?}"
+                    );
+                    assert_eq!(verdict, Err(VerifierError::DevelopmentPeer));
+                }
+                Posture::Development => {
+                    assert!(
+                        matches!(storage, Ok(ContentStorage::S3 { .. })),
+                        "{storage:?}"
+                    );
+                    assert_eq!(verdict, Ok(Verdict::Approved));
+                }
+            }
+        }
+        server.abort();
     }
 }
 
@@ -1434,6 +1620,34 @@ mod tests {
                 .contains("identity.databaseId is required"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn serve_accepts_posture_in_both_positions() {
+        for args in [
+            [
+                "documents",
+                "--runtime-config",
+                "/runtime.yaml",
+                "--posture",
+                "development",
+                "serve",
+            ],
+            [
+                "documents",
+                "--runtime-config",
+                "/runtime.yaml",
+                "serve",
+                "--posture",
+                "development",
+            ],
+        ] {
+            let parsed = command().try_get_matches_from(args).unwrap();
+            assert_eq!(
+                parsed.get_one::<String>("posture").map(String::as_str),
+                Some("development")
+            );
+        }
     }
 
     #[test]

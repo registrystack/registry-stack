@@ -192,6 +192,7 @@ fn try_spawn_server(
 ) -> Option<Server> {
     let stderr = tempfile::tempfile().expect("server stderr file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
+    command.env_remove("REGISTRY_STACK_POSTURE");
     command
         .arg("serve")
         .arg("--runtime-config")
@@ -406,6 +407,10 @@ fn the_metrics_listener_serves_the_series_and_the_api_listener_does_not() {
         "{body}"
     );
     assert!(
+        body.contains("render_request_refusals_total{check=\"credential-missing\"} 1"),
+        "{body}"
+    );
+    assert!(
         body.contains("\nrender_audit_write_failures_total 0\n"),
         "{body}"
     );
@@ -576,6 +581,7 @@ fn api_key_with_stray_whitespace_is_refused_at_startup() {
     // startup error, not a silent permanent 401 with /health green.
     write_secret(&home.join("api.key"), &format!(" {API_KEY}"));
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -647,6 +653,7 @@ fn a_refused_bind_is_caught_before_startup_touches_the_filesystem() {
     );
     std::fs::write(&runtime, text).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdin(Stdio::null())
         .output()
@@ -696,6 +703,7 @@ fn serve_startup_package_digest_mismatch_uses_common_expected_and_found_shape() 
         );
     std::fs::write(&runtime, text).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .output()
         .unwrap();
@@ -1103,6 +1111,7 @@ fn a_render_writes_a_request_entry_then_a_response_entry_sharing_correlation() {
                     "correlation",
                     "eventId",
                     "phase",
+                    "posture",
                     "record",
                     "schema",
                     "time"
@@ -1300,6 +1309,7 @@ fn package_changed_missing_and_extra_files_refuse_startup_by_name() {
             _ => unreachable!(),
         }
         let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
             .output()
             .unwrap();
@@ -1486,15 +1496,14 @@ fn chunked_bodies_are_refused_upfront_as_problems() {
     stream
         .set_read_timeout(Some(Duration::from_secs(60)))
         .unwrap();
-    let head = format!(
-        "POST /v1/render/receipt HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {API_KEY}\r\nTransfer-Encoding: chunked\r\n\r\n"
+    // The whole request goes in one write. The server refuses on the head
+    // and closes, so a body sent in a later write could arrive at a closed
+    // socket, draw a reset and fail the write before the answer is read.
+    let request = format!(
+        "POST /v1/render/receipt HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {API_KEY}\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n0\r\n\r\n",
+        body.len()
     );
-    stream.write_all(head.as_bytes()).unwrap();
-    stream
-        .write_all(format!("{:x}\r\n", body.len()).as_bytes())
-        .unwrap();
-    stream.write_all(body.as_bytes()).unwrap();
-    stream.write_all(b"\r\n0\r\n\r\n").unwrap();
+    stream.write_all(request.as_bytes()).unwrap();
     let _ = stream.shutdown(std::net::Shutdown::Write);
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw).unwrap();
@@ -1707,6 +1716,7 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
     )
     .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1788,11 +1798,11 @@ fn maintained_sdk_uses_the_real_oidc_adapter_for_render_and_typed_refusals() {
     );
     let runtime_text=std::fs::read_to_string(&runtime_path).unwrap().replace(
         "  apiKeyRef: secret:file/api.key",
-        "  oidc:\n    issuer: https://issuer.example.test\n    audience: urn:render:test\n    allowedClients: [portal]\n    jwksSource:\n      type: static\n      documentRef: secret:file/jwks.json"
+        "  oidc:\n    issuers:\n      main:\n        issuer: https://issuer.example.test\n        audience: urn:render:test\n        allowedClients: [portal]\n        jwksSource:\n          type: static\n          documentRef: secret:file/jwks.json"
     );
     std::fs::write(&runtime_path, runtime_text).unwrap();
     let server = start_server(&runtime_path);
-    let client = RenderClient::new(RenderClientConfig::new(format!(
+    let client = RenderClient::new_without_peer_policy(RenderClientConfig::new(format!(
         "http://127.0.0.1:{}",
         server.port
     )))

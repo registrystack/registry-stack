@@ -119,8 +119,9 @@ accessProfiles:
 
 `rstack dev` runs the project on your machine from a development plan. The plan lists the products
 to run and the synthetic people who call them, with the claims each person's test token carries.
-Create `dev.yaml`. It gives the test caller `editor` the claim `zone-a` and `foreign-editor` the
-claim `zone-b`:
+`rstack breg init` wrote a starter `dev.yaml` and `dev/scenarios.yaml`. Replace `dev.yaml` with this
+plan, which gives the test caller `editor` the claim `zone-a` and `foreign-editor` the claim
+`zone-b`:
 
 ```yaml title="dev.yaml" test-file
 apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1
@@ -167,10 +168,11 @@ scenarioFile: dev/scenarios.yaml
 
 The plan also names a scenario file: requests that `rstack dev` sends once the registry is running.
 It sits in `dev/` because the registry reads every file under `tests/` as one of its own checks.
-This scenario adds one contact in `zone-a` as `editor` and reads it back:
+Keep the generated `dev/` directory and replace `dev/scenarios.yaml` with a scenario that adds one
+contact in `zone-a` as `editor` and reads it back:
 
 ```sh
-mkdir dev
+mkdir -p dev
 ```
 
 ```yaml title="dev/scenarios.yaml" test-file
@@ -217,7 +219,10 @@ rstack dev start . --ttl 4h | tee dev-run.txt
 
 ```text test-expect
 Run <run-id> ready
+  Development data is kept after stop in <data-directory>; start this project with --clean to clear it.
   breg http://127.0.0.1:<port>
+  Created kept key <data-directory>/breg-audit-key
+  Created kept key <data-directory>/breg-cursor-key
   Runtime config breg <runtime-config>
   Scenario directory-contact passed
   Logs <logs-directory>
@@ -228,8 +233,8 @@ Run <run-id> ready
 `rstack dev` started a PostgreSQL server in Docker for this run, ran the project's tests, started
 the registry at the `breg` address, and sent the scenario, which added the test contact. The first
 start downloads the PostgreSQL image and takes longer. Each run gets a free port of its own, so your
-address differs. The run ends after four hours, or when you stop it, and removes its database, test
-keys and files with it.
+address differs. The run ends after four hours, or when you stop it; development data and keys stay
+in `<data-directory>` until you start the project with `--clean`.
 
 ## Read the contact as two callers
 
@@ -299,8 +304,8 @@ The registry applied the access profile: the contact exists, and `foreign-editor
 ## Leave the registry running
 
 The next tutorial continues with this project, and its first step restarts the run. When you are
-finished with the registry, run `rstack dev stop "$RUN"` to stop it and delete its data. A run you
-forget ends by itself after its time to live.
+finished with the registry, run `rstack dev stop "$RUN"` to stop it. Start the project with
+`--clean` when you want an empty database; a run you forget ends by itself after its time to live.
 
 ## Next
 

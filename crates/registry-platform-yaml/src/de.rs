@@ -36,6 +36,66 @@ pub(crate) const DATA_LITERAL: &str = "\0registry-platform-yaml/data-literal";
 /// `expecting` text carries the bounds.
 pub(crate) const BOUNDED: &str = "\0registry-platform-yaml/bounded";
 pub(crate) const BOUNDED_EXPECTING: &str = "a whole number from ";
+/// The newtype name a value the posture report records asks for: a
+/// development-only setting (`Gated` in `registry-platform-config`) and an
+/// explicit production setting (`Stated`). A deserializer that handles it
+/// records where the value sits for [`gated_site`] while the value decodes.
+pub const DEVELOPMENT_ONLY: &str = "\0registry-platform-yaml/development-only";
+
+/// Where a value read under [`DEVELOPMENT_ONLY`] sits in the document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatedSite {
+    /// The RFC 6901 pointer from the document root.
+    pub pointer: String,
+    /// Where the value starts in the file.
+    pub position: Option<Position>,
+    /// True when the pointer names the value itself. False when the value
+    /// was decoded from buffered content (under `#[serde(flatten)]` or an
+    /// untagged enum): the pointer then names the mapping that holds it, and
+    /// the caller appends the member's own key.
+    pub exact: bool,
+}
+
+thread_local! {
+    static EXACT_SITE: RefCell<Option<GatedSite>> = const { RefCell::new(None) };
+    static MAPPING_SITE: RefCell<Option<GatedSite>> = const { RefCell::new(None) };
+}
+
+/// Restores the previous value of a site cell when dropped, so nested
+/// decodes and panics leave the cell as they found it.
+struct SiteGuard {
+    cell: &'static std::thread::LocalKey<RefCell<Option<GatedSite>>>,
+    previous: Option<GatedSite>,
+}
+
+impl SiteGuard {
+    fn set(
+        cell: &'static std::thread::LocalKey<RefCell<Option<GatedSite>>>,
+        site: Option<GatedSite>,
+    ) -> SiteGuard {
+        let previous = cell.with(|current| current.replace(site));
+        SiteGuard { cell, previous }
+    }
+}
+
+impl Drop for SiteGuard {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        self.cell.with(|current| *current.borrow_mut() = previous);
+    }
+}
+
+/// The site of the development-only value being decoded, read by the
+/// `Deserialize` code that asked for [`DEVELOPMENT_ONLY`]. `None` outside a
+/// reader decode.
+///
+/// When the value decodes from buffered content the reader never sees it as
+/// a node, so the site is the innermost mapping with `exact: false`.
+pub fn gated_site() -> Option<GatedSite> {
+    EXACT_SITE
+        .with(|site| site.borrow().clone())
+        .or_else(|| MAPPING_SITE.with(|site| site.borrow().clone()))
+}
 
 /// A field renamed to a name starting with this prefix holds a platform
 /// shared block: the block's members sit beside the host's own, in the same
@@ -512,6 +572,21 @@ impl<'a> NodeDe<'a> {
         );
         item.foreign_value = self.foreign_value;
         item
+    }
+
+    /// Record this mapping as the innermost one for [`gated_site`], and hide
+    /// the enclosing value's exact site: a value decoded from buffered
+    /// content inside this mapping is not that value.
+    fn enter_mapping(&self) -> (SiteGuard, SiteGuard) {
+        let mapping = SiteGuard::set(
+            &MAPPING_SITE,
+            Some(GatedSite {
+                pointer: self.site.path.clone(),
+                position: self.site.value_at(),
+                exact: false,
+            }),
+        );
+        (mapping, SiteGuard::set(&EXACT_SITE, None))
     }
 
     /// Run one deserializer method, placing any error that has no position
@@ -1159,6 +1234,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDe<'a> {
         if let Some(tag) = name.strip_prefix(TAGGED_PREFIX) {
             return self.run(false, |de| {
                 de.mapping()?;
+                let _mapping = de.enter_mapping();
                 visitor.visit_enum(TaggedAccess {
                     de: de.clone(),
                     tag,
@@ -1209,6 +1285,19 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDe<'a> {
                 }
             });
         }
+        if name == DEVELOPMENT_ONLY {
+            return self.run(false, |de| {
+                let _site = SiteGuard::set(
+                    &EXACT_SITE,
+                    Some(GatedSite {
+                        pointer: de.site.path.clone(),
+                        position: de.site.value_at(),
+                        exact: true,
+                    }),
+                );
+                visitor.visit_newtype_struct(de.clone())
+            });
+        }
         if name == BOUNDED {
             let expecting = Expecting(&visitor).to_string();
             let bounds = parse_bounds(&expecting);
@@ -1254,6 +1343,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDe<'a> {
                 ));
             }
             let entries = de.mapping()?;
+            let _mapping = de.enter_mapping();
             visitor.visit_map(MapAccess::new(de, entries))
         })
     }
@@ -1266,6 +1356,7 @@ impl<'de, 'a> de::Deserializer<'de> for NodeDe<'a> {
     ) -> Result<V::Value, Error> {
         self.run(true, |de| {
             let entries = de.mapping()?;
+            let _mapping = de.enter_mapping();
             let mut access = StructAccess::new(de, entries, fields);
             let result = visitor.visit_map(&mut access);
             access.finish();

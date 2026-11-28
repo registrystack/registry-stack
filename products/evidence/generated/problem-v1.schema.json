@@ -83,6 +83,25 @@
     {
       "properties": {
         "code": {
+          "const": "platform.task-grant.development-assertion"
+        },
+        "detail": {
+          "const": "task grant was issued in the development posture"
+        },
+        "status": {
+          "const": 401
+        },
+        "title": {
+          "const": "Development task assertion refused"
+        },
+        "type": {
+          "const": "https://id.registrystack.org/problems/registry-evidence/platform/task-grant/development-assertion"
+        }
+      }
+    },
+    {
+      "properties": {
+        "code": {
           "const": "evidence.denied"
         },
         "detail": {
@@ -221,6 +240,7 @@
         "request.nonce-invalid",
         "request.selector-invalid",
         "auth.invalid-credential",
+        "platform.task-grant.development-assertion",
         "evidence.denied",
         "format.unsupported",
         "evidence.unavailable",
@@ -237,6 +257,7 @@
         "requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request",
         "selector does not match an available request profile",
         "bearer access token validation failed",
+        "task grant was issued in the development posture",
         "the Evidence request is not permitted",
         "the requested format is not supported",
         "evidence could not be produced for this request",
@@ -266,6 +287,7 @@
         "Request nonce is invalid",
         "Selector is invalid",
         "Bearer access token is invalid",
+        "Development task assertion refused",
         "Evidence request is not permitted",
         "Requested format is not supported",
         "Evidence could not be produced",
@@ -286,6 +308,7 @@
         "https://id.registrystack.org/problems/registry-evidence/request/nonce-invalid",
         "https://id.registrystack.org/problems/registry-evidence/request/selector-invalid",
         "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
+        "https://id.registrystack.org/problems/registry-evidence/platform/task-grant/development-assertion",
         "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
         "https://id.registrystack.org/problems/registry-evidence/format/unsupported",
         "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",

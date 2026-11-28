@@ -126,8 +126,6 @@ fn workspace(base_url: &str, user_var: &str, pass_var: &str) -> (tempfile::TempD
                type: basic\n      \
                usernameRef: secret:env/{user}\n      \
                passwordRef: secret:env/{pass}\n\
-         allowedClients:\n  \
-           - verify-client\n\
          allowedPrivateCidrs:\n  \
            - 10.0.0.0/8\n\
          listener:\n  \
@@ -136,8 +134,11 @@ fn workspace(base_url: &str, user_var: &str, pass_var: &str) -> (tempfile::TempD
            runtimeUrlRef: secret:env/VERIFY_LIVE_DB_RUNTIME\n  \
            migrationUrlRef: secret:env/VERIFY_LIVE_DB_MIGRATION\n\
          oidc:\n  \
-           issuer: https://issuer.example.invalid\n  \
-           audience: verify-demo\n\
+           issuers:\n    \
+             primary:\n      \
+               issuer: https://issuer.example.invalid\n      \
+               audience: verify-demo\n      \
+               allowedClients: [verify-client]\n\
          audit:\n  \
            retentionDays: 90\n"
     );
@@ -336,9 +337,9 @@ fn tls_workspace(
         1,
     );
     let runtime = runtime.replacen(
-        "allowedClients:\n",
+        "allowedPrivateCidrs:\n",
         &format!(
-            "outboundTls:\n  trustProfiles:\n    verify-ca:\n      caBundleFile: {}\nallowedClients:\n",
+            "outboundTls:\n  trustProfiles:\n    verify-ca:\n      caBundleFile: {}\nallowedPrivateCidrs:\n",
             ca_path.display()
         ),
         1,
@@ -818,4 +819,64 @@ fn verify_requires_the_live_flag_and_a_runtime() {
     let (exit, report, _stderr) = run_json(&["verify", "--live", &project_a]);
     assert_eq!(exit, ExitCode::from(2));
     assert_eq!(report["command"], "usage");
+}
+
+#[test]
+fn verify_accepts_and_lists_insecure_issuer_http_only_in_development() {
+    let double = Double::start(VecDeque::from([Response::json(200, r#"{"instances":[]}"#)]));
+    let (_root, project) = workspace(
+        &format!("http://127.0.0.1:{}", double.port),
+        "POSTURE",
+        "POSTURE",
+    );
+    let runtime = Path::new(&project).parent().unwrap().join("runtime.yaml");
+    let text = std::fs::read_to_string(&runtime).unwrap().replace(
+        "      issuer: https://issuer.example.invalid\n",
+        "      issuer: http://issuer.example.invalid\n      allowInsecureHttp: true\n",
+    );
+    std::fs::write(&runtime, text).unwrap();
+    for (flags, expected_exit, severity) in [
+        (&[][..], 1, "error"),
+        (&["--posture", "production"][..], 1, "error"),
+        (&["--posture", "development"][..], 0, "warning"),
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_adapterctl"))
+            .args(["--format=json", "verify", "--live", &project, "--runtime"])
+            .arg(&runtime)
+            .args(flags)
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .output()
+            .unwrap();
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(output.status.code(), Some(expected_exit), "{report}");
+        assert_eq!(
+            report["posture"],
+            serde_json::json!({
+                "value": flags.last().copied().unwrap_or("production"),
+                "source": if flags.is_empty() { "default" } else { "flag" }
+            }),
+            "{report}"
+        );
+        let finding = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["code"] == "platform.posture.insecure-issuer-http")
+            .unwrap_or_else(|| panic!("{report}"));
+        assert_eq!(
+            finding["path"], "/oidc/issuers/primary/allowInsecureHttp",
+            "{report}"
+        );
+        assert_eq!(finding["severity"], severity, "{report}");
+        if expected_exit != 0 {
+            let action = finding["suggestedAction"].as_str().unwrap();
+            assert!(action.contains("--posture development"), "{action}");
+            assert!(
+                action.contains("REGISTRY_STACK_POSTURE=development"),
+                "{action}"
+            );
+            assert!(double.requests().is_empty(), "{report}");
+        }
+    }
+    assert_eq!(double.requests().len(), 1);
 }

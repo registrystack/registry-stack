@@ -77,6 +77,27 @@
       ],
       "type": "object"
     },
+    "ChildUnit": {
+      "additionalProperties": false,
+      "description": "A child of the deployment's organization unit.",
+      "properties": {
+        "handle": {
+          "description": "1 to 64 ASCII letters, digits, `-`, `_` or `.`. Unique across the\nfile, because only this handle reaches a token.",
+          "type": "string"
+        },
+        "name": {
+          "description": "At most 100 bytes. Omitted, the name is the handle.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "handle"
+      ],
+      "type": "object"
+    },
     "ClaimValue": {
       "anyOf": [
         {
@@ -184,6 +205,13 @@
         },
         "name": {
           "type": "string"
+        },
+        "units": {
+          "description": "Child units of this unit. A user or client whose `claims` state\n`ouHandle` is placed in the child unit with that handle, and its\ntokens carry the handle as the `ouHandle` claim.",
+          "items": {
+            "$ref": "#/$defs/ChildUnit"
+          },
+          "type": "array"
         }
       },
       "required": [

@@ -13,6 +13,7 @@ use axum::{
     routing::get,
     Router,
 };
+use registry_platform_authcommon::RefusalRecorder;
 use registry_platform_metrics::{
     CounterVec, Exposition, LabelSpace, MetricKind, MetricsError, CONTENT_TYPE as METRICS_TYPE,
 };
@@ -115,6 +116,7 @@ impl Event {
 /// The service's counters.
 pub struct Metrics {
     events: CounterVec,
+    refusals: Arc<RefusalRecorder>,
 }
 
 impl Metrics {
@@ -127,7 +129,15 @@ impl Metrics {
                 "Presentation session, request, response, and read events by outcome.",
                 LabelSpace::closed_zero_filled(&["event"], &declared)?,
             )?,
+            refusals: Arc::new(RefusalRecorder::new("evidence_oid4vp")?),
         })
+    }
+
+    /// The recorder that counts each refused request under its check and
+    /// admits a bounded number of log lines.
+    #[must_use]
+    pub const fn refusal_recorder(&self) -> &Arc<RefusalRecorder> {
+        &self.refusals
     }
 
     pub fn record(&self, event: Event) {
@@ -145,6 +155,7 @@ impl Metrics {
     pub fn render(&self, store: &SessionStore) -> Result<String, MetricsError> {
         let mut out = Exposition::new();
         self.events.write(&mut out)?;
+        self.refusals.counter().write(&mut out)?;
         out.header(
             "evidence_oid4vp_sessions",
             Some("Presentation sessions held in memory, expired ones not yet cleaned up included."),
@@ -162,15 +173,53 @@ struct MetricsState {
 }
 
 /// The router the private metrics listener serves.
-pub fn metrics_app(metrics: Arc<Metrics>, store: Arc<SessionStore>) -> Router {
+pub fn metrics_app(
+    metrics: Arc<Metrics>,
+    store: Arc<SessionStore>,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         .route(METRICS_PATH, get(scrape))
         .with_state(MetricsState { metrics, store })
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 async fn scrape(State(state): State<MetricsState>) -> Response {
     match state.metrics.render(&state.store) {
         Ok(text) => ([(CONTENT_TYPE, METRICS_TYPE)], text).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use registry_platform_authcommon::FailedCheck;
+
+    use super::*;
+    use crate::session::system_clock;
+
+    #[test]
+    fn the_scrape_publishes_every_check_at_zero_and_counts_a_refusal_under_its_check() {
+        let metrics = Metrics::new().expect("the metrics declare");
+        let store = SessionStore::new(4, 1024, system_clock());
+        let scrape = metrics.render(&store).expect("the scrape renders");
+        for check in FailedCheck::ALL {
+            let series = format!(
+                "evidence_oid4vp_request_refusals_total{{check=\"{}\"}} ",
+                check.as_str()
+            );
+            assert!(
+                scrape.contains(&format!("{series}0")),
+                "{} is published at zero",
+                check.as_str()
+            );
+        }
+
+        assert!(metrics
+            .refusal_recorder()
+            .record(FailedCheck::Scope)
+            .is_some());
+        let scrape = metrics.render(&store).expect("the scrape renders");
+        assert!(scrape.contains("evidence_oid4vp_request_refusals_total{check=\"scope\"} 1"));
     }
 }

@@ -1,0 +1,191 @@
+# The product column of the acceptance journeys: every runtime binary that loads
+# a runtime file on `main`, one row each. The list matches the sixteen runtime
+# formats in products/platform/config-formats.yaml.
+#
+# tier: primary    the journeys start it and walk it to a first call.
+# tier: supporting it runs beside a parent product and shares that product's
+#                  setup, so each journey records it as unreached until its
+#                  parent's cell passes.
+#
+# ctl names the crate of the matching tool. It is null where the tool is a
+# binary of the runtime's own crate (coordinatorctl) or where none exists.
+#
+# usesPostgres, verifiesTokens and rstackDevPlan describe `main`. A change
+# that changes one edits the row in the same commit.
+
+schema: registry.journey-products/v1
+
+# The identity provider the own-provider journey starts. The image reference is
+# the one products/breg/scripts/test-issuer-portability.py pins, and the static
+# check fails when the two differ.
+ownProviderIssuer:
+  name: keycloak
+  image: quay.io/keycloak/keycloak:26.7.3@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
+
+products:
+  - id: breg
+    tier: primary
+    binary: breg
+    crate: registry-breg
+    ctl: registry-bregctl
+    cargoPackages: [registry-breg, registry-bregctl]
+    cargoFeatures: [registry-breg/runtime]
+    usesPostgres: true
+    verifiesTokens: true
+    rstackDevPlan: true
+  - id: casework
+    tier: primary
+    binary: casework
+    crate: registry-casework
+    ctl: registry-caseworkctl
+    cargoPackages: [registry-casework, registry-caseworkctl]
+    cargoFeatures: []
+    usesPostgres: true
+    verifiesTokens: true
+    rstackDevPlan: true
+  - id: messaging
+    tier: primary
+    binary: messaging
+    crate: registry-messaging
+    ctl: registry-messagingctl
+    cargoPackages: [registry-messaging, registry-messagingctl]
+    cargoFeatures: []
+    usesPostgres: true
+    verifiesTokens: true
+    rstackDevPlan: true
+  - id: evidence
+    tier: primary
+    binary: evidence
+    crate: registry-evidence
+    ctl: registry-evidencectl
+    cargoPackages: [registry-evidence, registry-evidencectl]
+    cargoFeatures: []
+    usesPostgres: false
+    verifiesTokens: true
+    rstackDevPlan: true
+  - id: scheduling
+    tier: primary
+    binary: scheduling
+    crate: registry-scheduling
+    ctl: registry-schedulingctl
+    cargoPackages: [registry-scheduling, registry-schedulingctl]
+    cargoFeatures: []
+    usesPostgres: true
+    verifiesTokens: true
+    rstackDevPlan: true
+  - id: documents
+    tier: primary
+    binary: documents
+    crate: registry-documents
+    ctl: registry-documentsctl
+    cargoPackages: [registry-documents, registry-documentsctl]
+    cargoFeatures: []
+    usesPostgres: true
+    verifiesTokens: true
+    rstackDevPlan: true
+  - id: coordinator
+    tier: primary
+    binary: coordinator
+    crate: registry-coordinator
+    ctl: null
+    cargoPackages: [registry-coordinator]
+    cargoFeatures: []
+    usesPostgres: true
+    verifiesTokens: true
+    rstackDevPlan: true
+  - id: adapter
+    tier: primary
+    binary: adapter
+    crate: registry-adapter
+    ctl: registry-adapterctl
+    cargoPackages: [registry-adapter, registry-adapterctl]
+    cargoFeatures: []
+    usesPostgres: true
+    verifiesTokens: true
+    rstackDevPlan: true
+  - id: render
+    tier: primary
+    binary: registry-render
+    crate: registry-render
+    ctl: null
+    cargoPackages: [registry-render]
+    cargoFeatures: []
+    usesPostgres: false
+    verifiesTokens: true
+    rstackDevPlan: true
+  - id: discovery
+    tier: primary
+    binary: discovery
+    crate: registry-discovery
+    ctl: registry-discoveryctl
+    cargoPackages: [registry-discovery, registry-discoveryctl]
+    cargoFeatures: [registry-discovery/server]
+    usesPostgres: false
+    verifiesTokens: false
+    rstackDevPlan: true
+  - id: breg-mcp
+    tier: supporting
+    parent: breg
+    binary: breg-mcp
+    crate: registry-breg-mcp
+    ctl: registry-bregctl
+    cargoPackages: [registry-breg-mcp]
+    cargoFeatures: []
+    usesPostgres: false
+    verifiesTokens: true
+    rstackDevPlan: false
+  - id: breg-review
+    tier: supporting
+    parent: breg
+    binary: breg-review
+    crate: registry-breg-review
+    ctl: registry-bregctl
+    cargoPackages: [registry-breg-review]
+    cargoFeatures: []
+    usesPostgres: false
+    verifiesTokens: true
+    rstackDevPlan: false
+  - id: registry-mcp
+    tier: supporting
+    parent: adapter
+    binary: registry-mcp
+    crate: registry-mcp
+    ctl: null
+    cargoPackages: [registry-mcp]
+    cargoFeatures: []
+    usesPostgres: false
+    verifiesTokens: true
+    rstackDevPlan: false
+  - id: evidence-oid4vci
+    tier: supporting
+    parent: evidence
+    binary: evidence-oid4vci
+    crate: registry-evidence-oid4vci
+    ctl: registry-evidencectl
+    cargoPackages: [registry-evidence-oid4vci]
+    cargoFeatures: []
+    usesPostgres: false
+    verifiesTokens: true
+    rstackDevPlan: false
+  - id: evidence-oid4vp
+    tier: supporting
+    parent: evidence
+    binary: evidence-oid4vp
+    crate: registry-evidence-oid4vp
+    ctl: null
+    cargoPackages: [registry-evidence-oid4vp]
+    cargoFeatures: []
+    usesPostgres: false
+    verifiesTokens: true
+    rstackDevPlan: false
+  - id: adapter-job
+    tier: supporting
+    parent: adapter
+    binary: adapter-job
+    crate: registry-adapter-job
+    ctl: registry-adapterctl
+    cargoPackages: [registry-adapter-job]
+    cargoFeatures: []
+    usesPostgres: true
+    verifiesTokens: false
+    rstackDevPlan: false

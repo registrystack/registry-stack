@@ -259,6 +259,32 @@ class DiscoveryClientTests(unittest.TestCase):
                 server.server_close()
                 thread.join()
 
+    def test_development_peer_is_accepted_unless_explicitly_refused(self) -> None:
+        class DevelopmentHandler(Handler):
+            def end_headers(self) -> None:
+                self.send_header("Registry-Posture", "production, development")
+                super().end_headers()
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), DevelopmentHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base_url = f"http://127.0.0.1:{server.server_port}/"
+            query = {"evidenceTypeId": "urn:example:evidence-type"}
+            for options in ({}, {"refuse_development_peer": False}, {"refuse_development_peer": True}):
+                with self.subTest(options=options):
+                    client = DiscoveryClient(base_url, **options)
+                    if options.get("refuse_development_peer"):
+                        with self.assertRaises(DiscoveryClientError) as caught:
+                            client.search_evidence_services(query)
+                        self.assertEqual(caught.exception.kind, "development-peer")
+                    else:
+                        self.assertEqual(len(client.search_evidence_services(query)["items"]), 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_search_resolve_and_inert_selection(self) -> None:
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

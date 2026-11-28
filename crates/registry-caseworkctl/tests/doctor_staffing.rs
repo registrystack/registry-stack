@@ -76,11 +76,11 @@ async fn doctor_warns_for_one_distinct_member_and_clears_after_a_second_joins() 
     let config = json!({
         "apiVersion":registry_casework::RUNTIME_CONFIG_API_VERSION,"kind":registry_casework::RUNTIME_CONFIG_KIND,
         "identity":{"databaseId":"doctor-staffing"},"package":{"root":package},
-        "listener":{"bind":"127.0.0.1:8100","tlsTermination":"development-loopback","networkExposure":"private-address"},
+        "listener":{"bind":"127.0.0.1:8100","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
         "secretProviders":{"file":{"root":secrets}},
         "database":{"runtimeUrlRef":"secret:file/database","migrationUrlRef":"secret:file/database","testOnlyPlaintext":true},
-        "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework",
-            "allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+        "authentication":{"oidc":{"issuers":{"main":{"issuer":"https://identity.example.test","audience":"urn:example:casework",
+            "allowedClients":["staff"]}}}},
         "audit":{"path":root_path.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
     });
     let runtime = root_path.join("runtime.yaml");

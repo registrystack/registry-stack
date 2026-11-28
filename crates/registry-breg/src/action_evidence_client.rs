@@ -551,7 +551,7 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        let config = EvidenceClientConfig::new(
+        let config = EvidenceClientConfig::new_without_peer_policy(
             format!("http://{address}").parse().unwrap(),
             Arc::new(registry_evidence_client::StaticToken::new("synthetic-test-token").unwrap()),
             registry_evidence_client::JwksDocument { keys: vec![public] },

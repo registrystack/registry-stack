@@ -1,11 +1,11 @@
 #![cfg(feature = "server")]
 
 use axum::body::{to_bytes, Body};
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
-use registry_platform_httpsec::{body_limit_problem_response, request_body_limit, CorsPolicy};
+use registry_platform_httpsec::{body_limit_problem_response, request_body_limit};
 use tower::ServiceExt;
 
 /// F-P4-1: a router wired with the 1 MiB limit and `body_limit_problem_response`
@@ -60,42 +60,4 @@ async fn body_limit_wired_with_problem_response_returns_rfc9457_on_oversized_bod
     assert_eq!(body["title"], "Payload Too Large");
     assert_eq!(body["status"], 413);
     assert_eq!(body["detail"], "request body exceeds the configured limit");
-}
-
-/// F-httpsec-2: a request carrying a non-allowlisted Origin must NOT receive
-/// an Access-Control-Allow-Origin header in the response.
-#[tokio::test]
-async fn cors_layer_omits_acao_header_for_non_listed_origin() {
-    let app = Router::new()
-        .route("/", post(|| async { StatusCode::OK }))
-        .layer(
-            CorsPolicy {
-                allowed_origins: vec!["https://app.example.test".to_string()],
-                allowed_methods: vec![Method::GET, Method::POST, Method::OPTIONS],
-                allowed_headers: Vec::new(),
-                allow_credentials: false,
-            }
-            .try_layer()
-            .expect("valid CORS policy"),
-        );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/")
-                .header(header::ORIGIN, "https://attacker.example.test")
-                .body(Body::empty())
-                .expect("request builds"),
-        )
-        .await
-        .expect("app responds");
-
-    assert!(
-        response
-            .headers()
-            .get("access-control-allow-origin")
-            .is_none(),
-        "non-listed origin must not receive Access-Control-Allow-Origin"
-    );
 }

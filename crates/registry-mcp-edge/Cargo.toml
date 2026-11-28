@@ -26,7 +26,7 @@ async-trait.workspace = true
 axum.workspace = true
 http.workspace = true
 registry-platform-audit.workspace = true
-registry-platform-authcommon.workspace = true
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
@@ -47,7 +47,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
-registry-platform-testing = { workspace = true, features = ["test-authorization-server"] }
+registry-platform-testing = { workspace = true, features = ["test-authorization-server", "token-fixtures"] }
 reqwest.workspace = true
 tokio.workspace = true
 tower.workspace = true

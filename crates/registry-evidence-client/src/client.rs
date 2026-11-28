@@ -17,7 +17,7 @@ use registry_evidence_verifier::{
 };
 use registry_platform_httputil::{
     read_bounded, retry_after_seconds, validate_response_headers, ExchangeAuthorization,
-    FetchUrlPolicy,
+    FetchUrlPolicy, ResponseHeaderError,
 };
 use reqwest::{
     header::{
@@ -343,20 +343,44 @@ impl EvidenceClient {
         Self::build(config)
     }
 
-    /// Build the high-level client from a parsed application-owned profile.
-    pub fn from_profile(profile: EvidenceClientProfile) -> Result<Self, EvidenceClientError> {
+    /// Load the client key and build from a decoded profile.
+    pub fn from_profile(
+        profile: EvidenceClientProfile,
+        peer_policy: crate::PeerPolicy,
+    ) -> Result<Self, EvidenceClientError> {
         let private_key = profile.load_private_key()?;
-        Self::from_profile_with_key(profile, private_key)
+        Self::from_profile_with_key(profile, private_key, peer_policy)
+    }
+
+    /// Refuses development peers. Use [`Self::from_profile`] to choose the policy.
+    pub fn from_profile_without_peer_policy(
+        profile: EvidenceClientProfile,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::from_profile(profile, crate::PeerPolicy::RefuseDevelopmentPeer)
     }
 
     /// Build from a profile while supplying secret-manager key material in memory.
     pub fn from_profile_with_key(
         profile: EvidenceClientProfile,
         private_key: PrivateJwk,
+        peer_policy: crate::PeerPolicy,
     ) -> Result<Self, EvidenceClientError> {
         Self::build_from_profile(
             profile,
             ProgressiveAuthorization::PrivateKey(Box::new(private_key)),
+            peer_policy,
+        )
+    }
+
+    /// Refuses development peers. Use [`Self::from_profile_with_key`] to choose the policy.
+    pub fn from_profile_with_key_without_peer_policy(
+        profile: EvidenceClientProfile,
+        private_key: PrivateJwk,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::from_profile_with_key(
+            profile,
+            private_key,
+            crate::PeerPolicy::RefuseDevelopmentPeer,
         )
     }
 
@@ -367,6 +391,7 @@ impl EvidenceClient {
     pub fn from_profile_with_authorization(
         profile: EvidenceClientProfile,
         authorization: ExchangeAuthorization,
+        peer_policy: crate::PeerPolicy,
     ) -> Result<Self, EvidenceClientError> {
         let policy = metadata_fetch_policy(&profile.trust);
         Self::build_from_profile(
@@ -374,12 +399,27 @@ impl EvidenceClient {
             ProgressiveAuthorization::Exchange(Arc::new(
                 authorization.with_fetch_url_policy(policy),
             )),
+            peer_policy,
+        )
+    }
+
+    /// Refuses development peers. Use [`Self::from_profile_with_authorization`] to choose the
+    /// policy.
+    pub fn from_profile_with_authorization_without_peer_policy(
+        profile: EvidenceClientProfile,
+        authorization: ExchangeAuthorization,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::from_profile_with_authorization(
+            profile,
+            authorization,
+            crate::PeerPolicy::RefuseDevelopmentPeer,
         )
     }
 
     fn build_from_profile(
         profile: EvidenceClientProfile,
         authorization: ProgressiveAuthorization,
+        peer_policy: crate::PeerPolicy,
     ) -> Result<Self, EvidenceClientError> {
         profile.validate()?;
         if matches!(&authorization, ProgressiveAuthorization::Exchange(_))
@@ -392,7 +432,7 @@ impl EvidenceClient {
         let base_url = Url::parse(&profile.base_url).map_err(|_| {
             EvidenceClientError::configuration("the client profile is invalid or unavailable")
         })?;
-        let config = EvidenceClientConfig::progressive(base_url)?;
+        let config = EvidenceClientConfig::progressive(base_url, peer_policy)?;
         config.validate()?;
         let http = build_client(&config)?;
         Ok(Self {
@@ -406,26 +446,69 @@ impl EvidenceClient {
         })
     }
 
+    /// Load a profile file and its referenced key.
     pub fn from_profile_path(
         path: impl AsRef<std::path::Path>,
+        peer_policy: crate::PeerPolicy,
     ) -> Result<Self, EvidenceClientError> {
-        Self::from_profile(EvidenceClientProfile::from_file(path)?)
+        Self::from_profile(EvidenceClientProfile::from_file(path)?, peer_policy)
     }
 
+    /// Refuses development peers. Use [`Self::from_profile_path`] to choose the policy.
+    pub fn from_profile_path_without_peer_policy(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::from_profile_path(path, crate::PeerPolicy::RefuseDevelopmentPeer)
+    }
+
+    /// Load a profile file and use the supplied key.
     pub fn from_profile_path_with_key(
         path: impl AsRef<std::path::Path>,
         private_key: PrivateJwk,
+        peer_policy: crate::PeerPolicy,
     ) -> Result<Self, EvidenceClientError> {
-        Self::from_profile_with_key(EvidenceClientProfile::from_file(path)?, private_key)
+        Self::from_profile_with_key(
+            EvidenceClientProfile::from_file(path)?,
+            private_key,
+            peer_policy,
+        )
     }
 
+    /// Refuses development peers. Use [`Self::from_profile_path_with_key`] to choose the policy.
+    pub fn from_profile_path_with_key_without_peer_policy(
+        path: impl AsRef<std::path::Path>,
+        private_key: PrivateJwk,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::from_profile_path_with_key(
+            path,
+            private_key,
+            crate::PeerPolicy::RefuseDevelopmentPeer,
+        )
+    }
+
+    /// Load a profile file and use the supplied exchange authorization.
     pub fn from_profile_path_with_authorization(
         path: impl AsRef<std::path::Path>,
         authorization: ExchangeAuthorization,
+        peer_policy: crate::PeerPolicy,
     ) -> Result<Self, EvidenceClientError> {
         Self::from_profile_with_authorization(
             EvidenceClientProfile::from_file(path)?,
             authorization,
+            peer_policy,
+        )
+    }
+
+    /// Refuses development peers. Use [`Self::from_profile_path_with_authorization`] to choose
+    /// the policy.
+    pub fn from_profile_path_with_authorization_without_peer_policy(
+        path: impl AsRef<std::path::Path>,
+        authorization: ExchangeAuthorization,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::from_profile_path_with_authorization(
+            path,
+            authorization,
+            crate::PeerPolicy::RefuseDevelopmentPeer,
         )
     }
 
@@ -439,7 +522,10 @@ impl EvidenceClient {
             .await
         {
             Ok(snapshot) => snapshot,
-            Err(error @ EvidenceClientError::Configuration { .. }) => return Err(error),
+            Err(
+                error @ (EvidenceClientError::Configuration { .. }
+                | EvidenceClientError::DevelopmentPeer),
+            ) => return Err(error),
             Err(error) => {
                 *cache = previous;
                 return Err(error);
@@ -490,6 +576,7 @@ impl EvidenceClient {
             Arc::clone(&snapshot.token_provider),
             snapshot.jwks.clone(),
             Vec::new(),
+            self.config.peer_policy,
         ))?;
         let prepared = client
             .prepare(spec)?
@@ -550,6 +637,7 @@ impl EvidenceClient {
             Arc::clone(&snapshot.token_provider),
             snapshot.jwks.clone(),
             Vec::new(),
+            self.config.peer_policy,
         ))?;
         let prepared = client
             .prepare(spec)?
@@ -607,6 +695,7 @@ impl EvidenceClient {
             Arc::clone(&service.token_provider),
             service.jwks.clone(),
             Vec::new(),
+            self.config.peer_policy,
         ))?;
         temporary.discover().await
     }
@@ -627,8 +716,11 @@ impl EvidenceClient {
             .await
         {
             Ok(snapshot) => snapshot,
-            Err(error @ EvidenceClientError::Configuration { .. }) => {
-                // An explicit trust or binding mismatch invalidates the old provider.
+            Err(
+                error @ (EvidenceClientError::Configuration { .. }
+                | EvidenceClientError::DevelopmentPeer),
+            ) => {
+                // An explicit trust, binding, or posture refusal invalidates the old provider.
                 *cache = None;
                 return Err(error);
             }
@@ -859,7 +951,10 @@ impl EvidenceClient {
             .await
             .map_err(|error| EvidenceClientError::transport(outbound::send_failure_kind(&error)))?;
         let response_status = response.status();
-        if validate_response_headers(response.headers()).is_err() {
+        if let Err(error) = validate_response_headers(response.headers(), self.config.peer_policy) {
+            if error == ResponseHeaderError::DevelopmentPeer {
+                return Err(EvidenceClientError::DevelopmentPeer);
+            }
             return Err(metadata_protocol_failure_with_status(response_status));
         }
         let response_etag = metadata_etag(response.headers())
@@ -1382,7 +1477,10 @@ impl EvidenceClient {
         max_bytes: u64,
     ) -> Result<RawEvidenceResponse, EvidenceClientError> {
         let status = response.status().as_u16();
-        if validate_response_headers(response.headers()).is_err() {
+        if let Err(error) = validate_response_headers(response.headers(), self.config.peer_policy) {
+            if error == ResponseHeaderError::DevelopmentPeer {
+                return Err(EvidenceClientError::DevelopmentPeer);
+            }
             return Err(EvidenceClientError::Protocol {
                 status,
                 code: None,
@@ -1673,7 +1771,7 @@ fn metadata_cache_seconds(
 
 fn metadata_fetch_policy(trust: &TrustProfile) -> FetchUrlPolicy {
     match trust {
-        TrustProfile::LocalLoopbackDiscovery => FetchUrlPolicy::dev(),
+        TrustProfile::LocalLoopbackDiscovery => FetchUrlPolicy::https_or_loopback(),
         TrustProfile::HttpsDiscovery | TrustProfile::PinnedJwks { .. } => FetchUrlPolicy::strict(),
     }
 }
@@ -1695,6 +1793,8 @@ fn authorization_server_metadata_is_compatible(
 }
 
 fn validate_metadata_url(url: &Url, trust: &TrustProfile) -> Result<(), EvidenceClientError> {
+    // Exactly `127.0.0.1`, the address a supervised development service binds,
+    // so metadata the service publishes cannot name another local listener.
     let exact_local_loopback = url.scheme() == "http"
         && url.host_str() == Some("127.0.0.1")
         && url.port().is_some_and(|port| port != 0);
@@ -1845,8 +1945,46 @@ mod tests {
     const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
     const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
+    #[tokio::test]
+    async fn response_posture_follows_the_peer_policy() {
+        use crate::PeerPolicy::{AcceptDevelopmentPeer, RefuseDevelopmentPeer};
+
+        let server = MockServer::start().await;
+        let fixture = signed_evidence();
+        for posture in [None, Some("production"), Some("development")] {
+            let mut response = ResponseTemplate::new(200)
+                .insert_header("traceparent", TRACEPARENT)
+                .set_body_json(serde_json::json!({}));
+            if let Some(posture) = posture {
+                response = response.insert_header("registry-posture", posture);
+            }
+            Mock::given(any())
+                .respond_with(response)
+                .mount(&server)
+                .await;
+            for policy in [AcceptDevelopmentPeer, RefuseDevelopmentPeer] {
+                let client = EvidenceClient::new(EvidenceClientConfig::new(
+                    Url::parse(&server.uri()).unwrap(),
+                    Arc::new(StaticToken::new("fixture").unwrap()),
+                    fixture.trusted_jwks.clone(),
+                    Vec::new(),
+                    policy,
+                ))
+                .unwrap();
+                let response = client.http.get(server.uri()).send().await.unwrap();
+                let result = client.expect_success(response, JSON_MEDIA_TYPE, 1024).await;
+                if posture == Some("development") && policy == RefuseDevelopmentPeer {
+                    assert!(matches!(result, Err(EvidenceClientError::DevelopmentPeer)));
+                } else {
+                    result.expect("peer response accepted");
+                }
+            }
+            server.reset().await;
+        }
+    }
+
     fn config_for(base_url: &str, fixture: &SignedEvidenceFixture) -> EvidenceClientConfig {
-        EvidenceClientConfig::new(
+        EvidenceClientConfig::new_without_peer_policy(
             Url::parse(base_url).expect("the base URL parses"),
             Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
             fixture.trusted_jwks.clone(),
@@ -2395,7 +2533,7 @@ mod tests {
             .as_str()
             .expect("the fixture key has an identifier")
             .to_owned();
-        let client = EvidenceClient::new(EvidenceClientConfig::new(
+        let client = EvidenceClient::new(EvidenceClientConfig::new_without_peer_policy(
             Url::parse("https://evidence.example.org").expect("the base URL parses"),
             Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
             fixture.trusted_jwks.clone(),
@@ -3638,10 +3776,12 @@ mod tests {
     }
 
     fn non_verifying_client(base_url: &str) -> NonVerifyingEvidenceClient {
-        NonVerifyingEvidenceClient::new(EvidenceClientConfig::without_verification(
-            Url::parse(base_url).expect("the base URL parses"),
-            Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
-        ))
+        NonVerifyingEvidenceClient::new(
+            EvidenceClientConfig::without_verification_without_peer_policy(
+                Url::parse(base_url).expect("the base URL parses"),
+                Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
+            ),
+        )
         .expect("the non-verifying client is configured")
     }
 
@@ -3780,6 +3920,7 @@ mod tests {
         let client = EvidenceClient::from_profile_with_key(
             profile,
             PrivateJwk::parse(PRIVATE_KEY).expect("the test key parses"),
+            crate::PeerPolicy::RefuseDevelopmentPeer,
         )
         .expect("the progressive client builds");
         let request = || {
@@ -3848,8 +3989,55 @@ mod tests {
         EvidenceClient::from_profile_with_key(
             profile,
             PrivateJwk::parse(PROGRESSIVE_CLIENT_KEY).expect("the test key parses"),
+            crate::PeerPolicy::RefuseDevelopmentPeer,
         )
         .expect("the progressive client builds")
+    }
+
+    #[tokio::test]
+    async fn decoded_profile_follows_the_peer_policy() {
+        use crate::PeerPolicy::{AcceptDevelopmentPeer, RefuseDevelopmentPeer};
+        let server = MockServer::start().await;
+        mount_progressive_discovery(&server, "").await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-protected-resource"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("registry-posture", "development")
+                    .set_body_json(serde_json::json!({
+                        "resource": server.uri(),
+                        "authorization_servers": [server.uri()],
+                        "jwks_uri": format!("{}/{JWKS_PATH}", server.uri()),
+                        "bearer_methods_supported": ["header"],
+                    })),
+            )
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        let key = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key.path(), PROGRESSIVE_CLIENT_KEY).unwrap();
+        let profile = EvidenceClientProfile::from_slice(
+            serde_json::json!({
+                "apiVersion": crate::EVIDENCE_CLIENT_PROFILE_API_VERSION,
+                "kind": crate::EVIDENCE_CLIENT_PROFILE_KIND,
+                "baseUrl": server.uri(),
+                "clientId": "progressive-test-client",
+                "privateKey": {"type": "file", "path": key.path()},
+                "trust": {"type": "local-loopback-discovery"},
+                "oauth": {"clientAssertionAudience": server.uri()}
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+        let accepting =
+            EvidenceClient::from_profile(profile.clone(), AcceptDevelopmentPeer).unwrap();
+        accepting.refresh_metadata().await.unwrap();
+        let refusing = EvidenceClient::from_profile(profile, RefuseDevelopmentPeer).unwrap();
+        assert!(matches!(
+            refusing.refresh_metadata().await,
+            Err(EvidenceClientError::DevelopmentPeer)
+        ));
     }
 
     /// Serve progressive discovery on `server` for one authorization server.
@@ -3967,6 +4155,59 @@ mod tests {
             0,
             "the refused issuer leads to no Evidence request"
         );
+    }
+
+    #[tokio::test]
+    async fn development_refresh_refuses_an_expired_but_usable_snapshot() {
+        let server = MockServer::start().await;
+        mount_progressive_discovery(&server, "").await;
+        let client = key_holding_progressive_client(&server);
+        let state = client.progressive_state().unwrap();
+        let first = client.progressive_service_snapshot(state).await.unwrap();
+        let now = Instant::now();
+        *state.cache.lock().await = Some(CachedServiceSnapshot {
+            value: first,
+            expires_at: now - Duration::from_secs(1),
+            stale_until: now + Duration::from_secs(60),
+        });
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-protected-resource"))
+            .respond_with(
+                ResponseTemplate::new(304).insert_header("registry-posture", "development"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            client.progressive_service_snapshot(state).await,
+            Err(EvidenceClientError::DevelopmentPeer)
+        ));
+        assert!(state.cache.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn development_metadata_refresh_refuses_and_drops_the_cached_snapshot() {
+        let server = MockServer::start().await;
+        mount_progressive_discovery(&server, "").await;
+        let client = key_holding_progressive_client(&server);
+        let state = client.progressive_state().unwrap();
+        client.progressive_service_snapshot(state).await.unwrap();
+        assert!(state.cache.lock().await.is_some());
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-protected-resource"))
+            .respond_with(
+                ResponseTemplate::new(304).insert_header("registry-posture", "development"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            client.refresh_metadata().await,
+            Err(EvidenceClientError::DevelopmentPeer)
+        ));
+        assert!(state.cache.lock().await.is_none());
     }
 
     /// Revalidated metadata that moves the service to another issuer is
@@ -4117,10 +4358,12 @@ mod tests {
     #[test]
     fn a_client_that_verifies_and_one_that_does_not_are_not_interchangeable() {
         let fixture = signed_evidence();
-        let failure = EvidenceClient::new(EvidenceClientConfig::without_verification(
-            Url::parse("https://evidence.example.org/").expect("the base URL parses"),
-            Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
-        ))
+        let failure = EvidenceClient::new(
+            EvidenceClientConfig::without_verification_without_peer_policy(
+                Url::parse("https://evidence.example.org/").expect("the base URL parses"),
+                Arc::new(StaticToken::new("test-token").expect("the credential is accepted")),
+            ),
+        )
         .expect_err("a verifying client refuses a declined configuration");
         assert!(
             matches!(
@@ -4260,7 +4503,7 @@ mod tests {
                 validate_metadata_url(&url, &TrustProfile::LocalLoopbackDiscovery).is_ok(),
                 "{target} was rejected"
             );
-            assert!(FetchUrlPolicy::dev()
+            assert!(FetchUrlPolicy::https_or_loopback()
                 .validate_dns_pinned_for_immediate_fetch(&url)
                 .is_ok());
         }
@@ -4440,7 +4683,7 @@ mod tests {
                 JSON_MEDIA_TYPE,
                 None,
                 600,
-                &FetchUrlPolicy::dev(),
+                &FetchUrlPolicy::https_or_loopback(),
             )
             .await
             .expect("first metadata response");
@@ -4450,7 +4693,7 @@ mod tests {
                 JSON_MEDIA_TYPE,
                 Some((&first.value, first.etag.as_ref(), first.cache_seconds)),
                 600,
-                &FetchUrlPolicy::dev(),
+                &FetchUrlPolicy::https_or_loopback(),
             )
             .await
             .expect("conditional metadata response");
@@ -4478,7 +4721,7 @@ mod tests {
                     JSON_MEDIA_TYPE,
                     None,
                     600,
-                    &FetchUrlPolicy::dev(),
+                    &FetchUrlPolicy::https_or_loopback(),
                 )
                 .await;
             let Err(error) = result else {
@@ -4530,7 +4773,7 @@ mod tests {
                 JSON_MEDIA_TYPE,
                 None,
                 600,
-                &FetchUrlPolicy::dev(),
+                &FetchUrlPolicy::https_or_loopback(),
             )
             .await
             .is_err());

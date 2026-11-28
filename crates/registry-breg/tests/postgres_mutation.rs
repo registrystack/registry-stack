@@ -1320,6 +1320,7 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
 
     let before_create = durable_counts(&database, &table).await;
     let before_create_refusals = refusal_audit_count(&database).await;
+    let counted_before_create = refusal_counts().await;
     let refused_create = send(
         &app,
         Method::POST,
@@ -1336,6 +1337,12 @@ async fn real_postgres_row_boundary_write_refusals_are_safe_audited_and_atomic()
     assert_eq!(refused_create.status(), StatusCode::FORBIDDEN);
     let refused_create = body_json(refused_create).await;
     assert_eq!(refused_create["code"], "write.outside-boundary");
+    assert_refusal_counted(
+        &counted_before_create,
+        "row-boundary",
+        "create outside boundary",
+    )
+    .await;
     assert_eq!(
         refused_create["detail"],
         "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition."
@@ -2136,6 +2143,49 @@ async fn real_postgres_row_local_constraint_problems_name_only_readable_declarat
     }
 
     database.cleanup().await;
+}
+
+/// The refusal counter, read the way an operator reads it: from the metrics
+/// listener. The recorder is process-wide, so a test that shares its process
+/// with others asserts a rise of at least one.
+async fn refusal_counts() -> std::collections::BTreeMap<String, u64> {
+    use tower::ServiceExt as _;
+    let response = registry_breg::metrics::metrics_app(
+        Arc::new(registry_breg::metrics::Metrics::without_pool_for_test()),
+        registry_platform_config::Posture::Production,
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("scrape request"),
+    )
+    .await
+    .expect("metrics respond");
+    let bytes = to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .expect("metrics body");
+    String::from_utf8(bytes.to_vec())
+        .expect("metrics are UTF-8")
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("breg_request_refusals_total{check=\"")?;
+            let (label, value) = rest.split_once("\"} ")?;
+            Some((label.to_owned(), value.parse().expect("counter value")))
+        })
+        .collect()
+}
+
+async fn assert_refusal_counted(
+    before: &std::collections::BTreeMap<String, u64>,
+    check: &str,
+    context: &str,
+) {
+    let after = refusal_counts().await;
+    assert!(
+        after.get(check).copied().unwrap_or(0) > before.get(check).copied().unwrap_or(0),
+        "{context}: the refusal counts under {check}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3060,6 +3110,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         .any(|window| window == b"http-patched"));
 
     let before_bad_query = durable_counts(&database, &table).await;
+    let counted_before_bad_query = refusal_counts().await;
     let bad_query = send(
         &app,
         Method::POST,
@@ -3074,6 +3125,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
     .await;
     assert_eq!(bad_query.status(), StatusCode::NOT_FOUND);
     assert_eq!(body_json(bad_query).await["code"], "resource.not_found");
+    assert_refusal_counted(&counted_before_bad_query, "visibility", "bad query").await;
     assert_eq!(
         durable_counts(&database, &table).await.audit,
         before_bad_query.audit + 1
@@ -3114,24 +3166,28 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         "refusal audit failure releases no intended refusal and commits no mutation packet"
     );
 
-    for (label, uri, blocked_claims) in [
+    for (label, uri, blocked_claims, expected_check) in [
         (
             "wrong purpose",
             "/v1/records/widgets?accessProfile=operator",
             api_claims("wrong-purpose", Some("zone-a")),
+            "purpose",
         ),
         (
             "wrong profile",
             "/v1/records/widgets?accessProfile=missing",
             api_claims("case-management", Some("zone-a")),
+            "access-profile",
         ),
         (
             "missing boundary",
             "/v1/records/widgets?accessProfile=operator",
             api_claims("case-management", None),
+            "row-boundary",
         ),
     ] {
         let before = durable_counts(&database, &table).await;
+        let counted_before = refusal_counts().await;
         let response = send(
             &app,
             Method::POST,
@@ -3145,6 +3201,7 @@ async fn real_postgres_http_mutations_are_guarded_and_exactly_replayable() {
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{label}");
+        assert_refusal_counted(&counted_before, expected_check, label).await;
         assert_eq!(
             durable_counts(&database, &table).await.current,
             before.current

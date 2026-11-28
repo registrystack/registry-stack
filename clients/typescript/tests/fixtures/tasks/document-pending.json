@@ -1,0 +1,15 @@
+{
+  "id": "5b2f1c3e-7a4d-4e8b-9c1a-0d2e3f4a5b6c",
+  "policy": { "id": "licence-evidence", "version": "1", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111" },
+  "custodian": { "subject": "person-1" },
+  "version": {
+    "id": "8e6d4c2a-1b3f-4a5c-9d7e-2f1a3b4c5d6e",
+    "status": "pending",
+    "mediaType": "application/pdf",
+    "expectedDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "length": 12,
+    "reservedAt": "2026-11-27T09:00:00Z"
+  },
+  "actions": [],
+  "label": "Diploma"
+}

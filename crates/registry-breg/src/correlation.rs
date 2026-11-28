@@ -9,6 +9,9 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
+use std::sync::{Arc, Mutex, PoisonError};
+
+use registry_platform_authcommon::{record_refusal, DeclaredScope, FailedCheck, RefusalNote};
 use registry_platform_httpsec::{Problem, ProblemBody, TraceContext, TraceId};
 use serde_json::Value;
 use uuid::Uuid;
@@ -22,7 +25,38 @@ use uuid::Uuid;
 pub struct RequestCorrelation {
     request_id: Uuid,
     trace: TraceContext,
+    declared_scope: DeclaredScopeSlot,
 }
+
+/// The operator-declared values of the scope check a request failed. A scope
+/// refusal fills it, the recording layer reads it, and nothing in it is
+/// written to the response. Every clone of one request's correlation shares
+/// the slot.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DeclaredScopeSlot(Arc<Mutex<Option<DeclaredScope>>>);
+
+impl DeclaredScopeSlot {
+    pub(crate) fn set(&self, declared: DeclaredScope) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(declared);
+    }
+
+    fn get(&self) -> Option<DeclaredScope> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+// The slot is bookkeeping for the recording layer, not part of a
+// correlation's identity.
+impl PartialEq for DeclaredScopeSlot {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for DeclaredScopeSlot {}
 
 impl RequestCorrelation {
     #[must_use]
@@ -30,6 +64,7 @@ impl RequestCorrelation {
         Self {
             request_id: Uuid::new_v4(),
             trace: TraceContext::from_headers(headers),
+            declared_scope: DeclaredScopeSlot::default(),
         }
     }
 
@@ -38,6 +73,7 @@ impl RequestCorrelation {
         Self {
             request_id: Uuid::new_v4(),
             trace: TraceContext::server_created(),
+            declared_scope: DeclaredScopeSlot::default(),
         }
     }
 
@@ -49,6 +85,10 @@ impl RequestCorrelation {
     #[must_use]
     pub fn trace_id(&self) -> &TraceId {
         &self.trace.trace_id
+    }
+
+    pub(crate) fn declared_scope_slot(&self) -> DeclaredScopeSlot {
+        self.declared_scope.clone()
     }
 
     fn apply_trace(&self, headers: &mut HeaderMap) {
@@ -75,6 +115,7 @@ pub(crate) struct PublicProblem {
     field_path: Option<String>,
     declared_refusal: Option<(String, String)>,
     guard_reason: Option<String>,
+    guard_label: Option<String>,
     declared_field: Option<(String, String)>,
     declared_constraint: Option<Box<crate::mutation::RowLocalConstraintViolation>>,
     timer_window_fields: Option<(String, String)>,
@@ -104,6 +145,7 @@ pub(crate) fn problem_response(
         field_path: None,
         declared_refusal: None,
         guard_reason: None,
+        guard_label: None,
         declared_field: None,
         declared_constraint: None,
         timer_window_fields: None,
@@ -115,6 +157,20 @@ pub(crate) fn problem_response(
         .with_extra("code", Value::String(code.to_owned()))
         .into_response();
     response.extensions_mut().insert(problem);
+    response
+}
+
+/// Name the check a refusal failed. The member rides in the response
+/// extensions to [`finish_response`], which counts it and writes the one
+/// bounded log line. It is never serialized, so the answer's bytes do not
+/// change.
+pub(crate) fn note_refusal(response: Response, check: FailedCheck) -> Response {
+    attach_refusal_note(response, RefusalNote::new(check))
+}
+
+/// [`note_refusal`] with a whole note, so a remedy reaches the log line.
+pub(crate) fn attach_refusal_note(mut response: Response, note: RefusalNote) -> Response {
+    response.extensions_mut().insert(note);
     response
 }
 
@@ -140,6 +196,7 @@ pub(crate) fn problem_response_with_field_path(
         field_path: Some(field_path.clone()),
         declared_refusal: None,
         guard_reason: None,
+        guard_label: None,
         declared_field: None,
         declared_constraint: None,
         timer_window_fields: None,
@@ -194,8 +251,12 @@ pub(crate) fn action_refusal_response(
     response
 }
 
-/// Called only after the ordinary guard and boundary disclosure recheck.
-pub(crate) fn action_guard_failure_response(reason: Option<String>) -> Response {
+/// Called only after the ordinary guard and boundary disclosure recheck. The
+/// authored label, when the guard has one, replaces the generic `detail`.
+pub(crate) fn action_guard_failure_response(
+    reason: Option<String>,
+    label: Option<String>,
+) -> Response {
     let code = crate::problem::ProblemCode::ActionGuardFailed;
     let mut response = problem_response(
         StatusCode::PRECONDITION_FAILED,
@@ -203,11 +264,12 @@ pub(crate) fn action_guard_failure_response(reason: Option<String>) -> Response 
         code.description(),
         code.code(),
     );
-    response
+    let problem = response
         .extensions_mut()
         .get_mut::<PublicProblem>()
-        .expect("problem metadata")
-        .guard_reason = reason;
+        .expect("problem metadata");
+    problem.guard_reason = reason;
+    problem.guard_label = label;
     response
 }
 
@@ -359,6 +421,11 @@ pub(crate) fn finish_response(
         }
         if let Some(reason) = &problem.guard_reason {
             object.insert("guardReason".to_owned(), Value::String(reason.clone()));
+            // A label is authored beside its reason, so it rides only where the
+            // reason does.
+            if let Some(label) = &problem.guard_label {
+                object.insert("detail".to_owned(), Value::String(label.clone()));
+            }
         }
         if let Some((name, value)) = problem.statistical_detail {
             object.insert(name.to_owned(), Value::String(value.to_owned()));
@@ -435,6 +502,18 @@ pub(crate) fn finish_response(
         );
     }
     correlation.apply_trace(response.headers_mut());
+    if let Some(problem) = &problem {
+        if matches!(problem.status.as_u16(), 401 | 403)
+            && response.extensions().get::<RefusalNote>().is_none()
+        {
+            debug_assert!(false, "a refusal was answered without its failed check");
+            tracing::error!(
+                code = problem.code,
+                "a refusal was answered without its failed check"
+            );
+        }
+    }
+    record_noted_refusal(&response, correlation);
 
     let status = status_class(response.status());
     let problem_code = problem.as_ref().map_or("none", |problem| problem.code);
@@ -449,6 +528,33 @@ pub(crate) fn finish_response(
         "Base Registry Engine request served"
     );
     response
+}
+
+/// Count and log the refusal a response carries, if any. A handler that folds
+/// several refused items into one answer calls this for each item, because the
+/// folded answer is not itself a refusal.
+pub(crate) fn record_noted_refusal(response: &Response, correlation: &RequestCorrelation) {
+    if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
+        record_refusal_note(note, correlation);
+    }
+}
+
+/// Count and log one refusal check on the operator side without attaching a
+/// [`RefusalNote`] to the response. Used when a concealed `412` must stay
+/// indistinguishable on the wire from an unknown target in development as well
+/// as production, while still counting under its check in metrics and logs.
+pub(crate) fn record_refusal_check(check: FailedCheck, correlation: &RequestCorrelation) {
+    record_refusal_note(RefusalNote::new(check), correlation);
+}
+
+fn record_refusal_note(note: RefusalNote, correlation: &RequestCorrelation) {
+    let declared = correlation.declared_scope.get();
+    record_refusal!(
+        crate::metrics::process_refusal_recorder(),
+        note,
+        trace_id = correlation.trace_id(),
+        declared = declared.as_ref()
+    );
 }
 
 pub(crate) fn method_name(method: &axum::http::Method) -> &'static str {
@@ -475,4 +581,127 @@ pub(crate) fn status_class(status: StatusCode) -> &'static str {
 
 fn duration_milliseconds(elapsed: std::time::Duration) -> u64 {
     u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod refusal_guard_tests {
+    use super::*;
+
+    fn refusal_statuses() -> [StatusCode; 2] {
+        [
+            StatusCode::from_u16(401).expect("401 is a status"),
+            StatusCode::FORBIDDEN,
+        ]
+    }
+
+    fn finish(response: Response) -> Response {
+        let correlation = RequestCorrelation::from_headers(&HeaderMap::new());
+        finish_response(response, &correlation, "GET", Instant::now())
+    }
+
+    #[test]
+    fn a_401_or_403_with_its_check_is_answered_unchanged() {
+        for status in refusal_statuses() {
+            let response = note_refusal(
+                problem_response(status, "Refused", "Refused.", "authentication.refused"),
+                FailedCheck::CredentialMissing,
+            );
+            assert_eq!(finish(response).status(), status);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_401_or_403_without_a_check_stops_a_debug_build() {
+        for status in refusal_statuses() {
+            let outcome = std::panic::catch_unwind(|| {
+                finish(problem_response(
+                    status,
+                    "Refused",
+                    "Refused.",
+                    "authentication.refused",
+                ))
+            });
+            assert!(outcome.is_err(), "{status} was answered without a check");
+        }
+    }
+
+    #[test]
+    fn a_404_without_a_check_is_an_unknown_route() {
+        let response = finish(problem_response(
+            StatusCode::NOT_FOUND,
+            "Not Found",
+            "The requested resource was not found.",
+            "resource.not_found",
+        ));
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    async fn body_of(response: Response) -> Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("the problem body reads");
+        serde_json::from_slice(&bytes).expect("the problem body is JSON")
+    }
+
+    #[tokio::test]
+    async fn a_guard_label_replaces_the_detail_only_beside_its_reason() {
+        let label = "Only a submitted application can be approved.";
+        let labelled = body_of(finish(note_refusal(
+            action_guard_failure_response(Some("not-submitted".into()), Some(label.into())),
+            FailedCheck::ActionGuard,
+        )))
+        .await;
+        assert_eq!(labelled["code"], "action.guard_failed");
+        assert_eq!(labelled["guardReason"], "not-submitted");
+        assert_eq!(labelled["detail"], label);
+
+        let plain = body_of(finish(note_refusal(
+            action_guard_failure_response(Some("not-submitted".into()), None),
+            FailedCheck::ActionGuard,
+        )))
+        .await;
+        assert_eq!(plain["detail"], "The action guard was not satisfied.");
+
+        // A label never rides without the reason it is authored beside.
+        let orphan = body_of(finish(note_refusal(
+            action_guard_failure_response(None, Some(label.into())),
+            FailedCheck::ActionGuard,
+        )))
+        .await;
+        assert_eq!(orphan["detail"], "The action guard was not satisfied.");
+        assert!(orphan.get("guardReason").is_none());
+        assert!(!orphan.to_string().contains(label));
+    }
+
+    #[test]
+    fn record_refusal_check_counts_without_attaching_a_response_note() {
+        let recorder = crate::metrics::process_refusal_recorder();
+        let before = recorder
+            .counter()
+            .get(&[FailedCheck::ActionGuard.as_str()])
+            .unwrap_or(0);
+        let correlation = RequestCorrelation::from_headers(&HeaderMap::new());
+        record_refusal_check(FailedCheck::ActionGuard, &correlation);
+        let response = finish_response(
+            problem_response(
+                StatusCode::PRECONDITION_FAILED,
+                "Precondition Failed",
+                "The mutation precondition failed.",
+                "precondition.failed",
+            ),
+            &correlation,
+            "POST",
+            Instant::now(),
+        );
+        let after = recorder
+            .counter()
+            .get(&[FailedCheck::ActionGuard.as_str()])
+            .unwrap_or(0);
+        assert!(after > before, "operator refusal counter must advance");
+        assert!(
+            response.extensions().get::<RefusalNote>().is_none(),
+            "concealed 412 must carry no RefusalNote for development body rewriting"
+        );
+    }
 }

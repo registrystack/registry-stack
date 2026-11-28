@@ -6,8 +6,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use registry_platform_config::{
-    ConfigBlockError, ConfigBlockErrorKind, ListenerBind, PackageConfig, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope,
+    ConfigBlockError, ConfigBlockErrorKind, DeclaredPosture, ListenerBind, LoadedRuntimeConfig,
+    PackageConfig, PackageErrorKind, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
 };
 use registry_platform_yaml::{escape_pointer_segment, BoundedU64, Diagnostic, RetiredApiVersion};
 use serde::Deserialize;
@@ -168,8 +168,8 @@ pub enum LogLevel {
 /// The loader for the Discovery runtime file, with its removed keys and its
 /// retired apiVersions.
 #[must_use]
-pub const fn runtime_loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new(RUNTIME_ENVELOPE)
+pub const fn runtime_loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+    RuntimeConfigLoader::new(RUNTIME_ENVELOPE, declared)
         .removed_keys(REMOVED_RUNTIME_KEYS)
         .retired_api_versions(RETIRED_RUNTIME_API_VERSIONS)
         .require_trusted_ownership()
@@ -192,15 +192,28 @@ pub struct RuntimeCheck {
 /// checked by syntax and position only: the value checks of a member that
 /// holds one are skipped, because they need the substituted text.
 #[must_use]
-pub fn check_runtime(path: &Path, substitute: bool) -> RuntimeCheck {
-    read_runtime(path, substitute).1
+pub fn check_runtime(path: &Path, substitute: bool, declared: DeclaredPosture) -> RuntimeCheck {
+    read_runtime(path, substitute, declared, false).1
+}
+
+/// Check a runtime file and verify its package when the configured root is available.
+#[must_use]
+pub fn check_runtime_with_package(
+    path: &Path,
+    substitute: bool,
+    declared: DeclaredPosture,
+) -> RuntimeCheck {
+    read_runtime(path, substitute, declared, true).1
 }
 
 /// Read the runtime file at `path` with the process environment, as the
 /// service does at startup. A refusal is every finding, each positioned in
 /// the file and naming its fix.
-pub fn load_runtime_config(path: &Path) -> Result<RuntimeConfig, Vec<Diagnostic>> {
-    match read_runtime(path, true) {
+pub fn load_runtime_config(
+    path: &Path,
+    declared: DeclaredPosture,
+) -> Result<LoadedRuntimeConfig<RuntimeConfig>, Vec<Diagnostic>> {
+    match read_runtime(path, true, declared, false) {
         (Some(config), _) => Ok(config),
         (None, check) => Err(check.diagnostics),
     }
@@ -208,8 +221,14 @@ pub fn load_runtime_config(path: &Path) -> Result<RuntimeConfig, Vec<Diagnostic>
 
 /// The file read by the shared loader, then its package block checked. The
 /// configuration is returned only when nothing was found.
-fn read_runtime(path: &Path, substitute: bool) -> (Option<RuntimeConfig>, RuntimeCheck) {
-    let check = runtime_loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
+fn read_runtime(
+    path: &Path,
+    substitute: bool,
+    declared: DeclaredPosture,
+    inspect_package: bool,
+) -> (Option<LoadedRuntimeConfig<RuntimeConfig>>, RuntimeCheck) {
+    let mut check =
+        runtime_loader(declared).check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
     if let Some(loaded) = &check.loaded {
         if let Err(error) = loaded.config.package.check() {
@@ -226,15 +245,59 @@ fn read_runtime(path: &Path, substitute: bool) -> (Option<RuntimeConfig>, Runtim
             }
         }
     }
-    let config = check
-        .loaded
-        .map(|loaded| loaded.config)
-        .filter(|_| diagnostics.is_empty());
+    let package_fields_resolved =
+        !check.defers("/package/root") && !check.defers("/package/expectedDigest");
+    let has_errors = |diagnostics: &[Diagnostic]| {
+        diagnostics
+            .iter()
+            .any(|d| d.severity == registry_platform_yaml::Severity::Error)
+    };
+    let mut config = check.loaded.take().filter(|_| !has_errors(&diagnostics));
+    let mut unavailable = check.unavailable;
+    if let (Some(loaded), true) = (config.as_mut(), inspect_package && package_fields_resolved) {
+        let root = &loaded.config.package.root;
+        let package = match package_root_exists(root) {
+            Ok(true) => crate::package::load_runtime_package(&loaded.config.package)
+                .map(Some)
+                .map_err(|error| {
+                    let unreadable = matches!(
+                        &error,
+                        crate::StartupError::Package(package)
+                            if matches!(package.kind(), PackageErrorKind::Io { .. })
+                    );
+                    (error.to_string(), unreadable)
+                }),
+            Ok(false) => Ok(None),
+            Err(error) => Err((error.message, true)),
+        };
+        match package {
+            Ok(Some((index, _))) => {
+                crate::record_index_posture(&index, &mut loaded.posture, |host| {
+                    registry_platform_loopback::loopback_host(host).is_some()
+                });
+                diagnostics.extend(loaded.posture.diagnostics(&root.join(crate::INDEX_FILE)));
+            }
+            Ok(None) => {}
+            Err((message, unreadable)) => {
+                unavailable |= unreadable;
+                diagnostics.push(check.error_at(
+                    RUNTIME_KIND,
+                    PACKAGE_REFUSED,
+                    PACKAGE_ROOT,
+                    message,
+                    PACKAGE_ACTION,
+                ));
+            }
+        }
+    }
+    // The configuration is returned only when nothing was found, the
+    // package included.
+    let config = config.filter(|_| !has_errors(&diagnostics));
     (
         config,
         RuntimeCheck {
             diagnostics,
-            unavailable: check.unavailable,
+            unavailable,
         },
     )
 }
@@ -279,9 +342,32 @@ fn package_finding(error: &ConfigBlockError) -> (&'static str, &'static str) {
     }
 }
 
+// Offline check skips a missing package so a runtime can be checked before
+// building it. Startup still requires the package. Lookup errors refuse both.
+pub(crate) fn package_root_exists(root: &Path) -> Result<bool, Box<Diagnostic>> {
+    root.try_exists().map_err(|error| {
+        Box::new(Diagnostic::error(
+            PACKAGE_REFUSED,
+            PACKAGE_ROOT,
+            format!("Could not look up the package root: {error}"),
+            PACKAGE_ACTION,
+        ))
+    })
+}
+
+const PACKAGE_REFUSED: &str = "discovery.runtime.package-refused";
+const PACKAGE_ROOT: &str = "/package/root";
+const PACKAGE_ACTION: &str =
+    "Verify the deployed package and its expected digest, or rebuild it with discoveryctl package.";
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_config::{Posture, PostureSource};
+    const PRODUCTION: DeclaredPosture = DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Default,
+    };
     use std::{fs, path::PathBuf};
 
     const RUNTIME: &str = "\
@@ -303,7 +389,7 @@ logLevel: info
         let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let path = temporary.path().join("runtime.yaml");
         fs::write(&path, text).unwrap();
-        check_runtime(&path, substitute)
+        check_runtime(&path, substitute, PRODUCTION)
     }
 
     fn codes(check: &RuntimeCheck) -> Vec<(&str, &str)> {
@@ -329,12 +415,8 @@ logLevel: info
     fn assert_unsafe_runtime(error: registry_platform_config::RuntimeConfigError) {
         let diagnostic = error.deciding_diagnostic();
         assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
-        assert!(diagnostic
-            .message
-            .contains("owned by root or the runtime user"));
-        assert!(diagnostic
-            .suggested_action
-            .contains("remove group and other write permission"));
+        assert!(diagnostic.message.contains("is writable by its group"));
+        assert!(diagnostic.suggested_action.contains("chmod g-w "));
     }
 
     #[cfg(unix)]
@@ -346,7 +428,7 @@ logLevel: info
         let path = write_ownership_test_runtime(directory.path());
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 
-        runtime_loader()
+        runtime_loader(PRODUCTION)
             .load::<serde_json::Value>(&path)
             .expect("an owner-writable runtime in a private directory loads");
     }
@@ -359,7 +441,7 @@ logLevel: info
         let directory = tempfile::tempdir().unwrap();
         let path = write_ownership_test_runtime(directory.path());
         fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
-        let result = runtime_loader().load::<serde_json::Value>(&path);
+        let result = runtime_loader(PRODUCTION).load::<serde_json::Value>(&path);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 
         assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
@@ -375,7 +457,7 @@ logLevel: info
         fs::create_dir(&writable).unwrap();
         fs::set_permissions(&writable, fs::Permissions::from_mode(0o770)).unwrap();
         let path = write_ownership_test_runtime(&writable);
-        let result = runtime_loader().load::<serde_json::Value>(&path);
+        let result = runtime_loader(PRODUCTION).load::<serde_json::Value>(&path);
         fs::set_permissions(&writable, fs::Permissions::from_mode(0o700)).unwrap();
 
         assert_unsafe_runtime(
@@ -421,7 +503,7 @@ logLevel: info
         let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let path = temporary.path().join("runtime.yaml");
         fs::write(&path, RUNTIME).unwrap();
-        let runtime = load_runtime_config(&path).unwrap();
+        let runtime = load_runtime_config(&path, PRODUCTION).unwrap().config;
         assert_eq!(runtime.listener.request_timeout(), Duration::from_secs(10));
         assert_eq!(runtime.limits.shutdown_grace(), Duration::from_secs(10));
 
@@ -540,7 +622,7 @@ logLevel: info
     #[test]
     fn cfg_check_1_an_unreadable_file_is_an_operational_failure() {
         let temporary = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
-        let check = check_runtime(&temporary.path().join("missing.yaml"), false);
+        let check = check_runtime(&temporary.path().join("missing.yaml"), false, PRODUCTION);
         assert!(check.unavailable);
         assert_eq!(check.diagnostics.len(), 1);
     }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Startup ordering gate for one verified Registry package.
 
+pub use registry_platform_oidc::StaticJwksError;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -22,18 +23,19 @@ use tokio_postgres::{Client, GenericClient};
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::api::{
-    authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
+    authenticated_router_with_listener, HttpService, ReadRuntimeIdentity, ReadinessProbe,
+    ServiceFuture,
 };
 use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::audit::RegistryAudit;
-use crate::auth::{AuthenticationConfigError, RegistryAuthenticator};
-use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
+use crate::auth::{AuthenticationConfigError, AuthenticatorIssuer, RegistryAuthenticator};
+use crate::field_encryption::FieldEncryptionService;
 use crate::hooks::{HookDeliveryService, HookRetainedBindingError, HookWorker};
 use crate::metrics::{self, LastSuccess, Metrics, ProgressWorker};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
 use crate::package::{
-    load_package_with_verified_envelope, PackageError, PackageLoadContext, VerifiedPackage,
+    load_verified_package_for_startup, PackageError, PackageLoadContext, VerifiedPackage,
 };
 use crate::postgres::{
     catalog_drift_objects, inspect_baseline, verify_catalog_identity_for_catalog, AdvisorySeverity,
@@ -42,7 +44,7 @@ use crate::postgres::{
     PostgresSnapshotReadService, RecordTimerWorker, RegistryLockKey, RoleMode, RuntimePool,
     SqlIdentifier,
 };
-use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
+use crate::runtime_config::{load_verified_startup_config, RuntimeConfig, RuntimeConfigError};
 
 /// Bounded startup refusal. Package paths, request identifiers, stored review
 /// values, and physical catalog details are intentionally unavailable through
@@ -51,6 +53,11 @@ use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigErr
 /// production operational logs still render only the closed refusal class.
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum StartupError {
+    #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
+    PostureMismatch {
+        recorded: registry_platform_config::Posture,
+        declared: registry_platform_config::Posture,
+    },
     #[error("the Registry runtime configuration was refused")]
     RuntimeConfig(RuntimeConfigError),
     #[error("the Registry package was refused")]
@@ -150,17 +157,22 @@ pub enum StartupError {
     ExternalProjectionRoleMode,
     #[error("the Registry OIDC key source was refused")]
     Oidc,
+    /// The shared static key set rule refused the pinned key set. The cause
+    /// names the rule and the key's position, never a key value.
+    #[error("the Registry OIDC key source was refused")]
+    StaticKeySet(StaticJwksError),
     #[error("the Registry authentication profile was refused")]
     Authentication,
-    /// The project names clients that `authentication.oidc.allowedClients`
-    /// does not list; `unrestricted` lists none.
+    /// The project names clients that no `authentication.oidc.issuers` entry
+    /// lists in `allowedClients`. `unrestricted` lists none.
     #[error(
-        "the project names clients that authentication.oidc.allowedClients does not list; list \
-         each client named in requesterClients, trusted actors, or consent recipients there"
+        "the project names clients that no authentication.oidc.issuers entry lists in \
+         allowedClients; list each client named in requesterClients, trusted actors, or consent \
+         recipients in the allowedClients of the entry whose issuer signs its tokens"
     )]
     AuthenticationClientsUnlisted,
     #[error("the Registry event destination bindings were refused")]
-    EventDestinations,
+    EventDestinations(String),
     #[error(
         "{retained_deliveries} retained hook deliveries require superseded bindings; inspect \
          them with `bregctl hook list` and either restore the exact bindings or explicitly \
@@ -194,8 +206,6 @@ pub enum StartupError {
     AttachmentStorage,
     #[error("the Registry field-encryption key state was refused")]
     FieldEncryption,
-    #[error("the Registry field-encryption data-key custody was refused")]
-    FieldEncryptionCustody,
     #[error("the Registry listener could not be started")]
     Listener,
     #[error("the Registry shutdown signal failed")]
@@ -516,7 +526,7 @@ pub enum OperationalEvent {
     PostgresBaselineAdvisory(BaselineAdvisory),
     /// The role mode the runtime file selects, logged once at startup.
     RoleMode(RoleMode),
-    /// The runtime file leaves `authentication.oidc.allowedClients`
+    /// An `authentication.oidc.issuers` entry leaves `allowedClients`
     /// unrestricted, logged once at startup. It names the member only.
     ClientsUnrestricted,
     /// A supervised background task panicked, or returned before shutdown
@@ -578,7 +588,7 @@ impl OperationalEvent {
             Self::ClientsUnrestricted => OperationalLogRecord {
                 level: OperationalLogLevel::Info,
                 target: "registry_breg::startup",
-                message: "authentication.oidc.allowedClients is unrestricted: a token from any client is accepted",
+                message: "an authentication.oidc.issuers entry leaves allowedClients unrestricted: a token from any client of its issuer is accepted",
                 error: None,
                 code: Some("startup.authentication.clients_unrestricted"),
             },
@@ -726,10 +736,34 @@ impl OperationalEvent {
                     .expect("background task stop and stage refusal records have a code");
                 tracing::error!(target: "registry_breg::startup", code, message = record.message);
             }
-            Self::StoppedWithError(StartupError::AuditDestination(reason)) => {
+            Self::StoppedWithError(
+                StartupError::AuditDestination(reason) | StartupError::EventDestinations(reason),
+            ) => {
                 let error = record
                     .error
                     .expect("stopped-with-error records have a closed error");
+                tracing::error!(
+                    target: "registry_breg::startup",
+                    error,
+                    reason = reason.as_str(),
+                    message = record.message
+                );
+            }
+            Self::StoppedWithError(StartupError::RuntimeConfig(
+                cause @ (RuntimeConfigError::InvalidDeliveryKey { .. }
+                | RuntimeConfigError::DuplicateCompletionRecipient { .. }),
+            )) => {
+                let error = record
+                    .error
+                    .expect("stopped-with-error records have a closed error");
+                let reason = cause.to_string();
+                tracing::error!(target: "registry_breg::startup", error, reason, message = record.message);
+            }
+            Self::StoppedWithError(StartupError::StaticKeySet(cause)) => {
+                let error = record
+                    .error
+                    .expect("stopped-with-error records have a closed error");
+                let reason = cause.to_string();
                 tracing::error!(
                     target: "registry_breg::startup",
                     error,
@@ -746,11 +780,20 @@ impl OperationalEvent {
                     .expect("database connection records have a closed cause code");
                 tracing::error!(target: "registry_breg::startup", code, error, message = record.message);
             }
+            Self::StoppedWithError(StartupError::PostureMismatch { recorded, .. }) => {
+                let error = crate::migration::posture_mismatch_message(*recorded);
+                let action = crate::migration::posture_mismatch_action(*recorded);
+                tracing::error!(target: "registry_breg::startup", code = crate::migration::POSTURE_MISMATCH_CODE, error, action, message = record.message);
+            }
             Self::StoppedWithError(_) => {
                 let error = record
                     .error
                     .expect("stopped-with-error records have a closed error");
-                tracing::error!(target: "registry_breg::startup", error, message = record.message);
+                if let Some(code) = record.code {
+                    tracing::error!(target: "registry_breg::startup", code, error, message = record.message);
+                } else {
+                    tracing::error!(target: "registry_breg::startup", error, message = record.message);
+                }
             }
             Self::AttachmentVerificationIterationFailed
             | Self::AttachmentVerificationRetryPending => {
@@ -808,6 +851,7 @@ impl StartupError {
     const fn operational_code(&self) -> Option<&'static str> {
         match self {
             Self::DatabaseConnection(cause) => Some(cause.code()),
+            Self::PostureMismatch { .. } => Some(crate::migration::POSTURE_MISMATCH_CODE),
             _ => None,
         }
     }
@@ -815,11 +859,9 @@ impl StartupError {
     const fn operational_message(&self) -> &'static str {
         match self {
             Self::RuntimeConfig(_) => "the Registry runtime configuration was refused",
+            Self::PostureMismatch { recorded, .. } => crate::migration::posture_mismatch_message(*recorded),
             Self::PackageRefused(PackageError::RetiredApiVersion) => {
                 "the Registry package carries the retired apiVersion registry.registrystack.org/package/v2; rebuild it with this release's `bregctl package`, then run `bregctl apply --initial --package DIR` against a new database"
-            }
-            Self::PackageRefused(PackageError::DeploymentIdentity) => {
-                "the Registry package carries a local-only identity; replace canonicalBaseIri, rerun schema-test, and rebuild the deployment package"
             }
             Self::PackageRefused(PackageError::EngineFeatureUpgradeRequired) => {
                 "the Registry package was built before this release and predates the required Record timer store; it cannot be upgraded in place. Create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`"
@@ -870,15 +912,15 @@ impl StartupError {
             Self::Cursor => "the Registry cursor profile was refused",
             Self::ExternalSources => "the external source binding list or the external projection store was refused",
             Self::ExternalProjectionRoleMode => "indexed external projections require separate migration and runtime PostgreSQL roles",
-            Self::Oidc => "the Registry OIDC key source was refused",
+            Self::Oidc | Self::StaticKeySet(_) => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
             Self::AuthenticationClientsUnlisted => {
-                "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
+                "the project names clients that no authentication.oidc.issuers entry lists in allowedClients; list each client named in requesterClients, trusted actors, or consent recipients in the allowedClients of the entry whose issuer signs its tokens"
             }
             Self::AttachmentStorage => {
                 "the Registry attachment storage or verification binding was refused"
             }
-            Self::EventDestinations => "the Registry event destination bindings were refused",
+            Self::EventDestinations(_) => "the Registry event destination bindings were refused",
             Self::RetainedHookBindings { .. } => {
                 "retained hook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
             }
@@ -886,9 +928,6 @@ impl StartupError {
                 "pending hook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
             }
             Self::FieldEncryption => "the Registry field-encryption key state was refused",
-            Self::FieldEncryptionCustody => {
-                "the Registry field-encryption data-key custody was refused"
-            }
             Self::ReviewBindings | Self::ReviewAuthorityMissing { .. } => {
                 "the Registry retained review bindings were refused"
             }
@@ -906,6 +945,7 @@ impl StartupError {
 /// Unforgeable listener gate produced only after package closure and database
 /// readiness verification. Listener construction must consume this object.
 pub struct VerifiedStartup {
+    recorded_posture: registry_platform_config::Posture,
     package: VerifiedPackage,
     expected: ExpectedRegistryIdentity,
     expected_catalog: ExpectedManagedCatalog,
@@ -937,6 +977,7 @@ impl VerifiedStartup {
 /// Fully verified server state. Fields are private so production listeners can
 /// only be created by consuming this value through [`serve`].
 pub struct PreparedServer {
+    recorded_posture: registry_platform_config::Posture,
     bind: SocketAddr,
     app: Router,
     shutdown_grace: Duration,
@@ -1023,10 +1064,12 @@ impl PreparedServer {
     /// carry no such capability, so fixture receipt code cannot attest canned
     /// Routers or a caller-selected database.
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
-    pub(crate) fn fixture_runtime(&self) -> Option<(Router, RuntimePool)> {
+    pub(crate) fn fixture_runtime(
+        &self,
+    ) -> Option<(Router, RuntimePool, registry_platform_config::Posture)> {
         self.fixture_pool
             .as_ref()
-            .map(|pool| (self.app.clone(), pool.clone()))
+            .map(|pool| (self.app.clone(), pool.clone(), self.recorded_posture))
     }
 
     #[cfg(feature = "postgres-test")]
@@ -1034,6 +1077,7 @@ impl PreparedServer {
     #[must_use]
     pub fn from_parts_for_test(bind: SocketAddr, app: Router, shutdown_grace: Duration) -> Self {
         Self {
+            recorded_posture: registry_platform_config::Posture::Production,
             bind,
             app,
             shutdown_grace,
@@ -1079,6 +1123,7 @@ impl PreparedServer {
         hook_worker: HookWorker,
     ) -> Self {
         Self {
+            recorded_posture: registry_platform_config::Posture::Production,
             bind,
             app,
             shutdown_grace,
@@ -1104,30 +1149,106 @@ impl PreparedServer {
     }
 }
 
+/// Configuration and verified package admitted by the deployment posture.
+pub struct StartupInputs {
+    config: RuntimeConfig,
+    package: VerifiedPackage,
+}
+
+impl StartupInputs {
+    pub fn load(path: &Path, declared: registry_platform_config::DeclaredPosture) -> Result<Self> {
+        let (config, package) = load_verified_startup_config(path, declared, None)?;
+        Ok(Self { config, package })
+    }
+
+    fn load_mapped(
+        path: &Path,
+        declared: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self> {
+        Self::load(path, declared).map_err(|error| match error {
+            StartupError::RuntimeConfig(error) => map_runtime_config_error(error),
+            other => other,
+        })
+    }
+
+    pub fn config(&self) -> &RuntimeConfig {
+        &self.config
+    }
+
+    /// Load a candidate selected by an activation command. The runtime's
+    /// package pin continues to bind the configured active package.
+    pub fn load_for_activation(
+        path: &Path,
+        declared: registry_platform_config::DeclaredPosture,
+        selected_package: &Path,
+    ) -> Result<Self> {
+        let (config, package) =
+            load_verified_startup_config(path, declared, Some(selected_package))?;
+        Ok(Self { config, package })
+    }
+
+    pub fn package(&self) -> &VerifiedPackage {
+        &self.package
+    }
+
+    pub fn into_parts(self) -> (RuntimeConfig, VerifiedPackage) {
+        (self.config, self.package)
+    }
+
+    /// Inspect startup and retain the database posture when later checks refuse.
+    pub async fn check_observing_posture(
+        self,
+        recorded_posture: &mut Option<registry_platform_config::Posture>,
+    ) -> Result<CheckedStartup> {
+        check_inputs(self, AuditOpening::ObservePosture, Some(recorded_posture)).await
+    }
+
+    pub async fn prepare(self) -> Result<PreparedServer> {
+        prepare_verified_package_with_connection(
+            self.config,
+            self.package,
+            None,
+            AuditOpening::Serve,
+            None,
+        )
+        .await
+    }
+
+    fn from_loaded(mut config: RuntimeConfig) -> Result<Self> {
+        let shared = config
+            .verify_package_envelope()
+            .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
+        let package = load_verified_package_for_startup(
+            config.package().root(),
+            &config.package_load_context(),
+            &shared,
+        )
+        .map_err(StartupError::PackageRefused)?;
+        config
+            .decide_package_posture(&package)
+            .map_err(map_runtime_config_error)?;
+        Ok(Self { config, package })
+    }
+}
+
+fn default_startup_posture() -> registry_platform_config::DeclaredPosture {
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Default,
+    }
+}
+
 /// Production startup. The package is verified before any secret resolution,
 /// database connection, OIDC discovery, audit profile, or listener bind.
 pub async fn prepare(config_path: &Path) -> Result<PreparedServer> {
-    let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
-    prepare_loaded(config).await
+    StartupInputs::load_mapped(config_path, default_startup_posture())?
+        .prepare()
+        .await
 }
 
-/// Production startup over a runtime configuration the caller has already
-/// loaded, so the caller can report a refused file in full before startup
-/// begins. Everything after the load is [`prepare`].
+/// Startup over a runtime configuration the caller already loaded.
 pub async fn prepare_loaded(config: RuntimeConfig) -> Result<PreparedServer> {
-    let shared = config
-        .verify_package_envelope()
-        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
-    let package_root = config.package().root().to_path_buf();
-    let package = {
-        let package_context = config.package_load_context();
-        load_package_with_verified_envelope(&package_root, &package_context, &shared)
-            .map_err(StartupError::PackageRefused)?
-    };
-    let connection = config
-        .runtime_database_connection_config()
-        .map_err(map_runtime_config_error)?;
-    prepare_verified_package_with_connection(config, package, connection, AuditOpening::Serve).await
+    StartupInputs::from_loaded(config)?.prepare().await
 }
 
 /// Check every dependency [`prepare`] opens, then discard the unbound state,
@@ -1139,30 +1260,46 @@ pub async fn prepare_loaded(config: RuntimeConfig) -> Result<PreparedServer> {
 /// state is built over a writer that refuses every entry, so nothing it holds
 /// can append.
 pub async fn check(config_path: &Path) -> Result<CheckedStartup> {
-    let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
-    check_loaded(config).await
+    check_inputs(
+        StartupInputs::load_mapped(config_path, default_startup_posture())?,
+        AuditOpening::CheckOnly,
+        None,
+    )
+    .await
 }
 
-/// The startup check over a runtime configuration the caller has already
-/// loaded, so what the caller reports from that file describes the same
-/// configuration the check verified. Everything after the load is [`check`].
+/// Startup check over a runtime configuration the caller already loaded.
 pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
-    let shared = config
-        .verify_package_envelope()
-        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
-    let package_root = config.package().root().to_path_buf();
-    let package = {
-        let package_context = config.package_load_context();
-        load_package_with_verified_envelope(&package_root, &package_context, &shared)
-            .map_err(StartupError::PackageRefused)?
-    };
-    let connection = config
-        .runtime_database_connection_config()
-        .map_err(map_runtime_config_error)?;
+    check_inputs(
+        StartupInputs::from_loaded(config)?,
+        AuditOpening::CheckOnly,
+        None,
+    )
+    .await
+}
+
+/// Inspect all startup dependencies and report the recorded posture even
+/// when it differs from the configuration. The prepared state is discarded.
+pub async fn check_loaded_observing_posture(config: RuntimeConfig) -> Result<CheckedStartup> {
+    check_inputs(
+        StartupInputs::from_loaded(config)?,
+        AuditOpening::ObservePosture,
+        None,
+    )
+    .await
+}
+
+async fn check_inputs(
+    inputs: StartupInputs,
+    opening: AuditOpening,
+    recorded_posture: Option<&mut Option<registry_platform_config::Posture>>,
+) -> Result<CheckedStartup> {
+    let StartupInputs { config, package } = inputs;
     let unbound_review_authorities = config.unbound_review_authorities(package.registry());
-    prepare_verified_package_with_connection(config, package, connection, AuditOpening::CheckOnly)
+    prepare_verified_package_with_connection(config, package, None, opening, recorded_posture)
         .await
         .map(|prepared| CheckedStartup {
+            recorded_posture: prepared.recorded_posture,
             postgres_advisories: prepared.postgres_advisories().to_vec(),
             role_mode: prepared.role_mode(),
             unbound_review_authorities,
@@ -1178,6 +1315,7 @@ pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
 /// of each projection it would serve.
 #[derive(Debug, Clone)]
 pub struct CheckedStartup {
+    pub recorded_posture: registry_platform_config::Posture,
     pub postgres_advisories: Vec<BaselineAdvisory>,
     pub role_mode: RoleMode,
     pub unbound_review_authorities: Vec<String>,
@@ -1242,6 +1380,18 @@ pub async fn rehearse_schema_fingerprint(
     config: &RuntimeConfig,
     registry: &CompiledRegistry,
 ) -> Result<String> {
+    measure_schema_install(config, registry)
+        .await
+        .map(|measurement| measurement.fingerprint)
+}
+
+/// The same rehearsal as [`rehearse_schema_fingerprint`], also returning the
+/// server's PostgreSQL major version, which a rehearsal receipt records.
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+pub async fn measure_schema_install(
+    config: &RuntimeConfig,
+    registry: &CompiledRegistry,
+) -> Result<crate::postgres::SchemaMeasurement> {
     validate_rehearsal_registry_binding(registry)?;
     let migration = config
         .migration_database_connection_config()
@@ -1285,7 +1435,9 @@ pub async fn rehearse_schema_fingerprint_with_connection_config_for_test(
     migration: &crate::postgres::ConnectionConfig,
 ) -> Result<String> {
     validate_rehearsal_registry_binding(registry)?;
-    rehearse_schema_fingerprint_with_connection_config(config, registry, migration).await
+    rehearse_schema_fingerprint_with_connection_config(config, registry, migration)
+        .await
+        .map(|measurement| measurement.fingerprint)
 }
 
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -1293,7 +1445,7 @@ async fn rehearse_schema_fingerprint_with_connection_config(
     config: &RuntimeConfig,
     registry: &CompiledRegistry,
     migration: &crate::postgres::ConnectionConfig,
-) -> Result<String> {
+) -> Result<crate::postgres::SchemaMeasurement> {
     crate::postgres::rehearse_schema_fingerprint_with_connection(
         migration,
         config.database().roles().migration(),
@@ -1398,18 +1550,17 @@ fn validate_rehearsal_registry_binding(registry: &CompiledRegistry) -> Result<()
 pub async fn prepare_with_connection_config_for_test(
     config_path: &Path,
     connection: crate::postgres::ConnectionConfig,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<PreparedServer> {
-    let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
-    let shared = config
-        .verify_package_envelope()
-        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
-    let package_root = config.package().root().to_path_buf();
-    let package = {
-        let package_context = config.package_load_context();
-        load_package_with_verified_envelope(&package_root, &package_context, &shared)
-            .map_err(StartupError::PackageRefused)?
-    };
-    prepare_verified_package_with_connection(config, package, connection, AuditOpening::Serve).await
+    let StartupInputs { config, package } = StartupInputs::load_mapped(config_path, declared)?;
+    prepare_verified_package_with_connection(
+        config,
+        package,
+        Some(connection),
+        AuditOpening::Serve,
+        None,
+    )
+    .await
 }
 
 #[cfg(feature = "postgres-test")]
@@ -1417,20 +1568,18 @@ pub async fn prepare_with_connection_config_for_test(
 pub async fn check_with_connection_config_for_test(
     config_path: &Path,
     connection: crate::postgres::ConnectionConfig,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<()> {
-    let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
-    let shared = config
-        .verify_package_envelope()
-        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
-    let package_root = config.package().root().to_path_buf();
-    let package = {
-        let package_context = config.package_load_context();
-        load_package_with_verified_envelope(&package_root, &package_context, &shared)
-            .map_err(StartupError::PackageRefused)?
-    };
-    prepare_verified_package_with_connection(config, package, connection, AuditOpening::CheckOnly)
-        .await
-        .map(drop)
+    let StartupInputs { config, package } = StartupInputs::load_mapped(config_path, declared)?;
+    prepare_verified_package_with_connection(
+        config,
+        package,
+        Some(connection),
+        AuditOpening::CheckOnly,
+        None,
+    )
+    .await
+    .map(drop)
 }
 
 #[cfg(feature = "postgres-test")]
@@ -1439,18 +1588,16 @@ pub async fn prepare_with_connection_and_key_source_for_test(
     config_path: &Path,
     connection: crate::postgres::ConnectionConfig,
     key_source: Arc<JwksFetcher>,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<PreparedServer> {
-    let config = load_runtime_config(config_path).map_err(map_runtime_config_error)?;
-    let shared = config
-        .verify_package_envelope()
-        .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
-    let package_root = config.package().root().to_path_buf();
-    let package = {
-        let package_context = config.package_load_context();
-        load_package_with_verified_envelope(&package_root, &package_context, &shared)
-            .map_err(StartupError::PackageRefused)?
-    };
-    prepare_verified_package_with_key_source(config, package, connection, key_source).await
+    let StartupInputs { config, package } = StartupInputs::load_mapped(config_path, declared)?;
+    let issuers = config
+        .authentication()
+        .oidc()
+        .issuers()
+        .map(|entry| entry.authenticator_issuer(Arc::clone(&key_source)))
+        .collect();
+    prepare_verified_package_with_key_source(config, package, connection, issuers).await
 }
 
 /// Whether startup opens the configured audit destination for serving or only
@@ -1459,29 +1606,43 @@ pub async fn prepare_with_connection_and_key_source_for_test(
 enum AuditOpening {
     Serve,
     CheckOnly,
+    ObservePosture,
 }
 
 async fn prepare_verified_package_with_connection(
     config: RuntimeConfig,
     package: VerifiedPackage,
-    connection: crate::postgres::ConnectionConfig,
+    connection: Option<crate::postgres::ConnectionConfig>,
     opening: AuditOpening,
+    recorded_posture: Option<&mut Option<registry_platform_config::Posture>>,
 ) -> Result<PreparedServer> {
+    config.posture_report().log_startup();
+    let connection = match connection {
+        Some(connection) => connection,
+        None => config
+            .runtime_database_connection_config()
+            .map_err(map_runtime_config_error)?,
+    };
     let (pool, startup, postgres_advisories) = prepare_database_startup(
         package,
         &connection,
         config.identity().database_id(),
         config.database().roles().migration(),
         config.database().roles().runtime(),
+        if opening == AuditOpening::ObservePosture {
+            StartupPurpose::ObservePosture(recorded_posture)
+        } else {
+            StartupPurpose::Serve
+        },
     )
     .await?;
     let audit = match opening {
         AuditOpening::Serve => open_registry_audit(&config).await?,
-        AuditOpening::CheckOnly => check_registry_audit(&config)?,
+        AuditOpening::CheckOnly | AuditOpening::ObservePosture => check_registry_audit(&config)?,
     };
     let cursor_codec = Arc::new(config.cursor_codec().map_err(|_| StartupError::Cursor)?);
-    let key_source = config
-        .oidc_key_source()
+    let issuers = config
+        .authenticator_issuers()
         .await
         .map_err(map_runtime_config_error)?;
     finish_prepared_server(
@@ -1489,7 +1650,7 @@ async fn prepare_verified_package_with_connection(
         startup,
         pool,
         postgres_advisories,
-        key_source,
+        issuers,
         audit,
         cursor_codec,
         opening,
@@ -1502,14 +1663,16 @@ async fn prepare_verified_package_with_key_source(
     config: RuntimeConfig,
     package: VerifiedPackage,
     connection: crate::postgres::ConnectionConfig,
-    key_source: Arc<JwksFetcher>,
+    issuers: Vec<AuthenticatorIssuer>,
 ) -> Result<PreparedServer> {
+    config.posture_report().log_startup();
     let (pool, startup, postgres_advisories) = prepare_database_startup(
         package,
         &connection,
         config.identity().database_id(),
         config.database().roles().migration(),
         config.database().roles().runtime(),
+        StartupPurpose::Serve,
     )
     .await?;
     let audit = open_registry_audit(&config).await?;
@@ -1519,7 +1682,7 @@ async fn prepare_verified_package_with_key_source(
         startup,
         pool,
         postgres_advisories,
-        key_source,
+        issuers,
         audit,
         cursor_codec,
         AuditOpening::Serve,
@@ -1533,7 +1696,7 @@ async fn prepare_verified_package_with_key_source(
 /// refuses to start instead of interleaving entries.
 async fn open_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
     let profile = config.audit_profile().map_err(|_| StartupError::Audit)?;
-    let writer = AuditWriter::open(config.audit().destination().clone())
+    let writer = AuditWriter::open(config.audit().destination().clone(), config.posture())
         .await
         .map_err(|error| StartupError::AuditDestination(error.operator_description()))?;
     Ok(RegistryAudit::new(profile, writer))
@@ -1566,7 +1729,7 @@ fn check_registry_audit(config: &RuntimeConfig) -> Result<RegistryAudit> {
         .map_err(|error| StartupError::AuditDestination(error.operator_description()))?;
     Ok(RegistryAudit::new(
         profile,
-        AuditWriter::from_line_sink(Box::new(RefuseEveryEntry)),
+        AuditWriter::from_line_sink(Box::new(RefuseEveryEntry), config.posture()),
     ))
 }
 
@@ -1610,6 +1773,7 @@ async fn prepare_database_startup(
     database_id: &str,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
+    purpose: StartupPurpose<'_>,
 ) -> Result<(RuntimePool, VerifiedStartup, Vec<BaselineAdvisory>)> {
     let pool = connection
         .clone()
@@ -1628,7 +1792,7 @@ async fn prepare_database_startup(
         &mut client,
         migration_role,
         runtime_role,
-        StartupPurpose::Serve,
+        purpose,
     )
     .await?;
     let advisories = inspect_baseline(&client, pool.status().max_size).await;
@@ -1642,16 +1806,22 @@ async fn finish_prepared_server(
     startup: VerifiedStartup,
     pool: RuntimePool,
     postgres_advisories: Vec<BaselineAdvisory>,
-    key_source: Arc<JwksFetcher>,
+    issuers: Vec<AuthenticatorIssuer>,
     audit: RegistryAudit,
     cursor_codec: Arc<crate::cursor::CursorCodec>,
     opening: AuditOpening,
 ) -> Result<PreparedServer> {
-    let oidc = config.authentication().oidc();
-    key_source
-        .ensure_key_set()
-        .await
-        .map_err(|_| StartupError::Oidc)?;
+    // Every issuer's keys are needed before the server is ready.
+    let key_sources = issuers
+        .iter()
+        .map(|issuer| Arc::clone(issuer.key_source()))
+        .collect::<Vec<_>>();
+    for key_source in &key_sources {
+        key_source
+            .ensure_key_set()
+            .await
+            .map_err(|_| StartupError::Oidc)?;
+    }
 
     let registry = Arc::new(startup.package().registry().clone());
     if crate::postgres::external_projection::enabled(&registry)
@@ -1681,16 +1851,21 @@ async fn finish_prepared_server(
     // Every verified database holds the subject access-log storage, so
     // retention always runs.
     let access_log_retention = Some((pool.clone(), Arc::<LastSuccess>::default()));
+    let review_authorities = config
+        .activate_review_authorities(&registry)
+        .map_err(StartupError::RuntimeConfig)?;
     let event_destinations = Arc::new(
         config
-            .activate_event_destinations(&registry)
-            .map_err(|_| StartupError::EventDestinations)?,
+            .activate_event_destinations_with_review_authorities(
+                &registry,
+                review_authorities.as_deref(),
+            )
+            .map_err(|error| StartupError::EventDestinations(error.to_string()))?,
     );
     let authenticator = Arc::new(
-        RegistryAuthenticator::new(
+        RegistryAuthenticator::with_issuers(
             &registry,
-            oidc.token_verifier_config(),
-            Arc::clone(&key_source),
+            issuers,
             config.authentication().authority_claim_config(),
         )
         .map_err(|error| match error {
@@ -1698,7 +1873,8 @@ async fn finish_prepared_server(
                 StartupError::AuthenticationClientsUnlisted
             }
             _ => StartupError::Authentication,
-        })?,
+        })?
+        .with_peer_policy(config.peer_policy()),
     );
     let expected = startup.expected_identity().clone();
     let expected_catalog = startup.expected_catalog().clone();
@@ -1718,7 +1894,7 @@ async fn finish_prepared_server(
         migration_role: config.database().roles().migration().clone(),
         runtime_role: config.database().roles().runtime().clone(),
         lock_key,
-        key_source: Arc::clone(&key_source),
+        key_sources,
         requires_postgis: registry.ddl().requires_postgis,
         requires_spatial_bbox: registry.ddl().requires_spatial_bbox(),
         audit_writer: audit.writer().clone(),
@@ -1757,13 +1933,6 @@ async fn finish_prepared_server(
             .field_encryption()
             .provider()
             .ok_or(StartupError::FieldEncryption)?;
-        if matches!(provider, FieldEncryptionProvider::LocalFile { .. })
-            && config.identity().database_initialization_environment() != "local"
-        {
-            // A plaintext data-key file is development custody; production
-            // initialization refuses it before any key material is read.
-            return Err(StartupError::FieldEncryptionCustody);
-        }
         let secrets = config
             .secret_resolver()
             .map_err(|_| StartupError::FieldEncryption)?;
@@ -1835,7 +2004,7 @@ async fn finish_prepared_server(
                 .await
                 .map_err(external_views_refused(ExternalViewsStage::RefreshRegister))?;
             unavailable_external_projections = external.unavailable_projections().clone();
-            if opening == AuditOpening::CheckOnly {
+            if opening != AuditOpening::Serve {
                 external_projection_status = external
                     .projection_status()
                     .await
@@ -1983,7 +2152,9 @@ async fn finish_prepared_server(
             } => StartupError::RetainedHookBindings {
                 retained_deliveries,
             },
-            HookRetainedBindingError::Unavailable => StartupError::EventDestinations,
+            HookRetainedBindingError::Unavailable => StartupError::EventDestinations(
+                "retained hook bindings could not be read".to_owned(),
+            ),
         })?;
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
@@ -1991,9 +2162,6 @@ async fn finish_prepared_server(
     let hook_worker = Some(HookWorker::new(hook_delivery));
     let evidence = config
         .activate_evidence(&registry)
-        .map_err(StartupError::RuntimeConfig)?;
-    let review_authorities = config
-        .activate_review_authorities(&registry)
         .map_err(StartupError::RuntimeConfig)?;
     crate::review_store::verify_retained_bindings(&pool, &registry, review_authorities.as_deref())
         .await
@@ -2092,6 +2260,7 @@ async fn finish_prepared_server(
         .filter(|backend| backend.has_managed_refresh())
         .map(|_| Arc::new(LastSuccess::default()));
     let mut service = HttpService::new(registry, read_identity, records, readiness, cursor_codec)
+        .with_posture(config.posture_report().clone())
         .with_postgres_revisions(revisions)
         .with_snapshots(snapshots)
         .with_postgres_mutations(mutations)
@@ -2149,19 +2318,28 @@ async fn finish_prepared_server(
         }
         Arc::new(registry)
     });
-    let app = with_request_timeout(
-        authenticated_router(service, authenticator),
+    // The request-timeout layer owns the correlation boundary and renders
+    // the final problem body, so the development `failedCheck` member is
+    // added outside it as well as inside the router.
+    let app = serving_router(
+        authenticated_router_with_listener(
+            service,
+            authenticator,
+            config.listener().bind().ip().to_canonical().is_loopback(),
+        ),
         config.operational_timeouts().http_request,
         telemetry_metrics.clone(),
+        config.posture(),
     );
     let metrics = config
         .metrics_listener()
         .zip(telemetry_metrics)
         .map(|(listener, registry)| PreparedMetricsListener {
             bind: listener.bind(),
-            app: metrics::metrics_app(registry),
+            app: metrics::metrics_app(registry, config.posture()),
         });
     Ok(PreparedServer {
+        recorded_posture: startup.recorded_posture,
         bind: config.listener().bind(),
         app,
         shutdown_grace: config.operational_timeouts().shutdown_grace,
@@ -2244,13 +2422,15 @@ async fn verify_attachment_storage(
             "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_state WHERE singleton
          AND package_id=$1 AND database_id=$2 AND active_package_digest=$3
          AND active_activation_id::text=$4 AND schema_fingerprint=$5
-         AND maintenance_status='ready')",
+         AND maintenance_status='ready'
+         AND coalesce(to_jsonb(registry_state) ->> 'posture', 'production')=$6)",
             &[
                 &expected.package_id,
                 &expected.database_id,
                 &expected.package_digest,
                 &expected.activation_id,
                 &expected.schema_fingerprint,
+                &lock_key.posture().as_str(),
             ],
         )
         .await
@@ -2288,6 +2468,7 @@ pub fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
         RuntimeConfigError::InvalidAudit => StartupError::Audit,
         RuntimeConfigError::InvalidCursor => StartupError::Cursor,
         RuntimeConfigError::InvalidOidc => StartupError::Oidc,
+        RuntimeConfigError::InvalidStaticJwks(cause) => StartupError::StaticKeySet(cause),
         other => StartupError::RuntimeConfig(other),
     }
 }
@@ -2322,6 +2503,30 @@ pub fn with_request_timeout_and_metrics_for_test(
     metrics: Option<Arc<Metrics>>,
 ) -> Router {
     with_request_timeout(app, timeout, metrics)
+}
+
+/// The router as startup serves it. The request-timeout layer owns the
+/// correlation boundary and renders the final problem body, so the
+/// development-only `failedCheck` member is added outside it, and the posture
+/// mark outside that.
+fn serving_router(
+    app: Router,
+    timeout: Duration,
+    metrics: Option<Arc<Metrics>>,
+    posture: registry_platform_config::Posture,
+) -> Router {
+    with_request_timeout(app, timeout, metrics)
+        .layer(registry_platform_httpsec::refusal_detail::name_failed_check(posture))
+        .layer(registry_platform_httpsec::posture_mark(posture))
+}
+
+#[doc(hidden)]
+pub fn serving_router_for_test(
+    app: Router,
+    timeout: Duration,
+    posture: registry_platform_config::Posture,
+) -> Router {
+    serving_router(app, timeout, None, posture)
 }
 
 /// State of the request-timeout boundary: the HTTP deadline plus the metrics
@@ -2753,7 +2958,7 @@ pub fn select_operational_log_level(
 /// before returning a listener gate.
 pub async fn prepare_startup(
     package_root: &Path,
-    context: &PackageLoadContext<'_>,
+    context: &PackageLoadContext,
     database_id: &str,
     client: &mut Client,
     migration_role: &SqlIdentifier,
@@ -2767,8 +2972,20 @@ pub async fn prepare_startup(
     .map_err(|error| StartupError::PackageEnvelopeRefused(error.to_string()))?;
     // Ordering is security-relevant: no database call precedes package closure
     // and compiler-derivation verification.
-    let package = load_package_with_verified_envelope(package_root, context, &shared)
+    let package = load_verified_package_for_startup(package_root, context, &shared)
         .map_err(StartupError::PackageRefused)?;
+    let mut report =
+        registry_platform_config::PostureReport::new(registry_platform_config::DeclaredPosture {
+            posture: context.posture,
+            source: registry_platform_config::PostureSource::Default,
+        });
+    crate::runtime_config::decide_startup_posture(
+        &mut report,
+        &package,
+        package_root,
+        package_root,
+    )
+    .map_err(map_runtime_config_error)?;
     prepare_loaded_startup(package, database_id, client, migration_role, runtime_role).await
 }
 
@@ -2794,13 +3011,14 @@ pub(crate) async fn prepare_loaded_startup(
 
 /// Who opens the verified startup, which decides whether the instance claim
 /// is checked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StartupPurpose {
+enum StartupPurpose<'a> {
     /// The serving runtime, which refuses a database its claim does not name.
     Serve,
     /// Operator tooling, which must keep working on a copy so the copy can be
     /// inspected, verified, and adopted.
     Inspect,
+    /// Doctor checks dependencies and reports an activation posture mismatch.
+    ObservePosture(Option<&'a mut Option<registry_platform_config::Posture>>),
 }
 
 async fn verify_opened_startup(
@@ -2809,11 +3027,12 @@ async fn verify_opened_startup(
     client: &mut Client,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
-    purpose: StartupPurpose,
+    mut purpose: StartupPurpose<'_>,
 ) -> Result<VerifiedStartup> {
     let manifest = package.manifest();
-    let lock_key =
-        RegistryLockKey::derive(&manifest.package_id).map_err(|_| StartupError::DatabaseUnready)?;
+    let lock_key = RegistryLockKey::derive(&manifest.package_id)
+        .map_err(|_| StartupError::DatabaseUnready)?
+        .for_posture(package.posture());
     let expected_catalog = ExpectedManagedCatalog::compiled(package.registry());
     let transaction = client
         .transaction()
@@ -2880,10 +3099,19 @@ async fn verify_opened_startup(
     // The physical claim is checked before the recorded identity, so a
     // restored copy is named as a copy whatever package or database id it
     // records.
-    if purpose == StartupPurpose::Serve {
+    if !matches!(purpose, StartupPurpose::Inspect) {
         verify_instance_claim(&transaction).await?;
     }
-    let expected = recorded_startup_identity(&transaction, &package, database_id).await?;
+    let observer = match &mut purpose {
+        StartupPurpose::ObservePosture(observer) => observer.as_deref_mut(),
+        _ => None,
+    };
+    let (expected, recorded) =
+        recorded_startup_identity(&transaction, &package, database_id, observer).await?;
+    let declared = package.posture();
+    if !matches!(purpose, StartupPurpose::ObservePosture(_)) && recorded != declared {
+        return Err(StartupError::PostureMismatch { recorded, declared });
+    }
     verify_single_role_activation(&transaction, &expected, migration_role, runtime_role).await?;
     if verify_catalog_identity_for_catalog(
         &transaction,
@@ -2908,10 +3136,11 @@ async fn verify_opened_startup(
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
     Ok(VerifiedStartup {
+        recorded_posture: recorded,
         package,
         expected,
         expected_catalog,
-        lock_key,
+        lock_key: lock_key.for_posture(recorded),
     })
 }
 
@@ -2929,12 +3158,14 @@ async fn recorded_startup_identity(
     client: &impl GenericClient,
     package: &VerifiedPackage,
     database_id: &str,
-) -> Result<ExpectedRegistryIdentity> {
+    observer: Option<&mut Option<registry_platform_config::Posture>>,
+) -> Result<(ExpectedRegistryIdentity, registry_platform_config::Posture)> {
     let row = client
         .query_opt(
             "SELECT package_id, database_id, active_package_digest,
-                    active_activation_id::text, maintenance_status
-             FROM registry_internal.registry_state
+                    active_activation_id::text, maintenance_status,
+                    coalesce(to_jsonb(state) ->> 'posture', 'production')
+             FROM registry_internal.registry_state state
              WHERE singleton",
             &[],
         )
@@ -2948,19 +3179,27 @@ async fn recorded_startup_identity(
     if row.get::<_, String>(1) != database_id {
         return Err(StartupError::DatabaseIdentityMismatch);
     }
+    let recorded = crate::postgres::catalog::recorded_posture(row.get(5));
+    if let Some(observer) = observer {
+        *observer = recorded.as_ref().ok().copied();
+    }
     if row.get::<_, String>(2) != package.package_digest() {
         return Err(StartupError::ActivePackageMismatch);
     }
     if row.get::<_, String>(4) != "ready" {
         return Err(StartupError::DatabaseUnready);
     }
-    Ok(ExpectedRegistryIdentity {
-        package_id: manifest.package_id.clone(),
-        database_id: database_id.to_owned(),
-        package_digest: package.package_digest().to_owned(),
-        activation_id: row.get(3),
-        schema_fingerprint: manifest.schema_fingerprint.clone(),
-    })
+    let recorded = recorded.map_err(|_| StartupError::DatabaseUnready)?;
+    Ok((
+        ExpectedRegistryIdentity {
+            package_id: manifest.package_id.clone(),
+            database_id: database_id.to_owned(),
+            package_digest: package.package_digest().to_owned(),
+            activation_id: row.get(3),
+            schema_fingerprint: manifest.schema_fingerprint.clone(),
+        },
+        recorded,
+    ))
 }
 
 struct DynamicRuntimeReadiness {
@@ -2970,7 +3209,8 @@ struct DynamicRuntimeReadiness {
     migration_role: SqlIdentifier,
     runtime_role: SqlIdentifier,
     lock_key: RegistryLockKey,
-    key_source: Arc<JwksFetcher>,
+    /// The key source of every issuer entry.
+    key_sources: Vec<Arc<JwksFetcher>>,
     requires_postgis: bool,
     requires_spatial_bbox: bool,
     audit_writer: AuditWriter,
@@ -3050,10 +3290,12 @@ impl DynamicRuntimeReadiness {
             .commit()
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;
-        self.key_source
-            .ensure_key_set()
-            .await
-            .map_err(|_| StartupError::Oidc)?;
+        for key_source in &self.key_sources {
+            key_source
+                .ensure_key_set()
+                .await
+                .map_err(|_| StartupError::Oidc)?;
+        }
         // A writer that refused an append refuses every later one, so every
         // audited request would answer audit-unavailable until a restart.
         if !self.audit_writer.ready().await {

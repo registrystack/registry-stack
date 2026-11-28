@@ -49,6 +49,9 @@ pub async fn migrate(client: &mut Client) -> Result<(), Error> {
     tx.batch_execute(SCHEMA)
         .await
         .map_err(|_| Error::Unavailable)?;
+    tx.batch_execute(include_str!("migrations/declared_posture.sql"))
+        .await
+        .map_err(|_| Error::Unavailable)?;
     tx.commit().await.map_err(|_| Error::Unavailable)
 }
 
@@ -56,11 +59,37 @@ pub async fn migrate(client: &mut Client) -> Result<(), Error> {
 pub struct PaymentStore {
     pub(crate) pool: Pool,
     pub(crate) deployment: String,
+    posture: registry_platform_config::Posture,
+    pub(crate) development: Option<registry_platform_config::DevelopmentWitness>,
 }
 
+/// The table privileges a runtime role needs for the collection tables.
+/// Startup checks them, and `adapter serve` grants those a split runtime role
+/// lacks.
+pub const RUNTIME_GRANTS: [(&str, &[&str]); 3] = [
+    ("adapter_payment_attempts", &["SELECT", "INSERT", "UPDATE"]),
+    ("adapter_payment_commands", &["SELECT", "INSERT"]),
+    ("adapter_payment_events", &["SELECT", "INSERT"]),
+];
+/// The sequence the events table draws its identifiers from. A runtime role
+/// needs USAGE on it.
+pub const RUNTIME_SEQUENCE: &str = "adapter_payment_events_sequence_seq";
+
 impl PaymentStore {
-    pub fn new(pool: Pool, deployment: String) -> Self {
-        Self { pool, deployment }
+    pub fn new(pool: Pool, deployment: String, posture: registry_platform_config::Posture) -> Self {
+        Self {
+            pool,
+            deployment,
+            posture,
+            development: None,
+        }
+    }
+    pub fn with_development(
+        mut self,
+        development: Option<registry_platform_config::DevelopmentWitness>,
+    ) -> Self {
+        self.development = development;
+        self
     }
 
     pub async fn audit_access(
@@ -70,21 +99,13 @@ impl PaymentStore {
         id: Option<Uuid>,
     ) -> Result<(), Error> {
         let client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
-        client.execute("INSERT INTO adapter_payment_events (deployment,attempt_id,principal,kind) VALUES ($1,$2,$3,$4)",
-            &[&self.deployment,&id.unwrap_or(Uuid::nil()),&principal,&kind]).await.map_err(|_| Error::Unavailable)?;
-        Ok(())
+        self.event(&**client, id.unwrap_or(Uuid::nil()), principal, kind)
+            .await
     }
 
     pub async fn check_privileges(&self) -> Result<(), Error> {
         let client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
-        for (table, privileges) in [
-            (
-                "adapter_payment_attempts",
-                &["SELECT", "INSERT", "UPDATE"][..],
-            ),
-            ("adapter_payment_commands", &["SELECT", "INSERT"][..]),
-            ("adapter_payment_events", &["SELECT", "INSERT"][..]),
-        ] {
+        for (table, privileges) in RUNTIME_GRANTS {
             if !crate::journal::missing_table_privileges(&client, table, privileges)
                 .await
                 .map_err(|_| Error::Unavailable)?
@@ -96,7 +117,7 @@ impl PaymentStore {
         let row = client
             .query_one(
                 "SELECT has_sequence_privilege(current_user, $1, 'USAGE')",
-                &[&"adapter_payment_events_sequence_seq"],
+                &[&RUNTIME_SEQUENCE],
             )
             .await
             .map_err(|_| Error::Unavailable)?;
@@ -162,6 +183,7 @@ impl PaymentStore {
     ) -> Result<Attempt, Error> {
         let mut client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
         let tx = client.transaction().await.map_err(|_| Error::Unavailable)?;
+        candidate.validate_integrity(self.development.as_ref())?;
         let document = serde_json::to_value(candidate).map_err(|_| Error::Unavailable)?;
         let version =
             i64::try_from(candidate.bill.bill_version).map_err(|_| Error::InvalidRequest)?;
@@ -187,10 +209,11 @@ impl PaymentStore {
         )
         .await?;
         if inserted == 1 {
-            event(&*tx, &self.deployment, &saved, "attempt.reserved").await?;
+            self.event(&*tx, saved.id, &saved.principal, "attempt.reserved")
+                .await?;
         }
+        saved.validate_integrity(self.development.as_ref())?;
         tx.commit().await.map_err(|_| Error::Unavailable)?;
-        saved.validate_integrity()?;
         Ok(saved)
     }
 
@@ -205,7 +228,8 @@ impl PaymentStore {
         let version = i64::try_from(version).map_err(|_| Error::InvalidRequest)?;
         let row=client.query_opt("SELECT document FROM adapter_payment_attempts WHERE deployment=$1 AND institution=$2 AND service=$3 AND bill_id=$4 AND bill_version=$5",
             &[&self.deployment,&institution,&service,&bill,&version]).await.map_err(|_| Error::Unavailable)?;
-        row.map(|row| decode(row.get(0))).transpose()
+        row.map(|row| decode(row.get(0), self.development.as_ref()))
+            .transpose()
     }
 
     pub async fn get(&self, id: Uuid) -> Result<Attempt, Error> {
@@ -218,13 +242,13 @@ impl PaymentStore {
             .await
             .map_err(|_| Error::Unavailable)?
             .ok_or(Error::NotFound)?;
-        decode(row.get(0))
+        decode(row.get(0), self.development.as_ref())
     }
 
     /// Called under the attempt's transaction-scoped advisory lock. The write
     /// and its audit event commit before any corresponding outbound mutation.
     pub async fn save(&self, attempt: &Attempt, kind: &str) -> Result<(), Error> {
-        attempt.validate_integrity()?;
+        attempt.validate_integrity(self.development.as_ref())?;
         let document = serde_json::to_value(attempt).map_err(|_| Error::Unavailable)?;
         let mut client = self.pool.get().await.map_err(|_| Error::Unavailable)?;
         let tx = client.transaction().await.map_err(|_| Error::Unavailable)?;
@@ -232,14 +256,36 @@ impl PaymentStore {
         if count != 1 {
             return Err(Error::Unavailable);
         }
-        event(&*tx, &self.deployment, attempt, kind).await?;
+        self.event(&*tx, attempt.id, &attempt.principal, kind)
+            .await?;
         tx.commit().await.map_err(|_| Error::Unavailable)
+    }
+
+    async fn event(
+        &self,
+        client: &impl GenericClient,
+        id: Uuid,
+        principal: &str,
+        kind: &str,
+    ) -> Result<(), Error> {
+        client
+            .execute(
+                "INSERT INTO adapter_payment_events (deployment, attempt_id, principal, kind, posture)
+                 VALUES ($1, $2, $3, $4, $5)",
+                &[&self.deployment, &id, &principal, &kind, &self.posture.as_str()],
+            )
+            .await
+            .map_err(|_| Error::Unavailable)?;
+        Ok(())
     }
 }
 
-fn decode(value: serde_json::Value) -> Result<Attempt, Error> {
+fn decode(
+    value: serde_json::Value,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+) -> Result<Attempt, Error> {
     let attempt: Attempt = serde_json::from_value(value).map_err(|_| Error::Unavailable)?;
-    attempt.validate_integrity()?;
+    attempt.validate_integrity(development)?;
     Ok(attempt)
 }
 async fn command(
@@ -280,14 +326,5 @@ async fn claim(
     {
         return Err(Error::Conflict);
     }
-    Ok(())
-}
-async fn event(
-    client: &impl GenericClient,
-    deployment: &str,
-    attempt: &Attempt,
-    kind: &str,
-) -> Result<(), Error> {
-    client.execute("INSERT INTO adapter_payment_events (deployment,attempt_id,principal,kind) VALUES ($1,$2,$3,$4)",&[&deployment,&attempt.id,&attempt.principal,&kind]).await.map_err(|_| Error::Unavailable)?;
     Ok(())
 }

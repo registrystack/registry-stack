@@ -56,7 +56,7 @@ GENERATOR_ARGUMENTS: tuple[str, ...] = (
 )
 GENERATOR_COMMAND = " ".join((*GENERATOR_ARGUMENTS, GENERATOR_OUTPUT))
 LEGACY_EXPANSION = re.compile(r"\bexpand_config_env_vars\w*\b")
-LOADER_USE = re.compile(r"\bRuntimeConfigLoader\s*::\s*new\s*\(")
+LOADER_USE = re.compile(r"\bRuntimeConfigLoader\s*::\s*new(?:_without_posture)?\s*\(")
 PLATFORM_CRATE = "registry_platform_config"
 # Keywords a hand-written copy of a shared block may add: each one only
 # describes or narrows what the canonical block accepts.
@@ -118,10 +118,46 @@ class Row:
 
 ROWS: tuple[Row, ...] = (
     Row(
+        product="adapter",
+        loader_sources=(
+            "crates/registry-adapter/src",
+            "crates/registry-adapter-engine/src",
+            "crates/registry-adapterctl/src",
+        ),
+        runtime_schema="products/adapter/schemas/runtime.v1alpha1.schema.json",
+        shared_blocks=(
+            "AccessTokenType",
+            "DatabaseConfig",
+            "DatabaseTransport",
+            "DeclaredActorKind",
+            "EnvironmentSecretProviderConfig",
+            "ExternalId",
+            "FileSecretProviderConfig",
+            "IssuerActorKind",
+            "JwksSource",
+            "ListenerBind",
+            "ListenerConfig",
+            "ListenerNetworkExposure",
+            "LocalId",
+            "MetricsListenerConfig",
+            "ScopeClaimName",
+            "SecretProvidersConfig",
+            "SecretReference",
+            "Url",
+        ),
+        reference_refusal=TestRef("crates/registry-adapterctl/tests/check.rs", "the_runtime_file_refuses_an_expression_in_a_reference_member"),
+        authored_refusal=TestRef("crates/registry-adapterctl/tests/check.rs", "an_expression_in_an_authored_file_is_refused_where_it_is_written"),
+        digest_mismatch=TestRef("crates/registry-adapter-core/src/checks.rs", "project_pins_refuse_a_digest_mismatch_even_when_the_version_matches"),
+    ),
+    Row(
         product="coordinator",
         loader_sources=("crates/registry-coordinator/src",),
         runtime_schema="products/coordinator/generated/runtime/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
+            "DeclaredActorKind",
+            "IssuerActorKind",
+            "ScopeClaimName",
             "DatabaseConfig",
             "EnvironmentSecretProviderConfig",
             "FileSecretProviderConfig",
@@ -142,11 +178,7 @@ ROWS: tuple[Row, ...] = (
             RustBlock("crates/registry-coordinator/src/runtime.rs", "RuntimeConfig", "database", "DatabaseConfig"),
             RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "packages", "PackageConfig", repeated=True),
             RustBlock("crates/registry-coordinator/src/deployment.rs", "DeploymentConfig", "listener", "PrivateListenerConfig"),
-            RustBlock("crates/registry-coordinator/src/access.rs", "AccessConfig", "issuer", "OidcIssuerConfig"),
-            # Coordinator derives the shared OidcClientsConfig from its policy keys,
-            # instead of carrying a second client-admission list. The owning
-            # policy_keys_are_the_only_closed_client_admission_configuration test
-            # verifies this authoring contract; AccessConfig still runs the shared check.
+            # The issuer entry either reads the policy keys or lists its clients.
         ),
     ),
     Row(
@@ -154,11 +186,15 @@ ROWS: tuple[Row, ...] = (
         loader_sources=("crates/registry-render/src",),
         runtime_schema="products/render/schemas/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
+            "DeclaredActorKind",
             "Digest",
             "EnvironmentSecretProviderConfig",
             "FileSecretProviderConfig",
+            "IssuerActorKind",
             "ListenerBind",
             "PackageConfig",
+            "ScopeClaimName",
             "SecretProvidersConfig",
             "SecretReference",
         ),
@@ -289,12 +325,16 @@ ROWS: tuple[Row, ...] = (
         loader_sources=("crates/registry-breg/src",),
         runtime_schema="products/breg/generated/runtime/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
+            "DeclaredActorKind",
             "EnvironmentSecretProviderConfig",
             "FileSecretProviderConfig",
+            "IssuerActorKind",
             "JwksSource",
             "ListenerBind",
             "ListenerNetworkExposure",
             "MetricsListenerConfig",
+            "ScopeClaimName",
             "SecretProvidersConfig",
             "SecretReference",
             "TaskGrantStatusConfig",
@@ -326,12 +366,6 @@ ROWS: tuple[Row, ...] = (
             ),
             RustBlock(
                 "crates/registry-breg/src/runtime_config.rs",
-                "RawOidcVerifierConfig",
-                "provider",
-                "OidcIssuerConfig",
-            ),
-            RustBlock(
-                "crates/registry-breg/src/runtime_config.rs",
                 "RawAuditConfig",
                 "key",
                 "AuditKeyConfig",
@@ -357,13 +391,17 @@ ROWS: tuple[Row, ...] = (
         loader_sources=("crates/registry-casework/src",),
         runtime_schema="products/casework/generated/runtime/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
             "DatabaseConfig",
+            "DeclaredActorKind",
             "EnvironmentSecretProviderConfig",
             "FileSecretProviderConfig",
+            "IssuerActorKind",
             "JwksSource",
             "ListenerBind",
             "ListenerNetworkExposure",
             "PrivateListenerConfig",
+            "ScopeClaimName",
             "SecretProvidersConfig",
             "SecretReference",
             "TlsTermination",
@@ -383,18 +421,6 @@ ROWS: tuple[Row, ...] = (
         rust_blocks=(
             RustBlock(
                 "crates/registry-casework/src/config.rs",
-                "OidcConfig",
-                "provider",
-                "OidcIssuerConfig",
-            ),
-            RustBlock(
-                "crates/registry-casework/src/config.rs",
-                "OidcConfig",
-                "clients",
-                "OidcClientsConfig",
-            ),
-            RustBlock(
-                "crates/registry-casework/src/config.rs",
                 "AuditConfig",
                 "key",
                 "AuditKeyConfig",
@@ -406,14 +432,18 @@ ROWS: tuple[Row, ...] = (
         loader_sources=("crates/registry-scheduling/src",),
         runtime_schema="products/scheduling/generated/runtime/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
             "DatabaseConfig",
+            "DeclaredActorKind",
             "EnvironmentSecretProviderConfig",
             "FileSecretProviderConfig",
+            "IssuerActorKind",
             "JwksSource",
             "ListenerBind",
             "ListenerNetworkExposure",
             "PackageConfig",
             "PrivateListenerConfig",
+            "ScopeClaimName",
             "SecretProvidersConfig",
             "SecretReference",
             "TaskGrantStatusConfig",
@@ -435,18 +465,6 @@ ROWS: tuple[Row, ...] = (
         rust_blocks=(
             RustBlock(
                 "crates/registry-scheduling/src/config.rs",
-                "OidcConfig",
-                "provider",
-                "OidcIssuerConfig",
-            ),
-            RustBlock(
-                "crates/registry-scheduling/src/config.rs",
-                "OidcConfig",
-                "clients",
-                "OidcClientsConfig",
-            ),
-            RustBlock(
-                "crates/registry-scheduling/src/config.rs",
                 "AuditConfig",
                 "key",
                 "AuditKeyConfig",
@@ -458,16 +476,20 @@ ROWS: tuple[Row, ...] = (
         loader_sources=("crates/registry-documents/src",),
         runtime_schema="products/documents/generated/runtime/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
             "DatabaseConfig",
+            "DeclaredActorKind",
             "Digest",
             "EnvironmentSecretProviderConfig",
             "ExternalId",
             "FileSecretProviderConfig",
+            "IssuerActorKind",
             "JwksSource",
             "ListenerBind",
             "ListenerNetworkExposure",
             "PackageConfig",
             "PrivateListenerConfig",
+            "ScopeClaimName",
             "SecretProvidersConfig",
             "SecretReference",
             "TlsTermination",
@@ -486,18 +508,6 @@ ROWS: tuple[Row, ...] = (
             "a_package_digest_mismatch_is_refused_in_the_shared_shape",
         ),
         rust_blocks=(
-            RustBlock(
-                "crates/registry-documents/src/config.rs",
-                "OidcConfig",
-                "provider",
-                "OidcIssuerConfig",
-            ),
-            RustBlock(
-                "crates/registry-documents/src/config.rs",
-                "OidcConfig",
-                "clients",
-                "OidcClientsConfig",
-            ),
             RustBlock(
                 "crates/registry-documents/src/config.rs",
                 "AuditConfig",
@@ -527,15 +537,19 @@ ROWS: tuple[Row, ...] = (
         loader_sources=("crates/registry-messaging/src",),
         runtime_schema="products/messaging/generated/runtime/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
             "DatabaseConfig",
+            "DeclaredActorKind",
             "EnvironmentSecretProviderConfig",
             "FileSecretProviderConfig",
+            "IssuerActorKind",
             "JwksSource",
             "ListenerBind",
             "MetricsListenerConfig",
             "ListenerNetworkExposure",
             "PackageConfig",
             "PrivateListenerConfig",
+            "ScopeClaimName",
             "SecretProvidersConfig",
             "SecretReference",
             "TlsTermination",
@@ -553,18 +567,6 @@ ROWS: tuple[Row, ...] = (
             "runtime_package_digest_pin_names_the_found_digest",
         ),
         rust_blocks=(
-            RustBlock(
-                "crates/registry-messaging/src/config.rs",
-                "OidcConfig",
-                "provider",
-                "OidcIssuerConfig",
-            ),
-            RustBlock(
-                "crates/registry-messaging/src/config.rs",
-                "OidcConfig",
-                "clients",
-                "OidcClientsConfig",
-            ),
             RustBlock(
                 "crates/registry-messaging/src/config.rs",
                 "AuditConfig",
@@ -688,7 +690,7 @@ ROWS: tuple[Row, ...] = (
 EXPECTED_PRODUCTS = frozenset(
     {"render", "discovery", "evidence", "breg", "casework", "scheduling",
      "messaging", "breg-mcp", "breg-review", "evidence-oid4vci", "coordinator",
-     "documents"}
+     "documents", "adapter"}
 )
 
 
@@ -872,6 +874,36 @@ def check_loader(root: Path, row: Row) -> list[str]:
     return problems
 
 
+def strip_attributes(code: str) -> str:
+    """Blank every `#[...]` attribute, counting nested brackets so an
+    attribute that holds an array, such as a schemars `extend` list, is
+    removed whole."""
+    out = list(code)
+    index = code.find("#[")
+    while index != -1:
+        depth = 0
+        end = index + 1
+        while end < len(code):
+            if code[end] == "[":
+                depth += 1
+            elif code[end] == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            end += 1
+        for position in range(index, min(end + 1, len(code))):
+            if out[position] != "\n":
+                out[position] = " "
+        index = code.find("#[", end + 1)
+    return "".join(out)
+
+
+def unwrap_gated(written: str | None) -> str | None:
+    """The type inside a posture `Gated<...>` wrapper, or `written` itself."""
+    gated = re.fullmatch(rf"(?:{PLATFORM_CRATE}::)?Gated<(.+)>", written or "")
+    return gated.group(1) if gated else written
+
+
 def struct_fields(code: str, struct: str) -> dict[str, str] | None:
     declaration = re.search(
         rf"\bstruct\s+{struct}\b[^{{;]*\{{", code
@@ -879,7 +911,7 @@ def struct_fields(code: str, struct: str) -> dict[str, str] | None:
     if declaration is None:
         return None
     body = code[declaration.end() : matching_brace(code, declaration.end() - 1)]
-    body = re.sub(r"#\[[^\]]*\]", " ", body)
+    body = strip_attributes(body)
     fields: dict[str, str] = {}
     depth = 0
     current = ""
@@ -906,7 +938,7 @@ def enum_variants(code: str, enum: str) -> dict[str, str] | None:
     if declaration is None:
         return None
     body = code[declaration.end() : matching_brace(code, declaration.end() - 1)]
-    body = re.sub(r"#\[[^\]]*\]", " ", body)
+    body = strip_attributes(body)
     body = re.sub(r"//[^\n]*", " ", body)
     variants: dict[str, str] = {}
     depth = 0
@@ -948,7 +980,7 @@ def variant_member(
         elif character in ">)]}":
             depth -= 1
         if (character == "," and depth == 0) or index == close:
-            chunk = re.sub(r"#\[[^\]]*\]", " ", code[start:index])
+            chunk = strip_attributes(code[start:index])
             field = re.fullmatch(
                 r"\s*(?:pub(?:\([^)]*\))?\s+)?(\w+)\s*:\s*(.+?)\s*", chunk, re.DOTALL
             )
@@ -1040,6 +1072,7 @@ def check_rust_blocks(root: Path, row: Row, canonical: dict[str, object]) -> lis
                 continue
         else:
             field = entry.field
+        written = unwrap_gated(written)
         if entry.repeated:
             item = re.fullmatch(r"Vec<(.+)>", written or "")
             written = item.group(1) if item else None

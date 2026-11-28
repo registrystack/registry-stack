@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -326,15 +326,34 @@ The table below gives each key. Rules that span keys or services:
   takes the input's identifier, not its API name.
 - `service.reviewBaseUrl` is the review page's `publicOrigin`. Review links take the form
   `<reviewBaseUrl>/proposals/<applicationId>`.
-- Plain `http` URLs are accepted only on a loopback host under
-  `tlsTermination: development-loopback`.
-- A fetched key set may not sit at a loopback, private, or cloud-metadata address. Use
-  `jwksSource.type: static` for an issuer on a private network.
+- The gateway and review service default to production. For a laptop run, start with
+  `rstack dev`, set `REGISTRY_STACK_POSTURE=development`, or pass `--posture development`.
+  Use one posture across the deployment. In production, Registry MCP's Live Adapter client
+  refuses Adapter responses marked as development.
+- Use `tlsTermination: loopback-plaintext` behind a TLS proxy on the same host.
+  Production keeps HSTS and the review page uses secure cookies with `__Host-` names.
+  Only development on a loopback listener omits HSTS.
+  Use HTTPS for `resourceServer.resource`, `resourceServer.issuer`, `service.reviewBaseUrl`,
+  the review page's `publicOrigin`, and the issuer's discovered `authorization_endpoint`.
+  The review page can fetch discovery from a loopback HTTP `signIn.issuer`. In production this
+  works only when the discovery document publishes an HTTPS `authorization_endpoint`. A typical
+  local issuer publishes an HTTP one, which production refuses.
+- `resourceServer.allowInsecureHttp: true` requires development and permits plain HTTP
+  to a non-loopback issuer and to a configured JWKS URI.
+- For an explicitly configured JWKS URI, HTTPS can reach loopback and private addresses.
+  Plain HTTP works on loopback, and beyond loopback requires `resourceServer.allowInsecureHttp: true`.
+  The fetch policy blocks cloud-metadata addresses.
 
 {/* Evidence: crates/registry-breg-mcp/src/config.rs, RuntimeConfig, REMOVED_KEYS, findings,
     cross_member_findings, audience-reused, exchange-client-admitted-inbound;
     crates/registry-platform-oidc/src/lib.rs, declared_jwks_fetch_policy;
     crates/registry-mcp-edge/src/server.rs, METADATA_PREFIX;
+    crates/registry-mcp-edge/src/config.rs, development_settings, deserialize_insecure_http;
+    crates/registry-platform-config/src/posture.rs, diagnostics;
+    crates/registry-mcp/src/adapter.rs, response_bytes;
+    crates/registry-mcp/src/runtime.rs, build_with_posture;
+    crates/registry-breg-review/src/lib.rs, build;
+    crates/registry-breg-mcp/src/runtime.rs, build_with_posture;
     crates/registry-breg-mcp/src/gateway.rs, prepare_review;
     crates/registry-platform-config/src/blocks.rs, PrivateListenerConfig. */}
 
@@ -385,17 +404,20 @@ Rules that span keys or services:
 - `registry.resource` equals the gateway's `registry.audience`. `registry.action` and
   `registry.targetInput` match its `service.application`, and `registry.accessProfile` names the
   human profile.
-- The issuer must be reachable at a public address.
+- The page fetches the issuer's discovery document over HTTPS at any address except a
+  cloud-metadata address, or over plain HTTP on loopback. An endpoint that discovery names on
+  another origin must use HTTPS at a public address.
 - `session.maximumPendingSignIns` must hold every sign-in that `rateLimits.globalSignIn` admits
   within `session.signInLifetimeSeconds`.
 - One citizen holds at most three sessions, and a fourth sign-in ends the oldest.
-- `development-loopback` also drops the `Secure` attribute and the `__Host-` prefix from the
-  session cookie.
+- An HTTP `publicOrigin`, which only development accepts, drops the `Secure` attribute and the
+  `__Host-` prefix from the session cookie.
 
 {/* Evidence: crates/registry-breg-review/src/config.rs, RuntimeConfig, REMOVED_KEYS, CALLBACK_PATH,
     findings, openid-scope, pending-sign-ins-fillable;
     crates/registry-breg-review/src/session.rs, MAXIMUM_SESSIONS_PER_CITIZEN, insert;
-    crates/registry-breg-review/src/lib.rs, router, FetchUrlPolicy. */}
+    crates/registry-breg-review/src/lib.rs, router_with_posture, FetchUrlPolicy, Cookies;
+    crates/registry-platform-oidc/src/lib.rs, issuer_fetch_policy, discovered_endpoint_fetch_policy. */}
 
 {/* Generated from products/breg/generated/review-runtime/review-runtime.schema.json,
     through src/data/generated/breg-configuration.json, by
@@ -439,9 +461,11 @@ Neither service terminates TLS. Your proxy forwards plain HTTP to the private li
 - Rate limits by client address, more tightly on `/signin` and `/signin/callback`. The review page
   reads no peer address, so its `rateLimits.globalSignIn` is shared by everyone.
 
-`GET /health` answers 200 `{"status":"alive"}`. `GET /ready` answers 200 `{"status":"ready"}`
-while the audit journal is writable, and 503 `{"status":"not-ready"}` otherwise. Neither probe
-calls BReg or the issuer.
+`GET /health` answers 200 with `status: "alive"`. While the audit journal is writable,
+`GET /ready` answers 200 with `status: "ready"`, `posture`, and `developmentSettings`.
+Each development setting has a `code` and a configuration `pointer`. When the journal is
+unwritable, readiness answers 503 with `status: "not-ready"`. The probes use local state.
+In development, both services include `Registry-Posture: development` on every response.
 
 {/* Evidence: crates/registry-mcp-edge/src/server.rs, require_resource_host, forbidden, health, ready;
     crates/registry-mcp-edge/src/inbound.rs, authenticate;
@@ -450,8 +474,8 @@ calls BReg or the issuer.
 
 ### Install or run the images
 
-Each release publishes both services as `linux-amd64` binaries, verified as
-[Obtain the runtime](../../operate/breg/#obtain-the-runtime) describes, and as images under
+Each release publishes both services as binaries for Linux amd64, Linux arm64, and macOS arm64,
+verified as [Obtain the runtime](../../operate/breg/#obtain-the-runtime) describes, and as images under
 `ghcr.io/registrystack/`. Deploy both from one tag, and images by digest.
 
 Each image runs as the Distroless `nonroot` user and reads `/etc/<service>/runtime.yaml`. Mount
@@ -517,7 +541,9 @@ standard error from `breg-review`, so collect both.
 | Service | Level | Message |
 |---|---|---|
 | `breg-mcp` | info | `tool call`, with `request_id`, `tool`, and `outcome` |
-| `breg-mcp` | warn | `the access-token key set is unavailable` |
+| `breg-mcp` | info | `request refused`, with `failed_check` (the check that refused the request) and `suppressed`. At most five lines per check per minute |
+| `breg-mcp` | error | `the gateway could not admit a request`, at most once a minute |
+| `breg-mcp` | error | `the static key set was refused`, with the reason, at startup |
 | `breg-mcp` | error | `tool audit request refused` or `tool audit response refused` |
 | `breg-review` | warn | `a rate limit refused a request` |
 | `breg-review` | warn | `the registry declined a review request` or `the registry could not answer a review` |
@@ -528,7 +554,9 @@ Neither service logs a token, secret, cookie, or field value.
 {/* Evidence: crates/registry-breg-mcp/src/main.rs, LOG_VARIABLE, main;
     crates/registry-breg-review/src/main.rs, LOG_VARIABLE;
     crates/registry-breg-mcp/src/gateway.rs, call;
-    crates/registry-mcp-edge/src/inbound.rs, authenticate;
+    crates/registry-mcp-edge/src/inbound.rs, authenticate, refuse;
+    crates/registry-mcp-edge/src/server.rs, require_resource_host;
+    crates/registry-breg-mcp/src/runtime.rs, static_key_fetcher;
     crates/registry-breg-review/src/pages.rs, review, submit;
     crates/registry-breg-review/src/lib.rs, Problem. */}
 

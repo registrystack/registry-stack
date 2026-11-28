@@ -5,7 +5,8 @@
 //! checks every project file offline, and with `--runtime-config` the
 //! runtime file too, `test` replays every fixture offline, `explain`
 //! publishes what the runtime would serve, `package` writes the deployment
-//! identity the runtime verifies, `plan`, `apply`, and `status` activate a
+//! identity the runtime verifies, `provision` creates the roles and the
+//! database the runtime file names, `plan`, `apply`, and `status` activate a
 //! verified package on a deployment's database and report its activation
 //! ledger, `records apply` performs the one attributable operator write of a
 //! deployment's live environment records, and `intents` reads the delivery
@@ -14,6 +15,7 @@
 pub mod activation;
 pub mod intents;
 mod project;
+mod provision;
 pub mod records;
 mod report;
 mod selected_binary;
@@ -22,6 +24,7 @@ mod templates;
 use anyhow::Result;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_platform_audit::AuditUnavailable;
+use registry_platform_config::DeclaredPosture;
 use registry_platform_yaml::{Diagnostic, Report};
 use registry_scheduling::config::RuntimeConfigError;
 use registry_scheduling::hooks::HookActivationError;
@@ -51,6 +54,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Send one raw HTTP request using a saved Scheduling connection.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage named Scheduling API connections.
@@ -66,13 +71,15 @@ enum Command {
     /// print effective defaults.
     Check(CheckArgs),
     /// Run every fixture's replay cases offline.
-    Test(ProjectArgs),
+    Test(TestArgs),
     /// Explain the checked policy offline: what the runtime would publish.
     Explain(ProjectArgs),
     /// Write the checked policy into a new package directory the runtime verifies.
     Package(PackageArgs),
     /// Report what `apply` would do to a deployment's database, writing nothing.
     Plan(ActivationArgs),
+    /// Create the roles and the database the runtime file names, or print the SQL.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Activate the verified package on a deployment's database.
     Apply(ApplyArgs),
     /// Report the active package and the activation ledger of a deployment's database.
@@ -85,6 +92,12 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct ServeArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file passed unchanged to the Scheduling runtime.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -106,10 +119,20 @@ struct InitArgs {
 
 #[derive(Debug, Args)]
 struct CheckArgs {
+    /// Check under the production posture.
+    #[arg(long)]
+    production: bool,
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Authored scheduling project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
     /// Exit 1 when a warning is reported.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
     /// Runtime configuration file.
@@ -127,6 +150,19 @@ struct ProjectArgs {
     /// Authored scheduling project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct TestArgs {
+    /// Authored scheduling project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+    #[arg(
+        long,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -148,6 +184,12 @@ struct PackageArgs {
 
 #[derive(Debug, Args)]
 struct ActivationArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
@@ -155,6 +197,12 @@ struct ActivationArgs {
 
 #[derive(Debug, Args)]
 struct ApplyArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
@@ -180,6 +228,12 @@ enum RecordsCommand {
 
 #[derive(Debug, Args)]
 struct RecordsApplyArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long = "runtime-config", value_name = "FILE")]
     config: PathBuf,
@@ -190,6 +244,12 @@ struct RecordsApplyArgs {
 
 #[derive(Debug, Args)]
 struct IntentsArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long = "runtime-config", value_name = "FILE")]
     config: PathBuf,
@@ -237,6 +297,20 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
+    let posture_environment = std::env::var_os(registry_platform_config::POSTURE_ENV);
+    main_entry_with_posture_environment(args, stdout, stderr, posture_environment.as_deref())
+}
+
+fn main_entry_with_posture_environment<I, T>(
+    args: I,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+    posture_environment: Option<&OsStr>,
+) -> ExitCode
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString>,
+{
     let args = args.into_iter().map(Into::into).collect::<Vec<_>>();
     let format_requested = args
         .iter()
@@ -264,6 +338,7 @@ where
                     OutputFormat::Json,
                     stdout,
                     stderr,
+                    None,
                 )
                 .is_err()
                 {
@@ -287,6 +362,7 @@ where
                     OutputFormat::Json,
                     stdout,
                     stderr,
+                    None,
                 )
                 .is_err()
                 {
@@ -299,6 +375,58 @@ where
         }
     }
     let Cli { format, command } = cli;
+    let name = command_path(&command);
+    let (flag, production) = match &command {
+        Command::Serve(args) => (Some(&args.posture), false),
+        Command::Check(args) => (Some(&args.posture), args.production),
+        Command::Test(args) => (Some(&args.posture), false),
+        Command::Provision(args) => (Some(&args.posture), false),
+        Command::Plan(args) | Command::Status(args) => (Some(&args.posture), false),
+        Command::Apply(args) => (Some(&args.posture), false),
+        Command::Records(args) => match &args.command {
+            RecordsCommand::Apply(args) => (Some(&args.posture), false),
+        },
+        Command::Intents(args) => (Some(&args.posture), false),
+        _ => (None, false),
+    };
+    let posture = if let Some(flag) = flag {
+        let flag = flag.as_deref();
+        let refusal = |code: &str, message: &str, action: &str| {
+            report::failure(
+                name,
+                USAGE_EXIT,
+                vec![json!({
+                    "severity": "error", "code": code, "path": "/posture",
+                    "message": message, "suggestedAction": action,
+                })],
+            )
+        };
+        let declaration = if production && flag == Some("development") {
+            Err(refusal(
+                "platform.posture.conflict",
+                "--production and --posture development contradict each other",
+                "Use one of them.",
+            ))
+        } else {
+            registry_platform_config::declared_from(
+                flag.or(production.then_some("production")),
+                posture_environment,
+            )
+            .map_err(|error| refusal(error.code(), error.message(), error.suggested_action()))
+        };
+        match declaration {
+            Ok(declared) => Some(declared),
+            Err(report) => {
+                return match write_failure(&report, format, stdout, stderr, None) {
+                    Ok(()) => ExitCode::from(USAGE_EXIT),
+                    Err(_) => output_failed(stderr),
+                }
+            }
+        }
+    } else {
+        None
+    };
+    let declared = posture.unwrap_or(registry_scheduling::config::DEFAULT_POSTURE);
     let command = match command {
         Command::Api(args) => {
             return api_command(format_requested, stderr, || {
@@ -324,12 +452,14 @@ where
             });
         }
         Command::Serve(args) => {
-            return serve(args, format, format_requested, stdout, stderr);
+            return serve(args, declared, format, format_requested, stdout, stderr);
         }
+        Command::Provision(args) => return provision(&args, format, declared),
+        Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
         command => command,
     };
     let command_name = command_path(&command);
-    match run(Cli { format, command }) {
+    match run(Cli { format, command }, declared) {
         Ok(mut report) => {
             // The exit code already tells the caller whether this refused;
             // the JSON must agree instead of reporting "ok": true underneath
@@ -340,7 +470,7 @@ where
             } else if refusal {
                 report["ok"] = json!(false);
             }
-            let outcome = write_success(&report, format, stdout, stderr);
+            let outcome = write_success(&report, format, stdout, stderr, posture);
             if outcome != ExitCode::SUCCESS {
                 return outcome;
             }
@@ -360,6 +490,8 @@ where
                     exit,
                     stdout,
                     stderr,
+                    posture,
+                    configuration_explicit_settings(&error),
                 )
                 .is_err()
                 {
@@ -373,6 +505,7 @@ where
                 format,
                 stdout,
                 stderr,
+                posture,
             )
             .is_err()
             {
@@ -407,6 +540,7 @@ fn api_command(
 /// The subcommand path a parsed invocation selected, as its report names it.
 fn command_path(command: &Command) -> &'static str {
     match command {
+        Command::RstackDev(_) => "rstack-dev",
         Command::Api(_) => "api",
         Command::Connection { .. } => "connection",
         Command::Serve(_) => "serve",
@@ -416,6 +550,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Explain(_) => "explain",
         Command::Package(_) => "package",
         Command::Plan(_) => "plan",
+        Command::Provision(_) => "provision",
         Command::Apply(_) => "apply",
         Command::Status(_) => "status",
         Command::Records(RecordsArgs {
@@ -425,18 +560,44 @@ fn command_path(command: &Command) -> &'static str {
     }
 }
 
-fn run(cli: Cli) -> Result<Value> {
+/// Runs the shared `provision` command, which writes its own report and sets
+/// its own exit code. The global `--format` selects its report as it selects
+/// every other command's.
+fn provision(
+    args: &registry_platform_provision::ProvisionArgs,
+    format: OutputFormat,
+    declared: registry_platform_config::DeclaredPosture,
+) -> ExitCode {
+    let shared = match format {
+        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+    };
+    registry_platform_provision::run_provision(
+        "schedulingctl",
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        args,
+        shared,
+        declared,
+        |path| provision::load(path, declared),
+    )
+}
+
+fn run(cli: Cli, declared: DeclaredPosture) -> Result<Value> {
     match cli.command {
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
         }
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
+        Command::Provision(_) => {
+            unreachable!("provision writes its own report before report dispatch")
+        }
         Command::Init(args) => project::init(&args.project, &args.template),
         Command::Check(args) => {
             let checked = if args.runtime_config.is_some() {
-                project::check(&args.project, false)
+                project::check(&args.project, false, declared)
             } else {
-                project::check_with_acceptances(&args.project, args.deny_warnings)
+                project::check_with_acceptances(&args.project, args.deny_warnings, declared)
             };
             match &args.runtime_config {
                 Some(runtime_config) => project::check_runtime_config(
@@ -445,32 +606,35 @@ fn run(cli: Cli) -> Result<Value> {
                     args.environment,
                     args.deny_warnings,
                     checked,
+                    declared,
                 ),
                 None => checked,
             }
         }
-        Command::Test(args) => project::test(&args.project),
+        Command::Test(args) => project::test(&args.project, declared),
         Command::Explain(args) => project::explain(&args.project),
         Command::Package(args) => match args.output {
             Some(output) => project::package(&args.project, &output, args.revision.as_deref()),
             None => project::package_dry_run(&args.project, args.revision.as_deref()),
         },
-        Command::Plan(args) => activation::plan(&args.runtime_config),
+        Command::Plan(args) => activation::plan(&args.runtime_config, declared),
         Command::Apply(args) => activation::apply(
             &args.runtime_config,
             args.operator_reference.as_deref(),
             &args.backups,
+            declared,
         ),
-        Command::Status(args) => activation::status(&args.runtime_config),
+        Command::Status(args) => activation::status(&args.runtime_config, declared),
         Command::Records(args) => match args.command {
-            RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records),
+            RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records, declared),
         },
-        Command::Intents(args) => intents::undelivered(&args.config, args.limit),
+        Command::Intents(args) => intents::undelivered(&args.config, args.limit, declared),
     }
 }
 
 fn serve(
     args: ServeArgs,
+    declared: DeclaredPosture,
     format: OutputFormat,
     format_requested: bool,
     stdout: &mut dyn io::Write,
@@ -486,6 +650,7 @@ fn serve(
                 OutputFormat::Json,
                 stdout,
                 stderr,
+                Some(declared),
             )
             .is_err()
             {
@@ -520,6 +685,7 @@ fn serve(
     command
         .arg("--runtime-config")
         .arg(args.runtime_config)
+        .args(["--posture", declared.posture.as_str()])
         .arg("serve");
     replace_with_service(command, "scheduling", stderr)
 }
@@ -629,6 +795,22 @@ fn completed_report(mut report: Value, command: &str, refusal: bool) -> Value {
             "message": message,
             "suggestedAction": action,
         });
+        if command == "plan" {
+            let posture_mismatch = report["refusals"].as_array().and_then(|refusals| {
+                refusals
+                    .iter()
+                    .find(|refusal| refusal["code"] == "platform.activation.posture-mismatch")
+            });
+            if let Some(refusal) = posture_mismatch {
+                let mut diagnostic = refusal.clone();
+                diagnostic["severity"] = json!("error");
+                diagnostic["artifact"] = json!("database");
+                match report["diagnostics"].as_array_mut() {
+                    Some(diagnostics) => diagnostics.insert(0, diagnostic),
+                    None => report["diagnostics"] = json!([diagnostic]),
+                }
+            }
+        }
         match report["diagnostics"].as_array_mut() {
             Some(diagnostics) => diagnostics.push(diagnostic),
             None => report["diagnostics"] = json!([diagnostic]),
@@ -667,6 +849,18 @@ pub(crate) fn configuration_report(error: &anyhow::Error) -> Option<&Report> {
     })
 }
 
+/// The explicit production settings the runtime file of a refused check
+/// states, when it loaded.
+fn configuration_explicit_settings(
+    error: &anyhow::Error,
+) -> Option<Vec<registry_cli_report::ExplicitSettingLine>> {
+    error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<project::RuntimeConfigRefusal>()
+            .and_then(|refusal| refusal.explicit_settings.clone())
+    })
+}
+
 /// The exit code of a configuration refusal: an operational failure when the
 /// runtime file could not be read at all, and otherwise a domain refusal.
 fn configuration_exit(error: &anyhow::Error) -> u8 {
@@ -685,6 +879,7 @@ fn configuration_exit(error: &anyhow::Error) -> u8 {
 /// Print a configuration refusal unchanged: the CFG-DIAG-2 lines on stderr,
 /// or, with `--format json`, the CFG-DIAG-1 diagnostics in the report
 /// envelope on stdout.
+#[allow(clippy::too_many_arguments)]
 fn write_configuration_report(
     report: &Report,
     format: OutputFormat,
@@ -692,6 +887,8 @@ fn write_configuration_report(
     exit: u8,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
+    posture: Option<DeclaredPosture>,
+    explicit_settings: Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 ) -> io::Result<()> {
     if format == OutputFormat::Json {
         let mut envelope = json!({
@@ -703,12 +900,33 @@ fn write_configuration_report(
         if let Some(files) = report.files_checked() {
             envelope["filesChecked"] = json!(files);
         }
-        report::write(&envelope, stdout)
+        report::write_with_settings(&envelope, stdout, posture, explicit_settings)
     } else {
         write_check_verdict(command, stderr);
         let _ = write!(stderr, "{}", report.render_human());
+        for setting in explicit_settings.iter().flatten() {
+            write_explicit_setting(
+                setting.code.as_str(),
+                setting.pointer.as_deref().unwrap_or_default(),
+                setting.summary.as_str(),
+                stderr,
+            )?;
+        }
         Ok(())
     }
+}
+
+/// The line that states one explicit production setting.
+fn write_explicit_setting(
+    code: &str,
+    pointer: &str,
+    summary: &str,
+    out: &mut dyn io::Write,
+) -> io::Result<()> {
+    writeln!(
+        out,
+        "Explicit production setting {code} at {pointer}. {summary}."
+    )
 }
 
 /// The line that opens a refused check, as the other check commands print it.
@@ -790,7 +1008,23 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
                 "artifact": "runtime-configuration",
                 "path": "destinations.hooks",
                 "message": format!("{error:#}"),
-                "suggestedAction": "Bind every destination the policy hooks name under destinations.hooks, with an hmacSha256KeyRef that resolves to a key of at least 32 bytes, then retry.",
+                "suggestedAction": activation::HOOK_DESTINATIONS_ACTION,
+            }),
+        );
+    }
+    if let Some(StoreError::DatabaseTransport(error)) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<StoreError>())
+    {
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({
+                "severity": "error",
+                "code": error.code(),
+                "artifact": "database",
+                "path": "/database/transport",
+                "message": error.to_string(),
+                "suggestedAction": error.suggested_action(),
             }),
         );
     }
@@ -798,15 +1032,22 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
         .chain()
         .find_map(|cause| cause.downcast_ref::<activation::Refusal>())
     {
+        let (path, suggested_action) = match refusal {
+            StoreError::PostureMismatch { action, .. } => ("/database", *action),
+            _ => (
+                "database",
+                "Run the command the message names, or correct what it names, then retry.",
+            ),
+        };
         return (
             DOMAIN_REFUSAL_EXIT,
             json!({
                 "severity": "error",
                 "code": activation::refusal_code(refusal),
                 "artifact": "database",
-                "path": "database",
+                "path": path,
                 "message": format!("{error:#}"),
-                "suggestedAction": "Run the command the message names, or correct what it names, then retry.",
+                "suggestedAction": suggested_action,
             }),
         );
     }
@@ -858,9 +1099,10 @@ fn write_success(
     format: OutputFormat,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
+    posture: Option<DeclaredPosture>,
 ) -> ExitCode {
     let result = match format {
-        OutputFormat::Json => report::write(report, stdout),
+        OutputFormat::Json => report::write_with_posture(report, stdout, posture),
         OutputFormat::Human => render_human(report, stdout),
     };
     if result.is_ok() {
@@ -881,9 +1123,10 @@ fn write_failure(
     format: OutputFormat,
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
+    posture: Option<DeclaredPosture>,
 ) -> io::Result<()> {
     if format == OutputFormat::Json {
-        return report::write(report, stdout);
+        return report::write_with_posture(report, stdout, posture);
     }
     write_check_verdict(report["command"].as_str().unwrap_or(""), stderr);
     if let Some(diagnostics) = report["diagnostics"].as_array() {
@@ -940,7 +1183,7 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
         for (key, value) in fields {
             if matches!(
                 key.as_str(),
-                "ok" | "command" | "diagnostics" | "filesChecked"
+                "ok" | "command" | "diagnostics" | "filesChecked" | "explicitProductionSettings"
             ) || value.is_null()
             {
                 continue;
@@ -955,6 +1198,18 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     if let Some(checked) = checked_diagnostics(report)? {
         write!(stdout, "{}", checked.render_human())?;
     }
+    for setting in report["explicitProductionSettings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        write_explicit_setting(
+            setting["code"].as_str().unwrap_or_default(),
+            setting["pointer"].as_str().unwrap_or_default(),
+            setting["summary"].as_str().unwrap_or_default(),
+            stdout,
+        )?;
+    }
     Ok(())
 }
 
@@ -965,7 +1220,7 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
 fn checked_diagnostics(report: &Value) -> io::Result<Option<Report>> {
     let Some(diagnostics) = report
         .get("diagnostics")
-        .filter(|_| report.get("filesChecked").is_some())
+        .filter(|_| report.get("filesChecked").is_some() || report["command"] == "status")
     else {
         return Ok(None);
     };
@@ -1100,12 +1355,56 @@ mod tests {
     fn the_committed_report_example_is_check_output() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let relative = "products/scheduling/examples/standalone-exact-time";
-        let project = root.join(relative);
-        let (exit, mut report, _) = run_json(&["check", project.to_str().unwrap()]);
-        assert_eq!(exit, ExitCode::SUCCESS);
+        let temporary =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let source = root.join(relative);
+        let project = temporary.path();
+        std::fs::create_dir(project.join("fixtures")).unwrap();
+        for file in [
+            "dev-scenarios.yaml",
+            "dev.yaml",
+            "fixtures/counter-stations.yaml",
+            "fixtures/fold-day-rebooking.yaml",
+            "records.yaml",
+            "runtime.example.yaml",
+            "scheduling.yaml",
+        ] {
+            std::fs::write(
+                project.join(file),
+                std::fs::read(source.join(file)).unwrap(),
+            )
+            .unwrap();
+        }
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_with_posture_environment(
+            [
+                "schedulingctl",
+                "check",
+                project.to_str().unwrap(),
+                "--format=json",
+                "--posture=production",
+            ],
+            &mut stdout,
+            &mut stderr,
+            None,
+        );
+        assert_eq!(
+            exit,
+            ExitCode::SUCCESS,
+            "{}",
+            String::from_utf8_lossy(&stdout)
+        );
+        let mut report: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_envelope(&stdout, &report, exit);
         report["project"] = json!(relative);
         let mut written = Vec::new();
-        report::write(&report, &mut written).unwrap();
+        report::write_with_posture(
+            &report,
+            &mut written,
+            Some(registry_scheduling::config::DEFAULT_POSTURE),
+        )
+        .unwrap();
         let committed = std::fs::read_to_string(
             root.join("products/scheduling/examples/formats/ctl-report.json"),
         )
@@ -1162,6 +1461,29 @@ mod tests {
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert_eq!(report["command"], "package");
         assert_eq!(report["status"], "domain-refusal");
+    }
+
+    #[test]
+    fn a_plan_posture_mismatch_has_the_shared_top_diagnostic() {
+        let report = completed_report(
+            json!({"refusals": [{
+                "code": "platform.activation.posture-mismatch",
+                "path": "/database",
+                "message": "Activation posture differs.",
+                "suggestedAction": "Use the matching deployment posture."
+            }]}),
+            "plan",
+            true,
+        );
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "platform.activation.posture-mismatch"
+        );
+        assert_eq!(report["diagnostics"][0]["path"], "/database");
+        assert_eq!(
+            report["diagnostics"][0]["suggestedAction"],
+            "Use the matching deployment posture."
+        );
     }
 
     /// A plan that names a refusal keeps its own `refusals` member and
@@ -1345,13 +1667,23 @@ mod tests {
 
     #[test]
     fn a_hook_destination_apply_cannot_run_is_the_refusal_plan_reports() {
-        let refused = anyhow::Error::new(HookActivationError::InvalidSigningMaterial)
-            .context("activating the candidate policy's hook destinations");
+        let refused = anyhow::Error::new(HookActivationError::SigningMaterial(
+            "destinations.hooks.appointment-events.hmacSha256KeyRef has 65 bytes".to_owned(),
+        ))
+        .context("activating the candidate policy's hook destinations");
         let (exit, diagnostic) = classify_failure(&refused);
         assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
         assert_eq!(diagnostic["code"], activation::HOOK_DESTINATIONS_CODE);
         assert_eq!(diagnostic["artifact"], "runtime-configuration");
         assert_eq!(diagnostic["path"], "destinations.hooks");
+        assert!(diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("destinations.hooks.appointment-events.hmacSha256KeyRef has 65 bytes"));
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            activation::HOOK_DESTINATIONS_ACTION
+        );
     }
 
     #[test]
@@ -1374,7 +1706,10 @@ mod tests {
             }
         }
         let audit = registry_scheduling::audit::SchedulingAudit::new(
-            registry_platform_audit::AuditWriter::from_line_sink(Box::new(Refusing)),
+            registry_platform_audit::AuditWriter::from_line_sink(
+                Box::new(Refusing),
+                registry_platform_config::Posture::Production,
+            ),
         );
         // A stream append waits on the Tokio timer.
         let unavailable = tokio::runtime::Builder::new_current_thread()
@@ -2218,6 +2553,36 @@ mod tests {
 
         std::fs::write(
             runtime,
+            runtime_text.replace(
+                "database:\n",
+                "database:\n  transport: private-network-plaintext\n",
+            ),
+        )
+        .unwrap();
+        let (exit, report, _) = run_json(&[
+            "check",
+            project,
+            "--runtime-config",
+            runtime,
+            "--deny-warnings",
+            "--posture",
+            "development",
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| {
+                    finding["code"] == "platform.posture.database-private-plaintext"
+                        && finding["severity"] == "warning"
+                }),
+            "{report}"
+        );
+
+        std::fs::write(
+            runtime,
             runtime_text.replacen("retention:\n", "retention:\n  stray: 1\n", 1),
         )
         .unwrap();
@@ -2239,6 +2604,173 @@ mod tests {
         ]);
         assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
         assert_eq!(report["status"], "operational-failure");
+    }
+
+    /// `check --runtime-config` lists the settings the file states on purpose
+    /// as facts for a reviewer. They never change the verdict.
+    #[test]
+    fn check_lists_the_explicit_production_settings_the_runtime_states() {
+        let (root, project) = initialized("standalone-exact-time");
+        let runtime = runtime_config(root.path(), &project);
+        let project = project.to_str().unwrap();
+        let runtime_text = std::fs::read_to_string(&runtime).unwrap();
+        let runtime = runtime.to_str().unwrap();
+
+        let (exit, report, _) = run_json(&["check", project, "--runtime-config", runtime]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert_eq!(report["explicitProductionSettings"], json!([]));
+
+        let marker = "        allowedClients: [scheduling-booking-agent]\n";
+        assert!(runtime_text.contains(marker), "{runtime_text}");
+        std::fs::write(
+            runtime,
+            runtime_text.replace(
+                marker,
+                &format!("{marker}        accessTokenType: JWT\n        scopeClaim: scp\n"),
+            ),
+        )
+        .unwrap();
+        let (exit, report, _) = run_json(&["check", project, "--runtime-config", runtime]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        let settings = report["explicitProductionSettings"].as_array().unwrap();
+        let listed: Vec<(&str, &str)> = settings
+            .iter()
+            .map(|line| {
+                (
+                    line["code"].as_str().unwrap(),
+                    line["pointer"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (
+                    "platform.posture.jwt-access-token",
+                    "/authentication/oidc/issuers/main/accessTokenType"
+                ),
+                (
+                    "platform.posture.scope-claim",
+                    "/authentication/oidc/issuers/main/scopeClaim"
+                ),
+            ]
+        );
+        assert!(settings.iter().all(|line| line["line"].is_u64()));
+        assert!(settings.iter().all(|line| line["file"] == json!(runtime)));
+        // A setting is a fact for the reviewer, never a finding.
+        assert_eq!(report["diagnostics"], json!([]));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                "schedulingctl",
+                "check",
+                project,
+                "--runtime-config",
+                runtime,
+            ]
+            .map(OsString::from),
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let text = String::from_utf8(stdout).unwrap();
+        assert!(
+            text.contains(
+                "Explicit production setting platform.posture.jwt-access-token at /authentication/oidc/issuers/main/accessTokenType."
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_check_writes_the_explicit_production_settings_after_the_posture_even_when_refused() {
+        let (root, project) = initialized("standalone-exact-time");
+        let runtime = runtime_config(root.path(), &project);
+        let project = project.to_str().unwrap();
+        let text = std::fs::read_to_string(&runtime).unwrap();
+        let marker = "        allowedClients: [scheduling-booking-agent]\n";
+        assert!(text.contains(marker), "{text}");
+        let stating = text.replace(marker, &format!("{marker}        accessTokenType: JWT\n"));
+        let runtime = runtime.to_str().unwrap();
+
+        let after_posture = |raw: &str| {
+            assert_eq!(
+                raw.matches("\"explicitProductionSettings\"").count(),
+                1,
+                "{raw}"
+            );
+            let posture = raw.find("\"posture\"").expect("a posture member");
+            let settings = raw
+                .find("\"explicitProductionSettings\"")
+                .expect("the settings member");
+            assert!(posture < settings, "{raw}");
+        };
+        let raw_check = || {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = main_entry_from(
+                [
+                    "schedulingctl",
+                    "--format=json",
+                    "check",
+                    project,
+                    "--runtime-config",
+                    runtime,
+                ]
+                .map(OsString::from),
+                &mut stdout,
+                &mut stderr,
+            );
+            (exit, String::from_utf8(stdout).unwrap())
+        };
+
+        std::fs::write(runtime, &stating).unwrap();
+        let (exit, raw) = raw_check();
+        assert_eq!(exit, ExitCode::SUCCESS, "{raw}");
+        after_posture(&raw);
+
+        // A refused file that states a setting still lists it.
+        // A relative audit path is a rule the loaded file breaks, so the
+        // refusal still has settings to list.
+        let audit_path = format!("  path: {}/audit.ndjson", root.path().display());
+        assert!(stating.contains(&audit_path), "{stating}");
+        std::fs::write(
+            runtime,
+            stating.replace(&audit_path, "  path: audit.ndjson"),
+        )
+        .unwrap();
+        let (exit, raw) = raw_check();
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{raw}");
+        after_posture(&raw);
+        let report: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(report["ok"], false, "{raw}");
+        assert_eq!(
+            report["explicitProductionSettings"][0]["code"], "platform.posture.jwt-access-token",
+            "{raw}"
+        );
+
+        // A setting the product refuses outright is a refusal, never a stated
+        // production setting.
+        std::fs::write(
+            runtime,
+            text.replace(
+                "allowedClients: [scheduling-booking-agent]",
+                "allowedClients: unrestricted",
+            ),
+        )
+        .unwrap();
+        let (exit, raw) = raw_check();
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{raw}");
+        assert!(
+            raw.contains("scheduling.runtime.allowed-clients-required"),
+            "{raw}"
+        );
+        assert!(
+            !raw.contains("platform.posture.unrestricted-clients"),
+            "{raw}"
+        );
     }
 
     /// A records document that does not hold together is refused at its

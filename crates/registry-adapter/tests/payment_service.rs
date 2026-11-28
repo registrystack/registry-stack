@@ -59,6 +59,7 @@ fn caller() -> Caller {
         issuer: "https://issuer.example.test".into(),
         client_id: "coordinator".into(),
         scopes: vec!["payments:collections".into()],
+        scope_claim: "scope".into(),
     }
 }
 fn bill() -> BillView {
@@ -240,7 +241,7 @@ impl ProviderPort for Provider {
 }
 
 fn provider_tenant(binding: &PaymentBinding) -> String {
-    match &binding.provider {
+    match binding.provider(development().as_ref()).unwrap() {
         registry_adapter::payments::config::CollectionProvider::Simulator { connection } => {
             connection.tenant.clone()
         }
@@ -266,7 +267,12 @@ async fn setup() -> (PaymentStore, Arc<Registry>, Arc<Provider>) {
         let mut client = pool.get().await.unwrap();
         migrate(&mut client).await.unwrap();
     }
-    let store = PaymentStore::new(pool, format!("payment-service-{}", Uuid::new_v4()));
+    let store = PaymentStore::new(
+        pool,
+        format!("payment-service-{}", Uuid::new_v4()),
+        registry_platform_config::Posture::Development,
+    )
+    .with_development(development());
     let registry = Arc::new(Registry {
         bill: Mutex::new(bill()),
         fail_read: AtomicBool::new(false),
@@ -377,11 +383,10 @@ async fn lost_bind_provider_and_receipt_responses_recover_without_new_effects() 
     );
     drop(service);
     let mut changed = config();
-    changed.connections[0]
-        .binding
-        .simulator_mut()
-        .unwrap()
-        .tenant = "new-tenant".into();
+    let mut provider_binding =
+        serde_json::to_value(&changed.connections[0].binding.provider).unwrap();
+    provider_binding["connection"]["tenant"] = json!("new-tenant");
+    changed.connections[0].binding.provider = serde_json::from_value(provider_binding).unwrap();
     let service = PaymentService::new(
         changed.clone(),
         store.clone(),
@@ -575,4 +580,28 @@ fn generic_provider_config(origin: &str, pack_bytes: &[u8], id: &str) -> Payment
 
 fn second_provider_config(origin: &str, pack_bytes: &[u8]) -> PaymentsConfig {
     generic_provider_config(origin, pack_bytes, "second-provider")
+}
+
+fn development() -> Option<registry_platform_config::DevelopmentWitness> {
+    use registry_adapter::payments::config::{API_VERSION, KIND};
+    use registry_platform_config::{
+        DeclaredPosture, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+    };
+    let loader = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: API_VERSION,
+            kind: KIND,
+        },
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        },
+    );
+    loader
+        .parse_str::<PaymentsConfig>(
+            &format!("apiVersion: {API_VERSION}\nkind: {KIND}\nconnections: []\n"),
+            |_| None,
+        )
+        .unwrap()
+        .development
 }

@@ -23,7 +23,7 @@ use registry_breg_client::{
     BRegCurrentContinuation, BRegCurrentContinuationProjection, BRegCurrentListRequest,
     BRegDirectWrite, BRegEtag, BRegEventRecordError, BRegGeoJsonContinuation,
     BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
-    BRegHookDelivery as CoreHookDelivery, BRegHookVerificationError,
+    BRegHookDelivery as CoreHookDelivery, BRegHookFreshness, BRegHookVerificationError,
     BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
     BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
     BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
@@ -70,50 +70,76 @@ pub struct JsonOutcome {
 /// Exact BReg hook request supplied by a receiver.
 #[napi(object)]
 pub struct HookDeliveryInput {
-    pub method: String,
-    pub path: String,
     pub headers: BTreeMap<String, String>,
     pub body: Buffer,
     pub key: Buffer,
+    pub previous_key: Option<Buffer>,
+    /// Window around the receiver clock, in whole seconds from 1 to 3600.
+    /// With neither this nor `callerEnforcedFreshness`, the window is 300
+    /// seconds.
+    pub max_skew_seconds: Option<f64>,
+    /// Check only that the delivery time is well formed; the caller enforces
+    /// its own window. Cannot be combined with `maxSkewSeconds`.
+    pub caller_enforced_freshness: Option<bool>,
 }
 
 /// Authenticated BReg hook metadata and exact body.
 #[napi(object)]
 pub struct VerifiedHookDelivery {
     pub id: String,
+    pub timestamp: String,
     pub source: String,
     pub r#type: String,
     pub time: String,
     pub dataschema: String,
-    pub generation: String,
-    pub attempt: String,
-    pub delivery_time: String,
-    pub idempotency_key: String,
     pub body: Buffer,
 }
 
-/// Verify a BReg Version 1 hook signature without applying receiver policy.
+const HOOK_MAXIMUM_SKEW_SECONDS: f64 = 3600.0;
+
+fn hook_freshness(
+    max_skew_seconds: Option<f64>,
+    caller_enforced_freshness: Option<bool>,
+) -> Result<BRegHookFreshness> {
+    let invalid = || binding_error("invalid-request", "hook freshness options are invalid");
+    match (max_skew_seconds, caller_enforced_freshness) {
+        (None, None | Some(false)) => Ok(BRegHookFreshness::DefaultWindow),
+        (None, Some(true)) => Ok(BRegHookFreshness::CallerEnforced),
+        (Some(_), Some(true)) => Err(invalid()),
+        (Some(seconds), None | Some(false)) => {
+            if seconds.fract() != 0.0 || !(1.0..=HOOK_MAXIMUM_SKEW_SECONDS).contains(&seconds) {
+                return Err(invalid());
+            }
+            Ok(BRegHookFreshness::Within {
+                skew: std::time::Duration::from_secs(seconds as u64),
+            })
+        }
+    }
+}
+
+/// Verify a BReg Standard Webhooks delivery. The delivery time must fall within
+/// 300 seconds of the receiver clock unless `maxSkewSeconds` or
+/// `callerEnforcedFreshness` says otherwise. Deduplication stays with the
+/// caller.
 #[napi]
 pub fn verify_hook_delivery(input: HookDeliveryInput) -> Result<VerifiedHookDelivery> {
+    let freshness = hook_freshness(input.max_skew_seconds, input.caller_enforced_freshness)?;
     let headers = input.headers.into_iter().collect::<Vec<_>>();
     let verified = verify_core_hook_delivery(CoreHookDelivery {
-        method: &input.method,
-        path: &input.path,
         headers: &headers,
         body: input.body.as_ref(),
         key: input.key.as_ref(),
+        previous_key: input.previous_key.as_ref().map(AsRef::as_ref),
+        freshness,
     })
     .map_err(hook_verification_error)?;
     Ok(VerifiedHookDelivery {
         id: verified.id,
+        timestamp: verified.timestamp.to_string(),
         source: verified.source,
         r#type: verified.event_type,
         time: verified.time,
         dataschema: verified.data_schema,
-        generation: verified.generation,
-        attempt: verified.attempt,
-        delivery_time: verified.delivery_time,
-        idempotency_key: verified.idempotency_key,
         body: verified.body.into(),
     })
 }
@@ -436,6 +462,10 @@ fn client_error(error: BaseRegistryClientError) -> NapiError {
             "status": status,
             "traceId": trace_id,
             "message": "Base Registry Engine refused or failed the request with an unrecognized problem code",
+        }),
+        BaseRegistryClientError::DevelopmentPeer => json!({
+            "kind": kind,
+            "message": BaseRegistryClientError::DevelopmentPeer.to_string(),
         }),
         BaseRegistryClientError::Protocol {
             status,
@@ -1053,6 +1083,7 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
             "userAgent",
             "trustedRootCertificates",
             "maximumMutationRetries",
+            "refuseDevelopmentPeer",
         ],
         "configuration",
         "client configuration contains an unsupported field",
@@ -1067,6 +1098,7 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
             "userAgent",
             "trustedRootCertificates",
             "maximumMutationRetries",
+            "refuseDevelopmentPeer",
         ],
         "configuration",
         "client configuration options must be omitted instead of null",
@@ -1079,7 +1111,21 @@ fn client_from_config(value: Value) -> Result<CoreClient> {
     )?;
     let base_url = Url::parse(&base_url)
         .map_err(|_| binding_error("configuration", "baseUrl must be a URL"))?;
-    let mut config = BaseRegistryClientConfig::new(base_url);
+    let refuse_development_peer = object
+        .get("refuseDevelopmentPeer")
+        .map(|value| {
+            value.as_bool().ok_or_else(|| {
+                binding_error("configuration", "refuseDevelopmentPeer must be a boolean")
+            })
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let peer_policy = if refuse_development_peer {
+        registry_breg_client::PeerPolicy::RefuseDevelopmentPeer
+    } else {
+        registry_breg_client::PeerPolicy::AcceptDevelopmentPeer
+    };
+    let mut config = BaseRegistryClientConfig::new(base_url, peer_policy);
     if let Some(value) = object.get("authorization") {
         if let Some(provider) = authorization_provider(value)? {
             config = config.with_token_provider(provider);

@@ -30,7 +30,6 @@ use registry_platform_config::package::{write_sum_file, PackageLimits, SUM_FILE}
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-const ENVIRONMENT: &str = "local";
 const SOURCE_REVISION: &str = "person-registration-rhai-acceptance-0.1.0";
 const HANDLER_SCRIPTS: [&str; 2] = [
     "scripts/register-person.rhai",
@@ -332,7 +331,7 @@ fn packages_without_current_engine_features_are_refused_by_every_reader() {
         .expect("mutated package envelope is closed");
 
         let context = PackageLoadContext {
-            database_initialization_environment: ENVIRONMENT,
+            posture: registry_platform_config::Posture::Development,
         };
         assert!(load_package(package.path(), &context).is_err());
         assert!(load_predecessor_package(package.path(), &context).is_err());
@@ -466,7 +465,7 @@ fn a_package_whose_access_profile_carries_an_anonymous_member_is_refused() {
     // predecessor, so no successor is planned over a baseline that claims
     // unauthenticated access.
     let context = PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Development,
     };
     for anonymous in [false, true] {
         let package = frozen_copy();
@@ -529,7 +528,7 @@ fn verified_successor(
         .publish_to_directory(&root)
         .expect("the successor publishes");
     let context = PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Development,
     };
     let verified = load_package(&root, &context).expect("the successor verifies");
     (directory, verified)
@@ -564,7 +563,7 @@ fn a_package_sealed_with_the_retired_project_header_is_refused() {
     let package = frozen_copy();
     retire_packaged_project_envelope(package.path());
     let context = PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Development,
     };
     // The stored sources do not read with this release, so the refusal names
     // the fresh-database path for a package built before it.
@@ -592,7 +591,7 @@ fn a_package_names_its_kind_and_refuses_another() {
     .unwrap();
     reseal(package.path());
     let context = PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Development,
     };
     assert!(matches!(
         load_package(package.path(), &context),
@@ -606,7 +605,7 @@ fn a_package_under_the_retired_api_version_is_refused_as_a_predecessor_too() {
     // the current apiVersion: the read that starts a package, the integrity
     // inspection, and the predecessor read a successor is planned over.
     let context = PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Development,
     };
     let retired = frozen_copy();
     retire_envelope(retired.path());
@@ -629,7 +628,7 @@ fn a_package_under_the_retired_api_version_is_refused_as_a_predecessor_too() {
 #[test]
 fn an_unchanged_rebuild_over_a_current_predecessor_is_an_empty_successor() {
     let context = PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Development,
     };
     let current = frozen_copy();
     let predecessor = load_predecessor_package(current.path(), &context)
@@ -758,7 +757,7 @@ fn a_package_sealed_with_the_shorter_field_bound_names_is_refused() {
     // The shorter names are not part of the package format: a package that
     // carries them is refused as a current package and as a predecessor.
     let context = PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Development,
     };
     for path in [GOVERNED_MODEL_FILE, ACTION_INVENTORY_FILE] {
         let package = frozen_copy();

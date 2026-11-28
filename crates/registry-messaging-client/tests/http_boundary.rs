@@ -191,7 +191,7 @@ async fn serve(prefix: &str, fixture: &Fixture) -> (MessagingClient, tokio::task
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve fixture");
     });
-    let client = MessagingClient::new(MessagingClientConfig::new(
+    let client = MessagingClient::new(MessagingClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}{prefix}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -613,13 +613,83 @@ async fn a_failure_that_is_not_a_problem_document_is_a_protocol_failure() {
 }
 
 #[tokio::test]
-async fn a_success_with_a_body_is_a_protocol_failure() {
+async fn a_success_with_a_body_that_is_not_json_is_a_protocol_failure() {
     let (client, server) = serve("", &Fixture::new(StatusCode::OK, None, "x")).await;
     assert!(matches!(
         client.health().await,
         Err(MessagingClientError::Protocol {
             status: 200,
-            failure: MessagingProtocolFailure::Body,
+            failure: MessagingProtocolFailure::MediaType,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn health_and_ready_accept_the_json_status_body() {
+    let health = Fixture::new(
+        StatusCode::OK,
+        Some("application/json"),
+        r#"{"status":"ok"}"#,
+    );
+    let (client, server) = serve("", &health).await;
+    assert_eq!(client.health().await.expect("health").trace_id, TRACE_ID);
+    server.abort();
+
+    let ready = Fixture::new(
+        StatusCode::OK,
+        Some("application/json"),
+        r#"{"status":"ready","extra":[1,2]}"#,
+    );
+    let (client, server) = serve("", &ready).await;
+    assert_eq!(client.ready().await.expect("ready").trace_id, TRACE_ID);
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_probe_body_over_the_bound_is_refused_as_too_large() {
+    let body = format!(r#"{{"status":"ok","padding":"{}"}}"#, "x".repeat(8 * 1024));
+    let fixture = Fixture::new(StatusCode::OK, Some("application/json"), &body);
+    let (client, server) = serve("", &fixture).await;
+    assert!(matches!(
+        client.health().await,
+        Err(MessagingClientError::Transport {
+            kind: TransportKind::ResponseTooLarge,
+        })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_probe_body_that_is_not_a_json_object_is_a_protocol_failure() {
+    for body in ["[]", "\"ok\"", "{"] {
+        let fixture = Fixture::new(StatusCode::OK, Some("application/json"), body);
+        let (client, server) = serve("", &fixture).await;
+        assert!(
+            matches!(
+                client.ready().await,
+                Err(MessagingClientError::Protocol {
+                    status: 200,
+                    failure: MessagingProtocolFailure::Body,
+                    ..
+                })
+            ),
+            "body {body}"
+        );
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn a_probe_body_under_another_media_type_is_a_protocol_failure() {
+    let fixture = Fixture::new(StatusCode::OK, Some("text/plain"), r#"{"status":"ok"}"#);
+    let (client, server) = serve("", &fixture).await;
+    assert!(matches!(
+        client.health().await,
+        Err(MessagingClientError::Protocol {
+            status: 200,
+            failure: MessagingProtocolFailure::MediaType,
             ..
         })
     ));
@@ -662,7 +732,7 @@ async fn an_unreachable_service_is_a_transport_failure() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
     let address = listener.local_addr().expect("the bound address");
     drop(listener);
-    let client = MessagingClient::new(MessagingClientConfig::new(
+    let client = MessagingClient::new(MessagingClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/")).expect("fixture URL"),
     ))
     .expect("client");
@@ -674,7 +744,7 @@ async fn an_unreachable_service_is_a_transport_failure() {
 
 #[test]
 fn an_unprotected_remote_base_url_is_refused_before_any_client_exists() {
-    let refused = MessagingClient::new(MessagingClientConfig::new(
+    let refused = MessagingClient::new(MessagingClientConfig::new_without_peer_policy(
         Url::parse("http://messaging.example.invalid/").expect("fixture URL"),
     ));
     assert!(matches!(

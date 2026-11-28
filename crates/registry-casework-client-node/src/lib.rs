@@ -41,6 +41,7 @@ pub fn submission_digest(
 #[napi(object)]
 pub struct CaseworkClientConfig {
     pub base_url: String,
+    pub refuse_development_peer: Option<bool>,
     pub attempt_timeout_milliseconds: Option<f64>,
     pub connect_timeout_milliseconds: Option<f64>,
     pub maximum_response_bytes: Option<f64>,
@@ -89,7 +90,12 @@ impl CaseworkClient {
         let base_url = Url::parse(&config.base_url).map_err(|_| {
             binding_error("configuration", "Casework client configuration is invalid")
         })?;
-        let mut core = CoreConfig::new(base_url);
+        let peer_policy = if config.refuse_development_peer.unwrap_or(false) {
+            registry_casework_client::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            registry_casework_client::PeerPolicy::AcceptDevelopmentPeer
+        };
+        let mut core = CoreConfig::new(base_url, peer_policy);
         if let Some(value) = config.attempt_timeout_milliseconds {
             let value = positive_u32(value)?;
             core = core.with_attempt_timeout(Duration::from_millis(u64::from(value)));
@@ -1508,6 +1514,10 @@ fn client_error(error: CaseworkClientError) -> NapiError {
                 "message": message,
             })
         }
+        CaseworkClientError::DevelopmentPeer => json!({
+            "kind": "development-peer",
+            "message": CaseworkClientError::DevelopmentPeer.to_string(),
+        }),
         CaseworkClientError::Protocol {
             status,
             failure,

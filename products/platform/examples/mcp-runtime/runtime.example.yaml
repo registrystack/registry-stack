@@ -5,14 +5,15 @@ name: Citizen registry assistant
 logLevel: info
 listener:
   bind: 127.0.0.1:8110
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   # Listener stays on loopback; any upstream proxy must enforce its own boundary.
   networkExposure: private-address
 secretProviders:
   environment: {}
 resourceServer:
-  resource: http://127.0.0.1:8110/mcp
-  issuer: http://127.0.0.1:8111
+  # A TLS proxy on the same host publishes this name and forwards to the listener.
+  resource: https://citizen-assistant.example.invalid/mcp
+  issuer: https://login.example.invalid
   jwksSource:
     type: static
     documentRef: secret:env/MCP_JWKS
@@ -45,10 +46,10 @@ bindings:
         audience: urn:example:breg
         scopes: [citizen:self]
       exchange:
-        tokenEndpoint: http://127.0.0.1:8111/token
+        tokenEndpoint: https://login.example.invalid/token
         clientId: citizen-gateway
         privateKeyRef: secret:env/MCP_EXCHANGE_PRIVATE_KEY
-        assertionAudience: http://127.0.0.1:8111
+        assertionAudience: https://login.example.invalid
       service:
         name: Citizen details
         description: Read the citizen's own registry details.
@@ -58,4 +59,4 @@ bindings:
         application:
           action: update-details
           targetInput: person
-        reviewBaseUrl: http://127.0.0.1:8113/
+        reviewBaseUrl: https://review.example.invalid/

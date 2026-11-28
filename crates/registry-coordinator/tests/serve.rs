@@ -12,7 +12,7 @@ fn runtime(path: &Path, name: &str, exit: u8) -> PathBuf {
     fs::write(
         &binary,
         format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'runtime-stdout\\n'\nprintf 'runtime-stderr\\n' >&2\nprintf '%s\\n' \"$$\" \"$@\" > \"$RUNTIME_CAPTURE\"\nif [[ -n \"${{RUNTIME_LEASE_FD:-}}\" ]]; then printf 'lease-inherited\\n' >&\"$RUNTIME_LEASE_FD\"; fi\nexit {exit}\n"
+            "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'runtime-stdout\\n'\nprintf 'runtime-stderr\\n' >&2\nprintf '%s\\n' \"$$\" \"$@\" > \"$RUNTIME_CAPTURE\"\nprintf '%s\\n' \"${{REGISTRY_STACK_POSTURE-unset}}\" > \"${{RUNTIME_POSTURE_CAPTURE:-/dev/null}}\"\nif [[ -n \"${{RUNTIME_LEASE_FD:-}}\" ]]; then printf 'lease-inherited\\n' >&\"$RUNTIME_LEASE_FD\"; fi\nexit {exit}\n"
         ),
     )
     .unwrap();
@@ -60,11 +60,14 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_status_and_lease(
             "serve",
             "--runtime-config",
             "/tmp/runtime.yaml",
+            "--posture",
+            "development",
         ])
         .env("CTL_BIN", env!("CARGO_BIN_EXE_coordinatorctl"))
         .env("COORDINATOR_BIN", &binary)
         .env("RUNTIME_CAPTURE", &capture)
         .env("RUNTIME_LEASE_CAPTURE", &lease)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env_remove("RSTACK_GENERATION_DIR")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -85,7 +88,7 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_status_and_lease(
     assert_eq!(fs::read_to_string(lease).unwrap(), "lease-inherited\n");
     assert_eq!(
         fs::read_to_string(capture).unwrap(),
-        format!("{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\n")
+        format!("{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\n--posture\ndevelopment\n")
     );
 }
 
@@ -100,6 +103,7 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
         .args(["serve", "--runtime-config", "/tmp/path.yaml"])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env("PATH", path)
         .env("RUNTIME_CAPTURE", &capture)
         .env_remove("COORDINATOR_BIN")
@@ -114,7 +118,12 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/path.yaml"]
+        [
+            "--runtime-config",
+            "/tmp/path.yaml",
+            "--posture",
+            "production"
+        ]
     );
 }
 
@@ -129,6 +138,7 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
     fs::create_dir(&poisoned_directory).unwrap();
     runtime(&poisoned_directory, "coordinator", 97);
     let capture = temp.path().join("capture");
+    let posture_capture = temp.path().join("posture");
     let poisoned_path = std::env::join_paths(std::iter::once(poisoned_directory).chain(
         std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set")),
     ))
@@ -136,8 +146,10 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
         .args(["serve", "--runtime-config", "/tmp/managed.yaml"])
+        .env("REGISTRY_STACK_POSTURE", "development")
         .env("PATH", poisoned_path)
         .env("RUNTIME_CAPTURE", &capture)
+        .env("RUNTIME_POSTURE_CAPTURE", &posture_capture)
         .env("RSTACK_GENERATION_DIR", &generation)
         .env("RSTACK_COORDINATOR_BIN", &selected)
         .env("RSTACK_RELEASE_TAG", "v-test")
@@ -152,7 +164,17 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/managed.yaml"]
+        [
+            "--runtime-config",
+            "/tmp/managed.yaml",
+            "--posture",
+            "development"
+        ]
+    );
+    // The child receives both the inherited declaration and the resolved flag.
+    assert_eq!(
+        fs::read_to_string(posture_capture).unwrap(),
+        "development\n"
     );
 }
 

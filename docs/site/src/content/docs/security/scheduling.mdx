@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-28"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -49,6 +49,19 @@ callers holding bearer tokens from a configured issuer.
   The OIDC verifier and the grant expiry check at the door read the system clock.
   Hook delivery uses PostgreSQL `transaction_timestamp()`.
   The clock pin used in tests exists only in `postgres-test` builds (SCHEDULING-SEC-23).
+- The operator's view of a refusal: Scheduling counts every refused request by the check that
+  refused it, in `scheduling_request_refusals_total{check}` on the private metrics listener
+  ([metrics](../../operate/scheduling/#watch-the-metrics)).
+  The `check` label is a closed set of 45 names, every one published at zero, and no caller value
+  becomes a label.
+  An answer replayed from a stored receipt is not counted again.
+  Each refusal also writes one `request refused` log line with `failed_check` and the request's
+  trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
+  a window held back.
+  Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and
+  recording a refusal changes nothing the caller receives.
+  A hook or reminder destination in plain `http` must be on loopback.
+  Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which Scheduling connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
 
 {/* Evidence: products/scheduling/contracts/security-invariant-matrix.yaml SCHEDULING-SEC-03,
     SCHEDULING-SEC-04, SCHEDULING-SEC-05, SCHEDULING-SEC-14, SCHEDULING-SEC-23, SCHEDULING-SEC-29,
@@ -68,14 +81,29 @@ after the transaction ends.
 If either entry is refused, the caller gets `service.unavailable` instead of an unaudited answer.
 A refused `request` entry opens no transaction; a refused `response` entry after the commit answers
 `service.unavailable` with the commitment in place.
-`/readyz` follows the audit writer.
+`/ready` and `/readyz` follow the audit writer.
 
 {/* Evidence: crates/registry-scheduling/tests/postgres_commitments.rs
     a_refused_request_entry_opens_no_capacity_transaction,
     a_failed_capacity_transaction_pairs_its_request_entry,
     a_replayed_receipt_is_released_only_after_its_response_entry_is_accepted;
-    crates/registry-scheduling/src/http.rs readyz;
+    crates/registry-scheduling/src/http.rs ready and readyz;
     crates/registry-scheduling/src/service.rs audit_ready. */}
+
+## Deployment posture
+
+Production is the default.
+Development responses carry `Registry-Posture: development`, and audit lines carry the process posture.
+Production peers refuse development neighbours.
+Scheduling refuses development task-grant status answers in production.
+A verified bearer token marked as development gets a 401 with
+`platform.task-grant.development-assertion` and a `Bearer` challenge.
+Activate a fresh database to change the deployment posture.
+
+{/* Evidence: crates/registry-scheduling/src/runtime.rs open_audit;
+    crates/registry-scheduling/src/http.rs http_edge,
+    a_development_assertion_answers_with_one_bearer_challenge_and_claims_check;
+    crates/registry-scheduling/src/store/activation.rs posture_mismatch. */}
 
 ## Operator obligations
 
@@ -83,9 +111,8 @@ The guarantees hold only when you meet these obligations.
 
 1. Run PostgreSQL 17 or newer.
    Activation and startup refuse older servers.
-2. Reach PostgreSQL over TLS.
-   The runtime requires it; `database.testOnlyPlaintext` is honoured only in `postgres-test` builds,
-   and the shipped runtime refuses it with `scheduling.runtime.plaintext-database`.
+2. Use verified TLS for PostgreSQL across the network in production.
+   Only a `postgres-test` build accepts `database.testOnlyPlaintext`.
 3. Bind the listener to a loopback or private address, or declare
    `networkExposure: container-private`.
    Anything else refuses to start.
@@ -118,18 +145,18 @@ The guarantees hold only when you meet these obligations.
     See SCHEDULING-DEF-06.
 11. Bound request rates at your ingress.
     Scheduling keeps no request budget of its own (SCHEDULING-RES-06).
-12. Make your hook receivers tolerate duplicate events; delivery is at-least-once
+12. Deduplicate hook and reminder deliveries using `webhook-id`. Delivery is at-least-once
     (SCHEDULING-RES-07).
 13. Apply a new package to a new database when a refusal reports a pre-1.0 schema.
     No release upgrades that state in place.
-14. Use an HTTPS issuer and leave `authentication.oidc.allowInsecureHttp` unset.
+14. Use an HTTPS issuer and leave `allowInsecureHttp` unset in every issuer entry.
     Declare only issuer and JWKS addresses you intend Scheduling to reach (SCHEDULING-RES-10).
 
 {/* Evidence: crates/registry-scheduling/src/store.rs refuse_pre_1_0_schema, UnsupportedPostgres;
     crates/registry-scheduling/src/config.rs plaintext_postgres_is_refused_outside_the_test_suite,
     listener_requires_a_private_address_or_explicit_container_network, task_grant_status_refused,
     retention_days, default_claim_owner_retention_days, DEFAULT_RECEIPT_RETENTION_DAYS,
-    insecure_http_startup_diagnostic;
+    runtime_reads_the_explicit_http_issuer_opt_in;
     crates/registry-scheduling/tests/plaintext_config.rs
     the_default_feature_runtime_refuses_test_only_plaintext;
     crates/registry-scheduling/src/http.rs request_body_limit_default, without_hsts, no-store;
@@ -171,7 +198,13 @@ it is listed with them.
 - Condition: the deployment writes `taskGrantStatus: unchecked-final-fifteen-minutes`.
   The signed token does not say whether the grant was issued in immediate or deferred mode.
 - Consequence: a grant with 900 seconds or less remaining qualifies for the bounded offline path
-  with no revocation check.
+  with no revocation check. An unexpired grant with more than 900 seconds remaining answers
+  `grant.lifetime-too-long` when it creates a hold or an appointment, only after its bounds have
+  matched, so the answer reveals nothing about which services and locations a grant reaches. On a
+  route that names an existing hold or appointment, the same grant answers
+  `operation.not-authorized`, as an unknown identifier does, so the answer reveals nothing about
+  which identifiers exist. The code does reveal to the holder that the deployment has no status
+  authority listed. The holder already controls its own grant, so this is accepted.
   Even with status checks, a withdrawal that follows a positive status answer can race the
   in-flight local commit; the interval is bounded by the short execution credential and by deadline
   re-checks after every lock wait and before commit.
@@ -250,17 +283,21 @@ it is listed with them.
 
 - Condition: a send's response is lost, or a reminder's appointment is cancelled or moved while a
   dispatcher holds the reminder.
-- Consequence: a destination that ignores the envelope `id` may see an event twice.
+- Consequence: a destination that ignores `webhook-id` may see an event twice.
   A cancel or reschedule committed between the liveness check and the send can still send a stale
   reminder, and receivers get no ordering across processes.
   One worker serves each runtime process.
-- Operator mitigation: deduplicate on the envelope `id` and treat reminders as advisory.
+- Operator mitigation: deduplicate by `webhook-id`, which is the outbox id for reminders, and
+  treat reminders as advisory. Configure a distinct signing key for each reminder and hook
+  destination, including each configured reminder purpose. See the
+  [delivery signing guide](../../reference/delivery-signing/) for destination key isolation,
+  key generation without trailing newlines, and rotation.
 - Related: SCHEDULING-SEC-24, SCHEDULING-SEC-38.
 
 {/* Evidence: products/scheduling/contracts/security-invariant-matrix.yaml SCHEDULING-SEC-24,
     SCHEDULING-SEC-38;
     crates/registry-scheduling/tests/postgres_commitments.rs
-    a_signed_reminder_uses_the_shared_event_delivery_contract. */}
+    a_signed_reminder_uses_the_standard_webhooks_delivery_contract. */}
 
 ### SCHEDULING-RES-08: an open activation race fails closed with an availability cost
 
@@ -295,8 +332,8 @@ it is listed with them.
 
 ### SCHEDULING-RES-10: declared issuer and key endpoints are trusted
 
-- Condition: the runtime file names an issuer or JWKS URI, or sets
-  `authentication.oidc.allowInsecureHttp: true`.
+- Condition: the runtime file names an issuer or JWKS URI, or an issuer entry sets
+  `allowInsecureHttp: true`.
 - Consequence: Scheduling trusts a declared issuer or JWKS URI on the operator's word.
   Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
   keys and mint tokens Scheduling accepts.
@@ -306,7 +343,7 @@ it is listed with them.
   static `jwksSource`.
 - Related: SCHEDULING-SEC-04, SCHEDULING-SEC-16.
 
-{/* Evidence: crates/registry-scheduling/src/config.rs insecure_http_startup_diagnostic,
+{/* Evidence: crates/registry-scheduling/src/config.rs runtime_reads_the_explicit_http_issuer_opt_in,
     static_jwks_requires_unique_named_asymmetric_keys;
     crates/registry-platform-oidc/src/lib.rs
     a_cross_origin_jwks_must_use_https_even_under_the_http_opt_in,

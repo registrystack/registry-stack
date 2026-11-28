@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -64,6 +64,28 @@ choose as `name.*`, as in `workflow.steps.*.next` or `operations.*.uses`.
     products/coordinator/generated/operations/catalog.json.
     Run npm run generate from docs/site. */}
 <ConfigurationReference contracts={reference.contracts} prefix="coordinator" />
+
+## Deployment posture
+
+Declare `development` or `production` with `REGISTRY_STACK_POSTURE` or `--posture`.
+An undeclared posture is production. If you set both, use the same value.
+Run `rstack dev` for development, or declare it on the command you run. The
+`check` command reports development settings as warnings in development and
+errors in production. `check --production` declares production.
+
+Use `listener.tlsTermination: loopback-plaintext` for a loopback bind. Configure
+PostgreSQL separately with `database.transport`. Its default is `verified-tls`.
+Use `loopback-plaintext` for a socket or a loopback host, or
+`private-network-plaintext` in development for a private-network host.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+A loopback HTTP issuer needs no exception. `allowInsecureHttp: true` and
+`jwksSource.type: test-issuer` require development.
+
+{/* Evidence: crates/registry-platform-posture/src/lib.rs declared_from;
+    crates/registry-platform-config/src/blocks.rs DatabaseTransport, permitted_transport, OidcIssuerConfig;
+    crates/registry-platform-postgres/src/lib.rs postgres_connection;
+    crates/registry-coordinator/src/runtime.rs loader_with_posture, findings. */}
 
 ## Host operations
 
@@ -270,19 +292,19 @@ connections:
         - casework:review
     completion:
       recipientBinding: coordinator-v1
-      bearerTokenRef: secret:file/review-completion-token
+      hmacSha256KeyRef: secret:file/review-completion-key
     resultCheckSeconds: 900
 ```
 
 Coordinator then accepts Casework's completion events at `POST /v1/review-completions` on the service listener.
-It finds the connection by the `Authorization: Bearer` token and the `registry-recipient-binding` header together, comparing the token in constant time.
-It refuses any other sender with HTTP 401 `authentication.refused` before reading the body.
+The `Registry-Recipient-Binding` header selects the connection. Its configured key verifies the Standard Webhooks signature over the webhook ID, Unix timestamp, and exact body.
+An unknown binding or a refused signature answers HTTP 401 `authentication.refused`. The signed timestamp must be within 300 seconds in either direction.
 `recipientBinding` is 1 to 256 visible ASCII characters and differs between Casework connections.
-An authenticated event must meet these rules, and anything else answers HTTP 400 `request.invalid` or 415 `request.unsupported-media-type`:
+A body larger than 2048 bytes answers HTTP 413 `request.body-too-large`. Once its signature verifies, the event must meet these requirements. An invalid body answers HTTP 400 `request.invalid` and an unsupported media type answers HTTP 415 `request.unsupported-media-type`.
 
-- It is `application/json` and at most 2048 bytes.
+- It uses exactly `application/json`.
 - It names non-nil identifiers.
-- It repeats its `eventId` as the `idempotency-key` header.
+- Its `eventId` equals `webhook-id`.
 - It carries a `completedAt` no older than 365 days and no more than 5 minutes ahead of the Coordinator's clock.
 
 Every authentic event answers HTTP 204, whether or not a run waits on its request, and an event only brings forward the next result read of a run that does.
@@ -292,7 +314,7 @@ Without a `completion` block the route refuses every event, and waits rely on re
 `resultCheckSeconds` runs from 60 to 86,400 and defaults to 900.
 It spaces the reads of a waiting run when no event arrives.
 Lower it when completion events cannot reach Coordinator; each read is one request to Casework per waiting run.
-A live run's binding includes `producer` but neither `completion` nor `resultCheckSeconds`, so you can change either, or rotate the completion token, while runs wait.
+A live run's binding includes `producer` but neither `completion` nor `resultCheckSeconds`, so you can change either while runs wait. To rotate the completion key, put new bytes behind the current reference and supply the old bytes through `previousHmacSha256KeyRef`.
 
 Select the review policy by ID from the owning Casework project's compiled `policyBindings` report.
 Casework binds its current concrete policy at first acceptance.
@@ -321,22 +343,44 @@ trustedProducers:
       recipientBinding: coordinator-v1
 ```
 
-In the Casework runtime file, bind that destination to the Coordinator route and to Casework's own reference to the same token.
-Present it as a bearer token with `bearerTokenRef` or `auth: {secretRef}`; Coordinator accepts no custom header.
+In the Casework runtime file, bind that destination to the Coordinator route and to Casework's own reference to the same key file.
 `attemptTimeoutMilliseconds`, `maximumAttempts`, and `retryDelaySeconds` bound Casework's delivery, as the Casework runtime configuration describes:
 
 ```yaml
 reviewCompletionDestinations:
   coordinator:
     url: https://coordinator.example.org/v1/review-completions
-    bearerTokenRef: secret:file/coordinator-completion-token
+    hmacSha256KeyRef: secret:file/review-completion-key
 ```
 
 The [reviewed notice example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples/reviewed-notice) lists the full set of Casework prerequisites for one review producer.
 
 {/* Evidence: crates/registry-coordinator/src/http/admission_contracts.rs review-completions;
-    crates/registry-coordinator/src/runtime.rs recipient_binding, bearer_token_ref;
+    crates/registry-coordinator/src/runtime.rs recipient_binding, hmac_sha256_key_ref;
     crates/registry-coordinator/tests/casework_adapter.rs. */}
+
+### Event sources
+
+Key each trusted producer by the alias its workflows declare.
+Set its exact producer URI and assign a distinct key to each workflow and trigger in the delivery URL.
+
+```yaml
+eventSources:
+  scheduling:
+    source: urn:registrystack:scheduling:coordinator-lifecycle
+    triggers:
+      scheduling-lifecycle:
+        confirmed:
+          hmacSha256KeyRef: secret:file/scheduling-confirmed-event-key
+        cancelled:
+          hmacSha256KeyRef: secret:file/scheduling-cancelled-event-key
+```
+
+You can declare up to 16 sources, 16 workflow entries per source, and 16 trigger entries per workflow.
+Every deployed trigger needs its own entry and every key entry must match a deployed trigger using that alias.
+The key holds 32 to 64 exact bytes.
+You can omit the optional `previousHmacSha256KeyRef` for each trigger and each completion connection.
+All current and previous keys must be distinct across triggers and completion connections.
 
 ### Observation authorisation
 

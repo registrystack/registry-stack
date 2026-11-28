@@ -163,7 +163,6 @@ identity:
   environment: production
   instanceId: {INSTANCE}
   databaseId: {DATABASE}
-  databaseInitializationEnvironment: production
 secretProviders:
   environment: {{}}
   file:
@@ -183,22 +182,24 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: http://127.0.0.1:9
-    audience: urn:breg:test
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 10
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: http://127.0.0.1:9
+        audience: urn:breg:test
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 10
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: principal
 audit:

@@ -15,14 +15,23 @@ use registry_platform_config::SecretResolver;
 use thiserror::Error;
 use tokio_postgres::Config as PgConfig;
 
+use registry_platform_config::{
+    DatabaseTransport, DatabaseTransportError, DevelopmentWitness, Posture,
+};
+
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const DOCUMENTS_MIGRATION: &str = include_str!("../migrations/0100_documents.sql");
+const ACTIVATION_POSTURE_MIGRATION: &str =
+    include_str!("../migrations/0101_activation_posture.sql");
 
 /// Every schema version, in the order it is applied. Readiness requires the
 /// applied set to be exactly this list. The 1.0 baseline is version
 /// [`BASELINE_SCHEMA_VERSION`]; each later migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 1] = [(100, DOCUMENTS_MIGRATION)];
+pub(crate) const MIGRATIONS: [(i64, &str); 2] = [
+    (100, DOCUMENTS_MIGRATION),
+    (101, ACTIVATION_POSTURE_MIGRATION),
+];
 /// The 1.0 baseline schema version, shared with the other products.
 const BASELINE_SCHEMA_VERSION: i64 = 100;
 const _: () = assert!(
@@ -56,6 +65,8 @@ pub enum StoreError {
     ActivationSchemaMismatch,
     #[error("the Document Store database configuration is invalid")]
     Configuration,
+    #[error("{code}: {0} {action}", code = .0.code(), action = .0.suggested_action())]
+    Transport(#[from] DatabaseTransportError),
     #[error("the Document Store database secret could not be resolved: {0}")]
     SecretConfiguration(String),
     #[error("the Document Store database schema is not the version this runtime expects; apply the schema with the migration connection")]
@@ -79,6 +90,7 @@ pub enum StoreError {
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: Pool,
+    pub(crate) posture: Posture,
     active_package: Option<(String, String)>,
 }
 
@@ -95,11 +107,22 @@ impl PostgresStore {
         config: &DatabaseConfig,
         secrets: &SecretResolver,
     ) -> Result<Self, StoreError> {
+        Self::connect_runtime_with_posture(config, secrets, Posture::Production, None)
+    }
+
+    pub(crate) fn connect_runtime_with_posture(
+        config: &DatabaseConfig,
+        secrets: &SecretResolver,
+        posture: Posture,
+        witness: Option<&DevelopmentWitness>,
+    ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
             "database.runtimeUrlRef",
             &config.runtime_url_ref,
+            posture,
+            witness,
         )
     }
 
@@ -107,11 +130,22 @@ impl PostgresStore {
         config: &DatabaseConfig,
         secrets: &SecretResolver,
     ) -> Result<Self, StoreError> {
+        Self::connect_migration_with_posture(config, secrets, Posture::Production, None)
+    }
+
+    pub(crate) fn connect_migration_with_posture(
+        config: &DatabaseConfig,
+        secrets: &SecretResolver,
+        posture: Posture,
+        witness: Option<&DevelopmentWitness>,
+    ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
             "database.migrationUrlRef",
             &config.migration_url_ref,
+            posture,
+            witness,
         )
     }
 
@@ -120,36 +154,28 @@ impl PostgresStore {
         secrets: &SecretResolver,
         field: &'static str,
         reference: &str,
+        posture: Posture,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         let protected = secrets.resolve(reference).map_err(|error| {
             StoreError::SecretConfiguration(describe_secret_failure(field, reference, &error))
         })?;
         let url = std::str::from_utf8(protected.expose_secret())
             .map_err(|_| StoreError::Configuration)?;
-        let mut postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
-        if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
-            return Err(StoreError::Configuration);
-        }
+        let (postgres, verified_tls) = driver_config(
+            config,
+            url,
+            witness,
+            &registry_platform_config::resolve_database_host,
+        )?;
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
-        #[cfg(feature = "postgres-test")]
-        let manager = if config.test_only_plaintext {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
+        let manager = if verified_tls {
+            let connector = tls_connector(config, secrets)?;
+            Manager::from_config(postgres, connector, manager_config)
         } else {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
-        };
-        #[cfg(not(feature = "postgres-test"))]
-        let manager = {
-            if config.test_only_plaintext {
-                return Err(StoreError::Configuration);
-            }
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
+            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
         };
         let pool = Pool::builder(manager)
             .max_size(32)
@@ -161,6 +187,7 @@ impl PostgresStore {
             .map_err(|_| StoreError::Configuration)?;
         Ok(Self {
             pool,
+            posture,
             active_package: None,
         })
     }
@@ -476,5 +503,75 @@ mod tests {
             (100, ""),
             (100, "")
         ]));
+    }
+}
+
+/// The driver configuration the pool is built from, and whether it requires
+/// verified TLS. Under a plaintext transport every TCP host is replaced by
+/// the numeric addresses its check accepted, so the driver never resolves a
+/// name again.
+fn driver_config(
+    config: &DatabaseConfig,
+    url: &str,
+    witness: Option<&DevelopmentWitness>,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<(PgConfig, bool), StoreError> {
+    let postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
+    if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
+        return Err(StoreError::Configuration);
+    }
+    config.check(cfg!(feature = "postgres-test"))?;
+    let (transport, mut postgres) =
+        registry_platform_postgres::postgres_connection(config, postgres, witness, resolve)?;
+    let verified_tls = transport == DatabaseTransport::VerifiedTls && !config.test_only_plaintext;
+    postgres.ssl_mode(if verified_tls {
+        tokio_postgres::config::SslMode::Require
+    } else {
+        tokio_postgres::config::SslMode::Disable
+    });
+    Ok((postgres, verified_tls))
+}
+
+#[cfg(test)]
+mod driver_config_tests {
+    use registry_platform_config::Gated;
+
+    use super::*;
+
+    #[test]
+    fn a_loopback_name_reaches_the_pool_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        let config = DatabaseConfig {
+            runtime_url_ref: "secret:env/DB_RUNTIME".to_owned(),
+            migration_url_ref: "secret:env/DB_MIGRATION".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap()),
+        };
+        let (postgres, verified_tls) = driver_config(
+            &config,
+            "postgresql://app@localhost:5433/documents",
+            None,
+            &fixed,
+        )
+        .unwrap();
+        assert!(!verified_tls);
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
     }
 }

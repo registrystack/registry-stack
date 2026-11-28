@@ -296,7 +296,8 @@ async fn evidence_pack_executes_actual_sql_without_credentials_and_projects_fact
         "urn:registry-evidence:offline-evaluation",
     )
     .expect("the fixture selector is authorized");
-    let programs = compile_sources(&bundle).expect("the pack compiles without runtime credentials");
+    let programs = compile_sources(&bundle, registry_evidence::config::Posture::Production)
+        .expect("the pack compiles without runtime credentials");
     let program = &programs[requirement.initial_source()];
     let assets = program
         .materialize_single_extract_in(
@@ -335,7 +336,8 @@ async fn evidence_pack_binds_selector_text_and_uses_one_repeatable_host_clock() 
     let bundle = reference_bundle();
     let fixture = fixture(&bundle);
     let requirement = bundle.config.requirements.first().unwrap();
-    let programs = compile_sources(&bundle).expect("the source pack compiles");
+    let programs = compile_sources(&bundle, registry_evidence::config::Posture::Production)
+        .expect("the source pack compiles");
     let program = &programs[requirement.initial_source()];
 
     let hostile = resolve_offline_fixture_authorization(

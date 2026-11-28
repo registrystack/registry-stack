@@ -62,18 +62,29 @@ fn scoped_url(base: &str, schema: &str) -> String {
 
 fn activate(config: &Path) {
     let config = config.to_path_buf();
-    std::thread::spawn(move || activation::apply(&config, None, &[]))
-        .join()
-        .expect("activation does not panic")
-        .expect("the package activates");
+    std::thread::spawn(move || {
+        activation::apply(
+            &config,
+            None,
+            &[],
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+    })
+    .join()
+    .expect("activation does not panic")
+    .expect("the package activates");
 }
 
 fn apply_error(config: &Path, records_path: &Path) -> String {
     let config = config.to_path_buf();
     let records_path = records_path.to_path_buf();
     std::thread::spawn(move || {
-        let error = records::apply(&config, &records_path)
-            .expect_err("missing configured busy-source coverage refuses records");
+        let error = records::apply(
+            &config,
+            &records_path,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .expect_err("missing configured busy-source coverage refuses records");
         format!("{error:#}")
     })
     .join()
@@ -96,9 +107,9 @@ fn write_runtime(
              listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
              secretProviders:\n  environment: {{}}\n\
              identity:\n  databaseId: busy-records-test\n\
-             authentication:\n  oidc:\n    issuer: https://identity.example.test\n\
-             \x20   audience: urn:example:scheduling\n\
-             \x20   allowedClients: [scheduling-test-client]\n\
+             authentication:\n  oidc:\n    issuers:\n      main:\n        issuer: https://identity.example.test\n\
+             \x20       audience: urn:example:scheduling\n\
+             \x20       allowedClients: [scheduling-test-client]\n\
              \x20   busyImportProfiles:\n\
              \x20     staff-calendar:\n\
              \x20       scope: scheduling-busy-write\n\

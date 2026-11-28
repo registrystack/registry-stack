@@ -443,6 +443,7 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | Cache entry lifetime | `cacheTtlSeconds` | |
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
 | Outbound hook destination bindings, one entry per destination id | `destinations.hooks` | `eventDestinations` |
+| Current and optional previous HMAC-SHA256 signing key references for a shared URL hook destination | `hmacSha256KeyRef`, `previousHmacSha256KeyRef` | |
 | What a caller resolved to an access profile is to the service (Casework, Documents, Messaging; `role` keeps its data sense elsewhere, so review refuses it here) | `actsAs` under an access profile | |
 | Human-readable name of an authored item (project, workflow, function, operation, step, event trigger); a project's own is `project.label` | `label` | `title` |
 | A holiday set (the Casework holiday-set file, Scheduling `holidaySets`) | `id`, `revision`, `label`, `dates`; each product keeps its own placement and mirrors the shape, since the two share no crate | |
@@ -613,7 +614,9 @@ must decide (`requiredScopes`, `rowBoundaries`, `allowedClients`) is required
 and takes the sentinel `unrestricted` in place of the list. A member that only
 narrows further (`requiredPurposes`, `requesterClients`) takes no sentinel:
 omit it when nothing is added, and the format registry records its omission as
-open. An enumerable set (Scheduling
+open. A format whose governed package names the clients may also accept the
+keyword `from-package` for `allowedClients`, meaning the package's requester
+clients. The member stays required and omission stays refused. An enumerable set (Scheduling
 `channels`) takes no sentinel: its open choice is every member listed, and
 `[]` is refused.
 
@@ -921,7 +924,9 @@ The shared concept includes its policy capabilities, not only its transport.
 `UrlHookDestinationConfig` covers signed URL delivery under the fixed outbound
 policy defined by `registry-platform-hooks`: no configured private address
 ranges or client certificate. Documents and Scheduling embed that block
-unchanged. BReg's `RawEventDestinationConfig` additionally governs explicit
+unchanged. The binding digest includes `hmacSha256KeyRef`, which stays stable
+during rotation, and excludes the optional `previousHmacSha256KeyRef`.
+BReg's `RawEventDestinationConfig` additionally governs explicit
 private ranges, TLS identities, classification and delivery ceilings; that
 full-policy configuration is outside the simple block's scope and remains
 product-owned. Both use the platform delivery primitives. A product needing

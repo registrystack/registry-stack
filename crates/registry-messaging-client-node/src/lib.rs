@@ -24,6 +24,8 @@ const MAXIMUM_JAVASCRIPT_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MessagingClientConfig {
     base_url: String,
+    #[serde(default)]
+    refuse_development_peer: bool,
     attempt_timeout_milliseconds: Option<f64>,
     connect_timeout_milliseconds: Option<f64>,
     maximum_response_bytes: Option<f64>,
@@ -57,7 +59,12 @@ impl MessagingClient {
         let base_url = Url::parse(&config.base_url).map_err(|_| {
             binding_error("configuration", "Messaging client configuration is invalid")
         })?;
-        let mut core = CoreConfig::new(base_url);
+        let peer_policy = if config.refuse_development_peer {
+            registry_messaging_client::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            registry_messaging_client::PeerPolicy::AcceptDevelopmentPeer
+        };
+        let mut core = CoreConfig::new(base_url, peer_policy);
         if let Some(value) = config.attempt_timeout_milliseconds {
             core = core.with_attempt_timeout(Duration::from_millis(whole_number(value)?));
         }
@@ -247,6 +254,10 @@ fn error_envelope(error: MessagingClientError) -> Value {
             "title": code.title(),
             "detail": code.detail(),
             "message": code.detail(),
+        }),
+        MessagingClientError::DevelopmentPeer => json!({
+            "kind": "development-peer",
+            "message": MessagingClientError::DevelopmentPeer.to_string(),
         }),
         MessagingClientError::Protocol {
             status,

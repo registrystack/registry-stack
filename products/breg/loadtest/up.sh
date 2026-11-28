@@ -28,12 +28,19 @@ for command in cargo docker python3; do
     exit 2
   }
 done
+umask 077
 if [[ -L "$run_dir" || -e "$run_dir" ]]; then
-  printf '%s\n' "load-test state path already exists: $run_dir. Preserve it, or move it aside after stopping its owned dev run." >&2
-  exit 2
+  if [[ -L "$run_dir" || ! -d "$run_dir" || -L "$run_dir/.launcher-owned" || ! -f "$run_dir/.launcher-owned" ]] ||
+    [[ "$(<"$run_dir/.launcher-owned")" != registry-stack-breg-loadtest-v2 ]] ||
+    ! python3 -c 'import json, sys; report = json.load(open(sys.argv[1])); sys.exit(not (report.get("status") == "stopped" and report.get("cleaned") is True))' "$run_dir/stop-report.json" 2>/dev/null; then
+    printf '%s\n' "load-test state path already exists: $run_dir. Stop its owned dev run with down.sh before starting again." >&2
+    exit 2
+  fi
+  archive=$(mktemp -d "$loadtest_dir/.run-archive.XXXXXXXX")
+  mv -- "$run_dir" "$archive/"
+  printf 'Previous load-test evidence: %s/.run\n' "$archive"
 fi
 
-umask 077
 mkdir -m 700 "$run_dir"
 printf '%s\n' 'registry-stack-breg-loadtest-v2' >"$run_dir/.launcher-owned"
 
@@ -57,9 +64,11 @@ rstack="$repository_root/target/$build_profile/rstack"
 export RSTACK_BREG_BIN="$repository_root/target/$build_profile/breg"
 export RSTACK_BREGCTL_BIN="$repository_root/target/$build_profile/bregctl"
 export RSTACK_DEV_STATE_DIR="$run_dir/state"
+unset RSTACK_DEV_DATABASE_URL RSTACK_DEV_DATABASE_CA
 bregctl="$RSTACK_BREGCTL_BIN"
+rstack_args=(--install-root "$repository_root/target/$build_profile" --format json)
 rstack_dev() {
-  "$rstack" --install-root "$repository_root/target/$build_profile" --format json dev "$@"
+  "$rstack" "${rstack_args[@]}" dev "$@"
 }
 run_id=""
 
@@ -67,8 +76,11 @@ cleanup_failed_start() {
   local status=$?
   if [[ "$status" -ne 0 && -n "$run_id" ]]; then
     printf '%s\n' 'Load-test startup failed; stopping only the run this script started.' >&2
-    rstack_dev stop "$run_id" >/dev/null 2>&1 ||
-      printf '%s\n' "Automatic cleanup failed; run: rstack dev stop $run_id" >&2
+    if ! rstack_dev stop "$run_id" --clean >/dev/null; then
+      printf 'Automatic cleanup failed. Run RSTACK_DEV_STATE_DIR=%q ' "$RSTACK_DEV_STATE_DIR" >&2
+      printf '%q ' "$rstack" "${rstack_args[@]}" dev stop "$run_id" --clean >&2
+      printf '\n' >&2
+    fi
   fi
   exit "$status"
 }

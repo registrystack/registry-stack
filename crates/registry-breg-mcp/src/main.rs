@@ -47,10 +47,52 @@ fn operational_targets(level: Level) -> Targets {
     Targets::new()
         .with_target("registry_breg_mcp", level)
         .with_target("registry_mcp_edge", level)
+        .with_target("registry_platform_config::posture", Level::INFO)
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let flag = cli.posture.as_deref();
+    let production = matches!(&cli.command, Command::Check(arguments) if arguments.production);
+    let usage_error = |code: &str, message: &str, action: &str| {
+        if matches!(&cli.command, Command::Check(arguments) if arguments.format == check::OutputFormat::Json)
+        {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "apiVersion": "id.registrystack.org/formats/breg/mcp-ctl-report/v1alpha1",
+                    "kind": "BRegMcpCtlReport",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "command": "check",
+                    "status": "usage-error",
+                    "ok": false,
+                    "filesChecked": 0,
+                    "errors": 1,
+                    "warnings": 0,
+                    "diagnostics": [{"severity": "error", "code": code, "path": "", "message": message, "suggestedAction": action}],
+                })
+            );
+        } else {
+            eprintln!("{code}: {message}. {action}");
+        }
+        ExitCode::from(2)
+    };
+    if production && flag == Some("development") {
+        return usage_error(
+            "platform.posture.conflict",
+            "--production and --posture development contradict each other",
+            "Use one of them.",
+        );
+    }
+    let flag = if production {
+        flag.or(Some("production"))
+    } else {
+        flag
+    };
+    let declared = match registry_platform_config::declared(flag) {
+        Ok(declared) => declared,
+        Err(error) => return usage_error(error.code(), error.message(), error.suggested_action()),
+    };
 
     // The offline check writes its own report and reads no log setting.
     if let Command::Check(arguments) = &cli.command {
@@ -58,6 +100,7 @@ fn main() -> ExitCode {
             runtime: &cli.runtime_config,
             environment: arguments.environment,
             format: arguments.format,
+            posture: declared,
             deny_warnings: arguments.deny_warnings,
         };
         return ExitCode::from(check::run(
@@ -80,13 +123,14 @@ fn main() -> ExitCode {
 
     // A refused runtime file is reported in the shared human shape on
     // standard error (CFG-DIAG-2), naming members and never their values.
-    let config = match RuntimeConfig::load(&cli.runtime_config) {
+    let loaded = match RuntimeConfig::load_with_posture(&cli.runtime_config, declared) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("breg-mcp: {error}");
             return ExitCode::FAILURE;
         }
     };
+    let config = loaded.config;
     let level = environment_level.unwrap_or_else(|| {
         operational_log_level(Err(std::env::VarError::NotPresent), config.log_level)
             .expect("the runtime log level was validated")
@@ -104,7 +148,8 @@ fn main() -> ExitCode {
         .with(operational_targets(level))
         .init();
 
-    match serve(&config) {
+    loaded.posture.log_startup();
+    match serve(&config, &loaded.posture, loaded.development.as_ref()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             // Startup failures name the failing field and stage, never the
@@ -115,14 +160,18 @@ fn main() -> ExitCode {
     }
 }
 
-fn serve(config: &RuntimeConfig) -> Result<(), String> {
+fn serve(
+    config: &RuntimeConfig,
+    posture: &registry_platform_config::PostureReport,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| format!("the async runtime could not start: {error}"))?;
     runtime.block_on(async {
         let shutdown = shutdown_after(registry_platform_httpsec::shutdown_signal)?;
-        runtime::serve(config, shutdown)
+        runtime::serve(config, posture, development, shutdown)
             .await
             .map_err(|error| format!("the gateway could not serve: {error}"))
     })

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -25,7 +25,7 @@ Delivery is not approval, and approval is not application: a job reports what it
   It is also the buffer a retry reads again.
   Source data is not registry authority.
 - The Adapter ingestion job reads the source, compares items, maps for the direct destination, hands off, keeps the source position and reports status.
-  It holds a source credential and, per destination, a BReg credential or a signing key.
+  It holds a source credential and either a BReg credential or signing keys for the Coordinator triggers.
   It holds no other product's client or credential, and it has no steps, branches, waits or business timers.
 - Coordinator, when used, owns admission, one Run per item, lookup, choice, waits, recovery of its own commands and reaching a person.
   No product depends on it.
@@ -151,6 +151,26 @@ Publishing a new message ID alone does not clear the old delivery, and the Adapt
 
 A job compiler loads a pack, an `AdapterJob` definition and an `AdapterJobRuntimeConfig`.
 The runtime config is the job's own file, distinct from the facade's `AdapterRuntimeConfig`.
+Job commands default to production and accept `--posture development` or
+`REGISTRY_STACK_POSTURE=development` for development runs.
+The job store defaults to verified TLS. Set `store.transport: loopback-plaintext`
+for a Unix socket, numeric loopback address or `localhost`.
+In development the job store also accepts `private-network-plaintext`.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the job host starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+A job pass records its posture when it takes the store lease.
+A pass, preview, rescan or identity rebind fails with `adapter.job.posture-mismatch` if the store records a different posture.
+Use the recorded posture or use a fresh store when you change posture.
+Run `adapter-job status` to see both the recorded and declared posture.
+
+{/* Evidence: crates/registry-adapter-job/tests/postgres_job.rs expired_development_lease_retains_the_store_posture, status_reports_a_pass_recorded_in_a_different_posture;
+    crates/registry-adapter-job/tests/job_file_host.rs rebind_identity_clears_the_fence_the_dry_run_reports. */}
+A PostgreSQL source on a Unix socket, numeric loopback or `localhost` can use
+`tls: {type: loopback-plaintext}` in either posture.
+
+{/* Evidence: crates/registry-adapter-job/src/main.rs load_runtime;
+    crates/registry-adapter-job/src/store.rs build_pool_in_posture;
+    crates/registry-adapter-job/src/postgres_source.rs PostgresSourceTls::LoopbackPlaintext. */}
 The compiler exposes the job's source route as a runnable program with no listener, no database requirement for the route, no OIDC issuer and no inbound Record shape.
 The exchange starts with a null body and the job cursor under a closed property name, bounded by the job profile's page deadline.
 The engine is the listener-free `registry-adapter-engine` crate, shared by the job host, the facade and the Evidence host.
@@ -293,7 +313,7 @@ There are exactly two destinations, chosen per job by what its items need.
 | | Direct to BReg | Signed event to Coordinator |
 | --- | --- | --- |
 | Use when | The item maps to one BReg operation with no lookup: an immediate Action, or a Proposal start and submit | The item needs a lookup, a choice between operations, a wait, a person, or a write outside BReg |
-| Adapter holds | The BReg client behind the `direct-breg` feature, and a BReg credential | A signing key, no product client and no Coordinator crate |
+| Adapter holds | The BReg client behind the `direct-breg` feature, and a BReg credential | One signing key per trigger, no product client and no Coordinator crate |
 | Mapping runs | In the job, as a Rhai script | In the workflow, as a Rhai Function on the same engine |
 | Retry identity | Command keys derived from the job, the item key and its sequence | An event ID derived from the same three |
 | Accepted means | BReg committed the Action, or the Proposal is submitted | Coordinator admitted the event and opened a Run |
@@ -346,7 +366,14 @@ A metadata mismatch or operation refusal never selects another operation or dest
 {/* Evidence: crates/registry-adapter-core/src/job.rs RevisedEventReceiver */}
 {/* Evidence: crates/registry-adapter-core/src/job.rs revised_receiver_refuses_the_registration_trigger */}
 
-The job sends one signed event per item, in the platform's `HookEnvelope` format signed with `sign_v1`.
+{/* Evidence: crates/registry-adapter-connectors/src/coordinator_event.rs a_signed_event_signs_id_timestamp_and_the_exact_body */}
+{/* Evidence: crates/registry-adapter-connectors/src/coordinator_event.rs a_rotating_trigger_sends_the_current_signature_first */}
+{/* Evidence: crates/registry-adapter-job/src/runtime_destination.rs resolve_destination_keys */}
+
+The job sends one event per item as a canonical JSON `HookEnvelope` in a Standard Webhooks POST to `/v1/events/{workflow}/{trigger}`.
+The request carries `accept: application/json`, `content-type: application/json`, `webhook-id`, `webhook-timestamp`, and `webhook-signature`.
+The signature covers the envelope ID, the send time in Unix seconds, and the exact body bytes.
+The receiver accepts a `webhook-timestamp` up to 300 seconds before or after its own clock.
 It admits one Run of a reviewed workflow through `workflow.eventTriggers`.
 Admission and Run commit together, and a repeat of the same event recovers the same Run.
 The workflow maps, resolves the target, calls one typed operation such as `breg.submit-proposal/v1`, and follows the outcome with `wait-for`.
@@ -354,7 +381,7 @@ Coordinator recovers its own commands, and the job tracks only the admission.
 
 The event data has one fixed wrapper: `job: {id, version}`, `key`, `sequence`, `digest`, `item` (the declared projection), and `priorRunId` only when known.
 Event identity and event time are stable for one item sequence.
-Transport time, signature and the monotonically increasing delivery attempt are renewed for retry.
+Each retry keeps the envelope ID as `webhook-id` and signs with the time of that send as `webhook-timestamp`. The job tracks the delivery attempt in its item table.
 The selected public receiver identity is frozen durably before sending.
 A pending sequence with a frozen receiver cannot be retargeted by configuration changes: when the selected receiver differs, the pass stops as `adapter.job.coordinator-receiver-changed` without advancing position, and restoring the original receiver permits recovery.
 A rescan of an item whose refusal answered its last attempt clears its frozen receiver, and the receiver selected when the item is next sent is frozen in its place.
@@ -363,8 +390,17 @@ A rescan sends it only to that receiver with that body, and a changed receiver o
 A possibly accepted item on a job with no revised trigger has no receiver to select: it is held as `adapter.job.revised-item` and sent nowhere, even when its revised event was sent and that answer was lost, and restoring the revised trigger does not resend a held item.
 
 `destination.revisedReceiver` optionally selects a revised-item `trigger`, `eventType` and `dataSchema` inside the same workflow and runtime binding.
-Its trigger must be distinct from the registration trigger.
-Without it, revised items remain held.
+Its trigger must be distinct from the registration trigger. Without a revised receiver, revised items remain held.
+Set `hmacSha256KeyRef` on the runtime destination for the registration trigger.
+When the job declares a revised receiver, set `revisedReceiver.hmacSha256KeyRef` on the runtime destination for that trigger. Omit the runtime block when the job has no revised receiver.
+
+Generate a separate key file for each trigger with `(umask 077; openssl rand -hex 32 | tr -d '\n' > key)`.
+Use distinct current and previous key bytes across all destinations and triggers in the runtime file.
+Each key must contain 32 to 64 exact bytes. Supply the same key file to the Coordinator trigger that receives the event.
+To rotate a trigger's key, set its `hmacSha256KeyRef` to the new key and set `previousHmacSha256KeyRef` in the same block to the old key.
+The job sends two `v1,<base64>` signature entries, separated by a space, with the current key first.
+Remove the previous reference after the receiving trigger has switched to the current key.
+
 A revised event may have no prior Run ID after an uncertain admission.
 The workflow must handle that case without creating a second registration or acquiring a person's authority.
 
@@ -414,7 +450,7 @@ The job keeps no payload at rest, so there is nothing to seal and no vault to ru
 | No payload in the item table | A dump or backup exposes personal data | A retry needs the source; a source that deletes early loses the item |
 | Field projection | A whole form reaches BReg, Coordinator, or their operators | One declared field list |
 | Narrow grants | An ingestion credential approves or applies | BReg Start, Submit and Get, or one Action; no Apply, no List |
-| Signed events, Coordinator destination only | A forged event starts a Run | One rotatable signing key; a clock within 30 seconds |
+| Signed events, Coordinator destination only | A forged event starts a Run | One rotatable signing key per trigger and a synchronized clock |
 | Value-free logs and status | Personal data reaches log aggregation | None |
 
 Four properties are never cut:
@@ -462,7 +498,7 @@ Aggregate `status` names only a count and a code, so it points you to `inspect` 
 
 The mode packages as one native companion executable on PostgreSQL.
 For a small IT team, a direct job adds one binary, one database, one source credential and one BReg credential.
-A Coordinator job swaps the BReg credential for a signing key and a clock within 30 seconds of Coordinator's.
+A Coordinator job needs a signing key per trigger and a clock synchronized with Coordinator's.
 
 ## Webhook ingress
 
@@ -484,7 +520,7 @@ The KoboToolbox example adds a webhook trigger with `job.hook.yaml` and `job-run
 Configure the KoboToolbox webhook to send `POST` requests to the public HTTPS URL whose path is `/hooks/kobo-submissions`, using HTTP Basic authentication.
 
 Each source binding has its own Basic credentials through secret references, and finite request-rate and burst bounds.
-Put the exact username and password in the two files referenced by `hookIngress.sources.kobo-submissions`, with the file permissions the platform secret provider requires (mode `0400` or `0600`).
+Put the exact username and password in the two files referenced by `hookIngress.sources.kobo-submissions`, with the file permissions the platform secret provider requires, in the [secret file rule](../../security/hardening-checklist/#secret-files) (for example mode `0400` or `0600` for a file the service user owns).
 Write them without a trailing newline, for example `printf '%s' "$PASSWORD" > hook-password`, because the host refuses a value that ends with a newline.
 The Adapter resolves and captures them at host startup, and `adapter-job check` resolves them too.
 A missing, unsafe or malformed credential is therefore refused with the runtime member and the secret reference named, instead of failing later as a `401`.
@@ -506,7 +542,7 @@ It does not time out a partly sent request head, cap open connections, or count 
 Do not expose the loopback plaintext listener directly or change it to a non-loopback bind.
 The host does not expose non-loopback plaintext ingress.
 
-`development-loopback` and port `0` are only for local development and tests.
+Use `tlsTermination: loopback-plaintext` to let the hook listener bind port `0`.
 When port `0` is selected, the host writes one startup line to standard error as `adapter.job.hook-listening address=<loopback-address>:<assigned-port>`.
 Standard output remains reserved for command reports.
 

@@ -3,10 +3,9 @@
 
 use clap::Parser;
 use registry_breg::cli::Arguments;
-use registry_breg::runtime_config::load_runtime_config;
 use registry_breg::startup::{
-    map_runtime_config_error, operational_log_level, prepare_loaded, select_operational_log_level,
-    serve, OperationalEvent, OperationalLogLevel,
+    map_runtime_config_error, operational_log_level, select_operational_log_level, serve,
+    OperationalEvent, OperationalLogLevel, StartupError, StartupInputs,
 };
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
@@ -14,6 +13,18 @@ use tracing_subscriber::prelude::*;
 #[tokio::main]
 async fn main() {
     let arguments = Arguments::parse();
+    let declared = match registry_platform_config::declared(arguments.posture.as_deref()) {
+        Ok(declared) => declared,
+        Err(error) => {
+            eprintln!(
+                "{}: {}\n{}",
+                error.code(),
+                error.message(),
+                error.suggested_action()
+            );
+            std::process::exit(2);
+        }
+    };
     let environment_log_level = match std::env::var("BREG_LOG") {
         Ok(value) => match operational_log_level(Some(&value)) {
             Ok(_) => Some(value),
@@ -40,8 +51,8 @@ async fn main() {
         OperationalEvent::Stopped.emit();
         std::process::exit(2);
     }
-    let config = match load_runtime_config(&arguments.runtime_config) {
-        Ok(config) => config,
+    let inputs = match StartupInputs::load(&arguments.runtime_config, declared) {
+        Ok(inputs) => inputs,
         Err(error) => {
             initialize_logging_filter(
                 select_operational_log_level(environment_log_level.as_deref(), "info")
@@ -51,23 +62,44 @@ async fn main() {
             // The operator reads every reader diagnostic, with its position
             // and fix, on stderr; the operational log on stdout carries only
             // the closed refusal class.
-            eprintln!("breg did not start: its runtime configuration was refused.");
-            eprint!("{}", error.render_human(Some(&arguments.runtime_config)));
-            OperationalEvent::StoppedWithError(map_runtime_config_error(error)).emit();
+            let error = match error {
+                StartupError::RuntimeConfig(cause) => {
+                    let refused =
+                        if cause.diagnostics(None).iter().any(|diagnostic| {
+                            diagnostic.code == "breg.posture.placeholder-identity"
+                        }) {
+                            "its deployment posture was refused"
+                        } else {
+                            "its runtime configuration was refused"
+                        };
+                    eprintln!("breg did not start: {refused}.");
+                    eprint!("{}", cause.render_human(Some(&arguments.runtime_config)));
+                    map_runtime_config_error(cause)
+                }
+                other => other,
+            };
+            OperationalEvent::StoppedWithError(error).emit();
             std::process::exit(1);
         }
     };
     let level = select_operational_log_level(
         environment_log_level.as_deref(),
-        config.log_level().as_str(),
+        inputs.config().log_level().as_str(),
     )
     .expect("the environment and runtime log levels were validated");
     initialize_logging_filter(level);
     OperationalEvent::StartupBegan.emit();
-    let clients_unrestricted = config.authentication().oidc().admits_every_client();
-    let prepared = match prepare_loaded(config).await {
+    let clients_unrestricted = inputs
+        .config()
+        .authentication()
+        .oidc()
+        .admits_every_client();
+    let prepared = match inputs.prepare().await {
         Ok(prepared) => prepared,
         Err(error) => {
+            if let StartupError::RuntimeConfig(ref cause) = error {
+                eprint!("{}", cause.render_human(Some(&arguments.runtime_config)));
+            }
             OperationalEvent::StoppedWithError(error).emit();
             std::process::exit(1);
         }
@@ -95,7 +127,9 @@ fn initialize_logging(level: OperationalLogLevel) {
 }
 
 fn initialize_logging_filter(level: tracing_subscriber::filter::LevelFilter) {
-    let filter = Targets::new().with_target("registry_breg", level);
+    let filter = Targets::new()
+        .with_target("registry_breg", level)
+        .with_target("registry_platform_config::posture", level);
     tracing_subscriber::registry()
         .with(filter)
         .with(

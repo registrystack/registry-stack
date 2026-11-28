@@ -3,6 +3,7 @@
 use super::*;
 use registry_platform_config::{SecretReference, SecretResolver, TaskGrantStatusConfig};
 use registry_platform_httputil::client::{validate_requested_scopes, PrivateKeyJwtConfig};
+use registry_platform_httputil::PeerPolicy;
 use registry_platform_yaml::{ExternalId, Url};
 
 /// One operator-pinned status authority, as a runtime's `taskGrantStatus`
@@ -109,10 +110,28 @@ impl TaskGrantStatusRegistry {
         Ok(())
     }
 
+    /// [`Self::activate`] under [`PeerPolicy::RefuseDevelopmentPeer`], for a caller
+    /// that has no runtime peer policy yet.
+    pub fn activate_without_peer_policy(
+        configs: &[TaskGrantStatusEndpoint],
+        resource: &str,
+        secrets: &SecretResolver,
+    ) -> Result<Self, TaskGrantError> {
+        Self::activate(
+            configs,
+            resource,
+            secrets,
+            PeerPolicy::RefuseDevelopmentPeer,
+        )
+    }
+
+    /// `peer_policy` decides whether a status answer from a development-posture
+    /// peer is accepted.
     pub fn activate(
         configs: &[TaskGrantStatusEndpoint],
         resource: &str,
         secrets: &SecretResolver,
+        peer_policy: PeerPolicy,
     ) -> Result<Self, TaskGrantError> {
         Self::validate_configuration(configs, resource)?;
         let mut clients = BTreeMap::new();
@@ -155,6 +174,7 @@ impl TaskGrantStatusRegistry {
                 &config.status_path,
                 Arc::new(PrivateKeyJwt::new(token).map_err(|_| TaskGrantError::Configuration)?),
                 ca.as_ref().map(|value| value.expose_secret()),
+                peer_policy,
             )?;
             if clients
                 .insert(config.source_issuer.as_str().to_owned(), client)
@@ -272,7 +292,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
         assert!(
-            TaskGrantStatusRegistry::activate(
+            TaskGrantStatusRegistry::activate_without_peer_policy(
                 std::slice::from_ref(&config),
                 "urn:resource:test",
                 &secrets
@@ -282,7 +302,7 @@ mod tests {
         );
         for resource in ["", "not-an-absolute-resource"] {
             TaskGrantStatusRegistry::validate_configuration(&[], resource).unwrap();
-            TaskGrantStatusRegistry::activate(&[], resource, &secrets).unwrap();
+            TaskGrantStatusRegistry::activate_without_peer_policy(&[], resource, &secrets).unwrap();
             assert!(TaskGrantStatusRegistry::validate_configuration(
                 std::slice::from_ref(&config),
                 resource
@@ -339,7 +359,7 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
         let config = endpoint();
-        let status = TaskGrantStatusRegistry::activate(
+        let status = TaskGrantStatusRegistry::activate_without_peer_policy(
             std::slice::from_ref(&config),
             "urn:resource:test",
             &secrets,
@@ -349,13 +369,16 @@ mod tests {
         assert!(!status.contains("https://other.test"));
         let mut urn_authority = config.clone();
         urn_authority.source_issuer = ExternalId::new("urn:authority:source").unwrap();
-        let urn_status =
-            TaskGrantStatusRegistry::activate(&[urn_authority], "urn:resource:test", &secrets)
-                .unwrap();
+        let urn_status = TaskGrantStatusRegistry::activate_without_peer_policy(
+            &[urn_authority],
+            "urn:resource:test",
+            &secrets,
+        )
+        .unwrap();
         assert!(urn_status.contains("urn:authority:source"));
         let mut duplicate = config.clone();
         duplicate.base_url = Url::new("https://other-authority.test").unwrap();
-        assert!(TaskGrantStatusRegistry::activate(
+        assert!(TaskGrantStatusRegistry::activate_without_peer_policy(
             &[config.clone(), duplicate],
             "urn:resource:test",
             &secrets
@@ -366,15 +389,22 @@ mod tests {
             let mut invalid = config.clone();
             invalid.base_url = Url::new(url).unwrap();
             assert!(
-                TaskGrantStatusRegistry::activate(&[invalid], "urn:resource:test", &secrets)
-                    .is_err(),
+                TaskGrantStatusRegistry::activate_without_peer_policy(
+                    &[invalid],
+                    "urn:resource:test",
+                    &secrets
+                )
+                .is_err(),
                 "{url}"
             );
         }
         let mut invalid = config;
         invalid.status_resource = ExternalId::new("not-an-absolute-resource").unwrap();
-        assert!(
-            TaskGrantStatusRegistry::activate(&[invalid], "urn:resource:test", &secrets).is_err()
-        );
+        assert!(TaskGrantStatusRegistry::activate_without_peer_policy(
+            &[invalid],
+            "urn:resource:test",
+            &secrets
+        )
+        .is_err());
     }
 }

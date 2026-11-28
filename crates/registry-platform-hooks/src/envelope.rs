@@ -4,12 +4,10 @@
 //! unchanged for every product and every destination kind.
 //!
 //! The fields are `id`, `type`, `source`, `time`, `subject`, `dataschema`,
-//! `data`, and `causation`. Delivery attributes (`attempt`, `generation`,
-//! `delivery_time`, `idempotency_key`, `signature`) are deliberately **not**
-//! envelope fields and never become them: they stay on the transport headers.
-//! The envelope is what the handler reasons over; the attributes are what the
-//! worker reasons over. A handler that wants to be idempotent keys on the
-//! envelope `id`, which the transport also sends as `idempotency_key`.
+//! `data`, and `causation` in both postures. A remote handler deduplicates on the event ID,
+//! which is also sent as `webhook-id`. The attempt timestamp and signature
+//! are HTTP headers. The worker tracks attempts and replay generations in
+//! delivery state.
 //!
 //! Causation is consumed by version one, not reserved for later: once a
 //! handler can propose a change that commits and fires another hook, event A
@@ -28,7 +26,7 @@ use crate::error::{bounded_token, redacted_message};
 
 /// The payload bound the envelope carries, in bytes.
 ///
-/// The 1 MiB Version 1 signable bound
+/// The 1 MiB delivery signature bound
 /// (`registry_platform_crypto::delivery_signature::MAX_BODY_BYTES`), so every
 /// envelope a product emits can be signed and verified on a delivery path. The
 /// delivery store's 2 MiB payload column is a looser outer bound. A
@@ -665,6 +663,20 @@ mod tests {
         assert_eq!(decoded, source);
         let again = decoded.to_canonical_bytes(&limits).expect("re-encodes");
         assert_eq!(again, bytes);
+    }
+
+    #[test]
+    fn a_posture_member_is_outside_the_closed_envelope() {
+        let limits = EnvelopeLimits::default();
+        let mut value = serde_json::to_value(envelope()).unwrap();
+        for mark in [Value::Null, json!("production"), json!("development")] {
+            value["posture"] = mark;
+            let body = canonicalize_json(&value).unwrap();
+            assert!(matches!(
+                HookEnvelope::from_canonical_bytes(&body, &limits),
+                Err(HookEnvelopeError::Shape(_))
+            ));
+        }
     }
 
     #[test]

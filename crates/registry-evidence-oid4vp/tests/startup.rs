@@ -5,7 +5,12 @@ mod common;
 
 use common::{Harness, Options};
 use registry_evidence_oid4vp::config::{check_file, Oid4vpConfig};
+use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use registry_platform_yaml::Severity;
+const PRODUCTION: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
 
 async fn startup_code(options: Options) -> String {
     let harness = Harness::new(&options).await;
@@ -19,6 +24,22 @@ async fn startup_code(options: Options) -> String {
     assert!(!diagnostic.suggested_action.is_empty());
     assert!(diagnostic.path.starts_with("/clientIdentifier"));
     diagnostic.code.clone()
+}
+
+#[test]
+fn openapi_write_failure_uses_the_operational_log() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_evidence-oid4vp"))
+        .args(["openapi", "--output"])
+        .arg(directory.path())
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let event: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(event["level"], "ERROR");
+    assert_eq!(event["target"], "registry_evidence_oid4vp");
+    assert!(output.stderr.is_empty());
 }
 
 #[tokio::test]
@@ -90,7 +111,7 @@ async fn a_missing_secret_is_refused_without_naming_its_contents() {
 }
 
 fn codes(harness: &Harness) -> Vec<String> {
-    check_file(&harness.config_path, false)
+    check_file(&harness.config_path, false, PRODUCTION)
         .diagnostics
         .iter()
         .map(|diagnostic| diagnostic.code.clone())
@@ -104,10 +125,192 @@ fn edit(harness: &Harness, from: &str, to: &str) {
 }
 
 #[tokio::test]
+async fn posture_loopback_issuers_need_no_opt_in() {
+    let harness = Harness::new(&Options::default()).await;
+    assert_eq!(codes(&harness), Vec::<String>::new());
+    let service = harness.service().await;
+    let server = axum_test::TestServer::new(registry_evidence_oid4vp::service::build_app(service));
+    let ready = server.get("/ready").await;
+    ready.assert_status_ok();
+    assert_eq!(
+        ready.json::<serde_json::Value>(),
+        serde_json::json!({
+            "status": "ready", "posture": "production", "developmentSettings": []
+        })
+    );
+    assert!(ready.maybe_header("registry-posture").is_none());
+    let token = harness.applicant_token("portal", "user-1");
+    server
+        .post("/v1/sessions")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({"policy": "national-id"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+
+    edit(
+        &harness,
+        "issuer: http://127.0.0.1:",
+        "issuer: http://local.example.invalid:",
+    );
+    assert!(!codes(&harness).is_empty());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
+}
+
+#[tokio::test]
+async fn development_audit_records_the_declared_posture() {
+    let harness = Harness::new(&Options::default()).await;
+    edit(
+        &harness,
+        "applicantTokens:\n",
+        "applicantTokens:\n  allowInsecureHttp: true\n",
+    );
+    let declared = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+    let config = Oid4vpConfig::load(&harness.config_path, declared).unwrap();
+    let service = registry_evidence_oid4vp::service::VerifierService::load_with_clock(
+        config,
+        harness.clock(),
+    )
+    .await
+    .unwrap();
+    let server = axum_test::TestServer::new(registry_evidence_oid4vp::service::build_app(
+        std::sync::Arc::new(service),
+    ));
+    let token = harness.applicant_token("portal", "user-1");
+    server
+        .post("/v1/sessions")
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({"policy": "national-id"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    let audit = harness.audit_journal();
+    let entry: serde_json::Value = serde_json::from_str(audit.lines().next().unwrap()).unwrap();
+    assert_eq!(entry["posture"], "development");
+}
+
+#[tokio::test]
+async fn posture_insecure_issuers_are_development_only() {
+    let harness = Harness::new(&Options::default()).await;
+    let text = std::fs::read_to_string(&harness.config_path).unwrap();
+    let text = text
+        .replacen("issuer: http://127.0.0.1", "issuer: http://10.0.0.5", 1)
+        .replacen(
+            "applicantTokens:\n",
+            "applicantTokens:\n  allowInsecureHttp: true\n",
+            1,
+        );
+    std::fs::write(&harness.config_path, text).unwrap();
+    assert!(codes(&harness)
+        .iter()
+        .any(|code| code == "platform.posture.insecure-issuer-http"));
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
+    let binary = env!("CARGO_BIN_EXE_evidence-oid4vp");
+    let checked = std::process::Command::new(binary)
+        .args([
+            "check",
+            "--posture",
+            "development",
+            "--deny-warnings",
+            "--runtime-config",
+        ])
+        .arg(&harness.config_path)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    let warnings = String::from_utf8_lossy(&checked.stderr);
+    assert!(checked.status.success(), "{warnings}");
+    assert!(
+        warnings.contains("platform.posture.insecure-issuer-http"),
+        "{warnings}"
+    );
+    let development = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+    let config = Oid4vpConfig::load(&harness.config_path, development)
+        .expect("development accepts the setting");
+    assert_eq!(
+        config.posture.settings()[0].pointer.as_deref(),
+        Some("/applicantTokens/allowInsecureHttp")
+    );
+    let service = registry_evidence_oid4vp::service::VerifierService::load_with_clock(
+        config,
+        harness.clock(),
+    )
+    .await
+    .unwrap();
+    let server = axum_test::TestServer::new(registry_evidence_oid4vp::service::build_app(
+        std::sync::Arc::new(service),
+    ));
+    let ready = server.get("/ready").await;
+    ready.assert_status_ok();
+    ready.assert_header("registry-posture", "development");
+    let ready = ready.json::<serde_json::Value>();
+    assert_eq!(
+        ready,
+        serde_json::json!({
+            "status": "ready",
+            "posture": "development",
+            "developmentSettings": [{
+                "code": "platform.posture.insecure-issuer-http",
+                "pointer": "/applicantTokens/allowInsecureHttp"
+            }]
+        })
+    );
+    // The service above holds the writer lock, so the second process logs
+    // its posture and then exits without binding a listener.
+    let mut child = std::process::Command::new(binary)
+        .args(["serve", "--posture", "development", "--runtime-config"])
+        .arg(&harness.config_path)
+        .env("RUST_LOG", "info")
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let drain = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        std::io::Read::read_to_end(&mut stdout, &mut output).unwrap();
+        output
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            child.wait().unwrap();
+            drain.join().unwrap();
+            panic!("the second verifier did not exit after the audit writer lock refusal");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    };
+    assert!(!status.success());
+    let output = drain.join().unwrap();
+    let listing = String::from_utf8_lossy(&output);
+    let logs: Vec<serde_json::Value> = listing
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    for setting in ready["developmentSettings"].as_array().unwrap() {
+        assert!(
+            logs.iter()
+                .any(|entry| entry["fields"]["error_code"] == setting["code"]
+                    && entry["fields"]["pointer"] == setting["pointer"]),
+            "{listing}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_unedited_deployment_passes_the_offline_check() {
     let harness = Harness::new(&Options::default()).await;
     assert_eq!(codes(&harness), Vec::<String>::new());
-    assert!(Oid4vpConfig::load(&harness.config_path).is_ok());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_ok());
 }
 
 #[tokio::test]
@@ -116,7 +319,7 @@ async fn an_empty_policy_identifier_is_refused() {
     edit(&harness, "- id: national-id", "- id: \"\"");
     let codes = codes(&harness);
     assert!(!codes.is_empty());
-    assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
 }
 
 #[tokio::test]
@@ -211,7 +414,7 @@ async fn metrics_accept_loopback_and_private_addresses_and_refuse_link_local_and
             vec!["evidence.oid4vp.metrics-address".to_owned()],
             "accepted {refused}"
         );
-        assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+        assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
     }
 }
 
@@ -228,7 +431,7 @@ async fn a_metrics_refusal_names_its_cause_and_remedy() {
     ] {
         let harness = Harness::new(&Options::default()).await;
         with_metrics(&harness, bind, None);
-        let diagnostics = check_file(&harness.config_path, false).diagnostics;
+        let diagnostics = check_file(&harness.config_path, false, PRODUCTION).diagnostics;
         let action = &diagnostics
             .first()
             .unwrap_or_else(|| panic!("{bind} should be refused"))
@@ -248,7 +451,7 @@ async fn the_metrics_wildcard_needs_container_private_exposure() {
         let harness = Harness::new(&Options::default()).await;
         with_metrics(&harness, wildcard, Some("container-private"));
         assert_eq!(codes(&harness), Vec::<String>::new(), "refused {wildcard}");
-        assert!(Oid4vpConfig::load(&harness.config_path).is_ok());
+        assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_ok());
     }
     for (bind, code) in [
         ("169.254.1.1:9095", "evidence.oid4vp.metrics-address"),
@@ -345,7 +548,7 @@ async fn an_empty_claim_path_segment_is_refused() {
     let harness = Harness::new(&Options::default()).await;
     edit(&harness, "- path: [given_name]", "- path: [\"\"]");
     assert!(!codes(&harness).is_empty());
-    assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
 }
 
 #[tokio::test]
@@ -380,7 +583,7 @@ async fn response_and_read_rate_limits_have_bounds() {
             edit(&harness, &line, &format!("  {member}: {bad}"));
             assert!(!codes(&harness).is_empty(), "{member}: {bad}");
             assert!(
-                Oid4vpConfig::load(&harness.config_path).is_err(),
+                Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err(),
                 "{member}: {bad}"
             );
         }
@@ -407,7 +610,7 @@ async fn the_response_and_read_limits_default_when_omitted() {
         })
         .collect();
     std::fs::write(&harness.config_path, kept.join("\n")).unwrap();
-    let config = Oid4vpConfig::load(&harness.config_path).expect("defaults apply");
+    let config = Oid4vpConfig::load(&harness.config_path, PRODUCTION).expect("defaults apply");
     assert_eq!(config.rate_limits.wallet_responses_per_minute, 600);
     assert_eq!(config.rate_limits.responses_per_request_per_minute, 12);
     assert_eq!(config.rate_limits.evidence_read_burst, 100);
@@ -425,7 +628,7 @@ async fn a_policy_naming_an_unknown_client_identifier_is_refused() {
         codes(&harness),
         vec!["evidence.oid4vp.unknown-client-identifier".to_owned()]
     );
-    assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
 }
 
 #[tokio::test]
@@ -454,7 +657,7 @@ async fn a_policy_must_name_its_client_identifier() {
     let harness = Harness::new(&Options::default()).await;
     edit(&harness, "    clientIdentifier: haip\n", "");
     assert!(!codes(&harness).is_empty());
-    assert!(Oid4vpConfig::load(&harness.config_path).is_err());
+    assert!(Oid4vpConfig::load(&harness.config_path, PRODUCTION).is_err());
 }
 
 #[tokio::test]
@@ -558,4 +761,45 @@ async fn startup_code_for(harness: &Harness) -> String {
         .diagnostic()
         .code
         .clone()
+}
+
+const PUBLIC_KEY_WITH_EXT: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","kid":"issuer-key","ext":true,"x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}]}"#;
+const KEY_WITH_PRIVATE_MEMBER: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","kid":"issuer-key","d":"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}]}"#;
+
+#[tokio::test]
+async fn a_static_key_set_with_an_ext_member_loads() {
+    let harness = Harness::new(&Options {
+        applicant_static_jwks: Some(PUBLIC_KEY_WITH_EXT),
+        ..Options::default()
+    })
+    .await;
+    harness
+        .try_service()
+        .await
+        .expect("a public key with an ext member is a valid static key set");
+}
+
+#[tokio::test]
+async fn a_static_key_set_with_a_private_member_is_refused_with_the_validator_text() {
+    let harness = Harness::new(&Options {
+        applicant_static_jwks: Some(KEY_WITH_PRIVATE_MEMBER),
+        ..Options::default()
+    })
+    .await;
+    let error = harness
+        .try_service()
+        .await
+        .expect_err("a key set holding a private member is refused at startup");
+    let diagnostic = error.diagnostic();
+    assert_eq!(diagnostic.code, "evidence.oid4vp.issuer-unavailable");
+    assert_eq!(diagnostic.path, "/applicantTokens");
+    assert!(
+        diagnostic.message.contains("private-key member \"d\""),
+        "the startup message names the broken rule: {}",
+        diagnostic.message
+    );
+    assert!(
+        !diagnostic.message.contains("jpsQnnGQmL"),
+        "the key material is never repeated"
+    );
 }

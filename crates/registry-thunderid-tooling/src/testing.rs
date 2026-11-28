@@ -76,6 +76,7 @@ pub fn synthetic_description() -> IssuerDescription {
             token_attributes: vec!["synthetic_tag".to_owned()],
             access_token_lifetime_seconds: 300,
             token_exchange: None,
+            unit: None,
         }],
         compatibility_clients: vec![CompatibilityClient {
             agent_id: "0197aaaa-0000-7000-8000-0000000000a2".to_owned(),
@@ -89,5 +90,6 @@ pub fn synthetic_description() -> IssuerDescription {
         interactive_applications: vec![],
         synthetic_users: vec![],
         schema_attributes: vec!["synthetic_tag".to_owned()],
+        units: vec![],
     }
 }

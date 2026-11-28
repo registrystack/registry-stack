@@ -24,9 +24,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::description::{
-    ExchangeAttributeKind, ExchangeIssuer, ExchangeMapping, InteractiveApplication, MachineClient,
-    OrganizationUnit, Profile, Role, SessionIdentity, SyntheticUser, TokenExchangeClient,
-    DEFAULT_OU_HANDLE, DEFAULT_OU_ID, PRIVATE_JWK_MEMBERS,
+    ChildUnit, ExchangeAttributeKind, ExchangeIssuer, ExchangeMapping, InteractiveApplication,
+    MachineClient, OrganizationUnit, Profile, Role, SessionIdentity, SyntheticUser,
+    TokenExchangeClient, DEFAULT_OU_HANDLE, DEFAULT_OU_ID, PRIVATE_JWK_MEMBERS,
 };
 use crate::identity_deployment::{
     self as deployment_file, relative_path, ClaimValue, Grant, IdentityDeployment,
@@ -223,6 +223,10 @@ fn permissions(
 /// The claim that says what kind of principal a token represents.
 const ACTOR_KIND: &str = ACTOR_KIND_CLAIM;
 const HUMAN: &str = "human";
+/// The claim that says in which organization unit a principal is placed.
+/// The issuer computes it from the unit, so a principal states it in its
+/// deployment claims and it never becomes an attribute.
+const UNIT_CLAIM: &str = crate::description::UNIT_CLAIM;
 /// The claim that says for which purpose a token is used.
 const PURPOSE: &str = "registry_purpose";
 /// The most token attributes a browser application may carry, as the
@@ -628,6 +632,32 @@ fn claim_value(value: &ClaimValue) -> Value {
     }
 }
 
+/// The unit claim is the issuer's, so no product has to declare it. A
+/// product that does must read it as a string, as a unit is single-valued.
+fn check_unit_claim(findings: &mut Findings<'_>, facts: &MergedFacts, pointer: &str) {
+    if facts
+        .claims
+        .get(UNIT_CLAIM)
+        .is_some_and(|declared| *declared != ClaimType::String)
+    {
+        findings.error(
+            pointer,
+            "identity.deployment.claim-type",
+            "the claim's value type differs from the type the products declare",
+            "Write the value in the declared type: a string or a list of strings.",
+        );
+    }
+}
+
+/// Take the unit handle out of a principal's claims, once every check that
+/// counts it as carried has run.
+fn take_unit(claims: &mut BTreeMap<String, Value>) -> Option<String> {
+    match claims.remove(UNIT_CLAIM)? {
+        Value::String(handle) => Some(handle),
+        _ => None,
+    }
+}
+
 /// A claim must be one a product declares, with the type it declares.
 fn check_claim(
     findings: &mut Findings<'_>,
@@ -939,6 +969,19 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         },
         port: 0,
         state_root: PathBuf::new(),
+        units: unit
+            .units
+            .iter()
+            .map(|child| ChildUnit {
+                id: local::derived_uuid(&format!(
+                    "{sid}:organization-unit:{}/{}",
+                    unit.handle, child.handle
+                )),
+                handle: child.handle.clone(),
+                name: child.name_or_handle().to_owned(),
+                description: child.name_or_handle().to_owned(),
+            })
+            .collect(),
         organization_unit: OrganizationUnit {
             id: if default_unit {
                 DEFAULT_OU_ID.to_owned()
@@ -1051,13 +1094,17 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
         }
         let mut attributes: BTreeMap<String, Value> = BTreeMap::new();
         for (name, value) in &client.claims {
-            check_claim(
-                &mut findings,
-                &facts,
-                &format!("{pointer}/claims"),
-                name,
-                claim_kind(value),
-            );
+            if name == UNIT_CLAIM {
+                check_unit_claim(&mut findings, &facts, &format!("{pointer}/claims"));
+            } else {
+                check_claim(
+                    &mut findings,
+                    &facts,
+                    &format!("{pointer}/claims"),
+                    name,
+                    claim_kind(value),
+                );
+            }
             attributes.insert(name.clone(), claim_value(value));
         }
         settle_purpose(&mut findings, &facts, &pointer, &granted, &mut attributes);
@@ -1085,6 +1132,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             );
             check_scope_claims(&mut findings, &facts, &pointer, &attributes, &granted);
         }
+        let placed_in = take_unit(&mut attributes);
         schema_attributes.extend(attributes.keys().cloned());
 
         // A client granted an exchange profile presents an assertion; its
@@ -1145,8 +1193,13 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             description: "Deployment machine client".to_owned(),
             client_id: client.id.clone(),
             public_jwks,
-            token_attributes: attributes.keys().cloned().collect(),
+            token_attributes: attributes
+                .keys()
+                .cloned()
+                .chain(placed_in.iter().map(|_| UNIT_CLAIM.to_owned()))
+                .collect(),
             attributes,
+            unit: placed_in,
             access_token_lifetime_seconds: 300,
             token_exchange,
         });
@@ -1230,6 +1283,13 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 "the application lists the most token attributes it may carry, so its tokens cannot also carry registry_purpose, which its product requires",
                 "List registry_purpose among the token attributes, or remove one so the generator can add it.",
             ),
+            (
+                UNIT_CLAIM,
+                product.claims.get(UNIT_CLAIM) == Some(&ClaimType::String),
+                "identity.deployment.unit-claim-not-projected",
+                "the application lists the most token attributes it may carry, so its tokens cannot also carry ouHandle, which its product reads",
+                "List ouHandle among the token attributes, or remove one so the generator can add it.",
+            ),
         ];
         let mut token_attributes = app.token_attributes.clone();
         for (name, read, code, message, remedy) in required {
@@ -1298,13 +1358,17 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             );
         }
         for name in user.claims.keys() {
-            check_claim(
-                &mut findings,
-                &facts,
-                &format!("{pointer}/claims"),
-                name,
-                ClaimType::String,
-            );
+            if name == UNIT_CLAIM {
+                check_unit_claim(&mut findings, &facts, &format!("{pointer}/claims"));
+            } else {
+                check_claim(
+                    &mut findings,
+                    &facts,
+                    &format!("{pointer}/claims"),
+                    name,
+                    ClaimType::String,
+                );
+            }
         }
         let mut user_claims: BTreeMap<String, Value> = user
             .claims
@@ -1348,6 +1412,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
             );
             check_scope_claims(&mut findings, &facts, &pointer, &user_claims, &granted);
         }
+        let placed_in = take_unit(&mut user_claims);
         let user_id = local::derived_uuid(&format!("{sid}:user:{}", user.id));
         user_identities.insert(user.id.clone(), json!({"kind": "user", "sub": user_id}));
         description.synthetic_users.push(SyntheticUser {
@@ -1359,6 +1424,7 @@ pub fn generate(inputs: &Inputs<'_>) -> Result<Generated, ToolingError> {
                 .iter()
                 .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
                 .collect(),
+            unit: placed_in,
         });
         description.roles.push(Role {
             id: local::derived_uuid(&format!("{sid}:role:user:{}", user.id)),

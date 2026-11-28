@@ -1,0 +1,22 @@
+# The Render runtime file the own-provider journey writes by hand, because
+# `registry-render init` writes a bundle and no runtime file. It follows the
+# runtime of the first-render-document tutorial with the OIDC block of the
+# Render operate page in place of the API key. own-provider.sh replaces each
+# @NAME@ with a path or port of the run before the reader "types" the file, and
+# the issuer step then points `issuer` at the reader's own provider.
+apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1
+kind: RenderRuntimeConfig
+listener:
+  bind: 127.0.0.1:@PORT@
+package:
+  root: @WORK@/package
+authentication:
+  oidc:
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:render
+        accessTokenType: JWT
+        allowedClients: [portal]
+audit:
+  path: @WORK@/audit.jsonl

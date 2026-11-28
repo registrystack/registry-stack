@@ -3,9 +3,9 @@
 
 use std::path::Path;
 
+use registry_breg::package::PackageError;
 use registry_breg::postgres::DatabaseConnectionCause;
-use registry_breg::runtime_config::load_runtime_config;
-use registry_breg::startup::{check_loaded, CheckedStartup, StartupError};
+use registry_breg::startup::{CheckedStartup, StartupError, StartupInputs};
 use registry_breg::{Diagnostic, DiagnosticSeverity, RelatedDiagnostic};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
@@ -31,11 +31,10 @@ pub(crate) struct DoctorRefusal {
     pub(crate) runtime_configuration: bool,
 }
 
-/// A passing doctor decision plus the non-fatal operator warning derived from
-/// the same runtime configuration startup checked.
+/// The dependencies and refresh timings verified by a passing doctor check.
 pub(crate) struct DoctorSuccess {
     pub(crate) checked: CheckedStartup,
-    pub(crate) insecure_http_warning: Option<&'static str>,
+    pub(crate) diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     pub(crate) external_refresh_timings: Vec<registry_breg::runtime_config::ExternalRefreshTiming>,
 }
 
@@ -44,7 +43,10 @@ pub(crate) struct DoctorSuccess {
 /// preparation opens and intentionally owns no parallel readiness logic; the
 /// audit destination is checked as writable rather than opened, so doctor runs
 /// beside a serving process that holds it.
-pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal> {
+pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
+    runtime_config: &Path,
+) -> Result<DoctorSuccess, DoctorRefusal> {
     if !runtime_config.is_absolute() {
         return Err(DoctorRefusal {
             diagnostics: vec![diagnostic(
@@ -56,14 +58,12 @@ pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal>
         });
     }
 
-    let config = load_runtime_config(runtime_config).map_err(|cause| DoctorRefusal {
-        diagnostics: crate::runtime_config_diagnostics(&cause),
-        runtime_configuration: true,
-    })?;
-    let insecure_http_warning = config
-        .authentication()
-        .oidc()
-        .insecure_http_startup_diagnostic();
+    let inputs = StartupInputs::load(runtime_config, posture).map_err(startup_refusal)?;
+    let config = inputs.config();
+    let registry = inputs.package().registry();
+    let mut diagnostics = config.posture_report().diagnostics(runtime_config);
+    let plan_diagnostics = config.external_refresh_diagnostics(registry);
+    let external_refresh_timings = config.external_refresh_timings(registry);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -75,31 +75,34 @@ pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal>
             )],
             runtime_configuration: false,
         })?;
-    let checked = runtime
-        .block_on(check_loaded(config.clone()))
-        .map_err(startup_refusal)?;
-    let package = config.load_active_package().map_err(|_| DoctorRefusal {
-        diagnostics: vec![diagnostic(
-            "startup.package.refused",
-            "package",
-            "the active runtime package could not be verified",
-        )],
-        runtime_configuration: false,
-    })?;
-    let plan_diagnostics = config.external_refresh_diagnostics(package.registry());
+    let mut recorded_posture = None;
+    let checked = runtime.block_on(inputs.check_observing_posture(&mut recorded_posture));
+    if let Some(recorded) = recorded_posture.filter(|recorded| *recorded != posture.posture) {
+        diagnostics.push(crate::activation_posture_finding(recorded));
+    }
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(error) => {
+            let mut refusal = startup_refusal(error);
+            refusal
+                .diagnostics
+                .extend(diagnostics.into_iter().map(runtime_diagnostic));
+            return Err(refusal);
+        }
+    };
     if !plan_diagnostics.is_empty() {
         return Err(DoctorRefusal {
             diagnostics: plan_diagnostics
                 .into_iter()
+                .chain(diagnostics)
                 .map(runtime_diagnostic)
                 .collect(),
             runtime_configuration: true,
         });
     }
-    let external_refresh_timings = config.external_refresh_timings(package.registry());
     Ok(DoctorSuccess {
         checked,
-        insecure_http_warning,
+        diagnostics,
         external_refresh_timings,
     })
 }
@@ -237,6 +240,13 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     // inside the one package check instead of collapsing every package fault
     // into the same sentence; both vocabularies are value free.
     if let StartupError::PackageRefused(cause) = error {
+        if matches!(cause, PackageError::DeploymentIdentity) {
+            return diagnostic(
+                "breg.posture.placeholder-identity",
+                "package",
+                "Replace canonicalBaseIri and rebuild the package, start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+            );
+        }
         return diagnostic(
             "startup.package.refused",
             "package",
@@ -245,6 +255,15 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     }
     if let StartupError::PackageEnvelopeRefused(cause) = error {
         return diagnostic("startup.package.refused", "package", &cause);
+    }
+    // The shared key set rule names the rule and the key's position, never a
+    // key value.
+    if let StartupError::StaticKeySet(cause) = error {
+        return diagnostic(
+            "startup.oidc.refused",
+            "authentication.oidc",
+            &format!("the OIDC key set was refused: {cause}"),
+        );
     }
     // The writer's own refusal names the rule and the recovery step, and
     // never a path or a secret.
@@ -255,12 +274,21 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             &format!("the audit destination was refused: {reason}"),
         );
     }
+    if let StartupError::EventDestinations(reason) = error {
+        let path = reason
+            .split_whitespace()
+            .next()
+            .filter(|path| path.starts_with("reviewAuthorities."))
+            .unwrap_or("destinations.hooks");
+        return diagnostic("startup.hook-destinations.refused", path, &reason);
+    }
     let (code, path, message) = match error {
         StartupError::RuntimeConfig(_) => {
             unreachable!("startup_refusal reports every runtime configuration diagnostic")
         }
         StartupError::PackageRefused(_)
         | StartupError::PackageEnvelopeRefused(_)
+        | StartupError::StaticKeySet(_)
         | StartupError::AuditDestination(_) => {
             unreachable!("handled above")
         }
@@ -270,6 +298,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         }
         StartupError::DatabaseConnection(cause) => database_connection_diagnostic(cause),
         StartupError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
+        StartupError::PostureMismatch { .. } => unreachable!("handled in run"),
         StartupError::DatabaseUnready => (
             "startup.database.unready",
             "database",
@@ -364,13 +393,9 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::AuthenticationClientsUnlisted => (
             "startup.authentication.clients-unlisted",
             "authentication",
-            "the project names clients in requesterClients, trusted actors, or consent recipients that authentication.oidc.allowedClients does not list; list each of them in allowedClients, because the keyword unrestricted lists none",
+            "the project names clients in requesterClients, trusted actors, or consent recipients that no authentication.oidc.issuers entry lists in allowedClients. List each of them in the allowedClients of the entry whose issuer signs its tokens, because the keyword unrestricted lists none",
         ),
-        StartupError::EventDestinations => (
-            "startup.hook-destinations.refused",
-            "destinations.hooks",
-            "the event destination bindings were refused",
-        ),
+        StartupError::EventDestinations(_) => unreachable!("handled above"),
         StartupError::RetainedHookBindings { .. } => {
             unreachable!("retained hook binding diagnostics return before the generic mapping")
         }
@@ -388,11 +413,6 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "startup.field-encryption.refused",
             "fieldEncryption",
             "the field-encryption key state was refused: an active package with encrypted fields requires a configured fieldEncryption provider that answers, and a stored key row the provider can unwrap",
-        ),
-        StartupError::FieldEncryptionCustody => (
-            "startup.field-encryption.custody-refused",
-            "fieldEncryption",
-            "the field-encryption data-key custody was refused: a databaseInitializationEnvironment other than local requires the transit provider; localFile data keys are development-only",
         ),
         StartupError::Listener => (
             "startup.listener.refused",
@@ -443,6 +463,20 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn package_identity_refusal_names_both_posture_remedies() {
+        let refusal = startup_diagnostic(StartupError::PackageRefused(
+            PackageError::DeploymentIdentity,
+        ));
+        assert_eq!(refusal.code, "breg.posture.placeholder-identity");
+        assert!(refusal.message.contains("canonicalBaseIri"));
+        assert!(refusal.message.contains("rstack dev"));
+        assert!(refusal.message.contains("--posture development"));
+        assert!(refusal
+            .message
+            .contains("REGISTRY_STACK_POSTURE=development"));
+    }
+
+    #[test]
     fn checked_dependencies_is_pinned_to_startups_own_vocabulary() {
         // `CHECKED_DEPENDENCIES` is a hand-typed success-report vocabulary.
         // Tie it to `startup_diagnostic`'s own failure-path vocabulary so the
@@ -488,9 +522,10 @@ mod tests {
             StartupError::Cursor,
             StartupError::Oidc,
             StartupError::Authentication,
-            StartupError::EventDestinations,
+            StartupError::EventDestinations(
+                "the event destination bindings were refused".to_owned(),
+            ),
             StartupError::FieldEncryption,
-            StartupError::FieldEncryptionCustody,
             StartupError::ReviewBindings,
         ];
 
@@ -743,18 +778,26 @@ mod tests {
                 "authentication",
             ),
             (
-                StartupError::EventDestinations,
+                StartupError::EventDestinations(
+                    "the event destination bindings were refused".to_owned(),
+                ),
                 "startup.hook-destinations.refused",
                 "destinations.hooks",
             ),
             (
-                StartupError::FieldEncryption,
-                "startup.field-encryption.refused",
-                "fieldEncryption",
+                StartupError::EventDestinations(
+                    registry_breg::event_destination::EventDestinationActivationError::RepeatedSigningKey {
+                        first: "reviewAuthorities.alpha.completion.hmacSha256KeyRef".to_owned(),
+                        second: "reviewAuthorities.beta.completion.hmacSha256KeyRef".to_owned(),
+                    }
+                    .to_string(),
+                ),
+                "startup.hook-destinations.refused",
+                "reviewAuthorities.alpha.completion.hmacSha256KeyRef",
             ),
             (
-                StartupError::FieldEncryptionCustody,
-                "startup.field-encryption.custody-refused",
+                StartupError::FieldEncryption,
+                "startup.field-encryption.refused",
                 "fieldEncryption",
             ),
             (
@@ -953,12 +996,14 @@ mod tests {
             (
                 RuntimeConfigError::InvalidOidc,
                 "breg.runtime.invalid-oidc",
-                "/authentication/oidc",
+                "/authentication/oidc/issuers",
             ),
             (
-                RuntimeConfigError::InvalidOidcLeeway,
+                RuntimeConfigError::InvalidOidcLeeway {
+                    pointer: "/authentication/oidc/issuers/primary/leewayMilliseconds".to_owned(),
+                },
                 "breg.runtime.invalid-oidc-leeway",
-                "/authentication/oidc/leewayMilliseconds",
+                "/authentication/oidc/issuers/primary/leewayMilliseconds",
             ),
             (
                 RuntimeConfigError::InvalidAudit,
@@ -986,6 +1031,13 @@ mod tests {
                 "/operationalTimeouts",
             ),
             (RuntimeConfigError::Secret, "breg.runtime.secret", ""),
+            (
+                RuntimeConfigError::SecretFile(
+                    registry_platform_config::SecretFileCheck::HardLinked,
+                ),
+                "breg.runtime.secret",
+                "",
+            ),
         ];
 
         for (cause, expected_code, expected_path) in cases {
@@ -1012,7 +1064,7 @@ mod tests {
             &format!(
                 "apiVersion: {RUNTIME_CONFIG_API_VERSION}\nkind: {RUNTIME_CONFIG_KIND}\nlistenr: {{}}\naudt: {{}}\n"
             ),
-            |_| None,
+            |_| None, registry_platform_config::DeclaredPosture { posture: registry_platform_config::Posture::Production, source: registry_platform_config::PostureSource::Default }
         )
         .expect_err("unknown keys are refused");
         let refusal = startup_refusal(StartupError::RuntimeConfig(refused));
@@ -1028,6 +1080,25 @@ mod tests {
             .diagnostics
             .iter()
             .all(|diagnostic| diagnostic.message.contains("; next: ")));
+    }
+
+    #[test]
+    fn a_refused_static_key_set_keeps_the_key_source_code_and_names_the_rule() {
+        let diagnostic = startup_diagnostic(StartupError::StaticKeySet(
+            registry_breg::startup::StaticJwksError::PrivateKeyMember {
+                key: 0,
+                member: "d",
+            },
+        ));
+        assert_eq!(diagnostic.code, "startup.oidc.refused");
+        assert_eq!(diagnostic.path, "authentication.oidc");
+        assert!(
+            diagnostic
+                .message
+                .contains("key 0 carries the private-key member \"d\""),
+            "{}",
+            diagnostic.message
+        );
     }
 
     #[test]
@@ -1057,6 +1128,18 @@ mod tests {
         let unlisted = startup_diagnostic(StartupError::AuthenticationClientsUnlisted);
         assert_eq!(unlisted.code, "startup.authentication.clients-unlisted");
         assert_eq!(unlisted.path, "authentication");
+        assert!(
+            unlisted.message.contains("authentication.oidc.issuers"),
+            "{}",
+            unlisted.message
+        );
+        assert!(
+            !unlisted
+                .message
+                .contains("authentication.oidc.allowedClients"),
+            "{}",
+            unlisted.message
+        );
         for fix in [
             "requesterClients",
             "trusted actors",

@@ -134,3 +134,15 @@ test('a retry ceiling outside zero to two is a configuration error', () => {
     });
   }
 });
+
+test('strict development-peer policy is an explicit boolean option', () => {
+  const { CaseworkClient } = require('../client');
+  const baseUrl = 'https://casework.example.invalid/';
+  for (const refuseDevelopmentPeer of [false, true]) {
+    assert.ok(new CaseworkClient({ baseUrl, refuseDevelopmentPeer }));
+  }
+  assert.throws(
+    () => new CaseworkClient({ baseUrl, refuseDevelopmentPeer: 'true' }),
+    (error) => error.kind === 'configuration',
+  );
+});

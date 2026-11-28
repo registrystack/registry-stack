@@ -24,6 +24,13 @@
           "default": "file",
           "description": "Where audit lines go: `file` or `stdout`."
         },
+        "hashKeyCustody": {
+          "$ref": "#/$defs/AuditKeyCustody",
+          "description": "Who provisioned the key. Absent means `operator-provisioned`.\n`development-generated` marks a key a development tool made.",
+          "x-registry-development-only": [
+            "platform.posture.generated-audit-key"
+          ]
+        },
         "hashKeyRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "Secret reference to the audit hash key."
@@ -89,6 +96,21 @@
         }
       ]
     },
+    "AuditKeyCustody": {
+      "description": "Who provisioned the audit hash key.",
+      "oneOf": [
+        {
+          "const": "operator-provisioned",
+          "description": "The operator provisioned the key.",
+          "type": "string"
+        },
+        {
+          "const": "development-generated",
+          "description": "A development tool generated the key.",
+          "type": "string"
+        }
+      ]
+    },
     "EnvironmentSecretProviderConfig": {
       "additionalProperties": false,
       "description": "The environment secret provider. It takes no settings.",
@@ -106,7 +128,7 @@
       "description": "The file secret provider.",
       "properties": {
         "root": {
-          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "description": "Absolute directory holding one file per secret. A name may be a\nrelative link that stays below this directory, through at most 8 links.\nThe file it reaches must be a regular file with one hard link, owned by\nthe runtime user with mode 0400 or 0600, or owned by root with no\naccess beyond group read (0440 or 0640) when the runtime is not root.\nA process that declared development loads a file with looser read or\nmode bits and logs a warning.",
           "pattern": "^/",
           "type": "string"
         }
@@ -218,7 +240,7 @@
         },
         "baseUrl": {
           "$ref": "#/$defs/Url",
-          "description": "The registry deployment's base URL. An https URL with no query or\nfragment; plain http is accepted only on a loopback host under\n`development-loopback`."
+          "description": "The registry deployment's base URL. An https URL with no query or\nfragment. Plain HTTP is accepted on loopback in both postures."
         },
         "resource": {
           "$ref": "#/$defs/ResourceUri",
@@ -346,7 +368,7 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "The provider's issuer. An https URL with no query or fragment; plain\nhttp is accepted only on a loopback host under `development-loopback`,\nbecause the page sends its client credentials to the token endpoint."
+          "description": "The provider's issuer. An https URL with no query or fragment; plain\nHTTP is accepted on loopback in both postures."
         },
         "scopes": {
           "description": "Scopes requested beside `openid`, such as the review scope the\nregistry profile requires. The page always requests `openid`, so the\nlist does not name it.",
@@ -374,11 +396,20 @@
     },
     "TlsTermination": {
       "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
-      "enum": [
-        "operator-controlled-upstream",
-        "development-loopback"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "operator-controlled-upstream",
+            "development-loopback"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "loopback-plaintext",
+          "description": "Plaintext on a loopback bind, behind a proxy on the same host. Valid\nin every posture. It is placement only: it relaxes nothing a product\nrelaxes under `development-loopback`.",
+          "type": "string"
+        }
+      ]
     },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
@@ -414,7 +445,10 @@
     },
     "publicOrigin": {
       "$ref": "#/$defs/Url",
-      "description": "The browser-facing origin, such as `https://review.example`: an https\nURL with no path, query, or fragment; plain http is accepted only on\na loopback host under `development-loopback`. The sign-in redirect\nURI is this origin with `/signin/callback`."
+      "description": "The browser-facing origin, such as `https://review.example`: an https\nURL with no path, query, or fragment. Plain HTTP requires declared\ndevelopment posture. The sign-in redirect\nURI is this origin with `/signin/callback`.",
+      "x-registry-development-only": [
+        "breg.posture.review-http-public-origin"
+      ]
     },
     "rateLimits": {
       "$ref": "#/$defs/RateLimitsConfig"

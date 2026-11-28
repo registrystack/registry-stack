@@ -115,9 +115,17 @@ fn refused_argument(error: &clap::Error) -> Option<String> {
 }
 
 /// Write one report, envelope members first, and its trailing newline.
-pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+pub(crate) fn write(
+    report: &Value,
+    posture: Option<registry_platform_config::DeclaredPosture>,
+    stdout: &mut dyn io::Write,
+) -> io::Result<()> {
     let report = registry_cli_report::Report::new(report, crate::build_info::DISPLAY_VERSION)
         .map_err(io::Error::other)?;
+    let report = match posture {
+        Some(declared) => report.with_posture(declared),
+        None => report,
+    };
     serde_json::to_writer_pretty(&mut *stdout, &report).map_err(io::Error::other)?;
     writeln!(stdout)
 }
@@ -181,6 +189,7 @@ mod tests {
         let mut out = Vec::new();
         write(
             &json!({"apiVersion": "v", "kind": "CtlReport", "status": "complete", "command": "check", "ok": true}),
+            None,
             &mut out,
         )
         .unwrap();
@@ -205,6 +214,7 @@ mod tests {
                 "kind": "DiscoveryCtlReport",
                 "filesChecked": 0
             }),
+            None,
             &mut out,
         )
         .unwrap();

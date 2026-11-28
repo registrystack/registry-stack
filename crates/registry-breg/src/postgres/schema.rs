@@ -4,7 +4,7 @@
 
 #[cfg(not(all(feature = "runtime", feature = "tooling")))]
 use tokio_postgres::GenericClient;
-#[cfg(all(feature = "runtime", feature = "tooling", feature = "postgres-test"))]
+#[cfg(all(feature = "runtime", feature = "tooling"))]
 use tokio_postgres::NoTls;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use tokio_postgres::{Client, GenericClient};
@@ -933,22 +933,32 @@ pub async fn prepare_schema_test_database_with_connections(
     })
 }
 
+/// What a fresh install of one compiled Registry measures on a disposable
+/// database: the managed schema fingerprint and the server's PostgreSQL major
+/// version.
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SchemaMeasurement {
+    pub fingerprint: String,
+    pub postgres_major: u16,
+}
+
 /// Install one compiled Registry into an empty disposable database transaction,
 /// verify the exact managed catalog, roll the transaction back, and return only
-/// its schema fingerprint. This is a measurement path only: it never writes
-/// active package identity and it never returns a pool, client, database id,
-/// role, URL, or SQL.
+/// its schema fingerprint and the server's PostgreSQL major version. This is a
+/// measurement path only: it never writes active package identity and it never
+/// returns a pool, client, database id, role, URL, or SQL.
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) async fn rehearse_schema_fingerprint_with_connection(
     migration_connection: &ConnectionConfig,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
     registry: &CompiledRegistry,
-) -> std::result::Result<String, SchemaRehearsalError> {
+) -> std::result::Result<SchemaMeasurement, SchemaRehearsalError> {
     let (mut migration, migration_task) = connect_schema_test_with_cause(migration_connection)
         .await
         .map_err(SchemaRehearsalError::Connection)?;
-    let migration_result: Result<String> = async {
+    let migration_result: Result<SchemaMeasurement> = async {
         verify_migration_role(&migration, migration_role).await?;
         let transaction = migration.transaction().await?;
         transaction
@@ -959,8 +969,21 @@ pub(crate) async fn rehearse_schema_fingerprint_with_connection(
         let expected_catalog = ExpectedManagedCatalog::compiled(registry);
         let fingerprint =
             managed_schema_fingerprint(&transaction, runtime_role, &expected_catalog).await?;
+        let version: i32 = transaction
+            .query_one(
+                "SELECT current_setting('server_version_num')::integer / 10000",
+                &[],
+            )
+            .await?
+            .get(0);
+        let postgres_major = u16::try_from(version).map_err(|_| {
+            PostgresKernelError::Configuration("the PostgreSQL major version is out of range")
+        })?;
         transaction.rollback().await?;
-        Ok(fingerprint)
+        Ok(SchemaMeasurement {
+            fingerprint,
+            postgres_major,
+        })
     }
     .await;
     migration_task.abort();
@@ -1000,8 +1023,7 @@ async fn connect_schema_test_with_cause(
             });
             Ok((client, task))
         }
-        #[cfg(feature = "postgres-test")]
-        ConnectionTls::TestOnlyPlaintext => {
+        ConnectionTls::Plaintext => {
             let (client, connection) = config
                 .postgres()
                 .connect(NoTls)

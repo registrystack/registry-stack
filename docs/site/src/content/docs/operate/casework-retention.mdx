@@ -109,6 +109,10 @@ A completion destination is the producer's URL Casework calls when a result is r
 carries no decision; the producer then reads the result. Each destination is declared under
 `reviewCompletionDestinations` in the [runtime configuration](../../reference/casework-configuration/#casework-runtime-configuration),
 keyed by the destination id the producer names in `casework.yaml`.
+Casework signs each attempt with a fresh timestamp and the same `webhook-id`.
+Deduplicate on that ID even when a retry arrives outside the first attempt's signature
+window. [Receive Casework completion wakes](../../configure/casework-completion-receivers/)
+describes verification and inbox retention.
 
 A failed call returns to the queue and is tried again after `retryDelaySeconds` (default 30), up to
 `maximumAttempts` (default 12), each attempt bounded by `attemptTimeoutMilliseconds` (default
@@ -144,7 +148,7 @@ reason was given. This is the request entry of the decision in
 [Decide your first ReviewRequest](../../tutorials/first-casework/):
 
 ```text
-{"schema":"registry-casework-audit/v1","eventId":"<id>","time":"<time>","phase":"request","correlation":"<id>","record":{"event":"casework.review-decided","principalPseudonym":"<pseudonym>","profileId":"staff"}}
+{"schema":"registry-casework-audit/v1","eventId":"<id>","time":"<time>","phase":"request","posture":"production","correlation":"<id>","record":{"event":"casework.review-decided","principalPseudonym":"<pseudonym>","profileId":"staff"}}
 ```
 
 The journal names people and records only by keyed pseudonym and carries no context, reason or

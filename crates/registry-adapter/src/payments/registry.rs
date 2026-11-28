@@ -2,7 +2,7 @@
 //! Restricted BReg bill reads and exact prepared Actions through its public client.
 
 use super::{
-    config::PaymentBinding,
+    config::{PaymentBinding, RegistryBinding},
     model::{Attempt, BillSnapshot, PreparedRegistryAction},
 };
 use async_trait::async_trait;
@@ -172,22 +172,29 @@ pub trait RegistryPort: Send + Sync {
 }
 
 pub struct BregBridge {
+    peer_policy: registry_platform_httputil::PeerPolicy,
     resolver: Arc<SecretResolver>,
 }
 impl BregBridge {
-    pub fn new(resolver: Arc<SecretResolver>) -> Self {
-        Self { resolver }
+    pub fn new(
+        resolver: Arc<SecretResolver>,
+        peer_policy: registry_platform_httputil::PeerPolicy,
+    ) -> Self {
+        Self {
+            resolver,
+            peer_policy,
+        }
     }
-    fn client(&self, binding: &PaymentBinding) -> Result<BaseRegistryClient, Error> {
+    fn client(&self, binding: &RegistryBinding) -> Result<BaseRegistryClient, Error> {
         let secret = self
             .resolver
-            .resolve(binding.registry.credential_ref.as_str())
+            .resolve(binding.credential_ref.as_str())
             .map_err(|_| Error::Unavailable)?;
         let token = std::str::from_utf8(secret.expose_secret()).map_err(|_| Error::Unavailable)?;
         let provider = StaticToken::new(token.to_owned()).map_err(|_| Error::Unavailable)?;
-        let url = url::Url::parse(&binding.registry.base_url).map_err(|_| Error::Unavailable)?;
+        let url = url::Url::parse(&binding.base_url).map_err(|_| Error::Unavailable)?;
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(url)
+            BaseRegistryClientConfig::new(url, self.peer_policy)
                 .with_token_provider(Arc::new(provider))
                 .with_attempt_timeout(Duration::from_secs(15))
                 .with_connect_timeout(Duration::from_secs(5))
@@ -201,7 +208,7 @@ impl BregBridge {
 #[async_trait]
 impl RegistryPort for BregBridge {
     async fn read_bill(&self, binding: &PaymentBinding, id: Uuid) -> Result<BillView, Error> {
-        let client = self.client(binding)?;
+        let client = self.client(&binding.registry)?;
         let options = BRegRecordOptions::default()
             .access_profile(&binding.registry.read_profile)
             .map_err(|_| Error::Unavailable)?;
@@ -225,7 +232,7 @@ impl RegistryPort for BregBridge {
         key: &str,
         inputs: Map<String, Value>,
     ) -> Result<PreparedRegistryAction, Error> {
-        let client = self.client(binding)?;
+        let client = self.client(&binding.registry)?;
         let (action, profile) = if receipt {
             (
                 &binding.registry.receipt_action,
@@ -288,7 +295,7 @@ impl RegistryPort for BregBridge {
         receipt: bool,
         prepared: &PreparedRegistryAction,
     ) -> Result<(), Error> {
-        let client = self.client(binding)?;
+        let client = self.client(&binding.registry)?;
         let (action, profile) = if receipt {
             (
                 &binding.registry.receipt_action,
@@ -322,5 +329,87 @@ impl RegistryPort for BregBridge {
             .await
             .map_err(|_| Error::OutcomeUnknown)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod peer_policy_tests {
+    use super::*;
+    use registry_breg_client::BaseRegistryClientError;
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource, SecretProvider};
+
+    #[tokio::test]
+    async fn payment_registry_bridge_follows_the_declared_peer_policy() {
+        const RECORD: &str = "00000000-0000-4000-8000-000000000001";
+        const TRACE: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let app = axum::Router::new().fallback(|| async {
+                (
+                    [
+                        ("registry-posture", "development"),
+                        ("traceparent", TRACE),
+                        ("etag", "\"breg-record-000000000001\""),
+                        ("link", "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/bill>; rel=\"describedby\""),
+                    ],
+                    axum::Json(json!({
+                        "data": {"recordIdentifier": RECORD, "revisionIdentifier": "1", "domainData": {}},
+                        "meta": {"registryIdentifier": "billing", "datasetIdentifier": "bills", "recordTypeIdentifier": "bill"}
+                    })),
+                )
+            });
+            axum::serve(listener, app).await.unwrap();
+        });
+        let root = tempfile::tempdir().unwrap();
+        let token = root.path().join("token");
+        std::fs::write(&token, "synthetic-billing-token").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(token, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let resolver = Arc::new(SecretResolver::new([SecretProvider::File], root.path()).unwrap());
+        let binding: RegistryBinding = serde_json::from_value(json!({
+            "baseUrl": endpoint, "recordType": "bill", "recordRoute": "bills",
+            "readProfile": "billing", "bindProfile": "billing", "receiptProfile": "billing",
+            "bindAction": "bind-payment", "receiptAction": "record-receipt",
+            "credentialRef": "secret:file/token", "credentialIdentity": "billing"
+        }))
+        .unwrap();
+        let config_file = root.path().join("payments.yaml");
+        let api_version = crate::payments::config::API_VERSION;
+        let kind = crate::payments::config::KIND;
+        std::fs::write(
+            &config_file,
+            format!("apiVersion: {api_version}\nkind: {kind}\nconnections: []\n"),
+        )
+        .unwrap();
+        for posture in [Posture::Production, Posture::Development] {
+            let declared = DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            };
+            let loaded = crate::payments::http::load_config(&config_file, declared)
+                .loaded
+                .unwrap();
+            let bridge = BregBridge::new(
+                resolver.clone(),
+                crate::payments::http::payment_peer_policy(loaded.posture.posture()),
+            );
+            let result = bridge
+                .client(&binding)
+                .unwrap()
+                .get_record("bills", RECORD, &BRegRecordOptions::default())
+                .await;
+            match posture {
+                Posture::Production => assert!(matches!(
+                    result,
+                    Err(BaseRegistryClientError::DevelopmentPeer)
+                )),
+                Posture::Development => assert!(result.is_ok(), "{result:?}"),
+            }
+        }
+        server.abort();
     }
 }

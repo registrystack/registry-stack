@@ -1,0 +1,7 @@
+apiVersion: id.registrystack.org/formats/discovery/origins/v1alpha1
+kind: DiscoveryOrigins
+origins:
+  tutorial-evidence:
+    catalogUrl: http://127.0.0.1:38090/evidence.jsonld
+    profile: registry-discovery-v1alpha1
+    enabled: false

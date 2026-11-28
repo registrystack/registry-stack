@@ -140,6 +140,17 @@ pub struct RegistryProject {
         schemars(schema_with = "local_id_map_schema::<ReusableValueTypeSchema>")
     )]
     pub value_types: BTreeMap<String, FieldTypeSource>,
+    /// Named lists of row boundaries, declared once and referenced as
+    /// `rowBoundaries: {rowBoundarySet: <id>}` wherever a row reach is written
+    /// in this file. A reference expands to the set's boundaries when the file
+    /// is read, so each grant still states its own reach. A set holds at least
+    /// one boundary and is never `unrestricted`.
+    #[serde(default, skip_serializing, deserialize_with = "local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "local_id_map_schema::<RowBoundarySetSource>")
+    )]
+    pub row_boundary_sets: BTreeMap<String, RowBoundarySetSource>,
     /// Written as a mapping from each function id to the rest of the function
     /// (CFG-ID-5) and held sorted by id.
     #[serde(
@@ -426,8 +437,33 @@ pub struct ReviewAuthoritySource {
 // Authored once per bounded package, rather than allocated per Record.
 #[allow(clippy::large_enum_variant)]
 pub enum ActionExecutionSource {
-    Immediate {},
-    Proposal { proposal: ProposalPolicySource },
+    Immediate {
+        #[serde(
+            default,
+            skip_serializing_if = "ActionConcurrency::is_condition_required"
+        )]
+        concurrency: ActionConcurrency,
+    },
+    Proposal {
+        proposal: ProposalPolicySource,
+    },
+}
+/// How an immediate Action guards its patches against a concurrent write.
+/// `condition-required` asks the caller to prove the revision it saw.
+/// `current-revision` evaluates the Action's commit guards against the locked
+/// current row instead, so the caller sends no condition.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActionConcurrency {
+    #[default]
+    ConditionRequired,
+    CurrentRevision,
+}
+impl ActionConcurrency {
+    pub fn is_condition_required(&self) -> bool {
+        matches!(self, Self::ConditionRequired)
+    }
 }
 registry_platform_yaml::tagged_union!(ActionExecutionSource, tag = "mode");
 serialize_tagged_union!(ActionExecutionSource, tag = "mode");
@@ -857,6 +893,168 @@ pub struct ProposalTargetPermissionSource {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "sentinel::RowBoundaries"))]
     pub row_boundaries: Vec<RowBoundarySource>,
+}
+
+/// A reusable list of row boundaries, written under `rowBoundarySets`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RowBoundarySetSource(pub Vec<RowBoundarySource>);
+
+impl<'de> Deserialize<'de> for RowBoundarySetSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        sentinel::row_boundary_set_rows(deserializer).map(Self)
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for RowBoundarySetSource {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RowBoundarySetSource".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<sentinel::Listed<Vec<RowBoundarySource>, sentinel::RowBoundarySetRows>>()
+    }
+}
+
+/// Replaces every `rowBoundaries: {rowBoundarySet: <id>}` written where a row
+/// reach is authored with the boundaries the file's set lists, and reports
+/// whether it replaced any. Those places are a profile's record permissions,
+/// its Action and Proposal targets, a Record type's access requirements, and
+/// a module profile. A mapping of that shape anywhere else, such as inside a
+/// structured field schema, is ordinary data and stays as written. A reference
+/// to a set the file does not declare, or one that carries another member, is
+/// refused: an empty list means every row, so no reference may fall through
+/// to one. Sets are read before this runs, so each holds at least one
+/// boundary.
+fn resolve_row_boundary_sets(value: &mut Value) -> Result<bool, (String, &'static str)> {
+    let sets = value
+        .get("rowBoundarySets")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut replaced = false;
+    for (pointer, profile) in entries_mut(value, "accessProfiles", "") {
+        replaced |= resolve_in_project_profile(profile, &pointer, &sets)?;
+    }
+    for collection in ["recordTypes", "extendRecordTypes"] {
+        for (pointer, record_type) in entries_mut(value, collection, "") {
+            replaced |= resolve_at(record_type, "accessRequirements", &pointer, &sets)?;
+            for (pointer, profile) in entries_mut(record_type, "accessProfiles", &pointer) {
+                replaced |= resolve_at(profile, "rowBoundaries", &pointer, &sets)?;
+            }
+        }
+    }
+    Ok(replaced)
+}
+
+/// The members of `parent[member]`, a mapping keyed by id or a list, with the
+/// JSON pointer of each.
+fn entries_mut<'a>(
+    parent: &'a mut Value,
+    member: &str,
+    parent_pointer: &str,
+) -> Vec<(String, &'a mut Value)> {
+    let base = format!("{parent_pointer}/{member}");
+    match parent.get_mut(member) {
+        Some(Value::Object(items)) => items
+            .iter_mut()
+            .map(|(key, item)| {
+                (
+                    format!("{base}/{}", key.replace('~', "~0").replace('/', "~1")),
+                    item,
+                )
+            })
+            .collect(),
+        Some(Value::Array(items)) => items
+            .iter_mut()
+            .enumerate()
+            .map(|(index, item)| (format!("{base}/{index}"), item))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn resolve_in_project_profile(
+    profile: &mut Value,
+    pointer: &str,
+    sets: &serde_json::Map<String, Value>,
+) -> Result<bool, (String, &'static str)> {
+    let Some(permissions) = profile.get_mut("permissions") else {
+        return Ok(false);
+    };
+    let permissions_pointer = format!("{pointer}/permissions");
+    let mut replaced = false;
+    for (pointer, permission) in entries_mut(permissions, "records", &permissions_pointer) {
+        replaced |= resolve_at(permission, "rowBoundaries", &pointer, sets)?;
+    }
+    for kind in ["actions", "proposals"] {
+        for (pointer, permission) in entries_mut(permissions, kind, &permissions_pointer) {
+            for (pointer, target) in entries_mut(permission, "targets", &pointer) {
+                replaced |= resolve_at(target, "rowBoundaries", &pointer, sets)?;
+            }
+        }
+    }
+    Ok(replaced)
+}
+
+/// Resolves a reference at `owner[member]`, where `member` is `rowBoundaries`,
+/// or inside `owner[accessRequirements]`.
+fn resolve_at(
+    owner: &mut Value,
+    member: &str,
+    pointer: &str,
+    sets: &serde_json::Map<String, Value>,
+) -> Result<bool, (String, &'static str)> {
+    let (owner, member, pointer) = if member == "accessRequirements" {
+        match owner.get_mut(member) {
+            Some(requirements) => (
+                requirements,
+                "rowBoundaries",
+                format!("{pointer}/accessRequirements"),
+            ),
+            None => return Ok(false),
+        }
+    } else {
+        (owner, member, pointer.to_owned())
+    };
+    let Some(child) = owner.get_mut(member) else {
+        return Ok(false);
+    };
+    let is_reference = child
+        .as_object()
+        .is_some_and(|object| object.contains_key("rowBoundarySet"));
+    if !is_reference {
+        return Ok(false);
+    }
+    let site = format!("{pointer}/{member}/rowBoundarySet");
+    let Some(object) = child.as_object().filter(|object| object.len() == 1) else {
+        return Err((
+            site,
+            "a row boundary set reference is a mapping with only a rowBoundarySet member",
+        ));
+    };
+    let Some(name) = object.get("rowBoundarySet").and_then(Value::as_str) else {
+        return Err((
+            site,
+            "rowBoundarySet must be a local row boundary set identifier",
+        ));
+    };
+    let Some(boundaries) = sets
+        .get(name)
+        .and_then(Value::as_array)
+        .filter(|boundaries| !boundaries.is_empty())
+    else {
+        return Err((
+            site,
+            "rowBoundarySet must name a row boundary set declared in this file",
+        ));
+    };
+    *child = Value::Array(boundaries.clone());
+    Ok(true)
 }
 
 fn resolve_local_value_types(value: &mut Value) -> Result<(), (String, &'static str)> {
@@ -1728,6 +1926,17 @@ pub struct RegistryModule {
         schemars(schema_with = "local_id_map_schema::<ReusableValueTypeSchema>")
     )]
     pub value_types: BTreeMap<String, FieldTypeSource>,
+    /// Named lists of row boundaries, declared once and referenced as
+    /// `rowBoundaries: {rowBoundarySet: <id>}` wherever a row reach is written
+    /// in this file. A reference expands to the set's boundaries when the file
+    /// is read, so each grant still states its own reach. A set holds at least
+    /// one boundary and is never `unrestricted`.
+    #[serde(default, skip_serializing, deserialize_with = "local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "local_id_map_schema::<RowBoundarySetSource>")
+    )]
+    pub row_boundary_sets: BTreeMap<String, RowBoundarySetSource>,
     /// Written as a mapping from each function id to the rest of the function
     /// (CFG-ID-5) and held sorted by id.
     #[serde(
@@ -2698,6 +2907,12 @@ impl ActionSource {
     pub fn is_proposal(&self) -> bool {
         matches!(self.execution, ActionExecutionSource::Proposal { .. })
     }
+    pub fn concurrency(&self) -> ActionConcurrency {
+        match &self.execution {
+            ActionExecutionSource::Immediate { concurrency } => *concurrency,
+            ActionExecutionSource::Proposal { .. } => ActionConcurrency::ConditionRequired,
+        }
+    }
 }
 
 pub const ACTION_PLAN_ABI_V1: &str = "registry.action-plan/v1";
@@ -2792,6 +3007,21 @@ pub struct ActionRequirementSource {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
     pub reason: Option<String>,
+    /// Authored refusal text, a constant of at most 256 bytes that requires
+    /// `reason`. It is returned as the Problem `detail` and as the availability
+    /// `guardLabel` exactly where `reason` is returned, so it is disclosed only
+    /// when every guard and boundary fact is readable. It never replaces the
+    /// generic precondition refusal.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
     #[serde(default)]
     pub field: String,
     #[serde(
@@ -2827,6 +3057,14 @@ pub struct ActionRequirementSource {
     #[serde(default, skip_serializing_if = "crate::model::is_zero_i32")]
     #[cfg_attr(feature = "schema", schemars(range(min = -365000, max = 365000)))]
     pub current_date_offset_days: i32,
+    /// Whole calendar months added to the registry-local date before applying
+    /// `currentDate`, clamping to the last day of a shorter month (January 31
+    /// plus one month is February 28 or 29). Requires `currentDate`, is
+    /// exclusive with `currentDateOffsetDays`, and zero preserves the
+    /// unshifted comparison.
+    #[serde(default, skip_serializing_if = "crate::model::is_zero_i32")]
+    #[cfg_attr(feature = "schema", schemars(range(min = -12000, max = 12000)))]
+    pub current_date_offset_months: i32,
     /// Requires the stored value to be at or above the named required action
     /// input of the same date, instant, or integer type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5320,7 +5558,7 @@ pub enum BoundaryOperator {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HookSource {
-    /// Stable hook contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.
+    /// Stable hook contract identifier, sent as the envelope `type`. Use a new identifier for a breaking payload change.
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
@@ -5564,9 +5802,14 @@ pub struct ProjectAccessProfileSource {
     pub display: PresentationSource,
     #[serde(default)]
     pub default: bool,
+    /// The caller kind this profile serves. A token whose kind is another one,
+    /// or that states none and has none declared for its issuer or client, is
+    /// refused. Omit to serve every kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_kind: Option<ActorKindSource>,
-    /// The OAuth clients whose tokens may select this profile. Omit to accept every client.
+    /// The OAuth clients whose tokens may select this profile, with or without
+    /// actorKind. Omit to accept every client an issuer entry of the runtime
+    /// admits.
     // Held as the listed clients, so the empty set accepts every client.
     #[serde(
         default,
@@ -6398,21 +6641,42 @@ fn read_with_value_types<T: DeserializeOwned>(
     if !option_errors.is_empty() {
         return Err(document.report_with(option_errors));
     }
-    if value.get("valueTypes").is_none() {
-        return document.decode().map(|value| Decoded { value, document });
+    let has_value_types = value.get("valueTypes").is_some();
+    let has_row_boundary_sets = value.get("rowBoundarySets").is_some();
+    // Validate declarations at their authored sites before copying them into
+    // use sites. A bad named set or type must point to its declaration.
+    if value.get("rowBoundarySets").is_some() {
+        let _: BTreeMap<LocalId, RowBoundarySetSource> = document.decode_at("/rowBoundarySets")?;
     }
-    // Validate declarations at their authored sites before copying constraints
-    // into use sites. A bad named type must point to its declaration.
-    let _: BTreeMap<LocalId, FieldTypeSource> = document.decode_at("/valueTypes")?;
-    resolve_local_value_types(&mut value).map_err(|(path, message)| {
+    let resolved_sets = resolve_row_boundary_sets(&mut value).map_err(|(path, message)| {
         Report::new(vec![document.diagnostic_at_value(
             Severity::Error,
-            "breg.value-type.reference-invalid",
+            "breg.row-boundary-set.reference-invalid",
             &path,
             message,
-            "Name a declared value type and keep its constraints at that declaration.",
+            "Declare the set under rowBoundarySets in this file and reference it by its identifier, with no other member.",
         )])
     })?;
+    if !has_value_types && !resolved_sets && !has_row_boundary_sets {
+        return document.decode().map(|value| Decoded { value, document });
+    }
+    // Every reference is expanded, so the read file holds the boundaries
+    // inline and no set: it serializes to source that reads back the same.
+    if let Some(root) = value.as_object_mut() {
+        root.remove("rowBoundarySets");
+    }
+    if has_value_types {
+        let _: BTreeMap<LocalId, FieldTypeSource> = document.decode_at("/valueTypes")?;
+        resolve_local_value_types(&mut value).map_err(|(path, message)| {
+            Report::new(vec![document.diagnostic_at_value(
+                Severity::Error,
+                "breg.value-type.reference-invalid",
+                &path,
+                message,
+                "Name a declared value type and keep its constraints at that declaration.",
+            )])
+        })?;
+    }
     let normalized = serde_json::to_vec(&value).expect("normalized authoring value serializes");
     match read_authored::<T>(file, &normalized, format) {
         Ok(decoded) => Ok(Decoded {

@@ -682,6 +682,8 @@ impl NativeTimerHarness {
             let arguments = vec![
                 "--runtime-config".to_owned(),
                 config_path.display().to_string(),
+                "--posture".to_owned(),
+                "production".to_owned(),
             ];
             let checkpoint_label =
                 self.checkpoint
@@ -709,9 +711,9 @@ impl NativeTimerHarness {
                             .join(format!("{launch_id}.mutation-before-commit.release")),
                     });
             let mut command = Command::new(&executable);
+            command.env_remove("REGISTRY_STACK_POSTURE");
             command
-                .arg("--runtime-config")
-                .arg(&config_path)
+                .args(&arguments)
                 .env("BREG_LOG", "info")
                 .env("TOKIO_WORKER_THREADS", "2")
                 .stdin(Stdio::null())
@@ -968,7 +970,7 @@ impl NativeTimerHarness {
             .ok_or_else(|| "native timer replica does not exist".to_owned())?
             .command
             .clone();
-        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
             self.replicas[replica].base_url.clone(),
         ))
         .map_err(|error| format!("native timer readiness client failed: {error}"))?;
@@ -1075,6 +1077,7 @@ impl NativeTimerHarness {
         let stdout = private_log(&stdout_path)?;
         let stderr = private_log(&stderr_path)?;
         let mut child = Command::new(&executable)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
@@ -1771,7 +1774,7 @@ impl NativeTimerHarness {
         let token = BearerToken::new(self.token.clone())
             .map_err(|_| "native timer bearer token is invalid".to_owned())?;
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new(base_url)
+            BaseRegistryClientConfig::new_without_peer_policy(base_url)
                 .with_attempt_timeout(attempt_timeout)
                 .with_connect_timeout(Duration::from_secs(2))
                 .with_maximum_mutation_retries(0),
@@ -3895,6 +3898,7 @@ impl NativeTimerHarness {
             return Err("native timer replica is not live for a process signal".to_owned());
         }
         let status = Command::new("/bin/kill")
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg(signal)
             .arg(replica.command.pid.to_string())
             .stdin(Stdio::null())
@@ -3916,7 +3920,7 @@ impl NativeTimerHarness {
     }
 
     async fn wait_ready(&mut self, replica: usize) -> Result<(), String> {
-        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new(
+        let client = BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
             self.replicas[replica].base_url.clone(),
         ))
         .map_err(|error| format!("native timer readiness client failed: {error}"))?;
@@ -4013,7 +4017,6 @@ listener:
   environment: {ENVIRONMENT}
   instanceId: {instance_id}
   databaseId: {DATABASE_ID}
-  databaseInitializationEnvironment: {ENVIRONMENT}
 secretProviders:
   file:
     root: {secret_root}
@@ -4033,25 +4036,27 @@ package:
   root: {package_root}
 authentication:
   oidc:
-    issuer: https://auth.example.test
-    audience: {AUDIENCE}
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: https://auth.example.test
+        audience: {AUDIENCE}
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksSource:
+          type: static
+          documentRef: secret:file/oidc-jwks
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
     purpose: purpose
@@ -4849,9 +4854,9 @@ fn lowercase_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-fn package_context() -> PackageLoadContext<'static> {
+fn package_context() -> PackageLoadContext {
     PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Production,
     }
 }
 

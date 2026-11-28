@@ -112,10 +112,30 @@ pub(crate) fn failure(command: &str, exit: u8, diagnostics: Vec<Value>) -> Value
 
 /// Render one report on a single line, envelope members first.
 pub(crate) fn render(report: &Value) -> String {
+    render_with_posture(report, None)
+}
+
+pub(crate) fn render_with_posture(
+    report: &Value,
+    posture: Option<registry_platform_config::DeclaredPosture>,
+) -> String {
     let report =
         registry_cli_report::Report::new(report, registry_platform_buildinfo::DISPLAY_VERSION)
             .expect("an Evidence command supplies a valid report envelope");
+    let report = match posture {
+        Some(posture) => report.with_posture(posture),
+        None => report,
+    };
     serde_json::to_string(&report).expect("a JSON value always serializes")
+}
+
+pub(crate) fn print_with_posture(
+    report: &Value,
+    posture: Option<registry_platform_config::DeclaredPosture>,
+) -> std::io::Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{}", render_with_posture(report, posture))?;
+    stdout.flush()
 }
 
 /// Write one report and its trailing newline to standard output.

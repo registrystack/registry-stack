@@ -34,15 +34,9 @@ use registry_platform_dispatch::{
     AttemptTimeoutBound, DispatchError, FailureCode, JobPolicy, RetrySchedule, SendOutcome, Sent,
     UncertainOutcome,
 };
-use registry_platform_httputil::destination::{
-    DestinationAuthorizationValue, DestinationRequestError,
-};
 use tokio_postgres::{Row, Transaction};
 
-use super::{
-    delivery_of, reminder_delivery_time, reminder_event, sign_reminder_event, Delivery,
-    ReminderTransport,
-};
+use super::{delivery_of, reminder_event, Delivery, ReminderTransport};
 use crate::store::{OutboxRow, PostgresStore, StoreError};
 
 /// The delivery-intent outbox table.
@@ -508,58 +502,7 @@ impl DispatchTransport for IntentTransport {
                 return refusal(EVENT_UNRENDERABLE);
             }
         };
-        let authorization = destination
-            .bearer
-            .as_ref()
-            .map(|secret| DestinationAuthorizationValue::bearer(secret.expose_secret().to_vec()))
-            .transpose();
-        let request = match (authorization, &destination.hmac_sha256_key) {
-            (Ok(authorization), None) => {
-                target
-                    .template
-                    .render(&[], &[], authorization, Some(event.body))
-            }
-            // A signed delivery binds the event, this lease's generation and
-            // attempt, the database clock the lease was taken at, and the
-            // selected purpose's exact request target.
-            (Ok(authorization), Some(key)) => reminder_delivery_time(job.attempt_started_at)
-                .map_err(|_| DestinationRequestError::InvalidAuthorization)
-                .and_then(|delivery_time| {
-                    sign_reminder_event(
-                        key.expose_secret(),
-                        &event,
-                        job.generation,
-                        job.attempt,
-                        &target.request_target,
-                        delivery_time,
-                    )
-                    .map_err(|_| DestinationRequestError::InvalidAuthorization)
-                })
-                .and_then(|signed| {
-                    target.template.render(
-                        &[],
-                        &[
-                            b"application/json",
-                            b"application/json",
-                            b"1.0",
-                            event.id.as_bytes(),
-                            event.source.as_bytes(),
-                            event.event_type.as_bytes(),
-                            event.time.as_bytes(),
-                            event.data_schema.as_bytes(),
-                            signed.generation.as_bytes(),
-                            signed.attempt.as_bytes(),
-                            signed.delivery_time.as_bytes(),
-                            signed.idempotency_key.as_bytes(),
-                            signed.signature.as_bytes(),
-                        ],
-                        authorization,
-                        Some(event.body),
-                    )
-                }),
-            (Err(_), _) => Err(DestinationRequestError::InvalidAuthorization),
-        };
-        let request = match request {
+        let request = match target.render(event, job.attempt_started_at) {
             Ok(request) => request,
             Err(error) => {
                 tracing::error!(

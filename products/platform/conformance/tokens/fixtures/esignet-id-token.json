@@ -1,0 +1,44 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "esignet-id-token",
+  "class": "negative",
+  "provider": "esignet",
+  "kind": "user-id",
+  "tokenUse": "id",
+  "subjectKind": "user",
+  "source": {
+    "basis": "documentation",
+    "consultedOn": "2026-11-27",
+    "url": "https://docs.esignet.io/home/esignet-2.x/readme/standards.md",
+    "note": "eSignet 2.x documentation. The shape is from documentation and was not observed. The ID token has iss, sub, aud (the relying party's client ID), exp, iat, auth_time, nonce, acr and at_hash. The header typ is not stated, so it is omitted."
+  },
+  "header": {
+    "alg": "RS256",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "iss": "https://esignet.example.test",
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "aud": "journey-app",
+    "exp": {
+      "offsetSeconds": 3600
+    },
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "auth_time": {
+      "offsetSeconds": 0
+    },
+    "nonce": "synthetic-nonce",
+    "acr": "synthetic-acr",
+    "at_hash": "synthetic-at-hash"
+  },
+  "omits": [
+    "scope",
+    "client_id",
+    "azp"
+  ],
+  "notes": "A relying party holds this token after sign-in, so it is the one most likely to be forwarded by mistake."
+}

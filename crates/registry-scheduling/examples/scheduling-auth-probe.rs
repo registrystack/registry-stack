@@ -119,14 +119,14 @@ async fn authenticate(input: ProbeInput) -> Result<bool, ()> {
             "listener": {"bind": "127.0.0.1:0", "tlsTermination": "development-loopback", "networkExposure": "private-address"},
             "secretProviders": {"file": {"root": secrets}, "environment": {}},
             "database": {"runtimeUrlRef": "secret:env/SCHEDULING_RUNTIME_URL", "migrationUrlRef": "secret:env/SCHEDULING_MIGRATION_URL"},
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": input.issuer.clone(),
                 "audience": input.audience.clone(),
                 "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-jwks"},
                 "allowedClients": [input.client.clone()],
                 "assertionIssuers": assertion_issuers,
                 "scopeClaim": "scope"
-            }},
+            }}}},
             "taskGrantStatus": "unchecked-final-fifteen-minutes",
             "audit": {"path": root.path().join("audit.jsonl"), "hashKeyRef": "secret:file/audit-key"},
             "destinations": {},
@@ -135,10 +135,12 @@ async fn authenticate(input: ProbeInput) -> Result<bool, ()> {
         .map_err(|_| ())?,
     )
     .map_err(|_| ())?;
-    let runtime = RuntimeConfig::load(&runtime_path).map_err(|_| ())?;
+    let runtime = RuntimeConfig::load(&runtime_path, registry_scheduling::config::DEFAULT_POSTURE)
+        .map_err(|_| ())?;
     let secrets = registry_scheduling::runtime::secret_resolver(&runtime).map_err(|_| ())?;
-    let (verifier, keys) = runtime.oidc_verifier(&secrets).await.map_err(|_| ())?;
-    let authenticator = SchedulingAuthenticator::new(&runtime.authentication.oidc, verifier, keys);
+    let sources = runtime.issuer_sources(&secrets).await.map_err(|_| ())?;
+    let authenticator =
+        SchedulingAuthenticator::new(&runtime.authentication.oidc, sources).map_err(|_| ())?;
     let caller = authenticator
         .authenticate_mutate(&input.token)
         .await

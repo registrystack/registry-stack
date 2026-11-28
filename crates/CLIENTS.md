@@ -19,7 +19,7 @@ that every checkout or release ships it.
 | `registry-documents-client` | Rust Document Store HTTP and response contract; no language binding and not part of the unified packages or the Rust facade |
 | BReg, Casework, Coordinator, Discovery, Evidence, Messaging, Render, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
 | `registry-stack-client` | Curated Rust facade for BReg, Casework, Coordinator, Discovery, Evidence, Messaging, Render, and Scheduling, with separate product, record, and auth modules |
-| `registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
+| `registry-stack-client-node` | Public `@registrystack/client-node` facade and platform package definitions |
 | `registry-stack-client-py` | Public `registry-stack-client` Python metadata and `registry_client` facade, assembled with all native bindings |
 | `registry-record` | Neutral Registry Record DTOs and strict envelope decoding, without product authorization semantics |
 

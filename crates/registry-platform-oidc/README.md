@@ -13,6 +13,13 @@ OIDC discovery, JWKS caching, and JWT verification for registry services.
 - Scope mapping for translating provider scopes into platform permissions.
 - Strict extraction and client/resource binding for the shared contextual
   authorization claims.
+- `IssuerSet`, a set of issuers. A token is matched to one `IssuerEntry` by its
+  exact `iss` and verified only with that entry's verifier. `caller_kind`
+  settles the kind of caller from the kind the operator declared for the client
+  or issuer, else the kind claim, else `Unspecified`, and refuses a claim that
+  contradicts the declaration. `refuse_identity_only` refuses a token that has
+  no kind and no scope. A verifier whose access-token type set holds `JWT`
+  refuses a token that carries an ID-token marker.
 - Typed exact task-grant status bindings and operator-pinned status clients
   for any task authority; the consuming product supplies each authority's
   status route, scope, and resource. `TaskGrantStatusRegistry::validate_configuration`
@@ -162,6 +169,14 @@ acquisition, is bounded to ten seconds, with a five-second status HTTP timeout a
 response ceiling. Products decide when the check precedes their effects and
 how failures map to their own API; the primitive owns no mutation or durable
 lifecycle state.
+
+A runtime passes a `PeerPolicy` to the status client and to `GrantClaims::verify_context`.
+Under `RefuseDevelopmentPeer`, a status answer whose `Registry-Posture` field is `development`
+is refused as `TaskGrantError::DevelopmentPeer` (`platform.task-grant.development-peer`), and a
+task assertion carrying the claim `registry_posture: development` is refused as
+`GrantContextError::DevelopmentAssertion` (`platform.task-grant.development-assertion`).
+Under `AcceptDevelopmentPeer` both are accepted. Any other value of `registry_posture` is a
+malformed claim. The `*_without_peer_policy` forms behave as `RefuseDevelopmentPeer`.
 
 ## Testing
 

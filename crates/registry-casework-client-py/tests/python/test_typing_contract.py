@@ -35,6 +35,7 @@ class TypingContractTests(unittest.TestCase):
                 "user_agent",
                 "trusted_root_certificates",
                 "maximum_mutation_retries",
+                "refuse_development_peer",
             ],
         )
 

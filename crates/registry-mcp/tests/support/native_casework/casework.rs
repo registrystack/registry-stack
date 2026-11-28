@@ -122,18 +122,20 @@ impl Casework {
                 "kind":"CaseworkRuntimeConfig",
                 "identity":{"databaseId":"native-staff-proof"},
                 "package":{"root":package},
-                "listener":{"bind":address.to_string(),"tlsTermination":"development-loopback","networkExposure":"private-address"},
+                "listener":{"bind":address.to_string(),"tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
                 "secretProviders":{"file":{"root":root}},
                 "database":{"runtimeUrlRef":"secret:file/casework-database-url","migrationUrlRef":"secret:file/casework-database-url","testOnlyPlaintext":true},
                 "authentication":{"oidc":{
-                    "issuer":issuer.issuer(),"audience":CASEWORK_AUDIENCE,"allowInsecureHttp":true,
-                    "allowedClients":["registry-mcp","casework-human","facility-registry"],
-                    "assertionIssuers":{"registry-mcp":[issuer.issuer()]},
-                    "scopeClaim":"scope","humanIdentity":{"claim":HUMAN_IDENTITY_CLAIM,"value":HUMAN_IDENTITY_VALUE},
-                    "maximumTokenLifetimeSeconds":300,
+                    "issuers":{"main":{
+                        "issuer":issuer.issuer(),"audience":CASEWORK_AUDIENCE,"allowInsecureHttp":true,
+                        "allowedClients":["registry-mcp","casework-human","facility-registry"],
+                        "assertionIssuers":{"registry-mcp":[issuer.issuer()]},
+                        "maximumTokenLifetimeSeconds":300
+                    }},
                     "delegatedStaffReaders":{
                         READER_POLICY:{
                             "profile":STAFF_PROFILE,"client":"registry-mcp","actorSubject":"registry-mcp",
+                            "representedHuman":{"claim":HUMAN_IDENTITY_CLAIM,"value":HUMAN_IDENTITY_VALUE},
                             "assertionIssuer":issuer.issuer(),"requiredScope":"casework:staff:delegated-read","maximumTokenLifetimeSeconds":300,
                             "sourceProfiles":[SOURCE_PROFILE]
                         }
@@ -159,6 +161,8 @@ impl Casework {
                 "apply".as_ref(),
                 "--runtime-config".as_ref(),
                 runtime.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
                 "--operator-reference".as_ref(),
                 "native-staff-proof".as_ref(),
             ],
@@ -170,6 +174,8 @@ impl Casework {
             &[
                 "--runtime-config".as_ref(),
                 runtime.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
                 "serve".as_ref(),
             ],
             root.join("service.log"),
@@ -179,8 +185,11 @@ impl Casework {
                 .as_str(),
         )
         .await;
-        let client = CaseworkClient::new(CaseworkClientConfig::new(base_url.clone()))
-            .expect("native Casework client");
+        let client = CaseworkClient::new(CaseworkClientConfig::new(
+            base_url.clone(),
+            registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
+        ))
+        .expect("native Casework client");
         Self {
             base_url,
             audit_path,

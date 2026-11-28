@@ -12,6 +12,7 @@ use registry_platform_yaml::{
 };
 use serde::de::DeserializeOwned;
 
+use crate::loader::{Decision, RuntimeConfigError};
 use crate::{
     contains_environment_expression, LoadedRuntimeConfig, RuntimeConfigLoader, UNAVAILABLE_CODE,
 };
@@ -32,7 +33,10 @@ pub struct RuntimeFileCheck<T> {
     /// Every loader finding, each naming the file as the path was given. A
     /// finding that depends on the value of a deferred expression is left
     /// out; in its place stands a warning, coded [`INCOMPLETE_CODE`], that
-    /// the check stopped at that member.
+    /// the check stopped at that member. Under a declared posture, each
+    /// development-only setting the file holds is one finding: an error in
+    /// production and a warning in development, with the same code. The
+    /// file is still decoded, so the product's own checks run beside them.
     pub diagnostics: Vec<Diagnostic>,
     /// The file could not be read at all, as opposed to read and refused.
     pub unavailable: bool,
@@ -118,6 +122,34 @@ impl<T> RuntimeFileCheck<T> {
         report
     }
 
+    /// Return the authored string scalar and its position at `pointer`,
+    /// including when typed decoding failed. Substituted values are not covered.
+    #[must_use]
+    pub fn authored_scalar(
+        &self,
+        pointer: &str,
+    ) -> Option<(&str, registry_platform_yaml::Position)> {
+        let node = self.tree.as_ref()?.pointer(pointer)?;
+        let NodeValue::String(value) = &node.value else {
+            return None;
+        };
+        Some((value.text.as_str(), node.span.start))
+    }
+
+    /// Return the keys of the authored mapping at `pointer` in source order,
+    /// including when typed decoding failed. Empty when nothing is authored
+    /// there or the member is not a mapping.
+    #[must_use]
+    pub fn authored_keys(&self, pointer: &str) -> Vec<&str> {
+        match self.tree.as_ref().and_then(|tree| tree.pointer(pointer)) {
+            Some(Node {
+                value: NodeValue::Mapping(entries),
+                ..
+            }) => entries.iter().map(|entry| entry.key.as_str()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Whether the member at `pointer`, or a member above it, holds an
     /// expression the check did not substitute. A product skips its value
     /// checks of such a member.
@@ -147,11 +179,7 @@ impl<T> RuntimeFileCheck<T> {
     ) -> Diagnostic {
         let mut diagnostic = Diagnostic::error(code, pointer, message, suggested_action);
         diagnostic.artifact = Some(artifact.to_owned());
-        let position = self
-            .tree
-            .as_ref()
-            .and_then(|root| root.pointer(pointer))
-            .map(|node| node.span.start);
+        let position = self.value_position(pointer);
         diagnostic.source = Some(Source {
             file: self.file.clone(),
             line: position.map(|position| position.line),
@@ -198,6 +226,31 @@ impl<T> RuntimeFileCheck<T> {
         });
     }
 
+    /// Attach a related note at the value of another member in this runtime
+    /// file, such as one element of a list.
+    pub fn add_related_at(
+        &self,
+        diagnostic: &mut Diagnostic,
+        pointer: &str,
+        message: impl Into<String>,
+    ) {
+        let position = self.value_position(pointer);
+        diagnostic.related.push(Related {
+            file: self.file.clone(),
+            line: position.map(|position| position.line),
+            column: position.map(|position| position.column),
+            path: pointer.to_owned(),
+            message: message.into(),
+        });
+    }
+
+    fn value_position(&self, pointer: &str) -> Option<registry_platform_yaml::Position> {
+        self.tree
+            .as_ref()
+            .and_then(|root| root.pointer(pointer))
+            .map(|node| node.span.start)
+    }
+
     fn key_position(&self, pointer: &str) -> Option<registry_platform_yaml::Position> {
         let (parent, key) = pointer.rsplit_once('/')?;
         let key = key.replace("~1", "/").replace("~0", "~");
@@ -224,32 +277,58 @@ impl RuntimeConfigLoader {
     /// repeat. A member that refuses its stand-in stops the decode: the check
     /// then reports a warning at that member, coded [`INCOMPLETE_CODE`], for
     /// the members it did not read.
+    ///
+    /// The posture is the loader's: a loader made without a posture reports
+    /// no development-only setting.
     pub fn check_offline<T: DeserializeOwned>(
         &self,
         path: &Path,
         substitute: bool,
         stand_in_for: fn(&str) -> &'static str,
     ) -> RuntimeFileCheck<T> {
-        let file = path.display().to_string();
         // One read under the loader's file rules serves the scan and the
         // decode, so nothing is opened before those rules have accepted it.
-        let bytes = self.read_file(path);
-        let tree = bytes.as_deref().ok().and_then(|bytes| scan(&file, bytes));
+        match self.read_file(path) {
+            Ok(bytes) => self.check_offline_bytes(path, &bytes, substitute, stand_in_for),
+            Err(error) => self.check_offline_input(path, Err(error), substitute, stand_in_for),
+        }
+    }
+
+    pub(crate) fn check_offline_input<T: DeserializeOwned>(
+        &self,
+        path: &Path,
+        bytes: Result<&[u8], RuntimeConfigError>,
+        substitute: bool,
+        stand_in_for: fn(&str) -> &'static str,
+    ) -> RuntimeFileCheck<T> {
+        let file = path.display().to_string();
+        let tree = bytes.as_ref().ok().and_then(|bytes| scan(&file, bytes));
         let deferred = match (&tree, substitute) {
             (Some(root), false) => Deferred::collect(root, stand_in_for),
             _ => Deferred::default(),
         };
         let loaded = bytes.and_then(|bytes| {
             if substitute {
-                self.parse_file::<T>(path, &bytes, &|name| std::env::var(name).ok())
+                self.parse_file::<T>(
+                    path,
+                    bytes,
+                    &|name| std::env::var(name).ok(),
+                    Decision::Report,
+                )
             } else {
-                self.parse_file_with_stand_ins::<T>(path, &bytes, &|pointer| {
-                    deferred.stand_in(pointer).to_owned()
-                })
+                self.parse_file_with_stand_ins::<T>(
+                    path,
+                    bytes,
+                    &|pointer| deferred.stand_in(pointer).to_owned(),
+                    Decision::Report,
+                )
             }
         });
         let (loaded, diagnostics, unavailable) = match loaded {
-            Ok(loaded) => (Some(loaded), Vec::new(), false),
+            Ok(loaded) => {
+                let found = loaded.posture.diagnostics(path);
+                (Some(loaded), found, false)
+            }
             Err(error) => (
                 None,
                 error
@@ -413,7 +492,7 @@ mod tests {
     use serde::Deserialize;
     use std::fs;
 
-    const LOADER: RuntimeConfigLoader = RuntimeConfigLoader::new(RuntimeEnvelope {
+    const LOADER: RuntimeConfigLoader = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
         api_version: "registry.registrystack.org/example-runtime/v1alpha1",
         kind: "ExampleRuntimeConfig",
     });
@@ -475,6 +554,17 @@ mod tests {
         let substituted = check(&text, true);
         assert_eq!(substituted.diagnostics[0].code, "config.substitution");
         assert_eq!(substituted.diagnostics[0].path, "/bind");
+    }
+
+    #[test]
+    fn authored_keys_reads_a_mapping_in_source_order_when_decoding_fails() {
+        let text =
+            format!("{HEAD}bind: 127.0.0.1:8080\ncount: 3\nentries:\n  zeta: 1\n  alpha: 2\n");
+        let checked = check(&text, false);
+        assert!(checked.loaded.is_none(), "an unknown member fails decoding");
+        assert_eq!(checked.authored_keys("/entries"), ["zeta", "alpha"]);
+        assert!(checked.authored_keys("/count").is_empty());
+        assert!(checked.authored_keys("/absent").is_empty());
     }
 
     #[test]

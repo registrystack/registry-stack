@@ -1,8 +1,7 @@
 //! HTTP security helpers for Axum/Tower registry services.
 //!
-//! The crate keeps browser-facing defaults small and explicit: CORS validation,
-//! common security headers, request-body limits, and RFC 9457-style
-//! Problem Details responses.
+//! The crate keeps browser-facing defaults small and explicit: common security
+//! headers, request-body limits, and RFC 9457-style Problem Details responses.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -12,12 +11,12 @@ use std::task::{Context, Poll};
 
 use axum::body::Body;
 use axum::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
-use axum::http::{HeaderMap, Method, Request, Response, StatusCode};
+use axum::http::{HeaderMap, Request, Response, StatusCode};
 use axum::response::IntoResponse;
+use registry_platform_posture::{Posture, POSTURE_HEADER};
 use serde::Serialize;
 use serde_json::Value;
 use tower::{Layer, Service};
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use ulid::Ulid;
 
@@ -103,6 +102,13 @@ fn parse_traceparent(value: &str) -> Option<TraceContext> {
     })
 }
 
+// The request trace id is the one value `record_refusal!` takes from a request:
+// it is a validated W3C trace id, so it carries no other caller text.
+#[cfg(feature = "refusal-trace-id")]
+impl registry_platform_authcommon::__refusal_trace_id_seal::Sealed for TraceId {}
+#[cfg(feature = "refusal-trace-id")]
+impl registry_platform_authcommon::RefusalTraceId for TraceId {}
+
 fn fresh_span_id() -> String {
     let value = u128::from(Ulid::generate());
     let span = u64::try_from(value & u128::from(u64::MAX)).unwrap_or(1);
@@ -120,99 +126,6 @@ pub struct ProblemBody {
     pub detail: &'static str,
     pub code: &'static str,
     pub trace_id: TraceId,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct CorsPolicy {
-    pub allowed_origins: Vec<String>,
-    pub allowed_methods: Vec<Method>,
-    pub allowed_headers: Vec<HeaderName>,
-    pub allow_credentials: bool,
-}
-
-impl CorsPolicy {
-    pub fn validate(&self) -> Result<(), CorsValidationError> {
-        for origin in &self.allowed_origins {
-            if origin == "*" {
-                return Err(CorsValidationError::WildcardOrigin);
-            }
-            let _value = HeaderValue::from_str(origin)
-                .map_err(|_| CorsValidationError::MalformedOrigin(origin.clone()))?;
-            let parsed = url::Url::parse(origin)
-                .map_err(|_| CorsValidationError::MalformedOrigin(origin.clone()))?;
-            match parsed.scheme() {
-                "https" => {}
-                "http" if is_loopback_origin(&parsed) => {}
-                _ => {
-                    return Err(CorsValidationError::MalformedOrigin(origin.clone()));
-                }
-            }
-            if parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some() {
-                return Err(CorsValidationError::MalformedOrigin(origin.clone()));
-            }
-        }
-        if self.allow_credentials && self.allowed_headers.is_empty() {
-            return Err(CorsValidationError::CredentialedWildcardHeaders);
-        }
-        Ok(())
-    }
-
-    /// Build a [`CorsLayer`] from this policy, panicking if the policy is invalid.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the policy fails validation (e.g. wildcard origin, credentialed
-    /// request without explicit allowed headers). Use [`try_layer`](Self::try_layer)
-    /// to handle the error gracefully instead.
-    #[deprecated(
-        note = "panics on invalid policy; use try_layer() and handle the CorsValidationError"
-    )]
-    pub fn layer(&self) -> CorsLayer {
-        self.validate()
-            .expect("invalid CORS policy must not be converted into a layer");
-        self.layer_unchecked()
-    }
-
-    pub fn try_layer(&self) -> Result<CorsLayer, CorsValidationError> {
-        self.validate()?;
-        Ok(self.layer_unchecked())
-    }
-
-    fn layer_unchecked(&self) -> CorsLayer {
-        if self.allowed_origins.is_empty() {
-            return CorsLayer::new();
-        }
-        let origins: Vec<HeaderValue> = self
-            .allowed_origins
-            .iter()
-            .filter_map(|origin| HeaderValue::from_str(origin).ok())
-            .collect();
-        let methods = if self.allowed_methods.is_empty() {
-            vec![Method::GET, Method::POST, Method::OPTIONS]
-        } else {
-            self.allowed_methods.clone()
-        };
-        let layer = CorsLayer::new()
-            .allow_origin(origins)
-            .allow_methods(methods)
-            .allow_credentials(self.allow_credentials);
-        if self.allowed_headers.is_empty() {
-            layer.allow_headers(Any)
-        } else {
-            layer.allow_headers(self.allowed_headers.clone())
-        }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum CorsValidationError {
-    #[error("wildcard CORS origin is not allowed")]
-    WildcardOrigin,
-    #[error("credentialed CORS requires explicit allowed headers")]
-    CredentialedWildcardHeaders,
-    #[error("malformed CORS origin: {0}")]
-    MalformedOrigin(String),
 }
 
 /// A content security policy built from static directive names.
@@ -337,10 +250,87 @@ fn checked_sources(sources: &[&'static str]) -> Vec<&'static str> {
 /// HSTS for deployments that terminate TLS upstream or serve plain HTTP.
 pub const DEFAULT_HSTS_VALUE: &str = "max-age=63072000; includeSubDomains";
 
-pub fn security_headers(csp: CspBuilder) -> SecurityHeadersLayer {
+/// The shared response-header baseline for a service of the given posture.
+///
+/// A development process also marks every response with `Registry-Posture:
+/// development`, overwriting a value a handler set. A production process sends
+/// no mark, so an absent field makes no claim.
+pub fn security_headers(csp: CspBuilder, posture: Posture) -> SecurityHeadersLayer {
     SecurityHeadersLayer {
         csp: csp.header_value(),
         hsts: Some(HeaderValue::from_static(DEFAULT_HSTS_VALUE)),
+        posture,
+    }
+}
+
+/// [`security_headers`] for a caller that does not yet hold a posture. It
+/// behaves as production: no mark is sent.
+pub fn security_headers_without_posture(csp: CspBuilder) -> SecurityHeadersLayer {
+    security_headers(csp, Posture::Production)
+}
+
+/// A layer that only sets the posture mark, for routers that do not use
+/// [`security_headers`]. A development process sets `Registry-Posture:
+/// development` on every response, overwriting a handler value. A production
+/// process sets nothing.
+pub fn posture_mark(posture: Posture) -> PostureMarkLayer {
+    PostureMarkLayer { posture }
+}
+
+fn mark_development<B>(response: &mut Response<B>, posture: Posture) {
+    if posture == Posture::Development {
+        response.headers_mut().insert(
+            HeaderName::from_static(POSTURE_HEADER),
+            HeaderValue::from_static(Posture::Development.as_str()),
+        );
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PostureMarkLayer {
+    posture: Posture,
+}
+
+impl<S> Layer<S> for PostureMarkLayer {
+    type Service = PostureMarkService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        PostureMarkService {
+            inner,
+            posture: self.posture,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PostureMarkService<S> {
+    inner: S,
+    posture: Posture,
+}
+
+impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for PostureMarkService<S>
+where
+    S: Service<Request<ReqBody>, Response = Response<ResBody>> + Send + 'static,
+    S::Future: Send + 'static,
+    S::Error: Send + 'static,
+    ResBody: Send + 'static,
+{
+    type Response = Response<ResBody>;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request<ReqBody>) -> Self::Future {
+        let future = self.inner.call(request);
+        let posture = self.posture;
+        Box::pin(async move {
+            let mut response = future.await?;
+            mark_development(&mut response, posture);
+            Ok(response)
+        })
     }
 }
 
@@ -352,6 +342,7 @@ pub struct SecurityHeadersLayer {
     /// [`SecurityHeadersLayer::without_hsts`] for deployments that terminate
     /// TLS upstream or serve plain HTTP.
     hsts: Option<HeaderValue>,
+    posture: Posture,
 }
 
 impl SecurityHeadersLayer {
@@ -383,6 +374,7 @@ impl<S> Layer<S> for SecurityHeadersLayer {
             inner,
             csp: self.csp.clone(),
             hsts: self.hsts.clone(),
+            posture: self.posture,
         }
     }
 }
@@ -392,6 +384,7 @@ pub struct SecurityHeadersService<S> {
     inner: S,
     csp: HeaderValue,
     hsts: Option<HeaderValue>,
+    posture: Posture,
 }
 
 impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for SecurityHeadersService<S>
@@ -413,6 +406,7 @@ where
         let future = self.inner.call(request);
         let csp = self.csp.clone();
         let hsts = self.hsts.clone();
+        let posture = self.posture;
         Box::pin(async move {
             let mut response = future.await?;
             insert_if_missing(
@@ -454,6 +448,7 @@ where
                     hsts_value,
                 );
             }
+            mark_development(&mut response, posture);
             Ok(response)
         })
     }
@@ -735,17 +730,6 @@ fn install_operating_system_signal(signal: StopSignal) -> io::Result<StopWatch> 
     }))
 }
 
-fn is_loopback_origin(url: &url::Url) -> bool {
-    let Some(host) = url.host() else {
-        return false;
-    };
-    match host {
-        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
-        url::Host::Ipv4(ip) => ip.is_loopback(),
-        url::Host::Ipv6(ip) => ip.is_loopback(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -806,6 +790,30 @@ mod tests {
         assert!(TraceId::parse("0123456789abcdef0123456789abcdef").is_ok());
         assert!(TraceId::parse("00000000000000000000000000000000").is_err());
         assert!(TraceId::parse("not-a-trace").is_err());
+    }
+
+    #[cfg(feature = "refusal-trace-id")]
+    #[test]
+    fn the_request_trace_id_is_the_one_a_refusal_line_takes() {
+        use registry_platform_authcommon::{
+            record_refusal, FailedCheck, RefusalNote, RefusalRecorder,
+        };
+
+        // Caller text never becomes a trace id, so it cannot reach a refusal
+        // line through the macro's `trace_id` field.
+        assert!(TraceId::parse("canary-request-value-7f3a").is_err());
+
+        let recorder = RefusalRecorder::new("httpsec").unwrap();
+        let trace = TraceContext::server_created();
+        let note = RefusalNote::new(FailedCheck::Scope);
+        record_refusal!(recorder, note, trace_id = &trace.trace_id);
+        record_refusal!(recorder, note, trace_id = trace.trace_id.clone());
+        record_refusal!(
+            recorder,
+            note,
+            trace_id = TraceId::parse("4bf92f3577b34da6a3ce929d0e0e4736").unwrap()
+        );
+        assert_eq!(recorder.counter().get(&["scope"]), Some(3));
     }
 
     #[test]
@@ -888,34 +896,6 @@ mod tests {
     }
 
     #[test]
-    fn cors_validation_rejects_localhost_prefix_attack() {
-        let policy = CorsPolicy {
-            allowed_origins: vec!["http://localhost.evil.test".to_string()],
-            allowed_methods: Vec::new(),
-            allowed_headers: Vec::new(),
-            allow_credentials: true,
-        };
-        assert!(matches!(
-            policy.validate(),
-            Err(CorsValidationError::MalformedOrigin(_))
-        ));
-    }
-
-    #[test]
-    fn cors_validation_accepts_loopback_dev_origin() {
-        let policy = CorsPolicy {
-            allowed_origins: vec![
-                "http://localhost:3000".to_string(),
-                "http://127.0.0.1:3000".to_string(),
-            ],
-            allowed_methods: Vec::new(),
-            allowed_headers: Vec::new(),
-            allow_credentials: false,
-        };
-        assert!(policy.validate().is_ok());
-    }
-
-    #[test]
     fn problem_response_uses_problem_json_content_type() {
         let response =
             Problem::new("about:blank", "Bad Request", StatusCode::BAD_REQUEST).into_response();
@@ -945,60 +925,6 @@ mod tests {
     }
 
     #[test]
-    fn cors_rejects_wildcard() {
-        let policy = CorsPolicy {
-            allowed_origins: vec!["*".to_string()],
-            allowed_methods: Vec::new(),
-            allowed_headers: Vec::new(),
-            allow_credentials: false,
-        };
-        assert!(matches!(
-            policy.validate(),
-            Err(CorsValidationError::WildcardOrigin)
-        ));
-    }
-
-    #[test]
-    fn credentialed_cors_rejects_wildcard_headers() {
-        let policy = CorsPolicy {
-            allowed_origins: vec!["https://app.example.test".to_string()],
-            allowed_methods: Vec::new(),
-            allowed_headers: Vec::new(),
-            allow_credentials: true,
-        };
-        assert!(matches!(
-            policy.validate(),
-            Err(CorsValidationError::CredentialedWildcardHeaders)
-        ));
-    }
-
-    #[test]
-    #[should_panic(expected = "invalid CORS policy")]
-    #[allow(deprecated)]
-    fn credentialed_cors_layer_rejects_wildcard_headers() {
-        let _layer = CorsPolicy {
-            allowed_origins: vec!["https://app.example.test".to_string()],
-            allowed_methods: Vec::new(),
-            allowed_headers: Vec::new(),
-            allow_credentials: true,
-        }
-        .layer();
-    }
-
-    #[test]
-    fn cors_try_layer_returns_validation_error_instead_of_panicking() {
-        let err = CorsPolicy {
-            allowed_origins: vec!["*".to_string()],
-            allowed_methods: Vec::new(),
-            allowed_headers: Vec::new(),
-            allow_credentials: false,
-        }
-        .try_layer()
-        .expect_err("wildcard origin rejects");
-        assert!(matches!(err, CorsValidationError::WildcardOrigin));
-    }
-
-    #[test]
     fn request_body_limit_default_is_one_mebibyte() {
         assert_eq!(DEFAULT_REQUEST_BODY_LIMIT_BYTES, 1024 * 1024);
         let _layer = request_body_limit_default();
@@ -1009,16 +935,16 @@ mod tests {
         use tower::service_fn;
         use tower::ServiceExt;
 
-        let service = security_headers(CspBuilder::restrictive()).layer(service_fn(
-            |_request: Request<Body>| async {
+        let service = security_headers_without_posture(CspBuilder::restrictive()).layer(
+            service_fn(|_request: Request<Body>| async {
                 let mut response = Response::new(Body::empty());
                 response.headers_mut().insert(
                     HeaderName::from_static("content-security-policy"),
                     HeaderValue::from_static("default-src 'none'"),
                 );
                 Ok::<_, std::convert::Infallible>(response)
-            },
-        ));
+            }),
+        );
 
         let response = service
             .oneshot(Request::new(Body::empty()))
@@ -1064,11 +990,11 @@ mod tests {
         use tower::service_fn;
         use tower::ServiceExt;
 
-        let service = security_headers(CspBuilder::restrictive()).layer(service_fn(
-            |_request: Request<Body>| async {
+        let service = security_headers_without_posture(CspBuilder::restrictive()).layer(
+            service_fn(|_request: Request<Body>| async {
                 Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
-            },
-        ));
+            }),
+        );
         let response = service
             .oneshot(Request::new(Body::empty()))
             .await
@@ -1086,7 +1012,7 @@ mod tests {
         use tower::service_fn;
         use tower::ServiceExt;
 
-        let service = security_headers(CspBuilder::restrictive())
+        let service = security_headers_without_posture(CspBuilder::restrictive())
             .without_hsts()
             .layer(service_fn(|_request: Request<Body>| async {
                 Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
@@ -1101,6 +1027,105 @@ mod tests {
                 .get("strict-transport-security")
                 .is_none(),
             "HSTS must be absent after without_hsts()"
+        );
+    }
+
+    async fn mark_of<L>(layer: L, handler_mark: Option<&'static str>) -> Option<HeaderValue>
+    where
+        L: Layer<
+            tower::util::BoxCloneService<Request<Body>, Response<Body>, std::convert::Infallible>,
+        >,
+        L::Service: Service<Request<Body>, Response = Response<Body>> + Send + 'static,
+        <L::Service as Service<Request<Body>>>::Error: std::fmt::Debug,
+        <L::Service as Service<Request<Body>>>::Future: Send + 'static,
+    {
+        use tower::ServiceExt;
+
+        let inner = tower::service_fn(move |_request: Request<Body>| async move {
+            let mut response = Response::new(Body::empty());
+            if let Some(value) = handler_mark {
+                response.headers_mut().insert(
+                    HeaderName::from_static(registry_platform_posture::POSTURE_HEADER),
+                    HeaderValue::from_static(value),
+                );
+            }
+            Ok::<_, std::convert::Infallible>(response)
+        });
+        let response = layer
+            .layer(tower::util::BoxCloneService::new(inner))
+            .oneshot(Request::new(Body::empty()))
+            .await
+            .expect("service responds");
+        response
+            .headers()
+            .get(registry_platform_posture::POSTURE_HEADER)
+            .cloned()
+    }
+
+    #[tokio::test]
+    async fn development_security_headers_set_the_mark_over_a_handler_value() {
+        let layer = security_headers(CspBuilder::restrictive(), Posture::Development);
+        assert_eq!(
+            mark_of(layer.clone(), None).await,
+            Some(HeaderValue::from_static("development"))
+        );
+        assert_eq!(
+            mark_of(layer, Some("production")).await,
+            Some(HeaderValue::from_static("development")),
+            "the layer overwrites a value a handler set"
+        );
+    }
+
+    #[tokio::test]
+    async fn production_security_headers_set_no_mark_and_leave_handler_values() {
+        let layer = security_headers(CspBuilder::restrictive(), Posture::Production);
+        assert_eq!(mark_of(layer.clone(), None).await, None);
+        assert_eq!(
+            mark_of(layer, Some("handler")).await,
+            Some(HeaderValue::from_static("handler")),
+            "production neither adds nor strips the field"
+        );
+    }
+
+    #[tokio::test]
+    async fn transitional_security_headers_behave_as_production() {
+        let layer = security_headers_without_posture(CspBuilder::restrictive());
+        assert_eq!(mark_of(layer, None).await, None);
+    }
+
+    #[tokio::test]
+    async fn development_posture_mark_sets_the_field_on_a_bare_service() {
+        let layer = posture_mark(Posture::Development);
+        assert_eq!(
+            mark_of(layer.clone(), None).await,
+            Some(HeaderValue::from_static("development"))
+        );
+        assert_eq!(
+            mark_of(layer, Some("production")).await,
+            Some(HeaderValue::from_static("development"))
+        );
+    }
+
+    #[tokio::test]
+    async fn production_posture_mark_sets_nothing() {
+        let layer = posture_mark(Posture::Production);
+        assert_eq!(mark_of(layer, None).await, None);
+    }
+
+    #[tokio::test]
+    async fn development_posture_mark_applies_to_an_axum_router() {
+        use tower::ServiceExt;
+
+        let router = axum::Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(posture_mark(Posture::Development));
+        let response = router
+            .oneshot(Request::new(Body::empty()))
+            .await
+            .expect("router responds");
+        assert_eq!(
+            response.headers().get("registry-posture"),
+            Some(&HeaderValue::from_static("development"))
         );
     }
 

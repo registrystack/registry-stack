@@ -18,6 +18,8 @@ import socket
 import subprocess
 import tempfile
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import unquote, urlsplit
@@ -226,8 +228,8 @@ def dev_output(bin_dir, env, cwd, *args, expected=0):
 def credential(bin_dir, env, cwd, run, alias):
     before = time.time()
     report = dev(bin_dir, env, cwd, "token", run, "--as", alias)
-    # The report gives the expiry the tokens carry, at most five minutes away.
-    assert before < report["expires_at"] <= time.time() + 300, report
+    # The report gives the expiry the tokens carry, at most one hour away.
+    assert before < report["expires_at"] <= time.time() + 3600, report
     [entry] = report["credentials"]
     header_file = Path(entry["header_file"])
     assert header_file.stat().st_mode & 0o077 == 0
@@ -280,7 +282,7 @@ def live_runs(state):
     return [
         path
         for path in state.iterdir()
-        if path.name != "failed" and not path.name.startswith(".")
+        if re.fullmatch(r"[a-f0-9]{32}", path.name)
     ]
 
 
@@ -288,7 +290,7 @@ def nothing_left_behind(state):
     """Every stopped run's files are eventually deleted."""
     eventually(
         lambda: (
-            not state.exists() or all(path.name == "failed" for path in state.iterdir())
+            not live_runs(state)
         ),
         "a stopped run's files were not deleted",
     )
@@ -367,9 +369,9 @@ def verify_deployment_key(root, bin_dir, env, run_root, headers):
         )
     )
     config = json.loads((run_root / "breg-runtime.yaml").read_text())
-    config["authentication"]["oidc"]["jwksSource"]["documentRef"] = (
-        "secret:file/deployment-jwks"
-    )
+    issuer = config["authentication"]["oidc"]["issuers"]["main"]
+    issuer["jwksSource"]["type"] = "static"
+    issuer["jwksSource"]["documentRef"] = "secret:file/deployment-jwks"
     config["audit"]["path"] = str(root / "deployment-audit" / "audit.jsonl")
     config["listener"]["bind"] = f"127.0.0.1:{port()}"
     runtime_file = root / "deployment-verifier.yaml"
@@ -377,7 +379,8 @@ def verify_deployment_key(root, bin_dir, env, run_root, headers):
     process = subprocess.Popen(
         [bin_dir / "breg", "--runtime-config", runtime_file],
         env={
-            key: value for key, value in env.items() if key != "RSTACK_DEV_DATABASE_URL"
+            **{key: value for key, value in env.items() if key != "RSTACK_DEV_DATABASE_URL"},
+            "REGISTRY_STACK_POSTURE": "development",
         },
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -636,8 +639,9 @@ def verify_messaging_alone(root, bin_dir):
         [message] = get_json(mailpit_url + "/api/v1/messages")["messages"]
         assert message["To"][0]["Address"] == "ada@example.org", message
 
-        stopped = dev(bin_dir, env, checkout, "stop", run)
-        assert stopped["status"] == "stopped", stopped
+        stopped = dev(bin_dir, env, checkout, "stop", run, "--clean")
+        assert stopped["status"] == "stopped" and stopped["cleaned"], stopped
+        assert not project_volumes(checkout, state)
         assert labelled_containers(run) == set()
         assert labelled_containers() == baseline
         for address in (gateway, mailpit_url, report["products"]["messaging"]):
@@ -656,6 +660,7 @@ def verify_messaging_alone(root, bin_dir):
             dev(bin_dir, env, checkout, "stop", run)
         for container in labelled_containers() - baseline:
             checked("docker", "rm", "--force", "--volumes", container)
+        remove_project_volume(checkout, state)
 
 
 def exercise(root, bin_dir, pg, project, ca, url, pg_env, spatial):
@@ -999,8 +1004,8 @@ def verify_lost_supervisor(bin_dir, pg, checkout, state, env, pg_env, owner_env)
     verify_recover(bin_dir, pg, checkout, state, env, pg_env)
 
 
-def lose_supervisor(bin_dir, checkout, state, env):
-    report = dev(bin_dir, env, checkout, "start", ".")
+def lose_supervisor(bin_dir, checkout, state, env, *start_options):
+    report = dev(bin_dir, env, checkout, "start", ".", *start_options)
     run = report["run_id"]
     worker = command(
         "pgrep", "-f", f"rstack-dev supervisor {re.escape(str(state / run))}"
@@ -1194,6 +1199,8 @@ def verify_startup_loss(bin_dir, pg, checkout, state, env, pg_env):
 import os
 import sys
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 if sys.argv[1] == "test":
@@ -1743,13 +1750,392 @@ def verify_offline_plan(root, bin_dir, project):
 RUN_LABEL = "org.registrystack.rstack.dev-run"
 
 
+def project_volumes(checkout, state):
+    identity = os.fsencode(checkout.resolve()) + b"\0" + os.fsencode(state.resolve())
+    digest = hashlib.sha256(identity).hexdigest()[:32]
+    volume = f"rstack-development-project-{digest}"
+    label = f"org.registrystack.rstack.development-project={digest}"
+    names = checked("docker", "volume", "ls", "-q", "--filter", f"label={label}")
+    return [name for name in names.decode().split() if name == volume]
+
+
+def remove_project_volume(checkout, state):
+    for volume in project_volumes(checkout, state):
+        checked("docker", "volume", "rm", volume)
+
+
+def verify_restart(root, bin_dir, product):
+    """Apply an authored successor, read earlier data and check audit continuity."""
+    checkout = root / product
+    source = (
+        MINIMAL if product == "breg"
+        else STACK / "products/scheduling/examples/standalone-exact-time"
+    )
+    shutil.copytree(source, checkout)
+    state = root / f"{product}-runs"
+    env = {key: value for key, value in os.environ.items() if key not in {
+        "REGISTRY_STACK_POSTURE", "RSTACK_DEV_DATABASE_URL", "RSTACK_DEV_DATABASE_CA",
+    }}
+    env.update({
+        "RSTACK_DEV_STATE_DIR": str(state),
+        f"RSTACK_{product.upper()}CTL_BIN": str(bin_dir / f"{product}ctl"),
+        f"RSTACK_{product.upper()}_BIN": str(bin_dir / product),
+    })
+    other_state = root / f"{product}-other-runs"
+    other_env = {**env, "RSTACK_DEV_STATE_DIR": str(other_state)}
+    try:
+        first = dev(bin_dir, env, checkout, "start", ".")
+        first_id = first["run_id"]
+        assert first["scenarios"] and all(item["result"] == "passed" for item in first["scenarios"]), first
+        other = dev(bin_dir, other_env, checkout, "start", ".")
+        assert other["database"]["volume"] != first["database"]["volume"], other
+        dev(bin_dir, other_env, checkout, "stop", other["run_id"], "--clean")
+        dev(bin_dir, env, checkout, "stop", first_id)
+        first = dev(bin_dir, env, checkout, "start", ".")
+        first_id = first["run_id"]
+        assert first["scenarios"] and all(item["result"] == "skipped" for item in first["scenarios"]), first
+        runtime = Path(first["runtimeConfigs"][product])
+        config = json.loads(runtime.read_text())
+        audit = Path(config["audit"]["path"])
+        base = first["products"][product]
+        person = "editor" if product == "breg" else "reader"
+        headers = credential(bin_dir, env, checkout, first_id, person)
+        if product == "breg":
+            status, result = post_json(
+                base + "/v1/records/contacts",
+                {**headers, "Idempotency-Key": "retention-contact"},
+                {"data": {"name": "Retained contact", "email": "retained@example.test", "jurisdiction": "zone-a"}},
+            )
+            assert status == 201, (status, result)
+            path = f"/v1/records/contacts/{result['data']['recordIdentifier']}"
+            expected = "Retained contact"
+        else:
+            records = (checkout / "records.yaml").read_text()
+            inventory = root / "operator-records.yaml"
+            inventory.write_text(records.replace(
+                "locations:\n", "locations:\n  - id: retained-counter\n    timezone: UTC\n", 1,
+            ))
+            checked(
+                bin_dir / "schedulingctl", "records", "apply",
+                "--posture", "development", "--runtime-config", runtime, inventory, env=env,
+            )
+            path, expected = "/v1/locations", "retained-counter"
+        status, body = get_body(base + path, headers)
+        assert status == 200 and expected in body
+        held = dev(bin_dir, env, checkout, "start", ".", "--clean", expected=1)
+        assert "live development run holds this project" in held["error"]["message"], held
+        dev(bin_dir, env, checkout, "stop", first_id)
+        journal = audit if product == "breg" else audit.with_suffix(".schedulingctl.jsonl")
+        prior = journal.read_bytes()
+        assert prior.endswith(b"\n")
+        volume = first["database"]["volume"]
+        assert volume in project_volumes(checkout, state)
+        state_dir = Path(first["database"]["developmentState"])
+        state_dir.chmod(0o755)
+        try:
+            refused = dev(bin_dir, env, checkout, "start", ".", "--clean", expected=1)
+            assert f"chmod 700 {state_dir}" in refused["error"]["message"], refused
+            assert volume in project_volumes(checkout, state)
+        finally:
+            state_dir.chmod(0o700)
+        generation = state_dir / "generation"
+        saved_generation = generation.read_bytes()
+        generation.write_bytes(b"other")
+        try:
+            refused = dev(bin_dir, env, checkout, "start", ".", expected=1)
+            message = refused["error"]["message"]
+            assert volume in message and str(state_dir) in message and "--clean" in message, refused
+        finally:
+            generation.write_bytes(saved_generation)
+        if product == "breg":
+            scenario = checkout / "dev/scenarios.yaml"
+            original = scenario.read_text()
+            scenario.write_text(original.replace("contact@example.test", "changed@example.test"))
+            try:
+                for _ in range(2):
+                    changed = dev(bin_dir, env, checkout, "start", ".", expected=1)
+                    assert changed["scenarios"][0]["result"] == "failed", changed
+                    assert "--clean" in changed["scenarios"][0]["action"], changed
+                    dev(bin_dir, env, checkout, "stop", changed["run_id"])
+            finally:
+                scenario.write_text(original)
+            registry = checkout / "registry.yaml"
+            original = registry.read_text()
+            revised, count = re.subn(r'(?m)^  version: .*$', '  version: 0.2.0', original, count=1)
+            assert count == 1 and revised != original
+            registry.write_text(revised)
+            try:
+                unsupported = dev(bin_dir, env, checkout, "start", ".", expected=1)
+                message = unsupported["error"]["message"]
+                assert "registry-version-changed" in message and "--clean" in message, unsupported
+                assert "--reviewed-migrations" not in message, unsupported
+            finally:
+                registry.write_text(original)
+
+        authored = checkout / ("registry.yaml" if product == "breg" else "scheduling.yaml")
+        before = authored.read_text()
+        if product == "breg":
+            after = before.replace("\nactions:\n", """
+  directory-note:
+    route: directory-notes
+    primaryDataset: directory
+    mutationMode: mutable
+    fields:
+      - {id: name, type: string, maximumLength: 160, classification: internal}
+
+actions:
+""", 1)
+        else:
+            after = before.replace('version: "1"', 'version: "2"', 1)
+        assert after != before
+        authored.write_text(after)
+        second = dev(bin_dir, env, checkout, "start", ".")
+        new_runtime = Path(second["runtimeConfigs"][product])
+        current = json.loads(new_runtime.read_text())
+        assert current["identity"]["databaseId"] == config["identity"]["databaseId"]
+        assert current["audit"]["path"] == str(audit)
+        if product == "scheduling":
+            assert current["package"]["root"] != config["package"]["root"]
+        assert first["database"]["volume"] == second["database"]["volume"]
+        if product == "breg":
+            assert current["package"]["root"] != config["package"]["root"]
+            activation = json.loads(checked(
+                bin_dir / "bregctl", "--format", "json", "status",
+                "--posture", "development", "--runtime-config", new_runtime, env=env,
+            ))
+            assert len(activation["ledger"]) == 2, activation
+        headers = credential(bin_dir, env, checkout, second["run_id"], person)
+        status, body = get_body(second["products"][product] + path, headers)
+        assert status == 200 and expected in body
+        dev(bin_dir, env, checkout, "stop", second["run_id"])
+        updated = journal.read_bytes()
+        # The current local audit format removed hash chaining. Verify that
+        # restart preserved every prior byte and appended complete entries.
+        assert updated.startswith(prior) and updated != prior
+        for line in updated[len(prior):].splitlines():
+            assert json.loads(line)["eventId"]
+        if product == "scheduling":
+            checked("docker", "volume", "rm", volume)
+            clean = dev(bin_dir, env, checkout, "start", ".")
+            assert clean["database"]["replacedMissingVolume"], clean
+            assert all(item["result"] == "passed" for item in clean["scenarios"]), clean
+        else:
+            clean = dev(bin_dir, env, checkout, "start", ".", "--clean")
+        headers = credential(bin_dir, env, checkout, clean["run_id"], person)
+        if product == "breg":
+            assert get(clean["products"][product] + path, headers) == 404
+        else:
+            status, body = get_body(clean["products"][product] + path, headers)
+            assert status == 200 and expected not in body
+        dev(bin_dir, env, checkout, "stop", clean["run_id"], "--clean")
+        assert not project_volumes(checkout, state)
+        print(f"{product} retained its record and appended to the same audit journal after an edit, then --clean removed the record")
+    finally:
+        for current_env, current_state in ((env, state), (other_env, other_state)):
+            for run_root in live_runs(current_state):
+                dev(bin_dir, current_env, checkout, "stop", run_root.name)
+            remove_project_volume(checkout, current_state)
+
+
 def labelled_containers(run=None):
     """IDs of the containers a managed run labelled: one run's, or every run's."""
     label = RUN_LABEL if run is None else f"{RUN_LABEL}={run}"
-    listed = checked(
-        "docker", "ps", "--all", "--quiet", "--no-trunc", "--filter", f"label={label}"
-    )
+    filters = ["--filter", f"label={label}"]
+    if lane := os.environ.get("RSTACK_DEV_TEST_DOCKER_LABEL"):
+        filters.extend(["--filter", f"label={lane}"])
+    listed = checked("docker", "ps", "--all", "--quiet", "--no-trunc", *filters)
     return set(listed.decode().split())
+
+
+PRODUCTION_STARTERS = {
+    "breg": ("bregctl", "init"),
+    "casework": ("caseworkctl", "init"),
+    "evidence": ("evidencectl", "init", "--profile", "local", "--starter", EVIDENCE),
+    "messaging": ("messagingctl", "init"),
+    "scheduling": ("schedulingctl", "init", "--template", "standalone-exact-time"),
+    "documents": ("documentsctl", "init"),
+    "coordinator": ("coordinatorctl", "init", "--directory"),
+    "adapter": ("adapterctl", "init"),
+    "render": ("registry-render", "init"),
+    "discovery": ("discoveryctl", "init"),
+}
+
+
+def verify_package_posture(bin_dir, checkout, runtime, env, product, placeholder):
+    if product == "breg":
+        package = Path(json.loads(runtime.read_text())["package"]["root"])
+        # Plan checks the target package under production rules before
+        # resolving database credentials. Leave the private probe root empty.
+        example = (checkout / "runtime.example.yaml").read_text()
+        marker = "root: /var/lib/breg/package"
+        assert example.count(marker) == 1
+        package_probe = runtime.parent / "production-package-probe.yaml"
+        secrets = runtime.parent / "production-probe-secrets"
+        secrets.mkdir(mode=0o700)
+        example = example.replace("root: /var/lib/breg/secrets", f"root: {json.dumps(str(secrets))}")
+        package_probe.write_text(example.replace(marker, f"root: {json.dumps(str(package))}"))
+        result = command(
+            bin_dir / "bregctl", "--format", "json", "plan",
+            "--runtime-config", package_probe, "--package", package, env=env,
+        )
+        report = json.loads(result.stdout)
+        if placeholder:
+            assert result.returncode == 1 and any(
+                diagnostic["code"] == "breg.posture.placeholder-identity"
+                and diagnostic["path"] == "/project/canonicalBaseIri"
+                for diagnostic in report["diagnostics"]
+            ), report
+            print("BReg's placeholder canonicalBaseIri was refused by the production package loader")
+        else:
+            [diagnostic] = report["diagnostics"]
+            assert diagnostic["code"].endswith(".database-configuration.refused"), report
+            print("BReg's package with an authored canonicalBaseIri loaded in production")
+    elif product == "evidence":
+        # The candidate bundle is copied byte for byte to the runtime package root.
+        bundle = runtime.parent / "bundle"
+        result = command(
+            bin_dir / "evidence", "bundle-check", "--bundle", bundle, "--json", env=env,
+        )
+        report = json.loads(result.stdout)
+        assert result.returncode == 1 and any(
+            diagnostic["code"] == "evidence.posture.local-assurance"
+            and diagnostic["path"] == "/assuranceProfile"
+            for diagnostic in report["diagnostics"]
+        ), report
+        print("Evidence's bundle with assuranceProfile local was refused in production")
+
+
+def verify_production_refusal(root, bin_dir, product):
+    """Check the generated runtime and the package it names under production."""
+    placeholder = product == "breg-placeholder"
+    external = product == "evidence-external-issuer"
+    if placeholder:
+        product = "breg"
+    if external:
+        product = "evidence"
+    init_tool, *args = PRODUCTION_STARTERS[product]
+    checkout = root / "project"
+    env = {key: value for key, value in os.environ.items() if key not in {
+        "REGISTRY_STACK_POSTURE", "RSTACK_DEV_DATABASE_URL", "RSTACK_DEV_DATABASE_CA",
+    }}
+    checked(bin_dir / init_tool, *args, checkout, env=env)
+    if placeholder:
+        authored = checkout / "registry.yaml"
+        text = authored.read_text()
+        marker = "canonicalBaseIri: https://directory.example.gov"
+        assert text.count(marker) == 1
+        authored.write_text(text.replace(marker, "canonicalBaseIri: https://directory.example.invalid"))
+    if product == "evidence":
+        (checkout / "tests/scenarios.yaml").write_text(
+            "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1\n"
+            "kind: RStackScenarios\n"
+            "scenarios:\n"
+            "  - id: list-definitions\n"
+            "    steps:\n"
+            "      - {id: list, product: evidence, as: caller, method: GET, "
+            "path: /v1/evidence-definitions, expect: {status: 200}}\n"
+        )
+    runtime_name = "registry-render" if product == "render" else product
+    state = root / "runs"
+    env.update({
+        "RSTACK_DEV_STATE_DIR": str(state),
+        f"RSTACK_{product.upper()}CTL_BIN": str(bin_dir / init_tool),
+        f"RSTACK_{product.upper()}_BIN": str(bin_dir / runtime_name),
+    })
+    source = None
+    source_thread = None
+    if product == "discovery" or external:
+        if external:
+            path, content_type = "/oauth2/jwks", "application/json"
+            keys = STACK / "products/evidence/fixtures/conformance/consumer-verification/jwks.json"
+            payload = keys.read_bytes()
+        else:
+            path = "/evidence.jsonld"
+            content_type = 'application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"'
+            payload = (STACK / "products/discovery/fixtures/descriptions/evidence.jsonld").read_bytes()
+
+        class SourceHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path != path:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_):
+                pass
+
+        source = ThreadingHTTPServer(("127.0.0.1", 0), SourceHandler)
+        if external:
+            issuer = f"http://127.0.0.1:{source.server_port}"
+            plan = checkout / "dev.yaml"
+            plan_text = plan.read_text()
+            assert plan_text.count("issuer: run") == 1
+            plan.write_text(plan_text.replace("issuer: run", f"issuer: {issuer}\nexternalJwksUri: {issuer}{path}"))
+            scenarios = checkout / "tests/scenarios.yaml"
+            scenarios.write_text(scenarios.read_text().split("scenarios:", 1)[0] + "scenarios: []\n")
+        else:
+            origins = checkout / "origins.yaml"
+            origins.write_text(origins.read_text().replace("38090", str(source.server_port)).replace("enabled: false", "enabled: true"))
+        source_thread = threading.Thread(target=source.serve_forever)
+        source_thread.start()
+    try:
+        report = dev(bin_dir, env, checkout, "start", ".")
+        runtime = Path(report["runtimeConfigs"][product])
+        tool, action, flags = {
+            "breg": ("bregctl", "verify", ("--runtime-config", runtime)),
+            "casework": ("caseworkctl", "check", (checkout, "--runtime-config", runtime)),
+            "evidence": ("evidence", "check", ("--runtime-config", runtime)),
+            "messaging": ("messagingctl", "check", ("--runtime-config", runtime)),
+            "scheduling": ("schedulingctl", "check", (checkout, "--runtime-config", runtime)),
+            "documents": ("documentsctl", "check", ("--runtime-config", runtime)),
+            "coordinator": ("coordinatorctl", "check", ("--runtime-config", runtime)),
+            "adapter": ("adapterctl", "check", (checkout, "--runtime", runtime)),
+            "render": ("registry-render", "check", ("--runtime-config", runtime)),
+            "discovery": ("discoveryctl", "check", ("--runtime-config", runtime)),
+        }[product]
+        code, pointer = {
+            "adapter": ("platform.posture.test-issuer", "/oidc/issuers/main/jwksSource"),
+            "coordinator": ("platform.posture.test-issuer", "/deployment/authentication/issuers/main/jwksSource"),
+            "discovery": ("discovery.posture.loopback-catalog-url", "/origins/0/catalogUrl"),
+            "evidence": ("evidence.posture.local-assurance", "/assuranceProfile"),
+        }.get(product, ("platform.posture.test-issuer", "/authentication/oidc/issuers/main/jwksSource"))
+        args = (bin_dir / tool, action, *flags, "--format", "json")
+        production = command(*args, cwd=checkout, env=env)
+        assert production.returncode != 0, f"{product} accepted {runtime} in production"
+        refusal = json.loads(production.stdout)
+        assert any(
+            diagnostic["code"] == code and diagnostic["path"] == pointer
+            and diagnostic["severity"] == "error"
+            for diagnostic in refusal["diagnostics"]
+        ), (product, code, pointer, refusal)
+        development = command(*args, "--posture", "development", cwd=checkout, env=env)
+        assert development.returncode == 0, (product, development.stdout, development.stderr)
+        if product == "discovery":
+            package = Path(json.loads(runtime.read_text())["package"]["root"])
+            index = package / "discovery-index.json"
+            probe = command(
+                bin_dir / tool, "check", "--format", "json", "--index", index,
+                cwd=checkout, env=env,
+            )
+            assert probe.returncode == 1 and any(
+                diagnostic["code"] == code and diagnostic["path"] == pointer
+                for diagnostic in json.loads(probe.stdout)["diagnostics"]
+            ), probe.stdout.decode()
+        mode = " with external issuer" if external else ""
+        print(f"{product}{mode} refused {code} at {pointer} in production and passed development")
+        verify_package_posture(bin_dir, checkout, runtime, env, product, placeholder)
+    finally:
+        if source is not None:
+            source.shutdown()
+            source.server_close()
+            source_thread.join()
+        for run_root in live_runs(state):
+            dev(bin_dir, env, checkout, "stop", run_root.name)
+        remove_project_volume(checkout, state)
 
 
 def verify_managed_run(report, state, image):
@@ -1811,6 +2197,12 @@ def exercise_managed(root, bin_dir, project, spatial):
         failure_env = {**env, "RSTACK_CASEWORK_BIN": str(failing)}
         failed = dev(bin_dir, failure_env, checkout, "start", ".", expected=1)
         assert "casework exited before readiness" in failed["error"]["message"], failed
+        fresh_state = root / "failed-start-state"
+        fresh_env = {**failure_env, "RSTACK_DEV_STATE_DIR": str(fresh_state)}
+        failed = dev(bin_dir, fresh_env, checkout, "start", ".", expected=1)
+        assert "casework exited before readiness" in failed["error"]["message"], failed
+        assert not project_volumes(checkout, fresh_state)
+        assert not any(path.is_dir() for path in fresh_state.glob("development-project-*"))
         assert labelled_containers() == baseline
         print("TTL expiry and a failed start removed the managed server")
 
@@ -1819,9 +2211,14 @@ def exercise_managed(root, bin_dir, project, spatial):
         [container] = labelled_containers(run)
         status = dev(bin_dir, env, checkout, "status", run, expected=3)
         assert status["recovery"]["container"] == f"rstack-dev-{run}", status
+        held = dev(bin_dir, env, checkout, "start", ".", expected=1)
+        assert f"rstack dev stop {run} --recover" in held["error"]["message"], held
+        checked("docker", "stop", container)
         recovered = dev(bin_dir, env, checkout, "stop", run, "--recover")
         assert recovered["status"] == "stopped", recovered
         assert recovered["recovered"]["containers"] == [container], recovered
+        assert f"rstack_{run}_breg_test" in recovered["recovered"]["databases_and_roles"], recovered
+        assert lost["database"]["volume"] in project_volumes(checkout, state)
         assert labelled_containers(run) == set()
         assert_nothing_listening(bin_dir, lost["products"].values())
         print("stop --recover removed a lost managed run's server without an administrator URL")
@@ -1851,6 +2248,11 @@ def exercise_managed(root, bin_dir, project, spatial):
             if left:
                 print(f"Removing containers left by run {run}: {sorted(left)}")
                 checked("docker", "rm", "--force", "--volumes", *sorted(left))
+        remove_project_volume(checkout, state)
+        remove_project_volume(root / "alone-breg", state)
+        remove_project_volume(root / "alone-casework", state)
+        if spatial:
+            remove_project_volume(root / "spatial", state)
 
 
 def main():
@@ -1866,6 +2268,7 @@ def main():
     parser.add_argument("--postgres-bin-dir", type=Path)
     parser.add_argument("--scratch-parent", type=Path)
     parser.add_argument("--spatial", action="store_true", help="also verify PostGIS")
+    parser.add_argument("--restart", choices=("breg", "scheduling"), help="verify one managed restart with an authored edit")
     parser.add_argument(
         "--evidence",
         action="store_true",
@@ -1877,7 +2280,29 @@ def main():
         help="only verify Messaging alone, which runs its own PostgreSQL server "
         "and a Mailpit in Docker",
     )
+    parser.add_argument(
+        "--production-checks", choices=(*PRODUCTION_STARTERS, "breg-placeholder", "evidence-external-issuer", "all"),
+        help="check generated runtimes and packages under production and development",
+    )
     args = parser.parse_args()
+    if args.production_checks:
+        products = (
+            (*PRODUCTION_STARTERS, "breg-placeholder", "evidence-external-issuer")
+            if args.production_checks == "all" else (args.production_checks,)
+        )
+        failures = []
+        for product in products:
+            with tempfile.TemporaryDirectory(prefix="m4b-production-", dir=args.scratch_parent) as directory:
+                try:
+                    verify_production_refusal(Path(directory), args.bin_dir.resolve(), product)
+                except (AssertionError, RuntimeError) as error:
+                    failures.append(f"{product}: {error}")
+        assert not failures, "\n".join(failures)
+        return
+    if args.restart:
+        with tempfile.TemporaryDirectory(prefix="m4b-rstack-dev-", dir=args.scratch_parent) as directory:
+            verify_restart(Path(directory), args.bin_dir.resolve(), args.restart)
+        return
     if args.messaging:
         with tempfile.TemporaryDirectory(
             prefix="rstack-dev-", dir=args.scratch_parent

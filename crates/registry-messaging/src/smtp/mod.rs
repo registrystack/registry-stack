@@ -202,7 +202,7 @@ impl fmt::Debug for SmtpProvider {
 pub(crate) enum Transport {
     Starttls(TlsParameters),
     Implicit(TlsParameters),
-    DevelopmentLoopback,
+    LoopbackPlaintext,
 }
 
 impl Transport {
@@ -210,7 +210,7 @@ impl Transport {
         match self {
             Self::Starttls(_) => "starttls",
             Self::Implicit(_) => "implicit",
-            Self::DevelopmentLoopback => "development-loopback",
+            Self::LoopbackPlaintext => "loopback-plaintext",
         }
     }
 }
@@ -293,7 +293,7 @@ impl SmtpProvider {
         let hello = ClientId::default();
         let implicit = match &self.transport {
             Transport::Implicit(parameters) => Some(parameters),
-            Transport::Starttls(_) | Transport::DevelopmentLoopback => None,
+            Transport::Starttls(_) | Transport::LoopbackPlaintext => None,
         };
         let mut connection = None;
         let mut last_failure = StepFailure::TimedOut;
@@ -446,7 +446,9 @@ impl SmtpProvider {
         }
         for address in &answers {
             let allowed = match self.transport {
-                Transport::DevelopmentLoopback => address.to_canonical().is_loopback(),
+                Transport::LoopbackPlaintext => {
+                    registry_platform_httputil::loopback::loopback_address(*address)
+                }
                 Transport::Starttls(_) | Transport::Implicit(_) => {
                     self.policy.classify(*address).is_ok()
                 }

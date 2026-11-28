@@ -126,6 +126,11 @@ fn client_error(py: Python<'_>, error: RustClientError) -> PyErr {
             trace_id,
             ..MappedError::default()
         },
+        RustClientError::DevelopmentPeer => MappedError {
+            kind: "development-peer",
+            message: RustClientError::DevelopmentPeer.to_string(),
+            ..MappedError::default()
+        },
         RustClientError::Protocol {
             status,
             failure,
@@ -326,7 +331,7 @@ struct SchedulingClient {
 #[pymethods]
 impl SchedulingClient {
     #[new]
-    #[pyo3(signature = (base_url, attempt_timeout_seconds=None, connect_timeout_seconds=None, maximum_response_bytes=None, user_agent=None, trusted_root_certificates=None, maximum_mutation_retries=None))]
+    #[pyo3(signature = (base_url, attempt_timeout_seconds=None, connect_timeout_seconds=None, maximum_response_bytes=None, user_agent=None, trusted_root_certificates=None, maximum_mutation_retries=None, refuse_development_peer=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -337,6 +342,7 @@ impl SchedulingClient {
         user_agent: Option<String>,
         trusted_root_certificates: Option<Vec<u8>>,
         maximum_mutation_retries: Option<&Bound<'_, PyAny>>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let base_url = Url::parse(base_url).map_err(|_| {
             binding_error(
@@ -345,7 +351,12 @@ impl SchedulingClient {
                 "Scheduling client configuration is invalid",
             )
         })?;
-        let mut config = SchedulingClientConfig::new(base_url);
+        let peer_policy = if refuse_development_peer {
+            scheduling_client_sdk::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            scheduling_client_sdk::PeerPolicy::AcceptDevelopmentPeer
+        };
+        let mut config = SchedulingClientConfig::new(base_url, peer_policy);
         if let Some(value) = attempt_timeout_seconds {
             config = config.with_attempt_timeout(duration(py, value)?);
         }

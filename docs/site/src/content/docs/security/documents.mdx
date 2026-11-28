@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -29,8 +29,38 @@ and the restore drill is in
   clients, signature from the configured key set) and resolves exactly one access profile before it
   reads a body or the store.
   An unreachable key set answers 503, never 401.
-  The deployment trusts one issuer; `allowedClients: unrestricted` is refused.
+  The deployment trusts one issuer.
+  `allowedClients` is required in every runtime file. `allowedClients: from-package` admits the sorted
+  union of the access profiles' `requesterClients` and nothing more, so the package and the runtime
+  file cannot disagree. An explicit list must include every client an access profile names, or the
+  runtime refuses to start with `documents.runtime.profile-client-not-allowed`.
+  `allowedClients: unrestricted` and an empty list are refused in every mode.
   Declared issuer and key addresses are trusted on the operator's word (DOCUMENTS-RES-17).
+  A static key set (`jwksSource: static`) holds public keys only.
+  The runtime refuses to start on a set that carries a private member (`d`, `p`, `q`, `dp`, `dq`,
+  `qi`, `oth` or `k`), a symmetric key, a repeated member name, or a key without a unique `kid`.
+  The startup error names the rule it broke, and the key's position for a rule about one key, never a key value.
+  Members it does not know, such as `x5c` or `ext`, are ignored.
+- The operator's view of a refusal: the answer to the caller names a problem code and no cause, so
+  an operator tells the causes apart from the private metrics listener and the log.
+  The Document Store counts every refused request by the check that refused it, in
+  `documents_request_refusals_total{check}` on the private metrics listener.
+  The `check` label is a closed set of 45 names such as `credential-missing`, `token-signature`,
+  `scope`, `actor-kind`, `access-profile`, `operation`, `ownership` and `visibility`, every one
+  published at zero, and no caller value becomes a label.
+  The counter covers a missing or refused credential, a token that resolves to no access profile, a
+  refused custody placement, a caller that sees a document but may not act on it, a document or
+  upload the caller may not see, and a verifier that cannot reach or use its key source
+  (`key-source-unavailable`). A key set the verifier cannot fetch, read or use answers 503. A key
+  endpoint the verifier refuses to contact answers the refusal a bad credential gets, and is counted
+  the same way.
+  Each refusal also writes one `request refused` log line with `failed_check`, at most five lines per
+  check per minute, with `suppressed` counting what a window held back.
+  A scope refusal's line also carries `scope_claim`, `required_scope` and `access_profile`, the
+  values the deployment configured, never the token's own scope, and a fixed remedy that names
+  the issuer entry's `scopeClaim`.
+  Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and
+  recording a refusal changes nothing the caller receives.
 - The custodian alone removes a document and issues, lists and revokes its grants.
   Under citizen delivery the citizen is the custodian and the reserving system keeps metadata and
   status only.
@@ -58,20 +88,26 @@ and the restore drill is in
 - Host users who can write audit files are trusted; the journal is only as strong as the storage it
   is written to.
 
-Weakened configuration (plaintext database transport, a disabled verifier or `http` verifier or
-hook URL outside `development-loopback`, environment expressions in secret references, undeclared
-secret providers) is refused before anything binds.
-Findings name the member and rule, never the value.
+Production refuses a disabled verifier and private-network plaintext
+PostgreSQL before binding. Both postures refuse non-loopback HTTP storage,
+verifier and hook URLs, environment expressions in secret references and
+undeclared secret providers. Findings name the member and rule.
 
 {/* Evidence: products/documents/contracts/security-invariant-matrix.yaml DOCUMENTS-SEC-01,
     DOCUMENTS-SEC-03, DOCUMENTS-SEC-04, DOCUMENTS-SEC-05, DOCUMENTS-SEC-06, DOCUMENTS-SEC-08,
     DOCUMENTS-SEC-10, DOCUMENTS-SEC-11, DOCUMENTS-SEC-21, DOCUMENTS-SEC-24, DOCUMENTS-SEC-26,
     DOCUMENTS-SEC-32, DOCUMENTS-SEC-34, DOCUMENTS-SEC-48;
-    crates/registry-documents/src/http.rs ready, readiness_router;
+    crates/registry-documents/src/http.rs ready, readiness_router, refusal_response;
+    crates/registry-documents/src/metrics.rs, Metrics, count_requests,
+    the_refusal_counter_lists_every_check_from_zero_and_counts_by_check;
+    crates/registry-documents/tests/refusal_golden.rs,
+    every_refusal_is_counted_and_logged_under_the_check_it_failed,
+    every_refusal_answers_the_bytes_the_golden_file_holds;
+    crates/registry-platform-oidc/src/static_jwks.rs, StaticJwksError;
     crates/registry-documents/src/config.rs check_secret_providers, unrestricted_clients_are_refused,
     plaintext_database_is_refused_outside_test_builds,
-    disabled_content_verification_requires_development_loopback,
-    a_plaintext_hook_destination_is_refused_outside_development,
+    disabled_content_verification_requires_declared_development,
+    a_non_loopback_plaintext_hook_destination_is_refused_in_both_postures,
     shared_runtime_loader_refuses_environment_expressions_in_secret_references;
     crates/registry-documents/tests/postgres_documents.rs the_storage_binding_is_pinned_at_the_first_write,
     under_institutional_custody_the_named_person_has_no_standing_without_a_grant,
@@ -79,14 +115,27 @@ Findings name the member and rule, never the value.
     crates/registry-documents/tests/postgres_startup.rs
     a_prepared_runtime_serves_documents_only_to_a_verified_caller. */}
 
-`development-loopback` is the only listener setting that permits a disabled verifier or an `http`
-hook URL, and the hook URL must also be a loopback address.
-Do not set it in production.
+Use one posture across a deployment. Development responses carry
+`Registry-Posture: development`, which the Document Store Rust client refuses. Development can
+approve finalized versions with `contentVerification: {type: disabled}`.
+Loopback HTTP storage, verifier and hook URLs are valid in either posture.
+Signed hook deliveries use the same canonical envelope in both postures.
+The worker checks the stored envelope before signing or sending those same bytes.
+
+{/* Evidence: crates/registry-documents/tests/postgres_hooks.rs
+    both_postures_capture_the_original_envelope_bytes,
+    production_restart_delivers_a_development_capture_unchanged,
+    a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_projection,
+    a_failing_destination_is_retried_then_dead_lettered_without_touching_the_transition;
+    crates/registry-platform-hooks/src/receiver.rs
+    verify_hook_delivery_refuses_a_signed_envelope_with_a_posture_member. */}
 
 {/* Evidence: crates/registry-documents/src/config.rs
-    disabled_content_verification_requires_development_loopback, check_hook_destinations;
+    disabled_content_verification_requires_declared_development, check_hook_destinations;
     crates/registry-platform-hooks/src/delivery/destination.rs
-    url_address_accepts_https_and_loopback_http_only. */}
+    url_address_accepts_https_and_loopback_http_only;
+    crates/registry-documents/tests/postgres_startup.rs
+    a_prepared_runtime_serves_documents_only_to_a_verified_caller. */}
 
 ## Operator obligations
 
@@ -354,8 +403,8 @@ The window needs write access to the parent directory and loses no content.
 
 ### DOCUMENTS-RES-17: declared issuer and key endpoints are trusted
 
-- Condition: the runtime file names an issuer or JWKS URI, or sets
-  `authentication.oidc.allowInsecureHttp: true`.
+- Condition: the runtime file names an issuer or JWKS URI, or an issuer entry sets
+  `allowInsecureHttp: true`.
 - Consequence: The Store trusts a declared issuer or JWKS URI on the operator's word.
   Under `allowInsecureHttp: true`, an attacker on the network path to the issuer can substitute
   keys and mint tokens the Store accepts.

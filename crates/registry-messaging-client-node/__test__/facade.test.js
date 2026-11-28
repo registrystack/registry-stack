@@ -57,10 +57,11 @@ async function serve(context, answer) {
     request.on('data', (chunk) => { body += chunk; });
     request.on('end', () => {
       requests.push({ method: request.method, path: request.url, headers: request.headers, body });
-      const { status, contentType, document, retryAfter } = answer(request);
+      const { status, contentType, document, retryAfter, posture } = answer(request);
       const headers = { traceparent: TRACEPARENT };
       if (contentType) headers['content-type'] = contentType;
       if (retryAfter !== undefined) headers['retry-after'] = retryAfter;
+      if (posture) response.setHeader('registry-posture', posture);
       response.writeHead(status, headers);
       response.end(document === undefined ? '' : JSON.stringify(document));
     });
@@ -94,8 +95,8 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof client.MessagingClientError, 'function');
 });
 
-test('health and ready complete with the answered trace and no value', async (context) => {
-  const { baseUrl, requests } = await serve(context, () => ({ status: 200 }));
+test('health and ready accept a development peer and return the answered trace', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, posture: 'development' }));
   const { MessagingClient } = require('../client');
   const client = new MessagingClient({ baseUrl });
 
@@ -708,4 +709,16 @@ test('receipt observation refuses an invalid key or request before any exchange'
   await assert.rejects(client.messageReceipt('token', 'two words', SUBMISSION), (error) => error.kind === 'invalid-request');
   await assert.rejects(client.messageReceipt('token', 'key', { ...SUBMISSION, extra: true }), (error) => error.kind === 'invalid-request');
   assert.equal(requests.length, 0);
+});
+
+test('strict development-peer policy is an explicit boolean option', () => {
+  const { MessagingClient } = require('../client');
+  const baseUrl = 'https://messaging.example.invalid/';
+  for (const refuseDevelopmentPeer of [false, true]) {
+    assert.ok(new MessagingClient({ baseUrl, refuseDevelopmentPeer }));
+  }
+  assert.throws(
+    () => new MessagingClient({ baseUrl, refuseDevelopmentPeer: 'true' }),
+    (error) => error.kind === 'configuration',
+  );
 });

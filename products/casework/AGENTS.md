@@ -20,7 +20,10 @@ canonical examples, and product-local verification scripts. Read the workspace
   `CASEWORK_ASSIGNMENT_TEST_DATABASE_URL`; fixtures isolate themselves in
   unique schemas. The native BReg journey also uses `BREG_TEST_DATABASE_URL`.
   The separate `caseworkctl` split-role session test uses
-  `CASEWORK_TEST_DATABASE_URL`.
+  `CASEWORK_TEST_DATABASE_URL`. The `caseworkctl provision` test reads the
+  shared `PROVISION_TEST_DATABASE_URL`, a disposable superuser URL on a server
+  that offers verified TLS, and `PROVISION_TEST_DATABASE_CA`, the
+  path of the CA bundle that verifies it.
   Never point test URLs at retained operator data.
 - Keep the submitted and current-source examples small and executable. Preserve
   exact policy and provider bindings, reviewer disclosure, independent producer

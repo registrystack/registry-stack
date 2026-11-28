@@ -1732,7 +1732,7 @@ async fn test_client(responses: Vec<MockResponse>) -> TestClient {
         .await
         .expect("serve mock registry");
     });
-    let config = BaseRegistryClientConfig::new(
+    let config = BaseRegistryClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/tenant/base")).expect("base URL"),
     )
     .with_token_provider(Arc::new(CountingToken(AtomicUsize::new(0))))
@@ -1817,7 +1817,7 @@ async fn other_failures_and_invalid_documents_stay_visible() {
         401,
         "Unauthorized",
         "authentication.refused",
-        "The bearer credential is missing or refused.",
+        "The bearer token or delivery signature was not accepted.",
     );
     let fixture = test_client(vec![MockResponse::problem(
         StatusCode::UNAUTHORIZED,

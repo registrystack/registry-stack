@@ -27,7 +27,8 @@ async fn client_for(answer: fn() -> Response) -> (DocumentsClient, tokio::task::
             .expect("the fixture server");
     });
     let url = url::Url::parse(&format!("http://{address}/")).expect("a fixture URL");
-    let client = DocumentsClient::new(DocumentsClientConfig::new(url)).expect("a client");
+    let client = DocumentsClient::new(DocumentsClientConfig::new_without_peer_policy(url))
+        .expect("a client");
     (client, server)
 }
 
@@ -170,6 +171,67 @@ async fn a_healthy_answer_without_a_trace_is_a_protocol_failure() {
 async fn a_healthy_answer_with_a_body_is_a_protocol_failure() {
     let (client, server) =
         client_for(|| (StatusCode::OK, [("traceparent", TRACEPARENT)], "ok").into_response()).await;
+    let error = client.health().await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            DocumentsClientError::Protocol {
+                failure: DocumentsProtocolFailure::Body,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    server.abort();
+}
+
+fn json_probe(body: String) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (CONTENT_TYPE, "application/json"),
+            (
+                axum::http::header::HeaderName::from_static("traceparent"),
+                TRACEPARENT,
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+#[tokio::test]
+async fn a_healthy_answer_with_a_json_object_body_is_accepted() {
+    let (client, server) = client_for(|| {
+        json_probe(r#"{"status":"ready","posture":"production","developmentSettings":[]}"#.into())
+    })
+    .await;
+    let complete = client.health().await.expect("a JSON object probe body");
+    assert_eq!(complete.trace_id, TRACE_ID);
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_healthy_answer_with_a_json_body_that_is_not_an_object_is_a_protocol_failure() {
+    let (client, server) = client_for(|| json_probe("[1]".into())).await;
+    let error = client.health().await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            DocumentsClientError::Protocol {
+                failure: DocumentsProtocolFailure::Body,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_healthy_answer_with_an_oversized_json_body_is_a_protocol_failure() {
+    let (client, server) =
+        client_for(|| json_probe(format!(r#"{{"note":"{}"}}"#, "a".repeat(8 * 1024)))).await;
     let error = client.health().await.unwrap_err();
     assert!(
         matches!(

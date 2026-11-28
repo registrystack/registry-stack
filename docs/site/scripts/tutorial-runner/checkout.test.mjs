@@ -30,7 +30,7 @@ test('a checkout copy holds the files a clone would, as they stand in the workin
     const dest = join(root, 'reader');
     await copyCheckout(repo, dest);
     assert.equal(await readFile(join(dest, 'products/example/registry.yaml'), 'utf8'), 'edited in the working tree\n');
-    assert.equal(await readFile(join(dest, 'new.txt'), 'utf8'), 'untracked\n');
+    assert.equal(existsSync(join(dest, 'new.txt')), false);
     assert.equal(await readlink(join(dest, 'link.yaml')), 'products/example/registry.yaml');
     assert.equal(existsSync(join(dest, 'target')), false);
     assert.equal(existsSync(join(dest, 'gone.txt')), false);

@@ -25,7 +25,7 @@ use registry_breg::package::{
     VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    initialize_compiled_registry_state_with_posture_for_test, install_compiled_schema,
     managed_schema_fingerprint, ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
 use registry_breg::startup::{prepare_with_connection_config_for_test, PreparedServer};
@@ -225,7 +225,7 @@ impl RunningFixture {
                 .await
                 .expect("managed schema fingerprint computes for action example");
         let package = TestPackage::build(&sources, &schema_fingerprint);
-        initialize_compiled_registry_state_for_test(
+        initialize_compiled_registry_state_with_posture_for_test(
             &migration,
             &database.runtime_role,
             &registry,
@@ -234,6 +234,7 @@ impl RunningFixture {
                 database_id: &package.database_id,
                 label: package.package.package_digest(),
             },
+            registry_platform_config::Posture::Development,
         )
         .await
         .expect("database initializes from the exact action example identity");
@@ -242,10 +243,16 @@ impl RunningFixture {
 
         let idp = MockIdp::start().await;
         let config_path = package.write_runtime_config(&database, &idp);
-        let prepared =
-            prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-                .await
-                .expect("verified startup constructs the authenticated action example runtime");
+        let prepared = prepare_with_connection_config_for_test(
+            &config_path,
+            database.runtime_config.clone(),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .await
+        .expect("verified startup constructs the authenticated action example runtime");
 
         Self {
             runtime_guard,
@@ -391,7 +398,7 @@ impl TestPackage {
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                database_initialization_environment: ENVIRONMENT,
+                posture: registry_platform_config::Posture::Development,
             },
         )
         .expect("published action example package rederives and verifies");
@@ -473,7 +480,6 @@ identity:
   environment: {}
   instanceId: {}
   databaseId: {}
-  databaseInitializationEnvironment: {}
 secretProviders:
   file:
     root: {}
@@ -492,25 +498,27 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: {}
-    audience: {AUDIENCE}
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 3600
-    leewayMilliseconds: 60000
-    jwksSource:
-      type: static
-      documentRef: secret:file/oidc-jwks
-    jwksCache:
-      cacheTtlSeconds: 60
-      negativeCacheTtlSeconds: 1
-      refreshCooldownSeconds: 1
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 5000
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {}
+        audience: {AUDIENCE}
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 3600
+        leewayMilliseconds: 60000
+        jwksSource:
+          type: static
+          documentRef: secret:file/oidc-jwks
+        jwksCache:
+          cacheTtlSeconds: 60
+          negativeCacheTtlSeconds: 1
+          refreshCooldownSeconds: 1
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 5000
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: registry_principal
     purpose: purpose
@@ -530,7 +538,6 @@ cursor:
                 ENVIRONMENT,
                 INSTANCE_ID,
                 self.database_id,
-                ENVIRONMENT,
                 secrets.display(),
                 database.migration_role.as_str(),
                 database.runtime_role.as_str(),

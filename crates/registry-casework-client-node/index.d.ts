@@ -64,6 +64,7 @@ export declare class CaseworkClient {
 
 export interface CaseworkClientConfig {
   baseUrl: string
+  refuseDevelopmentPeer?: boolean
   attemptTimeoutMilliseconds?: number
   connectTimeoutMilliseconds?: number
   maximumResponseBytes?: number

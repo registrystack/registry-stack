@@ -45,7 +45,7 @@ use registry_adapter_core::{
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::destination::{
-    DataDestinationPolicy, DestinationProfile, DestinationTlsMaterial,
+    DataDestinationPolicy, DestinationPolicyError, DestinationProfile, DestinationTlsMaterial,
     MAX_DESTINATION_CA_BUNDLE_BYTES,
 };
 use registry_platform_yaml::{Diagnostic, Report, SecretReference, Url};
@@ -103,6 +103,10 @@ fn record_wait(
 
 #[derive(Debug, Args)]
 pub struct VerifyArgs {
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long, value_name = "POSTURE")]
+    pub posture: Option<String>,
+
     /// Authored adapter project: its directory (holding `project.yaml`)
     /// or the `project.yaml` file itself. The profile and pack are read
     /// beside the project either way.
@@ -172,7 +176,10 @@ fn refused_now(report: Report, files: usize) -> VerifyFailure {
 
 /// Verify one project live. The reading half mirrors `check` exactly;
 /// any refusal it reports stops before the first dial.
-pub(crate) fn run(args: &VerifyArgs) -> Result<VerifyRun, VerifyFailure> {
+pub(crate) fn run(
+    args: &VerifyArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<VerifyRun, VerifyFailure> {
     // `--live` is the only mode: clap refuses its absence, and a caller
     // reaching the library without it gets the same refusal, not a
     // silent offline pass.
@@ -230,8 +237,14 @@ pub(crate) fn run(args: &VerifyArgs) -> Result<VerifyRun, VerifyFailure> {
     // The runtime reads through the shared loader with substitution on:
     // the command dials real destinations, so `${NAME}` expressions
     // must hold real values before anything connects.
-    let runtime =
-        crate::check::read_runtime(&args.runtime, true, &mut report, &mut files).map_err(io)?;
+    let runtime = crate::check::read_runtime_in_posture(
+        &args.runtime,
+        true,
+        &mut report,
+        &mut files,
+        declared,
+    )
+    .map_err(io)?;
 
     // A document the reader refuses stops the run: the drive needs
     // parsed values, and the report still names everything to fix.
@@ -833,9 +846,7 @@ fn destination_policy(
         profile,
         &networks,
     )
-    .map_err(|_| {
-        EgressFault::Refused("the destination is not admitted by the frozen policy".to_owned())
-    })?;
+    .map_err(|error| EgressFault::Refused(destination_refusal(&error)))?;
     if let Some(profile) = &binding.tls_trust_profile {
         let bundle = resolve_ca_bundle(runtime, profile.as_str()).map_err(|_| {
             EgressFault::Refused(
@@ -856,6 +867,16 @@ fn destination_policy(
     Ok(policy)
 }
 
+/// The report text for a refused destination. An empty private range list
+/// keeps the platform's own text, which says how to fix it. Any other refusal
+/// is a fixed sentence, so the report never repeats an origin.
+fn destination_refusal(error: &DestinationPolicyError) -> String {
+    match error {
+        DestinationPolicyError::PrivateServiceRequiresPrivateCidr => error.to_string(),
+        _ => "the destination is not admitted by the frozen policy".to_owned(),
+    }
+}
+
 fn destination_profile(base: &Url) -> DestinationProfile {
     let parsed = base.to_url();
     #[cfg(feature = "tls-test")]
@@ -864,19 +885,16 @@ fn destination_profile(base: &Url) -> DestinationProfile {
     }
     match parsed.scheme() {
         "https" => DestinationProfile::ProductionHttps,
-        _ if denotes_loopback(base) => DestinationProfile::LoopbackDevelopmentHttp,
+        _ if denotes_loopback(base) => DestinationProfile::LoopbackHttp,
         _ => DestinationProfile::PrivateServiceHttp,
     }
 }
 
 fn denotes_loopback(origin: &Url) -> bool {
-    let parsed = origin.to_url();
-    parsed.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
-    })
+    origin
+        .to_url()
+        .host_str()
+        .is_some_and(|host| registry_platform_httputil::loopback::loopback_host(host).is_some())
 }
 
 /// Read one declared CA bundle under the platform ceiling. Every failure is
@@ -1170,6 +1188,17 @@ mod tests {
         assert_eq!(
             message,
             "the runtime credential's kind (`none`) does not match the endpoint's declared kind (`basic`)"
+        );
+    }
+
+    #[test]
+    fn an_empty_private_range_list_keeps_the_platform_remedy() {
+        let message =
+            destination_refusal(&DestinationPolicyError::PrivateServiceRequiresPrivateCidr);
+        assert!(message.contains("name the range"), "{message}");
+        assert_eq!(
+            destination_refusal(&DestinationPolicyError::OriginMissingPort),
+            "the destination is not admitted by the frozen policy"
         );
     }
 

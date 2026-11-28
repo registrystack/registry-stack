@@ -60,7 +60,7 @@ if change == "unknown-key":
 elif change == "environment-in-credential":
     runtime["database"]["runtimeUrlRef"] = "${DOCUMENTS_RUNTIME_DATABASE_URL}"
 elif change == "unrestricted-clients":
-    runtime["authentication"]["oidc"]["allowedClients"] = "unrestricted"
+    runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] = "unrestricted"
 elif change == "plaintext-hook":
     hook = runtime["destinations"]["hooks"]["owning-system-events"]
     hook["url"] = hook["url"].replace("https://", "http://", 1)
@@ -120,12 +120,12 @@ PY
 expect_refusal unknown-key --runtime-config /listener/port config.unknown-key
 expect_refusal environment-in-credential --runtime-config /database/runtimeUrlRef \
   config.substitution-not-allowed
-expect_refusal unrestricted-clients --runtime-config /authentication/oidc/allowedClients \
+expect_refusal unrestricted-clients --runtime-config /authentication/oidc/issuers/main/allowedClients \
   documents.runtime.allowed-clients-required
 expect_refusal plaintext-hook --runtime-config /destinations/hooks/owning-system-events/url \
   documents.runtime.insecure-url
-expect_refusal verification-disabled --runtime-config /contentVerification/type \
-  documents.runtime.content-verification-disabled
+expect_refusal verification-disabled --runtime-config /contentVerification \
+  documents.posture.content-verification-disabled
 expect_refusal unknown-project-key --project /owner config.unknown-key
 
 # A project directory without documents.yaml is an operational failure, never

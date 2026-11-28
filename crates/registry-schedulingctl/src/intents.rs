@@ -11,6 +11,7 @@
 //! listed: nobody was ever meant to deliver it, and the row is retained as
 //! accounting rather than as work.
 
+use registry_platform_config::DeclaredPosture;
 use std::fs;
 use std::path::Path;
 
@@ -18,13 +19,14 @@ use anyhow::{Context, Result};
 use registry_scheduling::store::PostgresStore;
 use serde_json::{json, Value};
 
-pub fn undelivered(config_path: &Path, limit: i64) -> Result<Value> {
+pub fn undelivered(config_path: &Path, limit: i64, declared: DeclaredPosture) -> Result<Value> {
     let config_path =
         fs::canonicalize(config_path).context("resolving the Scheduling runtime configuration")?;
-    let config = crate::project::load_runtime_config(&config_path)?;
+    let config = crate::project::load_runtime_config(&config_path, declared)?;
     let resolver = crate::records::secret_resolver(&config)?;
-    let store = PostgresStore::connect_runtime(&config.database, &resolver)
-        .context("the Scheduling runtime database configuration is invalid")?;
+    let store =
+        PostgresStore::connect_runtime(&config.database, &resolver, config.development_witness())
+            .context("the Scheduling runtime database configuration is invalid")?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

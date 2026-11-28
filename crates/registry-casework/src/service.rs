@@ -1,5 +1,6 @@
 use crate::{PostgresStore, StoreError};
 use registry_casework_core::{CaseworkProject, InboxPolicy, ReviewContextProvider};
+use registry_platform_authcommon::FailedCheck;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 #[derive(Clone)]
@@ -76,9 +77,12 @@ pub enum ServiceError {
     #[error("the Casework service configuration is invalid")]
     Configuration,
     #[error("the requested review task was not found")]
-    NotFound,
+    NotFound(FailedCheck),
+    /// An absence that conceals nothing and is not counted as a refusal.
+    #[error("the requested resource was not found")]
+    Absent,
     #[error("the caller is not authorized")]
-    Forbidden,
+    Forbidden(FailedCheck),
     #[error(transparent)]
     ReviewValidation(#[from] registry_casework_core::ReviewValidationError),
     #[error(transparent)]

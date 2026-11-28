@@ -208,37 +208,43 @@ def encode_ingestion_chunk(
 
 HookVerificationRefusalCode = Literal[
     "missing-header",
-    "invalid-delivery-time",
     "duplicate-header",
+    "invalid-content-type",
+    "invalid-id",
+    "invalid-timestamp",
+    "stale-delivery",
+    "malformed-signature",
+    "unsupported-version",
+    "signature-mismatch",
     "body-too-large",
     "invalid-key",
-    "malformed-signature",
-    "signature-mismatch",
-    "unsupported-version",
+    "invalid-envelope",
+    "id-mismatch",
 ]
 
 class VerifiedHookDelivery(TypedDict):
     id: str
+    timestamp: int
     source: str
     type: str
     time: str
     dataschema: str
-    generation: str
-    attempt: str
-    delivery_time: str
-    idempotency_key: str
     body: bytes
 
 def verify_hook_delivery(
     *,
-    method: str,
-    path: str,
     headers: Sequence[tuple[str, str]],
     body: bytes,
     key: bytes,
+    previous_key: bytes | None = None,
+    max_skew_seconds: int | None = None,
+    caller_enforced_freshness: bool | None = None,
 ) -> VerifiedHookDelivery:
-    """Authenticate one exact Base Registry Engine Version 1 hook delivery.
-    Apply delivery-time skew and deduplication policy before acting on the body."""
+    """Authenticate one exact Base Registry Engine Standard Webhooks delivery.
+    The delivery time must be within 300 seconds of the receiver clock unless
+    `max_skew_seconds` (1 to 3600) names another window or
+    `caller_enforced_freshness` leaves the bound to the caller. A time outside
+    the window raises code `stale-delivery`. Deduplicate before acting on the body."""
     ...
 
 def event_record_view(arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
@@ -411,6 +417,7 @@ class BaseRegistryClient:
         maximum_response_bytes: int | None = None,
         trusted_root_certificates: bytes | None = None,
         maximum_mutation_retries: int | None = None,
+        refuse_development_peer: bool = False,
     ) -> None: ...
     def health(self) -> dict[str, Any]: ...
     def ready(self) -> dict[str, Any]: ...

@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-27"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - operator
@@ -94,16 +94,18 @@ alternatives:
       - urn:example:evidence-type:adult-status
 ```
 
-Check the project. `--allow-loopback` accepts the local `http://127.0.0.1` URL; without it, only
-HTTPS origins pass.
+Check the project in development to accept its loopback catalog URL. Production catalogs use HTTPS URLs on non-loopback hosts.
 
 ```sh
-rstack discovery check --project discovery-project --allow-loopback
+rstack discovery check --project discovery-project --posture development
 ```
 
 ```text test-expect
 valid origins=1 mappings=1
-0 errors, 0 warnings in 3 files
+warning[discovery.posture.loopback-catalog-url] discovery-project/origins.yaml:5:17 /origins/tutorial-evidence/catalogUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
+0 errors, 1 warning in 3 files
 ```
 
 The third file is `runtime.yaml`, which you use to serve the index. The check never contacts the
@@ -128,11 +130,17 @@ Back in the first shell, package the index:
 rstack discovery package \
   --project discovery-project \
   --output discovery-project/package \
-  --allow-loopback
+  --posture development
 ```
 
 ```text test-expect
 packaged packageDigest=sha256:<package-digest> catalogRevision=sha256:7e0799f2c5fd24957e4d1372f757c40abef694110eb70fc260a0abdc312ca963 mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
+warning[discovery.posture.loopback-catalog-url] discovery-project/package/discovery-index.json /origins/0/catalogUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
+warning[discovery.posture.loopback-catalog-url] discovery-project/package/discovery-index.json /services/0/originUrl
+  the index advertises an address on the reader's own machine; production refuses it
+  next: Publish HTTPS URLs on non-loopback hosts.
 ```
 
 Packaging fetched the description once. The catalogue revision digests what the descriptions mean
@@ -151,7 +159,7 @@ Stop the publication server with `Ctrl+C`. Discovery never contacts a provider w
 
 ```sh test-background="http://127.0.0.1:38080/ready"
 DISCOVERY_PACKAGE_ROOT="$PWD/discovery-project/package" \
-  rstack discovery serve --runtime-config "$PWD/discovery-project/runtime.yaml"
+  rstack discovery serve --runtime-config "$PWD/discovery-project/runtime.yaml" --posture development
 ```
 
 It checks the package against its `SHA256SUMS` file before it listens. In the second shell:
@@ -161,7 +169,7 @@ curl -s http://127.0.0.1:38080/ready
 ```
 
 ```json test-expect
-{"status":"ready"}
+{"developmentSettings":[{"code":"discovery.posture.loopback-catalog-url","pointer":"/origins/0/catalogUrl"},{"code":"discovery.posture.loopback-catalog-url","pointer":"/services/0/originUrl"}],"posture":"development","status":"ready"}
 ```
 
 ## Resolve a requirement

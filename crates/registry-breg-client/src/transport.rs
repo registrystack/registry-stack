@@ -1,8 +1,9 @@
+use crate::PeerPolicy;
 use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
 use registry_platform_httputil::{
-    read_bounded, url::append_path_segments, validate_response_headers,
+    read_bounded, url::append_path_segments, validate_response_headers, ResponseHeaderError,
 };
 use reqwest::header::{HeaderMap, CONTENT_TYPE};
 use reqwest::{Response, Url};
@@ -11,6 +12,7 @@ use crate::{BRegProtocolFailure, BaseRegistryClientConfig, BaseRegistryClientErr
 
 #[derive(Clone)]
 pub(crate) struct Transport {
+    peer_policy: PeerPolicy,
     pub(crate) http: reqwest::Client,
     pub(crate) base_url: ServiceBaseUrl,
     pub(crate) maximum_response_bytes: u64,
@@ -32,6 +34,7 @@ impl Transport {
         })
         .map_err(BaseRegistryClientError::configuration)?;
         Ok(Self {
+            peer_policy: config.peer_policy,
             http,
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
@@ -52,13 +55,16 @@ impl Transport {
             .send()
             .await
             .map_err(|error| BaseRegistryClientError::transport(send_failure_kind(&error)))?;
-        validate_response_headers(response.headers()).map_err(|_| {
-            BaseRegistryClientError::protocol(
-                response.status().as_u16(),
-                BRegProtocolFailure::HeaderBounds,
-                None,
-            )
-        })?;
+        validate_response_headers(response.headers(), self.peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => BaseRegistryClientError::DevelopmentPeer,
+                _ => BaseRegistryClientError::protocol(
+                    response.status().as_u16(),
+                    BRegProtocolFailure::HeaderBounds,
+                    None,
+                ),
+            },
+        )?;
         Ok(response)
     }
 

@@ -131,6 +131,7 @@ pub struct CheckConnectionArgs {
     #[arg(long)]
     pub file: PathBuf,
     /// Exit 1 when the check reports a warning.
+    /// Development posture listings do not count.
     #[arg(long)]
     pub deny_warnings: bool,
 }
@@ -346,8 +347,11 @@ fn write_connection_check(
 ) -> Result<u8, ApiError> {
     let (report, exit) = match inspect_connections_file(path) {
         Ok(report) => {
-            let exit =
-                u8::from(report.has_errors() || (deny_warnings && report.warning_count() > 0));
+            let exit = u8::from(
+                report.has_errors()
+                    || (deny_warnings
+                        && registry_platform_config::has_denied_warnings(report.diagnostics())),
+            );
             (report, exit)
         }
         Err(ApiError::Io) if json_output => {

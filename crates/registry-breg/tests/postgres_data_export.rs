@@ -16,7 +16,7 @@ use postgres_harness::TestDatabase;
 use registry_breg::api::{
     authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
-use registry_breg::auth::{AuthorityClaimConfig, RegistryAuthenticator};
+use registry_breg::auth::{AuthenticatorIssuer, AuthorityClaimConfig, RegistryAuthenticator};
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
@@ -33,7 +33,7 @@ use registry_breg::postgres::{
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::FetchUrlPolicy;
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_oidc::{ActorKind, DeclaredKinds, JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
@@ -449,13 +449,17 @@ fn authenticated_app(
     let key_source = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ));
     let authenticator = Arc::new(
-        RegistryAuthenticator::new(
+        RegistryAuthenticator::with_issuers(
             &registry,
-            oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
-            key_source,
+            vec![AuthenticatorIssuer::new(
+                "primary",
+                oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
+                key_source,
+            )
+            .with_declared_kinds(DeclaredKinds::Issuer(ActorKind::Service))],
             AuthorityClaimConfig::new("registry_principal", Some("purpose".to_owned())),
         )
         .expect("OIDC authority matches the compiled Registry"),

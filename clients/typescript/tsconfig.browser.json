@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": false,
+    "types": [],
+    "outDir": "dist",
+    "declaration": true
+  },
+  "include": ["browser.ts", "core.ts", "webhook.ts", "schema.ts", "generated/**/*.ts"]
+}

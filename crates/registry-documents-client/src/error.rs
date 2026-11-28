@@ -41,6 +41,11 @@ pub enum DocumentsProtocolFailure {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum DocumentsClientError {
+    #[error(
+        "the peer declared the development posture; a production runtime refuses its responses"
+    )]
+    DevelopmentPeer,
+
     #[error("Registry Stack Document Store client configuration is invalid: {reason}")]
     Configuration { reason: &'static str },
     #[error("Registry Stack Document Store client request is invalid: {reason}")]
@@ -92,6 +97,7 @@ impl DocumentsClientError {
     #[must_use]
     pub fn is_outcome_unknown(&self) -> bool {
         match self {
+            Self::DevelopmentPeer => true,
             Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
             Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
             Self::Problem { status, .. } => *status >= 500,

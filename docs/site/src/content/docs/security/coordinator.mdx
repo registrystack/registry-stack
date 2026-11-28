@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-28"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -38,10 +38,41 @@ Deployment steps are in [Deploy Registry Coordinator](../../operate/coordinator/
   Admission accepts a token only when its caller policy lists the token's exact `sub`, and refuses
   a delegated token (COORDINATOR-INV-10).
   Start input is the caller's assertion: Coordinator does not compare it with the caller's `sub`.
+- Standard Webhooks authenticates an event or a review completion over the webhook ID, Unix
+  timestamp, and exact body. The signed timestamp can differ from the receiver clock by at most
+  300 seconds in either direction. The event URL selects a workflow and trigger key.
+  `Registry-Recipient-Binding` selects a connection's completion key. Only possession of the
+  selected key lets a sender produce a valid signature.
+  The method, path, and recipient binding are outside the signature. Startup refuses reused key
+  bytes across triggers and connections, including previous keys, so a signature for one cannot
+  authorise a delivery to another.
+- The event's producer URI, webhook ID, and trigger bind durable admission to the run. Exact
+  redelivery returns that run. Coordinator keeps no completion replay record. A completion only
+  advances an eligible read, and the connection reads the authoritative result from Casework.
+  The signed timestamp bounds how long a captured completion can be replayed.
+- Coordinator counts every refused request by the check that refused it, in
+  `coordinator_request_refusals_total{check}` on the private metrics listener.
+  The `check` label is a closed set of 45 names, every one published at zero, and no caller value
+  becomes a label.
+  The counter covers a refused credential, a policy denial after authentication, a refused signed
+  event delivery or completion callback, an unavailable access-token verifier key source, and a
+  run the caller cannot see.
+  Each refusal also writes one `request refused` log line with `failed_check` and the request's
+  trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
+  a window held back.
+  A scope refusal's line also names the scope claim the deployment configured and the scope the
+  caller's policy requires, as `scope_claim` and `required_scope`.
+  Apart from those two configured values, neither the counter nor the line holds a token, claim,
+  client, subject, scope or identifier, and recording a refusal changes nothing the caller receives.
+  The older `coordinator_authentication_refusals_total{reason}` counter is unchanged.
 - Host users run `coordinatorctl`, which is local operator tooling for a trusted single-user
   machine.
 - PostgreSQL holds run, wait and job state.
   Coordinator does not defend against a database superuser.
+  Plaintext PostgreSQL is admitted only to a Unix socket, a loopback address literal or the name
+  `localhost`, in any letter case.
+  Coordinator matches `localhost` by spelling and does not pin its resolution, so a host that maps
+  that name elsewhere redirects the connection.
 
 {/* Evidence: crates/registry-coordinator/tests/external_command_project.rs
     the_workflow_cannot_name_a_destination_path_or_credential;
@@ -49,7 +80,40 @@ Deployment steps are in [Deploy Registry Coordinator](../../operate/coordinator/
     crates/registry-coordinator/tests/deployment_surface.rs a_policy_admits_only_the_subjects_it_lists,
     a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not;
     crates/registry-coordinator/tests/deployment_postgres.rs
-    start_input_is_not_bound_to_the_caller_subject. */}
+    start_input_is_not_bound_to_the_caller_subject;
+    crates/registry-coordinator/src/http.rs
+    every_refusal_the_service_answers_is_counted_and_logged_under_its_check,
+    a_policy_denial_after_authentication_is_counted,
+    the_authorization_header_names_a_missing_or_a_malformed_credential;
+    crates/registry-coordinator/src/event_trigger_tests.rs
+    a_refused_delivery_names_the_check_that_failed,
+    the_event_window_is_300_seconds_in_both_directions;
+    crates/registry-coordinator/tests/breg_event_native.rs
+    native_proposal_event_admits_one_run_without_conferring_apply_authority;
+    crates/registry-coordinator/src/completion.rs
+    an_unknown_recipient_binding_gets_the_signature_refusal. */}
+
+Use one posture across the deployment. Development responses carry
+`Registry-Posture: development`. The Coordinator Rust client and a production
+`coordinatorctl doctor` refuse those responses. Production responses keep HSTS
+behind a TLS proxy on the same host. Development responses omit HSTS on a
+loopback listener.
+
+The configured trigger key authenticates the sender in both postures.
+After verifying the signature, the Coordinator rejects an envelope with a
+`posture` member as `event.invalid`. An invalid signature returns
+`event.unauthenticated`.
+
+{/* Evidence: crates/registry-coordinator/src/event_trigger_tests.rs
+    an_event_signed_with_its_trigger_key_is_admitted,
+    signed_posture_members_are_refused_after_authentication. */}
+
+{/* Evidence: crates/registry-coordinator/src/http.rs hsts_is_omitted_only_in_development_on_loopback;
+    crates/registry-coordinator/tests/cli_remote.rs typed_commands_refuse_a_development_peer_only_in_production;
+    crates/registry-coordinator-client/src/client.rs send. */}
+
+{/* Evidence: crates/registry-coordinator/src/http.rs http_edge, ready_body;
+    crates/registry-platform-httputil/src/lib.rs PeerPolicy, validate_response_headers. */}
 
 ## Guarantees
 
@@ -266,17 +330,17 @@ A key set read over plain HTTP can be substituted by an on-path attacker, whose 
 mint access tokens Coordinator accepts.
 
 Enforcement: Coordinator fetches under the shared issuer network policy that Casework, Registry
-Messaging and Scheduling use, or the development loopback policy under `development-loopback`:
+Messaging and Scheduling use:
 
 - The declared issuer and a declared `jwksSource.uri` may resolve to a private or loopback address
   on any origin; both are operator configuration.
 - A discovered `jwks_uri` inherits that allowance only on the issuer's own origin.
   On another origin it must use HTTPS and is refused when it resolves to a private or loopback
-  address, under `development-loopback` too.
+  address.
 - Cloud metadata and link-local addresses are refused for declared and discovered endpoints alike.
   Redirects are disabled.
-- Plain HTTP is accepted at load only with `deployment.authentication.allowInsecureHttp: true`, or
-  on loopback under `development-loopback`.
+- Plain HTTP is accepted at load only with `deployment.authentication.issuers.ISSUER_ID.allowInsecureHttp: true`, or
+  over loopback in either posture. The explicit setting requires development.
   The setting never extends plain HTTP to a discovered endpoint on another origin.
 
 When the runtime file is loaded, Coordinator refuses a plain-HTTP issuer or key URI these rules do
@@ -292,11 +356,10 @@ redirects.
 
 {/* Evidence: crates/registry-platform-config/src/blocks.rs OidcIssuerConfig;
     crates/registry-coordinator/src/access.rs AccessConfig, IssuerNetworkPolicy,
-    fetch_discovery_for_issuer, declared_jwks_fetch_policy,
-    http_issuer_opt_in_has_a_startup_diagnostic;
+    fetch_discovery_for_issuer, declared_jwks_fetch_policy, issuer_diagnostics;
     crates/registry-coordinator/tests/deployment_surface.rs
     a_remote_http_issuer_is_refused_without_the_opt_in,
-    runtime_reads_the_explicit_http_issuer_opt_in;
+    runtime_reads_the_explicit_http_issuer_opt_in_only_in_development;
     crates/registry-platform-oidc/src/lib.rs
     non_loopback_http_requires_the_named_opt_in_while_loopback_does_not,
     declared_loopback_http_jwks_under_an_https_issuer_is_accepted_without_the_opt_in,
@@ -342,8 +405,11 @@ Enforcement:
   Inspection adds the connection's `requestLink` with the Proposal id filled in, only for a caller
   already authorised to inspect the run; the id grants nothing without BReg's own grant.
   The link must be `https` unless its host is a loopback IP address, the same rule as a connection
-  endpoint; a host name such as `localhost` is refused because name resolution is outside
-  Coordinator's control.
+  endpoint.
+  Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8`
+  address.
+  Coordinator accepts no name as loopback, not even `localhost`, because name resolution is outside
+  its control.
 - The run list finds waits on one Proposal through the keyed wait commitment over the database
   identity and the Proposal id, so neither the database nor the list cursor holds the id in clear.
   Each page reapplies the caller's owner and workflow scope, and a cursor is refused unless its
@@ -961,7 +1027,7 @@ Each residual names the condition under which it applies, its consequence, and t
 
 ### COORDINATOR-RES-13: declared OIDC addresses may be private
 
-- Condition: outside `development-loopback`, the declared issuer and a declared key URI may resolve
+- Condition: the declared issuer and a declared key URI may resolve
   to a private address.
 - Consequence: an operator who declares an internal address points Coordinator at it.
   The residual is shared across products and set out in [Token issuer and key endpoints](../#token-issuer-and-key-endpoints).
@@ -987,7 +1053,7 @@ Each residual names the condition under which it applies, its consequence, and t
     a_cross_origin_jwks_must_use_https_even_under_the_http_opt_in,
     discovered_cross_origin_private_or_loopback_jwks_stays_refused,
     cloud_metadata_is_refused_for_declared_and_discovered_key_endpoints;
-    crates/registry-coordinator/src/access.rs http_issuer_opt_in_has_a_startup_diagnostic. */}
+    crates/registry-coordinator/tests/deployment_surface.rs runtime_reads_the_explicit_http_issuer_opt_in_only_in_development. */}
 
 ### COORDINATOR-RES-16: Proposal wait commitments omit the BReg connection
 

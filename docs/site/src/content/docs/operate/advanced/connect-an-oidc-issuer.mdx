@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-platform
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -42,37 +42,44 @@ accepted origin cannot redirect a key fetch to a different destination.
 
 ## Permit plain HTTP only when required
 
-Without another setting, each product accepts a loopback HTTP issuer only in its own local
-development mode:
+Each product applies its own policy to HTTP issuers and key URIs on loopback.
 
-- The Base Registry Engine (BReg) accepts an issuer or key URI on IPv4 or IPv6 loopback.
-- Casework, Scheduling, Messaging, the Coordinator, BReg Review, and the MCP gateway accept one on
-  loopback only when `listener.tlsTermination` is `development-loopback`.
-- Evidence accepts only the canonical origin `http://127.0.0.1:PORT`, with the JWKS URI on that
-  same origin, and only under the `local` assurance profile. `production` and `evidence-grade`
-  bundles refuse loopback HTTP too.
-- The OID4VCI front end accepts a `http://127.0.0.1:PORT` origin only under
-  `validationMode: supervised-local-development`.
+- Base Registry Engine (BReg), Casework, Scheduling, Messaging, Document Store and Coordinator
+  accept an HTTP issuer or configured key URI on IPv4 or IPv6 loopback in either posture.
+- The BReg and Registry MCP gateways accept loopback HTTP issuers and configured key URIs.
+- BReg Review accepts a loopback HTTP sign-in issuer in either posture.
+- Evidence accepts an HTTP issuer or configured key URI on loopback under any assurance profile.
+  Only the `local` profile permits the explicit HTTP opt-in for a host beyond loopback.
+- The OID4VCI front end accepts a published `http://127.0.0.1:PORT` credential issuer only under
+  `validationMode: supervised-local-development`. It must match the listener address.
 
-For an HTTP issuer elsewhere, set the runtime's `allowInsecureHttp` field beside `issuer`:
+{/* Evidence: crates/registry-platform-config/src/blocks.rs, OidcIssuerConfig;
+    crates/registry-casework/src/config.rs, loopback_issuer_http_needs_no_setting_in_production;
+    crates/registry-coordinator/src/access.rs, AccessConfig::findings;
+    crates/registry-breg-mcp/src/config.rs, resource_server_finding;
+    crates/registry-mcp/src/config.rs, ResourceServerConfigError;
+    crates/registry-breg-review/src/config.rs, SignInConfig;
+    crates/registry-evidence/src/config.rs, deployable_profiles_refuse_non_loopback_http_and_the_insecure_http_opt_in;
+    crates/registry-evidence-oid4vci/src/config.rs, supervised_local_development_findings. */}
+
+For an HTTP issuer elsewhere, set the runtime's `allowInsecureHttp` field beside `issuer`. In a
+runtime file that lists issuers in an issuer set, that is inside the issuer's entry:
 
 ```yaml
 authentication:
   oidc:
-    issuer: http://identity.internal:8080
-    allowInsecureHttp: true
+    issuers:
+      main:
+        issuer: http://identity.internal:8080
+        allowInsecureHttp: true
 ```
 
 The runtime logs a warning at startup while this setting is active. Keep it limited to a trusted
 private network because bearer tokens and issuer metadata have no transport confidentiality on
 plain HTTP. The setting covers the issuer's origin and a JWKS URI you configure. It does not
 permit cloud metadata access, and a `jwks_uri` on another origin learned through discovery must
-still use HTTPS and may not resolve to a private address. Evidence accepts it only under the `local` assurance profile:
-`production` and `evidence-grade` bundles require HTTPS for the issuer and signing keys.
-
-BReg Review has no `allowInsecureHttp` setting. It signs people in only with an HTTPS issuer, or a
-loopback one under `development-loopback`, because it sends its client credentials to the
-issuer's token endpoint.
+still use HTTPS and may not resolve to a private address. Posture-aware OIDC configuration
+requires development for this opt-in.
 
 ## Trust an internal certificate authority
 

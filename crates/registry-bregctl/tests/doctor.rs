@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ffi::OsStr;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
@@ -40,28 +40,16 @@ impl Drop for TestDirectory {
 }
 
 fn run(runtime_config: &Path) -> (u8, String, String) {
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let status = registry_bregctl::run_from(
-        [
-            OsStr::new("bregctl"),
-            OsStr::new("--format"),
-            OsStr::new("json"),
-            OsStr::new("doctor"),
-            OsStr::new("--runtime-config"),
-            runtime_config.as_os_str(),
-        ],
-        &mut stdout,
-        &mut stderr,
-    );
+    let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
+        .args(["--format", "json", "doctor", "--runtime-config"])
+        .arg(runtime_config)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .expect("bregctl starts");
     (
-        if status == std::process::ExitCode::SUCCESS {
-            0
-        } else {
-            1
-        },
-        String::from_utf8(stdout).expect("stdout is UTF-8"),
-        String::from_utf8(stderr).expect("stderr is UTF-8"),
+        output.status.code().expect("bregctl exits normally") as u8,
+        String::from_utf8(output.stdout).expect("stdout is UTF-8"),
+        String::from_utf8(output.stderr).expect("stderr is UTF-8"),
     )
 }
 
@@ -179,11 +167,11 @@ fn doctor_names_a_missing_package_root_distinctly_from_other_configuration_cause
             "apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1\n\
 kind: BRegRuntimeConfig\n\
 listener:\n  bind: 127.0.0.1:0\n\
-identity:\n  environment: development\n  instanceId: generic-registry-1\n  databaseId: generic-registry-db-1\n  databaseInitializationEnvironment: development\n\
+identity:\n  environment: development\n  instanceId: generic-registry-1\n  databaseId: generic-registry-db-1\n\
 secretProviders:\n  file:\n    root: {secrets}\n\
 database:\n  runtimeUrlRef: secret:file/runtime-database-url\n  migrationUrlRef: secret:file/migration-database-url\n  pool:\n    maximumConnections: 8\n  roles:\n    migration: registry_migration\n    runtime: registry_runtime\n\
 package:\n  root: {missing}\n\
-authentication:\n  oidc:\n    issuer: https://issuer.example.invalid\n    audience: generic-registry\n    allowedAlgorithm: ES256\n    accessTokenType: at+jwt\n    scopeClaim: scope\n    scopeSeparator: \" \"\n    allowedClients: [generic-registry-client]\n    maximumTokenLifetimeSeconds: 300\n    leewayMilliseconds: 30000\n    jwksSource:\n      type: discovery\n  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
+authentication:\n  oidc:\n    issuers:\n      primary:\n        issuer: https://issuer.example.invalid\n        audience: generic-registry\n        allowedAlgorithm: ES256\n        accessTokenType: at+jwt\n        scopeClaim: scope\n        scopeSeparator: \" \"\n        allowedClients: [generic-registry-client]\n        maximumTokenLifetimeSeconds: 300\n        leewayMilliseconds: 30000\n        jwksSource:\n          type: discovery\n  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
 audit:\n  hashKeyRef: secret:file/audit-key\n  path: {audit}\n\
 cursor:\n  secretRef: secret:file/cursor-key\n\
 destinations:\n  hooks: {{}}\n",

@@ -17,6 +17,11 @@ name = "postgres_cli"
 path = "tests/postgres_cli.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "provision_postgres"
+path = "tests/provision_postgres.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = ["registry-documents/postgres-test"]
@@ -25,18 +30,24 @@ postgres-test = ["registry-documents/postgres-test"]
 workspace = true
 
 [dependencies]
+registry-rstack-dev.workspace = true
 clap.workspace = true
+registry-cli-report.workspace = true
 registry-documents.workspace = true
 registry-documents-core.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
+registry-platform-provision = { workspace = true, features = ["cli"] }
 registry-platform-yaml.workspace = true
+registry-thunderid-tooling.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
+registry-platform-provision = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-postgres.workspace = true

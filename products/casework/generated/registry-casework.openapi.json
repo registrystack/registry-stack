@@ -886,6 +886,21 @@
         "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
         "type": "string"
       },
+      "HealthStatus": {
+        "description": "Probe answer. Members beside status may be added.",
+        "properties": {
+          "status": {
+            "enum": [
+              "ok"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
       "HolidaySetDocument": {
         "additionalProperties": false,
         "description": "One live, revisioned holiday set supplied separately from deployed policy.",
@@ -2506,6 +2521,47 @@
         "required": [
           "id",
           "label"
+        ],
+        "type": "object"
+      },
+      "ReadyStatus": {
+        "description": "Probe answer. Members beside status may be added.",
+        "properties": {
+          "developmentSettings": {
+            "items": {
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "posture": {
+            "enum": [
+              "development",
+              "production"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ready"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "posture",
+          "developmentSettings"
         ],
         "type": "object"
       },
@@ -5587,6 +5643,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            },
             "description": "Success",
             "headers": {
               "traceparent": {
@@ -5675,6 +5738,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyStatus"
+                }
+              }
+            },
             "description": "Success",
             "headers": {
               "traceparent": {

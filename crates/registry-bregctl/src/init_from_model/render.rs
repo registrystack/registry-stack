@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Renders a plan into the files of a registry project.
 //!
-//! The files are the same six a plain `init` writes, minus the module and
-//! plus the echoed selection, and every value in them comes from the plan:
+//! The files describe the derived registry, its development fixtures and run,
+//! and the echoed selection. Every project-specific value comes from the plan:
 //! this module decides layout and wording only. The YAML is written by hand
 //! rather than serialized, so the project carries the comments a reader
 //! needs and keeps the key order a reader expects.
@@ -34,6 +34,11 @@ pub(crate) fn render(plan: &Plan, selection: &Selection) -> BTreeMap<String, Vec
     BTreeMap::from([
         ("README.md".to_owned(), readme(plan).into_bytes()),
         ("registry.yaml".to_owned(), registry(plan).into_bytes()),
+        ("dev.yaml".to_owned(), development_plan(plan).into_bytes()),
+        (
+            "dev/scenarios.yaml".to_owned(),
+            development_scenarios(plan).into_bytes(),
+        ),
         (
             "runtime.example.yaml".to_owned(),
             runtime_example(plan).into_bytes(),
@@ -51,6 +56,76 @@ pub(crate) fn render(plan: &Plan, selection: &Selection) -> BTreeMap<String, Vec
             selection_echo(selection).into_bytes(),
         ),
     ])
+}
+
+fn development_plan(plan: &Plan) -> String {
+    let mut yaml = Yaml::default();
+    yaml.line(0, "# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json");
+    yaml.line(
+        0,
+        "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1",
+    );
+    yaml.line(0, "kind: RStackDev");
+    yaml.entry(0, "issuer", &base_iri(plan));
+    yaml.line(0, "products:");
+    yaml.line(1, "- product: breg");
+    yaml.line(2, "project: .");
+    yaml.entry(2, "audience", &format!("urn:example:{}", plan.registry_id));
+    yaml.line(0, "people:");
+    let callers = [
+        Some((
+            OPERATOR_PROFILE,
+            operator_principal(plan),
+            operate_scope(plan),
+            "registry-operations",
+        )),
+        (!reader_entities(plan).is_empty()).then(|| {
+            (
+                READER_PROFILE,
+                reader_principal(plan),
+                read_scope(plan),
+                "registry-reporting",
+            )
+        }),
+    ];
+    for (profile, subject, scope, purpose) in callers.into_iter().flatten() {
+        yaml.line(1, &format!("{profile}:"));
+        yaml.entry(2, "subject", &subject);
+        yaml.entry(2, "client", profile);
+        yaml.line(2, "grants:");
+        yaml.line(3, "breg:");
+        yaml.entry(4, "profile", profile);
+        yaml.line(4, &format!("scopes: [{}]", scalar(&scope)));
+        yaml.line(4, "claims:");
+        yaml.entry(5, "registry_purpose", purpose);
+        yaml.line(5, "registry_actor_kind: service");
+    }
+    yaml.line(0, "scenarioFile: dev/scenarios.yaml");
+    yaml.finish()
+}
+
+fn development_scenarios(plan: &Plan) -> String {
+    let mut yaml = Yaml::default();
+    yaml.line(0, "# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json");
+    yaml.line(
+        0,
+        "apiVersion: id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+    );
+    yaml.line(0, "kind: RStackScenarios");
+    yaml.line(0, "scenarios:");
+    yaml.line(1, "- id: read-starter");
+    yaml.line(2, "steps:");
+    yaml.line(3, "- id: list-records");
+    yaml.line(4, "product: breg");
+    yaml.line(4, "as: operator");
+    yaml.line(4, "method: GET");
+    yaml.entry(
+        4,
+        "path",
+        &format!("/v1/records/{}", plan.entities[0].route),
+    );
+    yaml.line(4, "expect: {status: 200}");
+    yaml.finish()
 }
 
 /// The entities the reader profile may read: those not classified
@@ -447,7 +522,7 @@ fn registry(plan: &Plan) -> String {
         0,
         "A token selects one profile per request, and that profile decides everything the \
          request may touch. `operator` may create, read, list, and patch every entity; it is \
-         the profile `bregctl dev` and the journeys use first. Its required scope and purpose \
+         the default profile the schema journeys use first. Its required scope and purpose \
          restrict collection access to the registry operations team. Add `rowBoundaries` when \
          different callers on that team must see different rows. \
          `breg.access.profile-writable-row-boundary` reports a patch that can move a record \
@@ -661,17 +736,10 @@ fn dev_clients(plan: &Plan) -> String {
     );
     yaml.comment(
         0,
-        "Local callers for `bregctl dev`. The stock local identity provider that `dev` \
-         starts beside the registry registers each client below and issues it short-lived \
-         tokens carrying these claims. One client binds each access profile that \
-         tests/journeys.yaml uses, with the claims those journeys expect, so a first start \
-         runs the journeys and serves the package without another file. A maintained \
-         refusal step can name the exact client for its profile with `testBindings`; the \
-         'Explicit teaching clients' section of \
-         https://docs.registrystack.org/reference/bregctl-dev/ documents the closed \
-         binding format. `dev` generates a \
-         fresh private key per client under `.breg/dev/credentials/`; nothing here is a \
-         credential, and none of it belongs in a deployment.",
+        "Authoring inventory for the fixture clients in tests/journeys.yaml. \
+         Use these identities, scopes and purposes to author people and grants in \
+         dev.yaml. The rstack runner reads that plan; bregctl check can still verify \
+         this inventory offline.",
     );
     yaml.line(
         0,
@@ -696,7 +764,7 @@ fn dev_clients(plan: &Plan) -> String {
     yaml.finish()
 }
 
-/// The journeys `bregctl test` and `bregctl dev` replay: one record per
+/// The journeys `bregctl test` and `rstack dev` replay: one record per
 /// entity created by the operator, read back, and listed, then each
 /// non-restricted collection listed by the reader.
 /// The fixture grammar's identifier bound, mirroring the private
@@ -1246,8 +1314,7 @@ fn readme(plan: &Plan) -> String {
     let _ = writeln!(
         out,
         "- `{OPERATOR_PROFILE}` may create, read, list, and patch every entity and every \
-         field. It is the default profile, the one `bregctl dev` and `tests/journeys.yaml` \
-         use first."
+         field. It is the default profile used by `tests/journeys.yaml`."
     );
     if reader_entities(plan).is_empty() {
         let _ = writeln!(
@@ -1271,10 +1338,10 @@ fn readme(plan: &Plan) -> String {
     let _ = writeln!(
         out,
         "\nThis model-derived project declares no lookup grant or selector profile. To add \
-         Evidence later, stop the retained session and run `bregctl dev prepare-source .` to \
+         Evidence later, start the development run and run `bregctl prepare-source . --run-id RUN_ID` to \
          select the existing unique identifier, readable facts, explicit row scope, and a \
          dedicated client. It previews that bounded policy successor, `--apply` prepares it, and \
-         the next `bregctl dev` activates it while retaining records. Then add the source to an \
+         the next `rstack dev` activates it while retaining records. Then add the source to an \
          Evidence project with `bregctl generate evidence-source` and `evidencectl source import`."
     );
     if let Some(note) = sensitive_note(plan) {
@@ -1295,13 +1362,12 @@ fn readme(plan: &Plan) -> String {
     );
     let _ = writeln!(
         out,
-        "| `tests/journeys.yaml` | The requests `bregctl test` and `bregctl dev` replay: one \
+        "| `tests/journeys.yaml` | The requests `bregctl test` and `rstack dev` replay: one \
          record per entity created, read, and listed. |"
     );
     let _ = writeln!(
         out,
-        "| `dev-clients.yaml` | The local callers `bregctl dev` registers with its token \
-         issuer, one per access profile the journeys use. |"
+        "| `dev-clients.yaml` | Fixture identities, scopes and purposes for authoring a development plan. |"
     );
     let _ = writeln!(
         out,
@@ -1322,8 +1388,7 @@ fn readme(plan: &Plan) -> String {
     );
     let _ = writeln!(
         out,
-        "2. Run `bregctl dev .` to start the registry in Docker, replay the journeys, and \
-         serve the API locally."
+        "2. Review `dev.yaml` and run `rstack dev start .` to serve the registry locally."
     );
     let _ = writeln!(
         out,
@@ -1334,7 +1399,12 @@ fn readme(plan: &Plan) -> String {
     let _ = writeln!(
         out,
         "4. Replace `canonicalBaseIri` in `registry.yaml` before you build a production \
-         package; the reserved `.example.invalid` name never resolves."
+         package. The reserved `.example.invalid` name never resolves."
+    );
+    let _ = writeln!(
+        out,
+        "5. Package the unchanged project with `bregctl package --posture development`, or set \
+         `REGISTRY_STACK_POSTURE=development`. Run it unchanged with `rstack dev`."
     );
     out
 }
@@ -1638,6 +1708,8 @@ mod tests {
             vec![
                 "README.md",
                 "dev-clients.yaml",
+                "dev.yaml",
+                "dev/scenarios.yaml",
                 SELECTION_PATH,
                 "registry.yaml",
                 "runtime.example.yaml",
@@ -2037,11 +2109,10 @@ mod tests {
     fn the_dev_clients_bind_the_profiles_the_journeys_use() {
         let (plan, selection) = starter_plan("household");
         let files = render(&plan, &selection);
-        // The header the generated file carries names the explicit binding it
-        // does not generate and the bregctl dev reference section documenting it.
+        // The generated inventory directs readers to the runner plan.
         let header = String::from_utf8(files["dev-clients.yaml"].clone()).expect("UTF-8");
-        assert!(header.contains("testBindings"), "{header}");
-        assert!(header.contains("'Explicit teaching clients'"), "{header}");
+        assert!(header.contains("dev.yaml"), "{header}");
+        assert!(header.contains("verify"), "{header}");
         let clients = yaml(&files, "dev-clients.yaml");
         assert_eq!(
             clients["apiVersion"],
@@ -2097,7 +2168,7 @@ mod tests {
         assert!(readme.contains(&plan.model.revision));
         assert!(readme.contains(&plan.model.repository));
         assert!(readme.contains(&plan.model.license_url));
-        assert!(readme.contains("bregctl dev prepare-source"));
+        assert!(readme.contains("bregctl prepare-source"));
         assert!(readme.contains("declares no lookup grant or selector profile"));
         assert!(
             !readme.contains("assigned by the registry") && !readme.contains("registry assigns"),
@@ -2113,14 +2184,17 @@ mod tests {
         assert!(comments.contains("the caller supplies"), "{comments}");
     }
 
-    /// The guidance names commands that exist: `bregctl dev prepare-source`
+    /// The guidance names commands that exist: `bregctl prepare-source`
     /// for the lookup successor, then the export and import that add the
     /// source to an Evidence project.
     #[test]
     fn the_readme_adds_evidence_with_prepare_source_then_import() {
         let (plan, _) = starter_plan("household");
         let text = readme(&plan);
-        assert!(text.contains("`bregctl dev prepare-source .`"), "{text}");
+        assert!(
+            text.contains("`bregctl prepare-source . --run-id RUN_ID`"),
+            "{text}"
+        );
         assert!(
             text.contains("`bregctl generate evidence-source`"),
             "{text}"

@@ -58,16 +58,17 @@ pub struct BregDev {
 
 impl Drop for BregDev {
     fn drop(&mut self) {
-        let status = self
-            .rstack
-            .command()
-            .args(["stop", &self.run_id])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if !matches!(status, Ok(status) if status.success()) {
+        let stop = |option| {
+            self.rstack
+                .command()
+                .args(["stop", &self.run_id, option])
+                .stdout(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+        if !(stop("--clean") || stop("--recover") && stop("--clean")) {
             eprintln!(
-                "the owned rstack dev fixture did not stop cleanly; run rstack dev stop {}",
+                "the owned rstack dev fixture cleanup failed for run {}",
                 self.run_id
             );
         }
@@ -103,7 +104,6 @@ impl BregDev {
             String::from_utf8_lossy(&init.stderr)
         );
         extend_generated_contact_project(&project);
-        add_minimal_dev_plan(&project);
 
         let started = rstack
             .command()
@@ -169,20 +169,6 @@ impl BregDev {
         guard.origin = origin;
         guard
     }
-}
-
-/// Adds the minimal example's `rstack dev` plan and scenarios, which name the
-/// `editor` person the generated contact project's profile expects.
-fn add_minimal_dev_plan(project: &Path) {
-    let example =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
-    std::fs::copy(example.join("dev.yaml"), project.join("dev.yaml")).expect("copy dev plan");
-    std::fs::create_dir(project.join("dev")).expect("create dev directory");
-    std::fs::copy(
-        example.join("dev/scenarios.yaml"),
-        project.join("dev/scenarios.yaml"),
-    )
-    .expect("copy dev scenarios");
 }
 
 fn required_executable(name: &str) -> PathBuf {
@@ -460,13 +446,14 @@ database:
   migrationUrlRef: secret:env/TEST_ADAPTER_DB_URL
   testOnlyPlaintext: true
 oidc:
-  issuer: {ISSUER}
-  audience: {AUDIENCE}
-  allowInsecureHttp: true
-  jwksSource:
-    type: static
-    documentRef: secret:env/TEST_ADAPTER_JWKS
-allowedClients: [{CLIENT_ID}]
+  issuers:
+    primary:
+      issuer: {ISSUER}
+      audience: {AUDIENCE}
+      jwksSource:
+        type: static
+        documentRef: secret:env/TEST_ADAPTER_JWKS
+      allowedClients: [{CLIENT_ID}]
 allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90

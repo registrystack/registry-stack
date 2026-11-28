@@ -27,6 +27,7 @@ release manifests, and docs.
 |---|---|
 | Understand the product | [registrystack.org](https://registrystack.org/) |
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
+| Run a product locally with `rstack` (`rstack dev start`) | [Run a project with rstack dev](https://docs.registrystack.org/dev/configure/run-a-project-with-rstack-dev/) |
 | Get a first minimum-disclosure assertion | [Evidence Gateway overview](https://docs.registrystack.org/dev/start/evidence-quickstart/) |
 | Build a writable registry backed by PostgreSQL | [Create and query your first registry](https://docs.registrystack.org/dev/tutorials/first-breg/) |
 | Read an unsupported reference deployment on K3s | [Reference Helm chart](deploy/README.md) |

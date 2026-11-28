@@ -16,6 +16,7 @@
 mod accepted;
 mod client;
 pub use accepted::{accepted_binding, AcceptedBindingValidation};
+pub use registry_platform_httputil::PeerPolicy;
 mod config;
 mod error;
 mod model;

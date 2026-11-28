@@ -1,0 +1,252 @@
+{
+  "compact-token-shape": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "empty-bearer-token": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "key-source-unavailable": {
+    "body": {
+      "code": "render.authentication-unavailable",
+      "detail": "Credential verification is unavailable; retry when the issuer keys are available.",
+      "status": 503,
+      "title": "authentication-unavailable",
+      "type": "https://render.registrystack.org/problems/authentication-unavailable"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 503
+  },
+  "legacy-key-mismatch": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "legacy-key-on-seal-route": {
+    "body": {
+      "code": "render.forbidden",
+      "detail": "The legacy API key cannot seal; present an OIDC resource credential with the render:seal scope.",
+      "status": 403,
+      "title": "forbidden",
+      "type": "https://render.registrystack.org/problems/forbidden"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "no-authorization-header": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "non-ascii-authorization-header": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "render-scope-on-seal-route": {
+    "body": {
+      "code": "render.forbidden",
+      "detail": "Obtain a Render resource credential with the render:seal scope.",
+      "status": 403,
+      "title": "forbidden",
+      "type": "https://render.registrystack.org/problems/forbidden"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "repeated-authorization-header": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "scheme-not-bearer": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "scope-on-render-route": {
+    "body": {
+      "code": "render.forbidden",
+      "detail": "Obtain a Render resource credential with the render:render scope.",
+      "status": 403,
+      "title": "forbidden",
+      "type": "https://render.registrystack.org/problems/forbidden"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "seal-client-not-allowed": {
+    "body": {
+      "code": "render.seal-client-not-allowed",
+      "detail": "This client is not allowed to use this document type's seal.",
+      "status": 403,
+      "title": "seal-client-not-allowed",
+      "type": "https://render.registrystack.org/problems/seal-client-not-allowed"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "token-audience": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "token-client": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "token-client-canary": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "token-expired": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "value-shorter-than-the-scheme": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  }
+}

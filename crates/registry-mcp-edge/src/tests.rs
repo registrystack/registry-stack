@@ -260,7 +260,10 @@ fn delegation() -> Delegation {
 fn audit() -> (ToolAuditLog, Buffer) {
     let buffer = Buffer::default();
     (
-        ToolAuditLog::new(AuditWriter::from_line_sink(Box::new(buffer.clone()))),
+        ToolAuditLog::new(AuditWriter::from_line_sink(
+            Box::new(buffer.clone()),
+            registry_platform_config::Posture::Production,
+        )),
         buffer,
     )
 }
@@ -710,8 +713,17 @@ fn resource_server_options_can_be_validated_without_runtime_dependencies() {
     options.resource = "https://gateway.example.test/mcp".to_owned();
     options.issuer = "http://issuer.example.test/".to_owned();
     assert_eq!(options.validate(), Err(ResourceServerError::Issuer));
+    assert_eq!(
+        options.validate_with_posture(registry_platform_config::Posture::Development),
+        Err(ResourceServerError::Issuer)
+    );
     options.allow_insecure_http = true;
-    assert_eq!(options.validate(), Ok(()));
+    assert_eq!(
+        options.validate_with_posture(registry_platform_config::Posture::Development),
+        Ok(())
+    );
+    // Production refuses an insecure issuer even when it is allowed.
+    assert_eq!(options.validate(), Err(ResourceServerError::Issuer));
 
     options.resource = "http://gateway.example.test/mcp".to_owned();
     assert_eq!(options.validate(), Err(ResourceServerError::Resource));

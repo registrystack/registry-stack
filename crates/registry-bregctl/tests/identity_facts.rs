@@ -44,6 +44,12 @@ accessProfiles:
   - registry_record_status
 ";
 
+/// The facts file `path`, read back through the facts reader.
+fn read_facts(path: &Path) -> registry_thunderid_tooling::identity_facts::IdentityFacts {
+    let bytes = std::fs::read(path).unwrap();
+    registry_thunderid_tooling::identity_facts::read("facts", &bytes).unwrap()
+}
+
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/breg/fixtures/generic-operator-workflows")
@@ -82,6 +88,16 @@ fn generate(runtime: &Path, output: &Path) -> (bool, String, String) {
 }
 
 fn generate_for(project: &Path, runtime: &Path, output: &Path) -> (bool, String, String) {
+    generate_with(project, runtime, output, &[])
+}
+
+/// Run the command with `extra` arguments after the required ones.
+fn generate_with(
+    project: &Path,
+    runtime: &Path,
+    output: &Path,
+    extra: &[&str],
+) -> (bool, String, String) {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let status = registry_bregctl::run_from(
@@ -94,7 +110,9 @@ fn generate_for(project: &Path, runtime: &Path, output: &Path) -> (bool, String,
             runtime.as_os_str(),
             OsStr::new("--output"),
             output.as_os_str(),
-        ],
+        ]
+        .into_iter()
+        .chain(extra.iter().map(OsStr::new)),
         &mut stdout,
         &mut stderr,
     );
@@ -155,7 +173,7 @@ fn an_unrestricted_runtime_states_unrestricted_admission() {
 }
 
 #[test]
-fn a_customized_scope_claim_is_refused_and_writes_nothing() {
+fn a_customized_scope_claim_is_declared_as_an_array_claim() {
     let scratch = tempfile::tempdir().unwrap();
     let runtime = runtime(scratch.path());
     let text = std::fs::read_to_string(&runtime).unwrap();
@@ -167,11 +185,41 @@ fn a_customized_scope_claim_is_refused_and_writes_nothing() {
     .unwrap();
     let output = runtime.parent().unwrap().join("facts.yaml");
     let (ok, stdout, stderr) = generate(&runtime, &output);
-    assert!(!ok);
+    assert!(ok, "{stdout}\n{stderr}");
+    let facts = std::fs::read_to_string(&output).unwrap();
+    assert!(
+        facts.contains("  registry_scopes: string-array\n"),
+        "{facts}"
+    );
+}
+
+#[test]
+fn the_default_scope_claim_is_not_declared() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime(scratch.path());
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate(&runtime, &output);
+    assert!(ok, "{stdout}\n{stderr}");
+    let facts = read_facts(&output);
+    assert!(!facts.claims.contains_key("scope"), "{:?}", facts.claims);
+    assert!(facts
+        .access_profiles
+        .iter()
+        .all(|profile| profile.selected_by.is_empty()));
+}
+
+#[test]
+fn a_scope_claim_that_names_a_reserved_token_claim_is_refused_and_writes_nothing() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime(scratch.path());
+    edit_runtime(&runtime, "scopeClaim: scope\n", "scopeClaim: client_id\n");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate(&runtime, &output);
+    assert!(!ok, "{stdout}\n{stderr}");
     assert!(!output.exists());
-    let text = format!("{stdout}{stderr}");
-    assert!(text.contains("scopeClaim"), "{text}");
-    assert!(text.contains("support yet"), "{text}");
+    let report = format!("{stdout}{stderr}");
+    assert!(report.contains("scopeClaim"), "{report}");
+    assert!(report.contains("reserved"), "{report}");
 }
 
 /// A copy of the fixture project whose `evidence-source` profile requires
@@ -268,6 +316,32 @@ fn an_agent_profile_is_left_out_and_named() {
 }
 
 #[test]
+fn a_scopeless_agent_profile_does_not_block_the_facts() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime(scratch.path());
+    edit_runtime(
+        &runtime,
+        "    purpose: registry_purpose\n",
+        "    purpose: registry_purpose\n    trustedActors:\n      generic-registry-client: 00000000-0000-4000-8000-000000000001\n",
+    );
+    let project = project_requiring(runtime.parent().unwrap(), "agent");
+    let registry = project.join("registry.yaml");
+    let text = std::fs::read_to_string(&registry).unwrap();
+    let scoped = "    requiredScopes: [registry:evidence:lookup]\n";
+    assert!(text.contains(scoped));
+    std::fs::write(
+        &registry,
+        text.replace(scoped, "    requiredScopes: unrestricted\n"),
+    )
+    .unwrap();
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate_for(&project, &runtime, &output);
+    assert!(ok, "{stdout}\n{stderr}");
+    let facts = std::fs::read_to_string(&output).unwrap();
+    assert!(!facts.contains("id: evidence-source"), "{facts}");
+}
+
+#[test]
 fn a_profile_bound_by_different_claims_on_different_record_types_requires_each() {
     let scratch = tempfile::tempdir().unwrap();
     let runtime = runtime(scratch.path());
@@ -292,7 +366,7 @@ fn a_profile_bound_by_different_claims_on_different_record_types_requires_each()
 }
 
 #[test]
-fn a_renamed_actor_kind_claim_is_refused_and_writes_nothing() {
+fn a_renamed_actor_kind_claim_is_refused_naming_the_setting_and_writes_nothing() {
     let scratch = tempfile::tempdir().unwrap();
     let runtime = runtime(scratch.path());
     edit_runtime(
@@ -305,8 +379,11 @@ fn a_renamed_actor_kind_claim_is_refused_and_writes_nothing() {
     assert!(!ok, "{stdout}\n{stderr}");
     assert!(!output.exists());
     let report = format!("{stdout}{stderr}");
-    assert!(report.contains("actorKind"), "{report}");
-    assert!(report.contains("support yet"), "{report}");
+    assert!(report.contains("identity-facts.unstatable"), "{report}");
+    assert!(
+        report.contains("authentication.authorityClaims.contextual.actorKind"),
+        "{report}"
+    );
 }
 
 #[test]
@@ -413,4 +490,367 @@ fn a_row_boundary_on_a_boolean_or_integer_field_is_refused_and_writes_nothing() 
         );
         assert!(!output.exists(), "{kind}");
     }
+}
+
+/// The runtime with a second issuer entry, `partners`, beside `primary`.
+fn two_issuer_runtime(root: &Path) -> PathBuf {
+    let runtime = runtime(root);
+    edit_runtime(
+        &runtime,
+        "  authorityClaims:\n",
+        "      partners:\n        issuer: https://partners.example.invalid\n        audience: urn:example:partners\n        allowedAlgorithm: ES256\n        scopeSeparator: \" \"\n        allowedClients: [partner-client]\n        maximumTokenLifetimeSeconds: 300\n        leewayMilliseconds: 30000\n        jwksSource:\n          type: discovery\n  authorityClaims:\n",
+    );
+    runtime
+}
+
+#[test]
+fn two_entries_without_an_issuer_are_refused_and_write_nothing() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = two_issuer_runtime(scratch.path());
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate(&runtime, &output);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(!output.exists());
+    let report = format!("{stdout}{stderr}");
+    assert!(
+        report.contains("identity.facts.issuer-required"),
+        "{report}"
+    );
+    assert!(report.contains("--issuer"), "{report}");
+    assert!(!report.contains("issuer.example.invalid"), "{report}");
+}
+
+#[test]
+fn an_issuer_that_names_no_entry_is_refused_and_writes_nothing() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = two_issuer_runtime(scratch.path());
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) =
+        generate_with(&fixture(), &runtime, &output, &["--issuer", "missing"]);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(!output.exists());
+    let report = format!("{stdout}{stderr}");
+    assert!(report.contains("identity.facts.unknown-issuer"), "{report}");
+}
+
+#[test]
+fn a_named_issuer_states_the_facts_of_that_entry() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = two_issuer_runtime(scratch.path());
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) =
+        generate_with(&fixture(), &runtime, &output, &["--issuer", "partners"]);
+    assert!(ok, "{stdout}\n{stderr}");
+    let facts = std::fs::read_to_string(&output).unwrap();
+    assert!(
+        facts.contains("issuer: https://partners.example.invalid\n"),
+        "{facts}"
+    );
+    assert!(
+        facts.contains("audience: urn:example:partners\n"),
+        "{facts}"
+    );
+    assert!(facts.contains("- partner-client\n"), "{facts}");
+    assert!(!facts.contains("generic-registry-client"), "{facts}");
+}
+
+#[test]
+fn one_entry_needs_no_issuer_and_may_be_named() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime(scratch.path());
+    let unnamed = runtime.parent().unwrap().join("unnamed.yaml");
+    let (ok, stdout, stderr) = generate(&runtime, &unnamed);
+    assert!(ok, "{stdout}\n{stderr}");
+    let named = runtime.parent().unwrap().join("named.yaml");
+    let (ok, stdout, stderr) =
+        generate_with(&fixture(), &runtime, &named, &["--issuer", "primary"]);
+    assert!(ok, "{stdout}\n{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&unnamed).unwrap(),
+        std::fs::read_to_string(&named).unwrap()
+    );
+}
+
+#[test]
+fn an_entry_that_does_not_admit_a_profiles_client_leaves_the_profile_out_of_its_facts() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = two_issuer_runtime(scratch.path());
+    let project = project_requiring(runtime.parent().unwrap(), "human");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) =
+        generate_with(&project, &runtime, &output, &["--issuer", "partners"]);
+    assert!(ok, "{stdout}\n{stderr}");
+    let facts = std::fs::read_to_string(&output).unwrap();
+    assert!(!facts.contains("id: evidence-source"), "{facts}");
+    assert!(facts.contains("id: operator"), "{facts}");
+}
+
+#[test]
+fn an_issuer_on_another_artifact_is_refused() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime(scratch.path());
+    let output = scratch.path().join("openapi");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let status = registry_bregctl::run_from(
+        [
+            OsStr::new("bregctl"),
+            OsStr::new("generate"),
+            OsStr::new("openapi"),
+            fixture().as_os_str(),
+            OsStr::new("--output"),
+            output.as_os_str(),
+            OsStr::new("--issuer"),
+            OsStr::new("primary"),
+        ],
+        &mut stdout,
+        &mut stderr,
+    );
+    assert_ne!(status, std::process::ExitCode::SUCCESS);
+    let report = format!(
+        "{}{}",
+        String::from_utf8(stdout).unwrap(),
+        String::from_utf8(stderr).unwrap()
+    );
+    assert!(
+        report.contains("--issuer applies to generate identity-facts"),
+        "{report}"
+    );
+    assert!(!output.exists());
+    assert!(runtime.exists());
+}
+
+/// The runtime with its scope claim renamed to `name`.
+fn runtime_with_scope_claim(root: &Path, name: &str) -> PathBuf {
+    let runtime = runtime(root);
+    edit_runtime(
+        &runtime,
+        "scopeClaim: scope\n",
+        &format!("scopeClaim: {name}\n"),
+    );
+    runtime
+}
+
+#[test]
+fn a_renamed_scope_claim_selects_each_profile_by_its_scopes() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime_with_scope_claim(scratch.path(), "registry_scopes");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate(&runtime, &output);
+    assert!(ok, "{stdout}\n{stderr}");
+    let facts = read_facts(&output);
+    assert_eq!(facts.access_profiles.len(), 3);
+    for profile in &facts.access_profiles {
+        assert_eq!(
+            profile.selected_by,
+            std::collections::BTreeMap::from([(
+                "registry_scopes".to_owned(),
+                profile.scopes.clone()
+            )]),
+            "{}",
+            profile.id
+        );
+    }
+}
+
+#[test]
+fn a_scope_claim_the_facts_reader_reserves_is_refused_naming_the_setting() {
+    for reserved in ["scp", "roles", "registry-scopes"] {
+        let scratch = tempfile::tempdir().unwrap();
+        let runtime = runtime_with_scope_claim(scratch.path(), reserved);
+        let output = runtime.parent().unwrap().join("facts.yaml");
+        let (ok, stdout, stderr) = generate(&runtime, &output);
+        assert!(!ok, "{reserved}: {stdout}\n{stderr}");
+        assert!(!output.exists());
+        let report = format!("{stdout}{stderr}")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            report.contains("authentication.oidc.issuers.primary.scopeClaim"),
+            "{reserved}: {report}"
+        );
+        assert!(
+            report.contains("a name with characters other than letters, digits and `_`"),
+            "{reserved}: {report}"
+        );
+    }
+}
+
+/// An identity deployment that grants `generic-registry-client` the profile
+/// `record-reader` and states `scopes` under the renamed scope claim.
+fn deployment_stating(scopes: &str) -> String {
+    format!(
+        "apiVersion: id.registrystack.org/formats/platform/identity-deployment/v1
+kind: PlatformIdentityDeployment
+organizationUnit:
+  handle: registry
+  name: Registry
+  description: Registry Stack deployment
+clients:
+  - id: generic-registry-client
+    publicJwksFile: keys/client.jwks.json
+    grants:
+      - product: breg
+        accessProfiles: [record-reader]
+    claims:
+      registry_actor_kind: service
+      registry_principal: reader-one
+      registry_record_status: open
+      registry_scopes: {scopes}
+"
+    )
+}
+
+fn run_generator(
+    facts: &Path,
+    deployment: &str,
+) -> Result<(), registry_thunderid_tooling::ToolingError> {
+    let facts_text = std::fs::read_to_string(facts).unwrap();
+    let key = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../registry-thunderid-tooling/fixtures/identity/keys/case-portal.jwks.json"),
+    )
+    .unwrap();
+    let jwks = std::collections::BTreeMap::from([("keys/client.jwks.json".to_owned(), key)]);
+    let sources = [registry_thunderid_tooling::identity_generate::Source {
+        label: "breg",
+        bytes: facts_text.as_bytes(),
+    }];
+    registry_thunderid_tooling::identity_generate::generate(
+        &registry_thunderid_tooling::identity_generate::Inputs {
+            deployment: registry_thunderid_tooling::identity_generate::Source {
+                label: "deployment.yaml",
+                bytes: deployment.as_bytes(),
+            },
+            facts: &sources,
+            public_jwks: &jwks,
+        },
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn the_generator_refuses_a_renamed_scope_claim_that_exceeds_the_grants() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime_with_scope_claim(scratch.path(), "registry_scopes");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate(&runtime, &output);
+    assert!(ok, "{stdout}\n{stderr}");
+
+    run_generator(&output, &deployment_stating("[registry:generic:read]"))
+        .expect("the granted scope is accepted");
+    let refused = run_generator(&output, &deployment_stating("[registry:generic:operate]"))
+        .expect_err("a scope the grants do not give is refused");
+    let report = refused.report().expect("a report").diagnostics().to_vec();
+    assert!(
+        report
+            .iter()
+            .any(|diagnostic| diagnostic.code == "identity.deployment.scope-claim-exceeds-grants"),
+        "{report:?}"
+    );
+
+    // An extra scope that selects no other profile is refused by that check alone.
+    let extra = run_generator(
+        &output,
+        &deployment_stating("[registry:generic:read, registry:other:extra]"),
+    )
+    .expect_err("an extra scope is refused");
+    let codes: Vec<String> = extra
+        .report()
+        .expect("a report")
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.clone())
+        .collect();
+    assert_eq!(codes, ["identity.deployment.scope-claim-exceeds-grants"]);
+}
+
+#[test]
+fn a_single_entry_refuses_a_requester_client_it_does_not_list_without_naming_it() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime(scratch.path());
+    edit_runtime(
+        &runtime,
+        "allowedClients: [generic-registry-client]",
+        "allowedClients: [other-client]",
+    );
+    let project = project_requiring(runtime.parent().unwrap(), "human");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate_for(&project, &runtime, &output);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(!output.exists());
+    assert!(
+        format!("{stdout}{stderr}").contains("identity-facts.unstatable"),
+        "{stdout}{stderr}"
+    );
+    let report = format!("{stdout}{stderr}")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        report.contains(
+            "names a requester client that authentication.oidc.issuers.primary.allowedClients does not admit"
+        ),
+        "{report}"
+    );
+    assert!(!report.contains("generic-registry-client"), "{report}");
+    assert!(!report.contains("other-client"), "{report}");
+}
+
+#[test]
+fn a_requester_client_no_entry_lists_is_refused() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = two_issuer_runtime(scratch.path());
+    edit_runtime(
+        &runtime,
+        "allowedClients: [generic-registry-client]",
+        "allowedClients: [other-client]",
+    );
+    let project = project_requiring(runtime.parent().unwrap(), "human");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) =
+        generate_with(&project, &runtime, &output, &["--issuer", "partners"]);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(!output.exists());
+    let report = format!("{stdout}{stderr}");
+    assert!(report.contains("identity-facts.unstatable"), "{report}");
+    assert!(report.contains("authentication.oidc.issuers"), "{report}");
+    assert!(!report.contains("generic-registry-client"), "{report}");
+}
+
+#[test]
+fn an_unrestricted_entry_does_not_list_a_named_requester_client() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = two_issuer_runtime(scratch.path());
+    edit_runtime(
+        &runtime,
+        "allowedClients: [generic-registry-client]",
+        "allowedClients: unrestricted",
+    );
+    let project = project_requiring(runtime.parent().unwrap(), "human");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) =
+        generate_with(&project, &runtime, &output, &["--issuer", "partners"]);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(!output.exists());
+    let report = format!("{stdout}{stderr}");
+    assert!(report.contains("identity-facts.unstatable"), "{report}");
+    assert!(report.contains("authentication.oidc.issuers"), "{report}");
+}
+
+#[test]
+fn a_single_unrestricted_entry_does_not_list_a_named_requester_client() {
+    let scratch = tempfile::tempdir().unwrap();
+    let runtime = runtime(scratch.path());
+    edit_runtime(
+        &runtime,
+        "allowedClients: [generic-registry-client]",
+        "allowedClients: unrestricted",
+    );
+    let project = project_requiring(runtime.parent().unwrap(), "human");
+    let output = runtime.parent().unwrap().join("facts.yaml");
+    let (ok, stdout, stderr) = generate_for(&project, &runtime, &output);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(!output.exists());
 }

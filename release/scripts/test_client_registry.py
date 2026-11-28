@@ -92,7 +92,7 @@ class ClientRegistryTest(unittest.TestCase):
         include_messaging: bool = False,
         include_scheduling: bool = False,
     ) -> None:
-        definition = self.module.client_definition(client)
+        definition = self.module.client_definition(client, self.version)
         optional = {
             f"{definition.npm_root_package}-{platform}": self.version
             for platform, _binary in self.module.npm_platforms(
@@ -325,7 +325,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_v0_39_rejects_a_root_package_that_exposes_scheduling(self) -> None:
         self.version = "0.39.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(self.directory, self.version, "stack")[-1]
         write_npm_package(
             root,
@@ -392,7 +392,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_0_29_rejects_a_root_package_that_exposes_casework(self) -> None:
         self.version = "0.29.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(
             self.directory, self.version, "stack"
         )[-1]
@@ -416,7 +416,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_selected_casework_requires_its_root_facade(self) -> None:
         self.version = "0.30.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(
             self.directory, self.version, "stack"
         )[-1]
@@ -439,7 +439,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_selected_messaging_requires_its_root_facade(self) -> None:
         self.version = "0.38.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(self.directory, self.version, "stack")[-1]
         write_npm_package(
             root,
@@ -465,7 +465,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_selected_scheduling_requires_its_root_facade(self) -> None:
         self.version = "0.40.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(self.directory, self.version, "stack")[-1]
         write_npm_package(
             root,
@@ -690,6 +690,58 @@ class ClientRegistryTest(unittest.TestCase):
             )
 
 
+class WebPackageTest(unittest.TestCase):
+    def test_web_archive_has_exact_identity_and_excludes_source_fixtures(self) -> None:
+        registry = load_module()
+        version = "0.49.0"
+        metadata = {
+            "name": registry.WEB_NPM_NAME, "version": version, "license": "Apache-2.0",
+            "types": "./dist/browser.d.ts", "bin": {"registry-generate": "./registry-generate.js"},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / registry.web_npm_tarball(version)
+
+            def write_archive(extra: str, *, omit: str | None = None) -> None:
+                files = {
+                    "package/package.json": json.dumps(metadata).encode(),
+                    "package/LICENSE": b"", "package/README.md": b"",
+                    "package/dist/browser.js": b"", "package/dist/browser.d.ts": b"",
+                    "package/registry-generate.js": b"", "package/dist/generate-project.js": b"",
+                    "package/dist/generate.js": b"", "package/dist/generate-service.js": b"",
+                    extra: b"",
+                }
+                with tarfile.open(path, "w:gz") as archive:
+                    for name, payload in files.items():
+                        if name == omit:
+                            continue
+                        member = tarfile.TarInfo(name)
+                        member.size = len(payload)
+                        archive.addfile(member, io.BytesIO(payload))
+
+            write_archive("package/dist/core.js")
+            self.assertEqual(path, registry.validate_web_npm(directory, version))
+            with self.assertRaisesRegex(registry.ClientRegistryError, "outside the release roster"):
+                registry.validate_web_npm(directory, "0.48.0")
+            write_archive("package/tests/fixtures/project.json")
+            with self.assertRaisesRegex(registry.ClientRegistryError, "invalid web client payload"):
+                registry.validate_web_npm(directory, version)
+            for missing in ("package/registry-generate.js", "package/dist/generate-project.js"):
+                with self.subTest(missing=missing):
+                    write_archive("package/dist/core.js", omit=missing)
+                    with self.assertRaisesRegex(registry.ClientRegistryError, "invalid web client payload"):
+                        registry.validate_web_npm(directory, version)
+            metadata["bin"] = {"registry-generate": "./dist/generate-project.js"}
+            write_archive("package/dist/core.js")
+            with self.assertRaisesRegex(registry.ClientRegistryError, "invalid web client metadata"):
+                registry.validate_web_npm(directory, version)
+            metadata["bin"] = {"registry-generate": "./registry-generate.js"}
+            metadata["version"] = "0.48.0"
+            write_archive("package/dist/core.js")
+            with self.assertRaisesRegex(registry.ClientRegistryError, "invalid web client metadata"):
+                registry.validate_web_npm(directory, version)
+
+
 class BindOptionalDependenciesTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
@@ -835,11 +887,11 @@ class BindStackCompatibilityMetadataTest(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.directory = Path(self.temporary_directory.name)
-        self.version = "0.44.0-nightly.20261023.fixture"
+        self.version = "0.49.0-nightly.20261127.fixture"
         self.package_json = self.directory / "package.json"
         self.package_json.write_text(
             json.dumps(
-                {"name": "@registrystack/client", "version": self.version},
+                {"name": "@registrystack/client-node", "version": self.version},
                 indent=2,
             )
             + "\n",
@@ -930,17 +982,17 @@ class ClientReadmeInstallTest(unittest.TestCase):
                 stripped = line.strip()
                 where = f"{readme.name}:{number}"
                 if stripped.startswith("npm install ") and "@registrystack/" in stripped:
-                    self.assertIn("@registrystack/client@", stripped, where)
+                    self.assertIn("@registrystack/client-node@", stripped, where)
                 if stripped.startswith("python -m pip install ") and "registry-" in stripped:
                     self.assertIn("registry-stack-client==", stripped, where)
 
     def test_every_binding_readme_points_at_its_unified_namespace(self) -> None:
         expected = {
-            "registry-breg-client-node": "@registrystack/client",
-            "registry-discovery-client-node": "@registrystack/client",
-            "registry-evidence-client-node": "@registrystack/client",
-            "registry-messaging-client-node": "@registrystack/client",
-            "registry-scheduling-client-node": "@registrystack/client",
+            "registry-breg-client-node": "@registrystack/client-node",
+            "registry-discovery-client-node": "@registrystack/client-node",
+            "registry-evidence-client-node": "@registrystack/client-node",
+            "registry-messaging-client-node": "@registrystack/client-node",
+            "registry-scheduling-client-node": "@registrystack/client-node",
             "registry-breg-client-py": "registry-stack-client",
             "registry-casework-client-py": "registry-stack-client",
             "registry-discovery-client-py": "registry-stack-client",

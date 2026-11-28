@@ -569,7 +569,10 @@ async fn a_post_commit_callback_audit_refusal_retries_without_duplicate_history(
     let id = deployment.sent().await;
     let reference = reference_for(id);
     let sink = RefusingAuditSink::after(1);
-    let audit = test_audit(AuditWriter::from_line_sink(Box::new(sink.clone())));
+    let audit = test_audit(AuditWriter::from_line_sink(
+        Box::new(sink.clone()),
+        registry_platform_config::Posture::Production,
+    ));
     let app = deployment.harness.app_with_audit(audit).await;
 
     let (status, problem) = send_app(
@@ -622,9 +625,10 @@ async fn a_receipt_audit_failure_names_whether_the_receipt_was_applied() {
 
     let unavailable = record_receipt(
         &deployment.harness.store,
-        &test_audit(AuditWriter::from_line_sink(Box::new(
-            RefusingAuditSink::after(0),
-        ))),
+        &test_audit(AuditWriter::from_line_sink(
+            Box::new(RefusingAuditSink::after(0)),
+            registry_platform_config::Posture::Production,
+        )),
         "sms-gateway",
         &receipt,
     )
@@ -638,9 +642,10 @@ async fn a_receipt_audit_failure_names_whether_the_receipt_was_applied() {
 
     let unconfirmed = record_receipt(
         &deployment.harness.store,
-        &test_audit(AuditWriter::from_line_sink(Box::new(
-            RefusingAuditSink::after(1),
-        ))),
+        &test_audit(AuditWriter::from_line_sink(
+            Box::new(RefusingAuditSink::after(1)),
+            registry_platform_config::Posture::Production,
+        )),
         "sms-gateway",
         &receipt,
     )

@@ -201,11 +201,17 @@ for arg in "$@"; do
   case "$arg" in
     bundle-check) step="bundle-check" ;;
     evaluate|bundle-evaluate) step="evaluate" ;;
+    bundle-record-fixture-facts) step="record-facts" ;;
   esac
 done
 
 if [ "$step" = "bundle-check" ]; then
   printf '{{"packageDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","requirements":[{{"id":"urn:example:stub:record-active","configurationRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}}]}}\n'
+  exit 0
+fi
+
+if [ "$step" = "record-facts" ]; then
+  printf '{{"apiVersion":"id.registrystack.org/internal/evidence/fixture-fact-record/v1alpha1","kind":"EvidenceFixtureFactRecord","evaluatedCases":%s,"matchedFacts":{{}}}}\n' "$FIXTURE_CASES"
   exit 0
 fi
 
@@ -222,6 +228,155 @@ exit 0
     fs::set_permissions(&path, permissions).expect("chmod stub");
     executable::wait_until_executable(&path);
     path
+}
+
+#[test]
+fn runtime_children_receive_the_resolved_posture() {
+    let workspace = TempDir::new().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    let project = root.join("project");
+    let output = sqlite_new(&project, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let target = project.join("local-target.yaml");
+    let fixture = project.join("fixtures/record-status.yaml");
+    let fixture_text = fs::read_to_string(&fixture).unwrap();
+    let fixture_cases = fixture_text
+        .lines()
+        .filter(|line| line.trim_start().starts_with("- id: "))
+        .count()
+        .to_string();
+    if !fixture_text.contains("coequalAcceptanceDefinition: true") {
+        assert!(fixture_text.contains("syntheticOnly: true"));
+        fs::write(
+            fixture,
+            fixture_text.replacen(
+                "syntheticOnly: true",
+                "syntheticOnly: true\ncoequalAcceptanceDefinition: true",
+                1,
+            ),
+        )
+        .unwrap();
+    }
+    let runtime = root.join("runtime.yaml");
+    fs::write(&runtime, "synthetic runtime input").unwrap();
+    let stub = write_stub_evidence(&root);
+    let log = root.join("argv.log");
+
+    for (source, posture) in [
+        ("flag", "development"),
+        ("environment", "development"),
+        ("default", "production"),
+    ] {
+        let candidate = root.join(format!("candidate-{source}"));
+        for (args, expected_children) in [
+            (
+                vec!["check", path(&project), "--target", path(&target)],
+                &["bundle-check"][..],
+            ),
+            (
+                vec![
+                    "package",
+                    path(&project),
+                    "--target",
+                    path(&target),
+                    "--output",
+                    path(&candidate),
+                ],
+                &["bundle-check"][..],
+            ),
+            (
+                vec!["test", path(&project), "--target", path(&target)],
+                &["bundle-check", "bundle-evaluate"][..],
+            ),
+            (
+                vec![
+                    "fixtures",
+                    "record-facts",
+                    path(&project),
+                    "--target",
+                    path(&target),
+                    "--fixture",
+                    "fixtures/record-status.yaml",
+                    "--write",
+                ],
+                &[
+                    "bundle-check",
+                    "bundle-record-fixture-facts",
+                    "bundle-evaluate",
+                ][..],
+            ),
+            (
+                vec!["doctor", "--runtime-config", path(&runtime)],
+                &["check"][..],
+            ),
+        ] {
+            fs::write(&log, "").unwrap();
+            let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
+            command
+                .args(&args)
+                .env_remove("REGISTRY_STACK_POSTURE")
+                .env("EVIDENCE_BIN", &stub)
+                .env("EVIDENCE_STUB_LOG", &log)
+                .env("CASES", "1")
+                .env("FIXTURE_CASES", &fixture_cases);
+            match source {
+                "flag" => {
+                    command.args(["--posture", posture]);
+                }
+                "environment" => {
+                    command.env("REGISTRY_STACK_POSTURE", posture);
+                }
+                _ => {}
+            }
+            let output = command.output().unwrap();
+            let calls = fs::read_to_string(&log).unwrap();
+            let delegated: Vec<_> = calls
+                .lines()
+                .filter(|line| {
+                    line.split_whitespace()
+                        .next()
+                        .is_some_and(|child| child.starts_with("bundle-") || child == "check")
+                })
+                .collect();
+            for expected in expected_children {
+                assert!(
+                    delegated
+                        .iter()
+                        .any(|line| line.split_whitespace().next() == Some(expected)),
+                    "{args:?}, {source}: missing {expected}: {calls} {}",
+                    stderr(&output)
+                );
+            }
+            assert!(
+                delegated.iter().all(|line| {
+                    line.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .windows(2)
+                        .any(|args| args == ["--posture", posture])
+                }),
+                "{args:?}, {source}: {calls} {}",
+                stderr(&output)
+            );
+        }
+    }
+
+    fs::write(&log, "").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args([
+            "check",
+            path(&project),
+            "--target",
+            path(&target),
+            "--production",
+        ])
+        .env("REGISTRY_STACK_POSTURE", "development")
+        .env("EVIDENCE_BIN", &stub)
+        .env("EVIDENCE_STUB_LOG", &log)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("platform.posture.conflict"));
+    assert!(fs::read_to_string(&log).unwrap().is_empty());
 }
 
 #[test]
@@ -385,6 +540,8 @@ fn the_generated_openapi_starter_passes_check_and_test() {
     let checked = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(["check", path(&project), "--target"])
         .arg(project.join("local-target.yaml"))
+        .args(["--posture", "development"])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env("EVIDENCE_BIN", &evidence)
         .output()
         .expect("check the OpenAPI starter");
@@ -392,7 +549,8 @@ fn the_generated_openapi_starter_passes_check_and_test() {
     assert!(checked.status.success(), "{printed}");
 
     let tested = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
-        .args(["test", path(&project)])
+        .args(["test", path(&project), "--posture", "development"])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--evidence-bin")
         .arg(&evidence)
         .output()
@@ -500,6 +658,8 @@ fn the_generated_sqlite_starter_target_binds_its_extract_profile() {
     let checked = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(["check", path(&project), "--target"])
         .arg(project.join("local-target.yaml"))
+        .args(["--posture", "development"])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env("EVIDENCE_BIN", evidence)
         .output()
         .expect("check the starter against its local target");
@@ -533,6 +693,8 @@ fn a_fresh_starter_packages_against_its_new_local_target() {
     let packaged = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(["package", path(&project), "--target", path(&target)])
         .args(["--output", path(&root.join("package"))])
+        .args(["--posture", "development"])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env("EVIDENCE_BIN", evidence)
         .output()
         .expect("package the starter");

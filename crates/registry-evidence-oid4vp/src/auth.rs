@@ -9,11 +9,14 @@
 
 use std::{sync::Arc, time::Duration};
 
-use registry_platform_authcommon::parse_bearer_token;
-use registry_platform_config::{JwksSource, SecretResolver};
+use registry_platform_authcommon::{
+    parse_bearer_token, BearerParseError, DeclaredScope, FailedCheck,
+};
+use registry_platform_config::{JwksSource, Posture, SecretResolver};
 use registry_platform_oidc::{
-    parse_static_jwks, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
-    OidcError, TokenVerifier, TokenVerifierConfig,
+    parse_static_jwks, refuses_development_assertion, IssuerNetworkPolicy, JwksFetcher,
+    JwksFetcherConfig, OidcDiscoveryConfig, OidcError, PeerPolicy, TokenVerifier,
+    TokenVerifierConfig,
 };
 
 use crate::{config::TokenIssuerConfig, session::Principal};
@@ -24,12 +27,23 @@ const ACCESS_TOKEN_TYPES: [&str; 2] = ["at+jwt", "application/at+jwt"];
 /// Why a request was not authenticated.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum AuthError {
-    #[error("the request carried no bearer credential")]
-    Missing,
+    /// The caller's credential was refused, under the check that refused it.
     #[error("the presented credential was refused")]
-    Refused,
+    Refused(FailedCheck),
     #[error("the issuer key set is unavailable")]
     KeySource,
+}
+
+impl AuthError {
+    /// The check the request failed.
+    #[must_use]
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub const fn failed_check(&self) -> FailedCheck {
+        match self {
+            Self::Refused(check) => *check,
+            Self::KeySource => FailedCheck::KeySourceUnavailable,
+        }
+    }
 }
 
 /// Why an authenticator could not be built at startup.
@@ -41,15 +55,20 @@ pub enum AuthSetupError {
     Discovery,
     #[error("the static key set secret could not be read")]
     StaticKeySecret,
-    #[error("the static key set is not a valid JWKS")]
-    StaticKeySet,
+    /// The validator's account of the rule the document broke. It names a key
+    /// position and a member, never a value.
+    #[error("the static key set is not a valid JWKS: {0}")]
+    StaticKeySet(String),
 }
 
 /// Verifies bearer tokens from one issuer and extracts the caller.
 pub struct TokenAuthenticator {
+    posture: Posture,
     verifier: TokenVerifier,
     issuer: String,
     required_scope: String,
+    /// The claim the verifier reads scopes from.
+    scope_claim: String,
 }
 
 impl std::fmt::Debug for TokenAuthenticator {
@@ -66,6 +85,7 @@ impl TokenAuthenticator {
     pub async fn build(
         config: &TokenIssuerConfig,
         secrets: &SecretResolver,
+        posture: Posture,
     ) -> Result<Self, AuthSetupError> {
         let provider = &config.provider;
         let issuer = provider.issuer.to_string();
@@ -96,12 +116,12 @@ impl TokenAuthenticator {
                     policy,
                 )
             }
-            JwksSource::Static { document_ref } => {
+            JwksSource::Static { document_ref } | JwksSource::TestIssuer { document_ref } => {
                 let document = secrets
                     .resolve(document_ref)
                     .map_err(|_| AuthSetupError::StaticKeySecret)?;
                 let jwks = parse_static_jwks(document.expose_secret())
-                    .map_err(|_| AuthSetupError::StaticKeySet)?;
+                    .map_err(|error| AuthSetupError::StaticKeySet(error.to_string()))?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -124,28 +144,40 @@ impl TokenAuthenticator {
         if let Some(client) = &config.allowed_client {
             profile = profile.with_allowed_clients(vec![client.clone()]);
         }
+        let scope_claim = profile.scope_claim.clone();
         Ok(Self {
+            posture,
             verifier: TokenVerifier::new(profile, Arc::new(fetcher)),
             issuer,
             required_scope: config.required_scope.clone(),
+            scope_claim,
         })
+    }
+
+    /// What a scope refusal may say about this gate: the configured claim and
+    /// the configured scope, never a value the token carried.
+    #[must_use]
+    pub fn declared_scope(&self) -> DeclaredScope {
+        DeclaredScope::new(&self.scope_claim).with_required_scope(&self.required_scope)
     }
 
     /// Authenticate the value of an `Authorization` header.
     pub async fn authenticate(&self, authorization: Option<&str>) -> Result<Principal, AuthError> {
-        let header = authorization.ok_or(AuthError::Missing)?;
-        let token = parse_bearer_token(header).map_err(|_| AuthError::Missing)?;
+        let header = authorization.ok_or(AuthError::Refused(FailedCheck::CredentialMissing))?;
+        let token = parse_bearer_token(header).map_err(|error| match error {
+            BearerParseError::InvalidScheme => AuthError::Refused(FailedCheck::CredentialMissing),
+            _ => AuthError::Refused(FailedCheck::CredentialMalformed),
+        })?;
         let verified = match self.verifier.verify(token).await {
             Ok(verified) => verified,
-            Err(error) if is_key_source_failure(&error) => {
-                tracing::warn!(
-                    target: "registry_evidence_oid4vp::auth",
-                    "the issuer key set is unavailable"
-                );
-                return Err(AuthError::KeySource);
-            }
-            Err(_) => return Err(AuthError::Refused),
+            Err(error) if is_key_source_failure(&error) => return Err(AuthError::KeySource),
+            Err(error) => return Err(AuthError::Refused(error.failed_check())),
         };
+        if self.posture == Posture::Production
+            && refuses_development_assertion(&verified, PeerPolicy::RefuseDevelopmentPeer)
+        {
+            return Err(AuthError::Refused(FailedCheck::TaskGrantClaims));
+        }
         // The scope gate runs on the verified token's scope set: a correctly
         // signed token for this audience without the scope grants nothing.
         if !verified
@@ -153,7 +185,7 @@ impl TokenAuthenticator {
             .iter()
             .any(|scope| scope == &self.required_scope)
         {
-            return Err(AuthError::Refused);
+            return Err(AuthError::Refused(FailedCheck::Scope));
         }
         let client = match verified.matched_client_id() {
             Ok(Some(client)) => Some(client.to_owned()),
@@ -162,12 +194,12 @@ impl TokenAuthenticator {
                 .azp
                 .clone()
                 .or_else(|| verified.claims.client_id.clone()),
-            Err(_) => return Err(AuthError::Refused),
+            Err(_) => return Err(AuthError::Refused(FailedCheck::TokenClient)),
         }
         .filter(|client| !client.is_empty());
         let subject = verified.claims.sub.clone().filter(|sub| !sub.is_empty());
         if client.is_none() && subject.is_none() {
-            return Err(AuthError::Refused);
+            return Err(AuthError::Refused(FailedCheck::TokenClient));
         }
         Ok(Principal {
             issuer: verified

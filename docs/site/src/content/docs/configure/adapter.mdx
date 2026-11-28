@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -20,6 +20,17 @@ This page covers the artifacts you write, the contract between a route and a fac
 
 [Adapter route language](../adapter-routes/) covers the routes themselves.
 [Adapter ingestion jobs](../adapter-jobs/) covers jobs and the webhook trigger.
+
+## Deployment posture
+
+Adapter defaults to production. To run a laptop configuration that uses development
+settings, start with `rstack dev` or declare development with
+`REGISTRY_STACK_POSTURE=development` or `--posture development`.
+Production payment callers refuse responses marked by development peers.
+Use one posture across a deployment.
+
+{/* Evidence: crates/registry-adapter/src/main.rs resolve_posture;
+    crates/registry-adapter/src/payments/http.rs PreparedPayments. */}
 
 ## Artifacts
 
@@ -671,9 +682,10 @@ Response custody and terminal audit remain one PostgreSQL transaction.
 {/* Evidence: crates/registry-adapter/tests/oauth_served_route.rs */}
 {/* TODO[evidence]: allowedClients admission and the required non-empty list have no test located by symbol in the files searched */}
 
-Every facade call is authenticated with an OIDC bearer token through the platform block, as in every Registry Stack product.
+Every facade operation call is authenticated with an OIDC bearer token through the platform block, as in every Registry Stack product.
 It is authorised by the Adapter's own access profiles: named bindings of scopes to concrete facade operations and record types, declared in the project.
-The facade accepts no API keys, no Basic authentication and no anonymous calls.
+The facade accepts no API keys, no Basic authentication and no anonymous operation calls.
+The one exception is the two listener probes, `GET /health` and `GET /ready`, which return service status and readiness information to any caller. [Probe health and readiness](../../operate/adapter/#probe-health-and-readiness) describes them.
 The Adapter inherits no authorisation from any product and grants none to any source.
 
 The caller's token is never forwarded upstream.
@@ -688,6 +700,41 @@ The facade serves trusted machine clients only.
 Any admitted client with a matching scope sees every record that the deployment's configured source access reaches, because scopes gate operations and record types, not individual records.
 Record-level authorisation is not built.
 Admitting a client means trusting it with the full reach of the deployment credential.
+
+A refused facade or payment request is counted and logged under the check that refused it, never under a caller value.
+`adapter_request_refusals_total{check}` rises by one and the log carries one `request refused` line with the fixed `failed_check` label, for example `credential-missing`, `token-signature`, `token-client`, `scope`, `operation` or `ownership`.
+The answer to the caller is unchanged.
+The line is rate limited per check, so a flood of one kind of refusal cannot fill the log.
+See [Scrape metrics](../../operate/adapter/#scrape-metrics).
+
+### Plain HTTP, private ranges and loopback
+
+Adapter sources are https or loopback only.
+An origin is plain HTTP only inside the loopback exception.
+Loopback means a `127.0.0.0/8` address, `::1`, an IPv4-mapped form of a `127.0.0.0/8` address, or the exact name `localhost`.
+A payment provider connection takes only the address literals, never the name.
+The name is pinned: the connection goes only to loopback addresses.
+`a.localhost` and `localhost.` are named hosts.
+
+A plain-HTTP origin beyond loopback fails the runtime check with `adapter.runtime.insecure-origin` at the binding's `baseUrl`, and the deployment refuses to start.
+This holds for every authentication kind, and inside the ranges `allowedPrivateCidrs` declares too, so a credential never travels in clear.
+The text names the fix: serve the source over https, or reach it on loopback through a sidecar that carries the connection over TLS.
+The facade and the job host print the same pointer and fix when they refuse to start.
+
+`allowedPrivateCidrs` decides which private addresses an https origin may reach.
+An omitted or empty list admits no private address.
+
+An endpoint binding has no `transport` member.
+Other products accept `transport: private-network-plaintext` for a receiver on a declared private network.
+The Adapter refuses it as an unknown key.
+
+A source that serves only plain HTTP inside a private network is reached through a sidecar on the Adapter's host.
+The sidecar carries the connection over TLS, for example a service-mesh proxy or a TLS tunnel, and the binding names it on loopback, for example `http://127.0.0.1:8081`.
+
+**Breaking.** Before this change a source on plain HTTP whose address `allowedPrivateCidrs` covered passed the runtime check and loaded.
+Each request that carried its credential was refused at send time with `egress.refused`, so the refusal surfaced only on traffic, and a credential-free source was reached in plain HTTP.
+Now the runtime check refuses both and the deployment does not start.
+To migrate, serve the source over https, or reach it on loopback through a sidecar.
 
 ### Upstream authentication
 
@@ -721,6 +768,9 @@ The private CA is `outboundTls.trustProfiles.<id>.caBundleFile` in the runtime c
 A CA bundle is not a secret.
 
 A pack `authentication.type: none` with an explicit runtime `credential.type: none` may reach a fixed non-loopback HTTPS source only when the same binding says `anonymousHttps: operator-approved`.
+Adapter logs the explicit acknowledgement at startup in either posture.
+
+{/* Evidence: crates/registry-adapter-core/src/runtime.rs record_endpoint_posture. */}
 The acknowledgement is a named operator decision, not a boolean, and omission stays closed.
 It is refused on HTTP or with any other authentication pairing.
 It is harmlessly redundant on an admitted `none` plus mTLS HTTPS binding.
@@ -1093,7 +1143,7 @@ The Adapter core and the shared engine keep their source-neutral dependency boun
 
 ### Collection
 
-Collections run only against the synthetic payment simulator.
+Collections run in development against the synthetic payment simulator.
 A collection connection must use the `simulator` provider with `simulation: true`; any other collection provider is refused at load with `adapter.payment.collection-simulation-only`, by both `adapter serve` and `adapterctl payments check`.
 
 Before any provider send, PostgreSQL reserves one attempt per institution, service, bill and bill version across workflow command keys.

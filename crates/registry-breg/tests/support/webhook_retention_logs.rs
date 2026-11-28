@@ -73,7 +73,7 @@ impl Fixture {
         install_compiled_schema(&migration, &compiled, &database.runtime_role)
             .await
             .unwrap();
-        let identity = initialize_compiled_registry_state_for_test(
+        let identity = registry_breg::postgres::initialize_compiled_registry_state_for_test(
             &migration,
             &database.runtime_role,
             &compiled,

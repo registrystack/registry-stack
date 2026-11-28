@@ -23,7 +23,6 @@ identity:
   environment: local
   instanceId: generic-registry-1
   databaseId: generic-registry-db-1
-  databaseInitializationEnvironment: local
 
 # The directory holding the owner-only files the references below name.
 secretProviders:
@@ -47,22 +46,25 @@ database:
 package:
   root: /replace/me/packages/build-1/package
 
-# The token issuer this deployment accepts, and the claim names that carry
-# Registry authority. `authorityClaims` must name the claims the access profiles
-# in registry.yaml read: `principalClaim`, and the claims row boundaries compare.
+# The token issuers this deployment accepts, one entry per issuer, and the claim
+# names that carry Registry authority. `authorityClaims` must name the claims the
+# access profiles in registry.yaml read: `principalClaim`, and the claims row
+# boundaries compare.
 authentication:
   oidc:
-    issuer: https://issuer.example.invalid
-    audience: generic-registry
-    allowedAlgorithm: ES256
-    accessTokenType: at+jwt
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [generic-registry-client]
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 30000
-    jwksSource:
-      type: discovery
+    issuers:
+      primary:
+        issuer: https://issuer.example.invalid
+        audience: generic-registry
+        allowedAlgorithm: ES256
+        accessTokenType: at+jwt
+        scopeClaim: scope
+        scopeSeparator: " "
+        allowedClients: [generic-registry-client]
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 30000
+        jwksSource:
+          type: discovery
   authorityClaims:
     principal: registry_principal
     purpose: registry_purpose

@@ -18,16 +18,21 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use registry_platform_authcommon::{DeclaredScope, FailedCheck};
+use registry_platform_config::Posture;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    grant_claims, ClaimNames, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError,
-    TokenVerifier, TokenVerifierConfig,
+    grant_claims, refuses_development_assertion, ClaimNames, IssuerNetworkPolicy, JwksFetcher,
+    JwksFetcherConfig, OidcError, PeerPolicy, TokenVerifier, TokenVerifierConfig,
 };
 
-use crate::config::{OfferAuthorizationConfig, ValidationMode};
+use crate::config::OfferAuthorizationConfig;
 
 /// The access-token types this service accepts, which are the two spellings
 /// RFC 9068 permits for a JWT access token.
+/// The claim the platform verifier reads scopes from unless configured.
+const DEFAULT_SCOPE_CLAIM: &str = "scope";
+
 const ACCESS_TOKEN_TYPES: [&str; 2] = ["at+jwt", "application/at+jwt"];
 
 /// What a verified offer token established.
@@ -52,27 +57,50 @@ pub struct AuthorizedOffer {
 pub enum AuthorizationError {
     #[error("the request carried no bearer credential")]
     Missing,
+    /// The credential was refused, under the check that refused it.
     #[error("the presented credential was refused")]
-    Refused,
+    Refused(FailedCheck),
     #[error("the offer key set is unavailable")]
     KeySource,
+}
+
+impl AuthorizationError {
+    /// The check the request failed.
+    #[must_use]
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub const fn failed_check(&self) -> FailedCheck {
+        match self {
+            Self::Missing => FailedCheck::CredentialMissing,
+            Self::Refused(check) => *check,
+            Self::KeySource => FailedCheck::KeySourceUnavailable,
+        }
+    }
 }
 
 /// The seam the offer endpoint authorizes through.
 #[async_trait]
 pub trait OfferAuthorizer: Send + Sync {
     async fn authorize(&self, credential: &str) -> Result<AuthorizedOffer, AuthorizationError>;
+
+    /// What a scope refusal may say about the deployment, when the authorizer
+    /// has a scope gate. Both values are configured, never read from a token.
+    fn declared_scope(&self) -> Option<DeclaredScope> {
+        None
+    }
 }
 
 /// The configured issuer's access-token verifier.
 #[derive(Debug)]
 pub struct MintResourceServer {
+    posture: Posture,
     verifier: Arc<TokenVerifier>,
     claims: ClaimNames,
     /// Scopes every offer token must carry. Checked against the verified
     /// token's scope set after verification, with the same closed refusal a
     /// refused client gets, before any offer is stored or Evidence contacted.
     required_scopes: Vec<String>,
+    /// The claim the verifier reads scopes from.
+    scope_claim: String,
 }
 
 impl MintResourceServer {
@@ -82,33 +110,43 @@ impl MintResourceServer {
     /// purpose: the offer boundary must be configurable,
     /// and auditable, without reference to who this service is elsewhere.
     #[must_use]
-    pub fn from_config(config: &OfferAuthorizationConfig, mode: ValidationMode) -> Self {
-        if let Some(diagnostic) = config.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
+    pub fn from_config(config: &OfferAuthorizationConfig) -> Self {
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             config.jwks_uri.clone(),
             JwksFetcherConfig::defaults(),
-            fetch_url_policy(config, mode),
+            fetch_url_policy(config),
         ));
         let required_scopes = config.required_scopes.items().to_vec();
+        let profile = verifier_profile(config);
+        let scope_claim = profile.scope_claim.clone();
         Self {
-            verifier: Arc::new(TokenVerifier::new(verifier_profile(config), fetcher)),
+            posture: Posture::Production,
+            verifier: Arc::new(TokenVerifier::new(profile, fetcher)),
             required_scopes,
+            scope_claim,
             claims: config.claims.clone(),
         }
     }
 
     /// Build the resource server over an already constructed verifier, for a
     /// deployment that resolved its key source another way. No scope gate is
-    /// applied; the verifier alone decides.
+    /// applied. Defaults to production posture.
     #[must_use]
     pub fn new(verifier: Arc<TokenVerifier>) -> Self {
         Self {
+            posture: Posture::Production,
             verifier,
             required_scopes: Vec::new(),
+            scope_claim: DEFAULT_SCOPE_CLAIM.to_owned(),
             claims: ClaimNames::default(),
         }
+    }
+
+    /// Apply the delivery service's declared posture to offer authorization.
+    #[must_use]
+    pub fn with_posture(mut self, posture: Posture) -> Self {
+        self.posture = posture;
+        self
     }
 
     /// Apply the issuer's contextual claim names when supplying a verifier
@@ -157,35 +195,37 @@ pub fn verifier_profile(config: &OfferAuthorizationConfig) -> TokenVerifierConfi
 }
 
 /// The key set is declared configuration, so it follows the shared declared
-/// endpoint rule: plain HTTP is fetched on loopback, where only supervised
-/// local validation admits it, and beyond loopback only with
-/// `allowInsecureHttp`. A plain HTTP offer issuer outside a supervised local
-/// group, without that setting, gets the strict policy.
-fn fetch_url_policy(config: &OfferAuthorizationConfig, mode: ValidationMode) -> FetchUrlPolicy {
-    let supervised_local_http = mode == ValidationMode::SupervisedLocalDevelopment
-        && config.issuer.starts_with("http://127.0.0.1:")
-        && config.jwks_uri.starts_with("http://127.0.0.1:");
-    if config.issuer.starts_with("http://") && !config.allow_insecure_http && !supervised_local_http
-    {
-        return FetchUrlPolicy::strict();
-    }
-    let allow_insecure_http = config.allow_insecure_http || supervised_local_http;
-    IssuerNetworkPolicy::new(&config.issuer, allow_insecure_http)
+/// endpoint rule. Plain HTTP is fetched on loopback in either posture.
+/// Beyond loopback it requires `allowInsecureHttp`, which requires development.
+fn fetch_url_policy(config: &OfferAuthorizationConfig) -> FetchUrlPolicy {
+    IssuerNetworkPolicy::new(&config.issuer, config.allow_insecure_http)
         .map(|network| network.declared_jwks_fetch_policy())
         .unwrap_or_else(|_| FetchUrlPolicy::strict())
 }
 
 #[async_trait]
 impl OfferAuthorizer for MintResourceServer {
+    fn declared_scope(&self) -> Option<DeclaredScope> {
+        (!self.required_scopes.is_empty()).then(|| {
+            DeclaredScope::new(&self.scope_claim)
+                .with_required_scope(self.required_scopes.join(" "))
+        })
+    }
+
     async fn authorize(&self, credential: &str) -> Result<AuthorizedOffer, AuthorizationError> {
         if credential.is_empty() {
             return Err(AuthorizationError::Missing);
         }
         match self.verifier.verify(credential).await {
             Ok(verified) => {
+                if self.posture == Posture::Production
+                    && refuses_development_assertion(&verified, PeerPolicy::RefuseDevelopmentPeer)
+                {
+                    return Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims));
+                }
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|_| AuthorizationError::Refused)?
+                    .map_err(|_| AuthorizationError::Refused(FailedCheck::TokenTime))?
                     .as_secs();
                 if !matches!(grant_claims(&verified.claims, &self.claims, now), Ok(None))
                     || !matches!(
@@ -197,7 +237,7 @@ impl OfferAuthorizer for MintResourceServer {
                     // later redemption cannot recheck the task authority. No
                     // complete, partial, malformed, or expired task grant under
                     // either configured or reserved claim names may cross it.
-                    return Err(AuthorizationError::Refused);
+                    return Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims));
                 }
                 // The scope gate runs only on the verified token's scope set:
                 // a correctly signed token for this audience whose client
@@ -210,7 +250,7 @@ impl OfferAuthorizer for MintResourceServer {
                         .iter()
                         .all(|scope| present.contains(scope.as_str()))
                     {
-                        return Err(AuthorizationError::Refused);
+                        return Err(AuthorizationError::Refused(FailedCheck::Scope));
                     }
                 }
                 let client = match verified.matched_client_id() {
@@ -232,7 +272,7 @@ impl OfferAuthorizer for MintResourceServer {
                             target: "registry_evidence_oid4vci::authorizer",
                             "the token verifier returned a malformed matched client"
                         );
-                        return Err(AuthorizationError::Refused);
+                        return Err(AuthorizationError::Refused(FailedCheck::TokenClient));
                     }
                 };
                 let subject = verified
@@ -241,18 +281,12 @@ impl OfferAuthorizer for MintResourceServer {
                     .clone()
                     .filter(|subject| !subject.is_empty());
                 if client.is_none() && subject.is_none() {
-                    return Err(AuthorizationError::Refused);
+                    return Err(AuthorizationError::Refused(FailedCheck::TokenClient));
                 }
                 Ok(AuthorizedOffer { client, subject })
             }
-            Err(error) if is_key_source_failure(&error) => {
-                tracing::warn!(
-                    target: "registry_evidence_oid4vci::authorizer",
-                    "the offer key set is unavailable"
-                );
-                Err(AuthorizationError::KeySource)
-            }
-            Err(_) => Err(AuthorizationError::Refused),
+            Err(error) if is_key_source_failure(&error) => Err(AuthorizationError::KeySource),
+            Err(error) => Err(AuthorizationError::Refused(error.failed_check())),
         }
     }
 }
@@ -302,8 +336,24 @@ mod tests {
     #[tokio::test]
     async fn an_empty_credential_is_missing_rather_than_refused() {
         let config = valid_config();
-        let server = MintResourceServer::from_config(&config.offers, config.validation_mode);
+        let server = MintResourceServer::from_config(&config.offers);
         assert_eq!(server.authorize("").await, Err(AuthorizationError::Missing));
+    }
+
+    #[test]
+    fn the_declared_scope_is_the_configured_claim_and_scopes() {
+        let mut config = valid_config();
+        config.offers.required_scopes =
+            crate::config::Restriction::Listed(vec!["offers:create".to_owned()]);
+        let server = MintResourceServer::from_config(&config.offers);
+        let declared = server.declared_scope().expect("a scope gate is declared");
+        assert_eq!(declared.scope_claim(), "scope");
+        assert_eq!(declared.required_scope(), Some("offers:create"));
+        assert_eq!(declared.access_profile(), None);
+
+        config.offers.required_scopes = crate::config::Restriction::Unrestricted;
+        let server = MintResourceServer::from_config(&config.offers);
+        assert_eq!(server.declared_scope(), None);
     }
 
     #[test]
@@ -312,22 +362,18 @@ mod tests {
         // There is no parameter for the outbound token-client identity, so no
         // key or identifier belonging to the client half can reach this one.
         let config = valid_config();
-        let _server = MintResourceServer::from_config(&config.offers, config.validation_mode);
+        let _server = MintResourceServer::from_config(&config.offers);
     }
 
     #[test]
     fn plain_http_key_sources_stay_on_loopback_without_the_opt_in() {
         let validate = |offers: &OfferAuthorizationConfig| {
-            fetch_url_policy(offers, ValidationMode::SupervisedLocalDevelopment)
-                .validate_dns_pinned_for_immediate_fetch(
-                    &reqwest::Url::parse(&offers.jwks_uri).unwrap(),
-                )
+            fetch_url_policy(offers).validate_dns_pinned_for_immediate_fetch(
+                &reqwest::Url::parse(&offers.jwks_uri).unwrap(),
+            )
         };
         let mut config = valid_config();
 
-        // Under an https issuer, a plain http key set that supervised local
-        // validation admits on loopback is fetched, and one beyond loopback
-        // is refused.
         config.offers.jwks_uri = "http://127.0.0.1:8082/.well-known/jwks.json".to_owned();
         validate(&config.offers).expect("a declared loopback key set is accepted");
         config.offers.jwks_uri = "http://10.20.30.40:8080/.well-known/jwks.json".to_owned();
@@ -338,23 +384,10 @@ mod tests {
 
         config.offers.issuer = "http://127.0.0.1:8081".to_owned();
         config.offers.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
-        assert_eq!(
-            fetch_url_policy(&config.offers, ValidationMode::Strict).allowed_schemes,
-            ["https"],
-            "strict mode never opens a plain http key source"
-        );
-        let supervised =
-            fetch_url_policy(&config.offers, ValidationMode::SupervisedLocalDevelopment);
-        assert!(supervised
-            .allowed_schemes
-            .iter()
-            .any(|scheme| scheme == "http"));
-        assert!(!supervised.deny_private_ranges);
+        validate(&config.offers).expect("a loopback HTTP issuer admits a loopback HTTP key set");
 
-        // The key set is declared configuration, so a supervised local group
-        // may serve it from another loopback port than the issuer.
         config.offers.jwks_uri = "http://127.0.0.1:8082/.well-known/jwks.json".to_owned();
-        fetch_url_policy(&config.offers, ValidationMode::SupervisedLocalDevelopment)
+        fetch_url_policy(&config.offers)
             .validate_dns_pinned_for_immediate_fetch(
                 &reqwest::Url::parse(&config.offers.jwks_uri).unwrap(),
             )

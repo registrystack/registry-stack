@@ -1,6 +1,84 @@
 # Registry Evidence changelog
 
 ## Unreleased
+- OID4VCI reports loopback HTTP offer token issuer and JWKS endpoints as explicit production settings.
+
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
+
+- Offline fixture source replay follows the command's declared posture.
+- Production-only offline Evidence commands and `evidence-oid4vci openapi` reject invalid `REGISTRY_STACK_POSTURE` values.
+
+- BREAKING: Rust client configurations take a peer policy in `EvidenceClientConfig::new` and `EvidenceClientConfig::without_verification`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+- `evidencectl client contracts fetch` accepts `--posture`.
+- `evidencectl request prepare` accepts `--posture` with `--profile`.
+
+- `evidencectl init --starter` copies the development plan and the scenario file it names.
+
+- BREAKING: An undeclared posture is production. Migration: Set `REGISTRY_STACK_POSTURE=development` for laptop and test runs; `rstack dev` sets it for you.
+- BREAKING: Evidence, OID4VCI and OID4VP checks and `evidencectl check`, `test` and `package` report development settings as errors under the default posture. Migration: Pass `--posture development`, or set `REGISTRY_STACK_POSTURE`, when checking a laptop file.
+- BREAKING: Evidence runs local assurance in development and production or evidence-grade assurance in production. Migration: Use `assuranceProfile: local` under development, and build a production bundle for production.
+- BREAKING: Credential-free Evidence source bindings require development. Migration: Bind an `mtlsIdentity` or an authenticated endpoint for production sources.
+- BREAKING: OID4VCI supervised validation requires development. Migration: Declare development for `validationMode: supervised-local-development`.
+- BREAKING: OID4VCI `offers.allowInsecureHttp: true` and unrestricted offer gates require development. Migration: Match `evidence.posture.unrestricted-offer-gate` in place of `evidence.oid4vci.offer-gate-unrestricted`. For a called origin using HTTP beyond loopback, match `evidence.oid4vci.https-required` in place of `evidence.oid4vci.supervised-endpoint`. Loopback HTTP called origins need no opt-in.
+- BREAKING: Successful `/ready` responses include `posture` and `developmentSettings`. Migration: No change for probes that read the status code.
+- BREAKING: Audit lines include `posture`. Migration: Audit readers with a closed line parser accept the posture member.
+- BREAKING: Development responses carry `Registry-Posture: development`. Production runtimes refuse development task assertions with `platform.task-grant.development-assertion`, and production peers refuse marked development responses where peer policy is configured. Migration: Point production runtimes at production peers.
+- Added `--posture` to the runtime configuration commands and to the corresponding `evidencectl` commands. Tool reports include the declared posture.
+- OID4VCI called origins and OID4VP issuers permit loopback HTTP in either posture. Strict OID4VCI requires HTTPS for `tokenClient.clientAssertionAudience`.
+
+- The local assurance profile accepts loopback HTTP OIDC issuers and JWKS endpoints without `allowInsecureHttp`.
+- BREAKING: `evidencectl doctor --format json` preserves each runtime diagnostic's code, path and artifact. Migration: Read `diagnostics[].code` on each entry.
+- Doctor checks the configured audit path after any runtime posture refusal.
+- Production Evidence refuses development-marked signed-source and wallet-presentation responses.
+- Supervised OID4VCI accepts loopback HTTP credential issuer origins with an explicit port matching the listener.
+- The public check route's CORS preflight allows the `Registry-Client` request
+  header beside `Content-Type`, so a page on another origin can call the route
+  through the TypeScript client. The allowed origins and methods, the refusal of
+  credentials, and every other route are unchanged.
+
+- `evidence doctor` judges secret files with the runtime's rule. It no
+  longer demands exactly `0400` or `0600`, and it accepts a link chain that
+  stays inside the secret root. It still requires a secret root that group
+  and other cannot reach, as the runtime does.
+
+- Evidence counts every `401`, `403` and `429` answer by the check that failed
+  in `evidence_request_refusals_total{check}` on the private metrics listener,
+  and writes one `request refused` log line with the check and the request's
+  trace id, at most five per check per minute. No response status, header or
+  body changes.
+- Evidence OID4VCI and Evidence OID4VP count each refused request in
+  `evidence_oid4vci_request_refusals_total{check}` and
+  `evidence_oid4vp_request_refusals_total{check}`, published at zero for every
+  check, and log it once as `request refused` with the failed check, at most
+  five lines per check per minute. This bounded `INFO` line replaces the
+  key-source `WARN` line of both services: alert on the counter under
+  `key-source-unavailable` instead. Responses are unchanged.
+- Evidence names the refusal check more precisely, with no change to any
+  answer. An expired task grant counts under `task-grant-expired` at the
+  request as it does at release, a grant bound to another principal counts
+  under `task-grant-binding`, and a caller whose actor kind or audience falls
+  outside a definition's grant ceiling counts under `actor-kind` or
+  `access-profile` unless it presented a task grant. The key-source `WARN`
+  line now follows the same classification as the `key-source-unavailable`
+  count.
+- The `request refused` line of Evidence, Evidence OID4VCI and Evidence OID4VP
+  names the configured scope claim and the scope or scopes the configuration
+  requires when the failed check is `scope`, as `scope_claim` and
+  `required_scope`. Nothing the caller's token carried is written. No response
+  status, header or body changes.
+- Evidence OID4VP states the rule a refused static key set broke in its
+  startup message, still under `evidence.oid4vp.issuer-unavailable`. A request
+  whose `Authorization` header is present but unreadable as text counts under
+  `credential-malformed`. The answer is unchanged.
+- Evidence counts an `Authorization` header that names another scheme, such as
+  `Basic`, under `credential-missing`, and a header that is only the start of
+  `Bearer` under `credential-malformed`. Evidence OID4VCI counts an unreadable
+  header, or `Bearer` with no token, under `credential-malformed`. The
+  key-source `WARN` text says the key set could not be retrieved or used, and
+  no longer says every request is rejected. No answer changes.
+- `evidencectl suggest` accepts an IPv4-mapped IPv6 loopback address, for
+  example `[::ffff:127.0.0.1]`, for a plain-HTTP base URL or OpenAPI URL, as
+  the shared loopback rule does. The name `localhost` is still refused there.
 
 - BREAKING (experimental surface): `evidencectl check` and `evidencectl package`
   refuse a `publicCheck` definition whose Source facts schema states more than

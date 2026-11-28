@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-28"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -37,8 +37,8 @@ current-source policy also needs a read-only context provider.
 
 Establish issuer signing-key trust and TLS trust separately. The
 [OIDC connection guide](../advanced/connect-an-oidc-issuer/) explains issuer configuration and
-key discovery; the Casework runtime's `authentication.oidc` block binds the accepted resource,
-clients, and human identity claim. Configure downstream HTTPS trust through the owning connection's
+key discovery; each entry under the Casework runtime's `authentication.oidc.issuers` binds the
+accepted resource, clients, and declared actor kinds. Configure downstream HTTPS trust through the owning connection's
 certificate setting, rather than weakening verification.
 
 Present a resource-specific access token and select the authored profile with
@@ -80,44 +80,6 @@ root read-only, and give the audit directory durable writable storage.
 
 {/* Evidence: crates/registry-casework/install.sh; release/docker/Dockerfile.casework, ENTRYPOINT and CMD. */}
 
-## Provision PostgreSQL
-
-Use a new database. As your PostgreSQL administrator, create a schema-owning migration role, a
-separate runtime role, and the database:
-
-```sql
-CREATE ROLE casework_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
-CREATE ROLE casework_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
-CREATE DATABASE casework;
-```
-
-In that database, grant connection access and give the migration role the schema:
-
-```sql
-REVOKE ALL ON DATABASE casework FROM PUBLIC;
-GRANT CONNECT ON DATABASE casework TO casework_migration, casework_runtime;
-ALTER SCHEMA public OWNER TO casework_migration;
-REVOKE ALL ON SCHEMA public FROM PUBLIC;
-```
-
-Each runtime holds up to 32 connections and waits up to 5 seconds for one; neither is configurable,
-so allow 32 connections per replica.
-
-{/* Evidence: crates/registry-casework/src/store.rs, max_size(32) and wait_timeout. */}
-
-Only `caseworkctl apply` uses the migration credential, so keep it off the serving host. Apply
-grants the runtime role what it serves with and keeps the activation ledger read-only to it.
-
-If apply reports `casework.activation.role-mode-weakened`, make the ownership, privilege, or
-trigger correction it names, then plan again; never give the runtime role ledger writes to get past
-it. When both credentials name one role, the deployment records single-role mode, and `status`
-says the runtime credential can activate packages.
-
-{/* Evidence: crates/registry-casework/src/activation.rs, grant_runtime_role(), observe_role(), and stray_authority();
-    crates/registry-casework/src/store.rs, tcp_user_timeout. */}
-
 ## Write the runtime file
 
 The runtime file is yours, kept apart from the authored policy. This one uses mounted secrets and
@@ -142,13 +104,12 @@ database:
   migrationUrlRef: secret:file/migration-database-url
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:casework
-    allowedClients: [casework-console, review-producer]
-    scopeClaim: scope
-    humanIdentity:
-      claim: registry_actor_kind
-      value: human
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:casework
+        allowedClients: [casework-console, review-producer]
+        scopeClaim: scope
 audit:
   path: /var/lib/registry-casework/audit/casework.ndjson
   hashKeyRef: secret:file/casework-audit-key
@@ -160,14 +121,14 @@ explicit nulls are refused at their position; omit a key to take its default.
 every later apply and start refuses a database that recorded another.
 
 Each `...Ref` key names a secret, never its value: `secret:file/<name>` resolves under
-`secretProviders.file.root`. Mount each secret as a file owned by the runtime user, mode `0400` or
-`0600`, with no symbolic or extra hard link. `operator-controlled-upstream` requires
+`secretProviders.file.root`. Each secret file must meet the
+[secret file rule](../../security/hardening-checklist/#secret-files). `operator-controlled-upstream` requires
 `allowedClients` to list its clients. Ship the audit journal to your archive;
 [Review retention and audit](../casework-retention/#keep-the-audit-file) covers its key and
 rotation.
 
 {/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig;
-    crates/registry-platform-config/src/secrets.rs, validate_file_metadata(). */}
+    crates/registry-platform-config/src/secrets.rs, judge_file(). */}
 
 ### Add a current-source provider
 
@@ -203,6 +164,10 @@ Check the authored project against the runtime file before anything touches a da
 caseworkctl check ./decisions --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
+Pass `--posture development` to check a development runtime file, or set
+`REGISTRY_STACK_POSTURE=development`. `--production` declares production and
+enables the package closure checks.
+
 The check opens no package, database, issuer, provider, or secret. Add `--environment` to fill
 `${VAR}` expressions from the current environment. A clean check does not prove live readiness.
 
@@ -224,6 +189,85 @@ Keep earlier package directories for recovery, and plan every activation, rollba
 
 {/* Evidence: crates/registry-casework/src/config.rs, verify_casework_package() and expected_digest;
     crates/registry-casework/src/config.rs, RuntimePackageConfig. */}
+
+## Provision PostgreSQL
+
+Use a new database. Your runtime file names the roles, their passwords, and the database: they are
+the URLs in `database.migrationUrlRef` and `database.runtimeUrlRef`, which
+[the runtime file](#write-the-runtime-file) names. `caseworkctl provision` loads that file and
+verifies the package it points at, so write the runtime file and verify the package first. Put both
+URLs in their secret files, then run `caseworkctl provision` once as a PostgreSQL role that can
+create roles and databases:
+
+```sh
+caseworkctl provision --runtime-config runtime.yaml --admin-url-file admin-url
+```
+
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
+`CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable instead,
+use `--admin-url-env NAME`. The connection requires TLS and verifies the server certificate. Set
+`database.caBundleRef` in the runtime file to trust a private CA. The command never prints the
+administrator URL or a password.
+
+The administrator URL must name the same host and port as the two product URLs, or `provision`
+refuses it as `platform.provision.target-mismatch`. It must also name a database other than the
+product database, such as `postgres`, or `provision` refuses it as `platform.provision.target-invalid`.
+Where the administrator may connect only to the product database, `provision` cannot run: add
+`--print-sql` and give the script to the person who administers the server.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Gives the migration role `USAGE` and `CREATE` on the `public` schema and the runtime role `USAGE`
+  on it, and takes `CREATE` on it from `PUBLIC`.
+
+Run it again at any time. It creates only what is missing and refuses a role that exists with
+different attributes. When both URLs name one role, it creates that one role and the deployment
+records single-role mode.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
+`\password` line that prompts for the password in `psql`, so the script holds no password:
+
+```sql
+-- provision script, product casework. Nothing was run.
+-- For a server where these objects do not exist yet. Review, then run with psql as an
+-- administrator that has CREATEROLE and CREATEDB. It stops at the first error.
+\set ON_ERROR_STOP on
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "casework_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "casework_migration"
+CREATE ROLE "casework_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "casework_runtime"
+CREATE DATABASE "casework" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "casework" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "casework" TO "casework_migration", "casework_runtime";
+ALTER DATABASE "casework" ALLOW_CONNECTIONS true;
+\connect "casework"
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "casework_migration"; GRANT USAGE ON SCHEMA public TO "casework_runtime";
+```
+
+{/* Evidence: crates/registry-caseworkctl/src/provision.rs; crates/registry-platform-provision/src/plan.rs,
+    SchemaLayout::PublicForMigration; crates/registry-caseworkctl/tests/provision.rs. */}
+
+Each runtime holds up to 32 connections and waits up to 5 seconds for one; neither is configurable,
+so allow 32 connections per replica.
+
+{/* Evidence: crates/registry-casework/src/store.rs, max_size(32) and wait_timeout. */}
+
+Only `caseworkctl apply` uses the migration credential, so keep it off the serving host. Apply
+grants the runtime role what it serves with and keeps the activation ledger read-only to it.
+
+If apply reports `casework.activation.role-mode-weakened`, make the ownership, privilege, or
+trigger correction it names, then plan again; never give the runtime role ledger writes to get past
+it. When both credentials name one role, the deployment records single-role mode, and `status`
+says the runtime credential can activate packages.
+
+{/* Evidence: crates/registry-casework/src/activation.rs, grant_runtime_role(), observe_role(), and stray_authority();
+    crates/registry-casework/src/store.rs, tcp_user_timeout. */}
 
 ## Refuse a package that strands pinned work
 
@@ -248,6 +292,12 @@ caseworkctl apply --runtime-config /etc/registry-casework/runtime.yaml \
 caseworkctl status --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
+Pass `--posture development` to `plan`, `apply`, `status`, `doctor`, or
+`serve` for a development deployment. Both `casework` and `caseworkctl serve`
+accept the flag. Startup, `plan`, and `apply` refuse a database activated in
+the other posture. `status` and `doctor` report the mismatch and continue
+their checks. To change posture, apply to a fresh database.
+
 `plan` writes nothing; read its package digest, pending schema versions, role mode, and refusals.
 Applying the package that is already active is refused with
 `casework.activation.already-active`. `--operator-reference` is stored as a keyed hash;
@@ -255,7 +305,8 @@ Applying the package that is already active is refused with
 
 If apply returns `casework.activation.applied-unaudited`, the activation committed but its audit
 entry did not: restore audit, read `status`, and record the recovery. A runtime role that cannot
-read the ledger gets `casework.activation.ledger-unreadable`; apply restores its grants. Exit codes
+read the ledger gets `casework.activation.ledger-unreadable`; apply restores its grants. `USAGE` on
+`public` comes from `provision`, so run `provision` again if the runtime role lost it. Exit codes
 are `0` for success, `1` for a refusal, `2` for usage, and `3` for an operational failure.
 
 Then serve as the runtime user:
@@ -266,7 +317,9 @@ curl --fail http://10.42.0.7:8100/ready
 ```
 
 Startup refuses a database whose active package is not the configured one. `/ready` checks the
-database and audit writer only; check source context and queue staffing with real identities.
+database and audit writer only. Its JSON body contains `status`, `posture`,
+and `developmentSettings`, an array of codes and configuration pointers.
+Check source context and queue staffing with real identities.
 
 {/* Evidence: crates/registry-casework/src/activation.rs, plan_activation() and apply_activation();
     crates/registry-caseworkctl/src/project.rs, plan() and apply();
@@ -313,6 +366,7 @@ package digest the process serves, so a rollout can confirm what each process ru
 | `casework_completion_deliveries` | gauge | `state`: `pending`, `retrying`, `leased`, `unknown`, `dead-lettered`, `expired` |
 | `casework_completion_oldest_undelivered_age_seconds` | gauge | none |
 | `casework_metrics_sample_failures_total` | counter | `sample`: `review`, `completion-backlog` |
+| `casework_request_refusals_total` | counter | `check`: the check that refused the request, every value published at zero |
 
 Every gauge except `casework_database_up` is read from the database and cached for 5 seconds.
 The review counts and the completion backlog are read separately, one pool connection at a time,
@@ -335,6 +389,21 @@ expired delivery stays counted until review retention erases it, so a non-zero `
 unknown delivery has waited, or 0 when there are none. It runs from the delivery's next attempt time
 while pending, from its attempt start while leased, and from its last change once it is unknown.
 Dead-lettered and expired deliveries do not set it, because they stay counted until retention erases them.
+
+`casework_request_refusals_total` counts every request the API listener refused, by the check that
+refused it, since the process started: a missing or refused credential or token, an unreachable
+key source, a refused delegated reviewer, and a review, directory, clock or task-grant request the
+caller may not act on or see. Each
+refusal also writes one `request refused` line with `failed_check` and the request's trace id, at
+most five lines per check per minute across the process. The next line for that check carries
+`suppressed`, the number the minute counted but did not log, so alert on the counter, not the log.
+Neither carries a token, claim, client or subject value, and counting changes nothing the caller
+receives.
+
+{/* Evidence: crates/registry-casework/src/metrics.rs, refusal_recorder() and render();
+    crates/registry-casework/tests/refusal_golden.rs,
+    authentication_and_profile_refusals_match_the_checked_in_answers;
+    crates/registry-platform-authcommon/src/refusal.rs, the recorder's per-check window. */}
 
 {/* Evidence: crates/registry-casework/src/metrics.rs, metrics_router() and render();
     crates/registry-casework/src/runtime/completion.rs, completion_backlog();

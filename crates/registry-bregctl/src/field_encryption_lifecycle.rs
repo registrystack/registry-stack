@@ -71,6 +71,7 @@ pub(crate) struct FieldEncryptionPreflightLifecycleOutcome {
 }
 
 pub(crate) fn run_preflight(
+    posture: registry_platform_config::DeclaredPosture,
     request: FieldEncryptionPreflightLifecycleRequest<'_>,
 ) -> Result<FieldEncryptionPreflightLifecycleOutcome, FieldEncryptionPreflightLifecycleError> {
     if !request.runtime_config.is_absolute() {
@@ -79,7 +80,7 @@ pub(crate) fn run_preflight(
     if !request.package.is_absolute() {
         return Err(FieldEncryptionPreflightLifecycleError::PackagePath);
     }
-    let config = load_runtime_config(request.runtime_config)
+    let config = load_runtime_config(request.runtime_config, posture)
         .map_err(FieldEncryptionPreflightLifecycleError::RuntimeConfig)?;
     // The counts are only meaningful against the state the apply would start
     // from, so bind the same predecessor an apply binds and let the engine pin
@@ -156,6 +157,7 @@ pub(crate) fn run_preflight(
         .block_on(preflight_field_encryption_backfill_with_connection(
             &connection,
             FieldEncryptionBackfillPreflightRequest {
+                posture: config.posture(),
                 expected: &expected,
                 migration_role: config.database().roles().migration(),
                 timeouts,
@@ -207,6 +209,7 @@ pub(crate) struct FieldEncryptionEraseHistoryLifecycleOutcome {
 }
 
 pub(crate) fn run_erase_history(
+    posture: registry_platform_config::DeclaredPosture,
     request: FieldEncryptionEraseHistoryLifecycleRequest<'_>,
 ) -> Result<FieldEncryptionEraseHistoryLifecycleOutcome, FieldEncryptionEraseHistoryLifecycleError>
 {
@@ -214,7 +217,7 @@ pub(crate) fn run_erase_history(
         return Err(FieldEncryptionEraseHistoryLifecycleError::RuntimeConfigPath);
     }
     let erase = load_erase_request(request.request_file)?;
-    let config = load_runtime_config(request.runtime_config)
+    let config = load_runtime_config(request.runtime_config, posture)
         .map_err(FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig)?;
     let package = config
         .load_active_package()
@@ -226,7 +229,8 @@ pub(crate) fn run_erase_history(
         .audit_profile()
         .map_err(FieldEncryptionEraseHistoryLifecycleError::RuntimeConfig)?;
     let lock_key = RegistryLockKey::derive(&package.manifest().package_id)
-        .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::DatabaseConfiguration)?;
+        .map_err(|_| FieldEncryptionEraseHistoryLifecycleError::DatabaseConfiguration)?
+        .for_posture(config.posture());
     let timeouts = FieldEncryptionBackfillTimeouts::new(
         bounded_erase_timeout(config.operational_timeouts().migration_lock)?,
         bounded_erase_timeout(config.operational_timeouts().migration_statement)?,

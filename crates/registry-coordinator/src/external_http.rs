@@ -102,8 +102,12 @@ impl ExternalHttpConfig {
         };
         let base = ServiceBaseUrl::new(self.base_url.clone());
         let numeric_loopback = match self.base_url.host() {
-            Some(Host::Ipv4(ip)) => ip.is_loopback(),
-            Some(Host::Ipv6(ip)) => ip.is_loopback(),
+            Some(Host::Ipv4(ip)) => {
+                registry_platform_httputil::loopback::loopback_address(ip.into())
+            }
+            Some(Host::Ipv6(ip)) => {
+                registry_platform_httputil::loopback::loopback_address(ip.into())
+            }
             _ => false,
         };
         if base.is_err() || (self.base_url.scheme() == "http" && !numeric_loopback) {
@@ -414,7 +418,7 @@ impl ExternalHttpConnection {
         // peers may be private, but metadata and non-loopback cleartext remain
         // denied. Each request connects to only the addresses validated here.
         let policy = if url.scheme() == "http" {
-            FetchUrlPolicy::dev()
+            FetchUrlPolicy::https_or_loopback()
         } else {
             FetchUrlPolicy {
                 allowed_schemes: vec!["https".into()],

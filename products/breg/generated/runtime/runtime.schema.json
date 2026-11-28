@@ -10,9 +10,24 @@
       ],
       "type": "string"
     },
+    "AccessTokenType": {
+      "description": "The access-token type an issuer entry admits.",
+      "oneOf": [
+        {
+          "const": "at+jwt",
+          "description": "RFC 9068 access tokens, typed `at+jwt` or `application/at+jwt`.",
+          "type": "string"
+        },
+        {
+          "const": "JWT",
+          "description": "Access tokens typed `JWT`, from a provider that does not type them\n`at+jwt`. An ID token stays refused.",
+          "type": "string"
+        }
+      ]
+    },
     "AdapterEndpointBindings": {
       "additionalProperties": false,
-      "description": "The endpoint bindings of one deployment: the runtime members every\nmode shares.\nThe ingestion job's runtime document (`AdapterJobRuntimeConfig`)\nstates these members beside its own `sources`, `store`,\n`destinations`, `secretProviders`, and `hookIngress` members; the\nfacade's document states them beside the facade-only members\n(`secretProviders`, `listener`, `database`, `oidc`, `allowedClients`,\n`audit`, `idempotency`, and the cursor custody), which\n[`AdapterRuntimeConfig::endpoint_bindings`] sets aside.",
+      "description": "The endpoint bindings of one deployment: the runtime members every\nmode shares.\nThe ingestion job's runtime document (`AdapterJobRuntimeConfig`)\nstates these members beside its own `sources`, `store`,\n`destinations`, `secretProviders`, and `hookIngress` members; the\nfacade's document states them beside the facade-only members\n(`secretProviders`, `listener`, `database`, `oidc`,\n`audit`, `idempotency`, and the cursor custody), which\n[`AdapterRuntimeConfig::endpoint_bindings`] sets aside.",
       "properties": {
         "allowedPrivateCidrs": {
           "default": [],
@@ -45,29 +60,6 @@
       ],
       "type": "object"
     },
-    "AllowedClients": {
-      "anyOf": [
-        {
-          "const": "unrestricted",
-          "description": "Accept a token from every client.",
-          "type": "string"
-        },
-        {
-          "description": "Accept a token only from a listed client.",
-          "items": {
-            "maxLength": 512,
-            "minLength": 1,
-            "pattern": "^[^\\x00-\\x20\\x7F]+$",
-            "type": "string"
-          },
-          "maxItems": 128,
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
-        }
-      ],
-      "description": "The OAuth clients whose tokens a runtime accepts: the keyword\n`unrestricted`, or a list of at least one client."
-    },
     "AnonymousHttpsAcknowledgement": {
       "const": "operator-approved",
       "description": "The operator reviewed and approved this fixed anonymous source.",
@@ -84,6 +76,21 @@
         {
           "const": "stdout",
           "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditKeyCustody": {
+      "description": "Who provisioned the audit hash key.",
+      "oneOf": [
+        {
+          "const": "operator-provisioned",
+          "description": "The operator provisioned the key.",
+          "type": "string"
+        },
+        {
+          "const": "development-generated",
+          "description": "A development tool generated the key.",
           "type": "string"
         }
       ]
@@ -119,6 +126,35 @@
           "type": "string"
         }
       ]
+    },
+    "DatabaseTransport": {
+      "description": "How a PostgreSQL connection is protected.",
+      "oneOf": [
+        {
+          "const": "verified-tls",
+          "description": "TLS with verification. `caBundleRef` is optional.",
+          "type": "string"
+        },
+        {
+          "const": "loopback-plaintext",
+          "description": "No TLS. Every host must be a Unix socket, a numeric loopback address\nor `localhost`.",
+          "type": "string"
+        },
+        {
+          "const": "private-network-plaintext",
+          "description": "No TLS, in development only. Every host must also be loopback, a\nsocket, a private IPv4 address (RFC 1918), an IPv6 unique local\naddress (`fc00::/7`), or a name that resolves only to such addresses.",
+          "type": "string"
+        }
+      ]
+    },
+    "DeclaredActorKind": {
+      "description": "An actor kind an operator declares for a caller.",
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
     },
     "Digest": {
       "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
@@ -197,7 +233,7 @@
     "EventDestinationNetworkProfile": {
       "enum": [
         "production-https",
-        "loopback-development-http"
+        "loopback-http"
       ],
       "type": "string"
     },
@@ -681,7 +717,7 @@
       "description": "The file secret provider.",
       "properties": {
         "root": {
-          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "description": "Absolute directory holding one file per secret. A name may be a\nrelative link that stays below this directory, through at most 8 links.\nThe file it reaches must be a regular file with one hard link, owned by\nthe runtime user with mode 0400 or 0600, or owned by root with no\naccess beyond group read (0440 or 0640) when the runtime is not root.\nA process that declared development loads a file with looser read or\nmode bits and logs a warning.",
           "pattern": "^/",
           "type": "string"
         }
@@ -690,6 +726,10 @@
         "root"
       ],
       "type": "object"
+    },
+    "IssuerActorKind": {
+      "$ref": "#/$defs/DeclaredActorKind",
+      "description": "The kind every token from one issuer is treated as."
     },
     "JwksSource": {
       "description": "Where a runtime obtains the OIDC issuer's signing keys.",
@@ -735,6 +775,24 @@
             },
             "type": {
               "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, as `static` does, for a test issuer a\ndevelopment run supervises. Development only: production refuses it.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "test-issuer",
               "type": "string"
             }
           },
@@ -992,6 +1050,13 @@
           "default": "file",
           "description": "`file` (the default) writes a durable, rotated JSON Lines file at\n`path`; `stdout` writes one JSON line per entry to standard output."
         },
+        "hashKeyCustody": {
+          "$ref": "#/$defs/AuditKeyCustody",
+          "description": "Who provisioned the key. Absent means `operator-provisioned`.\n`development-generated` marks a key a development tool made.",
+          "x-registry-development-only": [
+            "platform.posture.generated-audit-key"
+          ]
+        },
         "hashKeyRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "Secret reference to the audit hash key."
@@ -1048,7 +1113,7 @@
           "$ref": "#/$defs/RawAuthorityClaimsConfig"
         },
         "oidc": {
-          "$ref": "#/$defs/RawOidcVerifierConfig"
+          "$ref": "#/$defs/RawOidcConfig"
         }
       },
       "required": [
@@ -1203,13 +1268,8 @@
           "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
           "type": "string"
         },
-        "databaseInitializationEnvironment": {
-          "maxLength": 256,
-          "minLength": 1,
-          "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
-          "type": "string"
-        },
         "environment": {
+          "description": "A deployment label recorded in activation audit entries.",
           "maxLength": 256,
           "minLength": 1,
           "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
@@ -1225,8 +1285,7 @@
       "required": [
         "environment",
         "instanceId",
-        "databaseId",
-        "databaseInitializationEnvironment"
+        "databaseId"
       ],
       "type": "object"
     },
@@ -1274,7 +1333,7 @@
         },
         "hmacSha256KeyRef": {
           "$ref": "#/$defs/SecretReference",
-          "description": "Runtime secret reference for the receiver's shared HMAC-SHA-256 key."
+          "description": "Runtime secret reference for the receiver's 32 to 64 exact HMAC-SHA-256 key bytes."
         },
         "networkProfile": {
           "$ref": "#/$defs/EventDestinationNetworkProfile",
@@ -1292,6 +1351,10 @@
           "minLength": 1,
           "pattern": "^/[\\x20-\\x22\\x24\\x26-\\x3E\\x40-\\x5B\\x5D-\\x7E]*$",
           "type": "string"
+        },
+        "previousHmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Optional previous signing key during rotation."
         },
         "tls": {
           "$ref": "#/$defs/RawEventDestinationTlsConfig",
@@ -1365,7 +1428,10 @@
       "description": "Raw `fieldEncryption` deployment block, absent by default.",
       "properties": {
         "provider": {
-          "$ref": "#/$defs/RawFieldEncryptionProvider"
+          "$ref": "#/$defs/RawFieldEncryptionProvider",
+          "x-registry-development-only": [
+            "breg.posture.local-key-custody"
+          ]
         }
       },
       "type": "object"
@@ -1413,6 +1479,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "Development-only custody of the data key in a local file. Use Transit in production.",
           "properties": {
             "dekRef": {
               "$ref": "#/$defs/SecretReference",
@@ -1485,28 +1552,82 @@
       },
       "type": "object"
     },
+    "RawOidcConfig": {
+      "additionalProperties": false,
+      "description": "The issuers this registry accepts access tokens from.",
+      "properties": {
+        "issuers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RawOidcVerifierConfig"
+          },
+          "description": "The issuers a token may come from, by issuer id.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "issuers"
+      ],
+      "type": "object"
+    },
     "RawOidcVerifierConfig": {
       "additionalProperties": false,
-      "description": "The OIDC issuer a runtime accepts access tokens from: the exact `iss`\nvalue, the `aud` value a token must carry, and where the issuer's signing\nkeys come from, written under `authentication.oidc` beside the product's\nown token rules.",
+      "description": "One issuer a token may come from: the members every caller issuer entry\nshares, and the verification rules this registry adds.",
       "properties": {
         "accessTokenType": {
-          "description": "The one admitted access-token `typ` semantics. Configuring the\nRFC 9068 access-token media type as `at+jwt` or\n`application/at+jwt` admits both spellings of that one type; any\nother value (for example `JWT`) admits only that token type, matched\ncase-insensitively.",
-          "maxLength": 2048,
-          "minLength": 1,
-          "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
-          "type": "string"
+          "$ref": "#/$defs/AccessTokenType",
+          "default": "at+jwt",
+          "description": "The access-token type the entry admits. Absent reads `at+jwt`.",
+          "x-registry-explicit-production": [
+            "platform.posture.jwt-access-token"
+          ]
+        },
+        "actorKind": {
+          "$ref": "#/$defs/IssuerActorKind",
+          "description": "The kind every token from this issuer is treated as. Absent declares\nnone.",
+          "x-registry-explicit-production": [
+            "platform.posture.issuer-actor-kind"
+          ]
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. Loopback needs no setting. The\nvalue `true` is a development-only setting: the loader records it, and\nproduction refuses it.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
         },
         "allowedAlgorithm": {
           "$ref": "#/$defs/AccessTokenAlgorithm"
         },
         "allowedClients": {
-          "$ref": "#/$defs/AllowedClients",
-          "description": "The OAuth clients whose tokens this registry accepts: `unrestricted`\nto accept a token from every client, or a list of at least one\nclient."
+          "anyOf": [
+            {
+              "const": "unrestricted",
+              "description": "Admit a token from every client the issuer verifies.",
+              "type": "string"
+            },
+            {
+              "description": "Admit a token only from a listed client.",
+              "items": {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x20\\x7F]+$",
+                "type": "string"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          ],
+          "description": "The clients whose tokens the entry admits.",
+          "x-registry-explicit-production": [
+            "platform.posture.unrestricted-clients"
+          ]
         },
         "assertionIssuers": {
           "additionalProperties": {
@@ -1539,6 +1660,20 @@
           "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
           "type": "string"
         },
+        "clientActorKinds": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DeclaredActorKind"
+          },
+          "description": "The kind tokens from each named client are treated as. Absent declares\nnone. Not combined with `actorKind`.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "object",
+          "x-registry-explicit-production": [
+            "platform.posture.client-actor-kinds"
+          ]
+        },
         "issuer": {
           "$ref": "#/$defs/Url",
           "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set.",
@@ -1559,7 +1694,10 @@
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
-          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
         },
         "leewayMilliseconds": {
           "format": "uint64",
@@ -1587,10 +1725,15 @@
           "uniqueItems": true
         },
         "scopeClaim": {
+          "$ref": "#/$defs/ScopeClaimName",
+          "default": "scope",
+          "description": "The claim that carries scopes. Absent reads `scope`.",
           "maxLength": 128,
           "minLength": 1,
           "pattern": "^[\\x21-\\x7E]+$",
-          "type": "string"
+          "x-registry-explicit-production": [
+            "platform.posture.scope-claim"
+          ]
         },
         "scopeSeparator": {
           "maxLength": 1,
@@ -1602,11 +1745,9 @@
       "required": [
         "issuer",
         "audience",
-        "allowedAlgorithm",
-        "accessTokenType",
-        "scopeClaim",
-        "scopeSeparator",
         "allowedClients",
+        "allowedAlgorithm",
+        "scopeSeparator",
         "maximumTokenLifetimeSeconds",
         "leewayMilliseconds"
       ],
@@ -1718,6 +1859,9 @@
       ],
       "type": "object"
     },
+    "RawPublicOrigin": {
+      "$ref": "#/$defs/Url"
+    },
     "RawRegistryDatabase": {
       "additionalProperties": false,
       "description": "The registry's database: the shared database block and the connection\npool and SQL roles the registry adds.",
@@ -1744,6 +1888,13 @@
           "default": false,
           "description": "Allow a plaintext connection. Refused outside test builds.",
           "type": "boolean"
+        },
+        "transport": {
+          "$ref": "#/$defs/DatabaseTransport",
+          "description": "How the connection is protected. Absent means `verified-tls`. A\nplaintext transport must match the database hosts, and cannot be\nwritten beside `testOnlyPlaintext`.",
+          "x-registry-development-only": [
+            "platform.posture.database-private-plaintext"
+          ]
         }
       },
       "required": [
@@ -1762,8 +1913,11 @@
           "$ref": "#/$defs/ListenerBind"
         },
         "publicOrigin": {
-          "$ref": "#/$defs/Url",
-          "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. It is `https`; `http` is accepted\nonly for a loopback host, for local development. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links."
+          "$ref": "#/$defs/RawPublicOrigin",
+          "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. Production requires `https`.\nDevelopment also accepts `http` for a loopback host with no deployment\npath prefix. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links.",
+          "x-registry-development-only": [
+            "breg.posture.http-public-origin"
+          ]
         }
       },
       "required": [
@@ -1796,13 +1950,9 @@
     "RawReviewAuthorityConfig": {
       "additionalProperties": false,
       "properties": {
-        "completionRecipient": {
-          "description": "The logical recipient the review authority names in each completion\nnotification. Written together with `completionTokenRef`; omitted, no\ncompletion notification is accepted and the registry polls for\nresults.",
-          "type": "string"
-        },
-        "completionTokenRef": {
-          "$ref": "#/$defs/SecretReference",
-          "description": "The bearer token the review authority presents when it notifies this\nregistry that a review completed. Written together with\n`completionRecipient`; omitted, no completion notification is\naccepted and the registry polls for results."
+        "completion": {
+          "$ref": "#/$defs/RawReviewCompletionConfig",
+          "description": "Standard Webhooks authentication for review completion notifications.\nOmit this block to poll for results without notifications."
         },
         "endpoint": {
           "type": "string"
@@ -1833,6 +1983,28 @@
         "profile",
         "producerId",
         "recoveryDays"
+      ],
+      "type": "object"
+    },
+    "RawReviewCompletionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "hmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Runtime secret reference for 32 to 64 exact HMAC-SHA-256 key bytes."
+        },
+        "previousHmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Optional previous completion signing key during rotation."
+        },
+        "recipientBinding": {
+          "description": "Recipient binding the completion sender supplies to select this authority.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recipientBinding",
+        "hmacSha256KeyRef"
       ],
       "type": "object"
     },
@@ -2135,6 +2307,10 @@
           "type": "object"
         }
       ]
+    },
+    "ScopeClaimName": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The name of the claim that carries scopes."
     },
     "SecretProvidersConfig": {
       "additionalProperties": false,

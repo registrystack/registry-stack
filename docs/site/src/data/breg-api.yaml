@@ -31,7 +31,7 @@
     - ['`POST /v1/actions/{action}/target-conditions`', '`invoke`', 'Immediate Action advertises required target conditions', '`{"preconditions": {...}}` for the targets the input names.']
     - ['`POST /v1/actions/{action}/availability`', '`invoke`', 'Immediate Action has at least one reference input', 'Advisory availability for one referenced target: `true` or `false` with its observed revision, or `null` when more input is required or the current profile cannot inspect the guard safely.']
     - ['`POST /v1/actions/{action}`', '`invoke`', 'Action mode is immediate and the caller holds Invoke', '`{"action", "applicationId", "results"}`. Requires `Idempotency-Key` and `application/json` with `input` and every declared file in `attachments` (each with `contentType`, lowercase hex `sha256` and base64 `content`).']
-    - ['`POST /v1/review-completions`', 'review completion receiver', 'A review authority configures a completion token and recipient binding', '204 after durable acceptance or an exact replay. Requires bearer authentication, `Registry-Recipient-Binding`, and an `Idempotency-Key` equal to the completion event ID.']
+    - ['`POST /v1/review-completions`', 'review completion receiver', 'A review authority configures a completion block', '204 after durable acceptance or an exact replay. Requires `Registry-Recipient-Binding` and a Standard Webhooks signature under the authority’s completion key. The body’s `eventId` equals `webhook-id`.']
     - ['`GET /v1/gis`', 'GIS adapter', '`listener.publicOrigin` is configured; the response includes only GIS collections visible to the caller', 'Landing document with links to the service description, conformance document, and collection inventory. Declares `breg-gis-bounded-crs84-point-bbox-v1` for Point-only visibility or `breg-gis-bounded-crs84-geometry-bbox-v1` when a polygon collection is visible.']
     - ['`GET /v1/gis/api`', 'GIS adapter', '`listener.publicOrigin` is configured; the response includes only GIS collections visible to the caller', 'Caller-filtered OpenAPI 3.0 description for the visible collection item routes.']
     - ['`GET /v1/gis/conformance`', 'GIS adapter', '`listener.publicOrigin` is configured', 'An empty `conformsTo` array; the bounded adapter makes no OGC conformance claim.']
@@ -71,6 +71,7 @@
   columns: [Code, Status, When]
   rows:
     - ['`authentication.refused`', '401', 'A bearer token is missing or rejected: bad signature, wrong issuer or audience, expired, denied key, or a claim outside policy.']
+    - ['`platform.task-grant.development-assertion`', '401', 'Production refuses a task assertion issued in the development posture.']
     - ['`resource.not_found`', '404', 'A verified token that does not satisfy the profile, a route the profile cannot reach, or a record outside the caller''s row boundary. The server does not distinguish these cases.']
     - ['`lookup.unresolved`', '404', 'A lookup matched zero records or more than one.']
     - ['`request.invalid`', '400', 'The body, headers, or path did not match the compiled contract. `fieldPath` names the body member or header at fault when one is, and never a field name the grant does not admit. A lookup against a selector whose values come from a verified claim answers `fieldPath` `/values` when the body sends `values`.']

@@ -186,7 +186,7 @@ async fn serve(answers: &[Answer]) -> (String, Script, tokio::task::JoinHandle<(
 }
 
 fn config(address: &str) -> BaseRegistryClientConfig {
-    BaseRegistryClientConfig::new(
+    BaseRegistryClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/tenant")).expect("fixture URL"),
     )
     .with_token_provider(Arc::new(

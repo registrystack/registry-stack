@@ -1,0 +1,45 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "identity-only",
+  "class": "positive",
+  "provider": "synthetic",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "constructed",
+    "reason": "A token that proves who the caller is and nothing else, built to isolate the lack of a scope and of a client claim from the other differences of a provider's token."
+  },
+  "header": {
+    "alg": "RS256",
+    "typ": "at+jwt",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "iss": {
+      "bind": "issuer"
+    },
+    "aud": {
+      "bind": "audience"
+    },
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 300
+    }
+  },
+  "omits": [
+    "scope",
+    "scp",
+    "client_id",
+    "azp",
+    "registry_actor_kind"
+  ]
+}

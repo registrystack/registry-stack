@@ -54,11 +54,11 @@ so a seed that stops early resumes when rerun with the same `--count` and
 `--seed`. Other parameters are refused, because they would leave the committed
 records unaccounted for; run `down.sh` and start a fresh environment instead.
 
-`up.sh` refuses any existing `.run` path and does not clear it. `down.sh` first
-validates the launcher's ownership marker, then calls `rstack dev stop` for
-the run recorded in `.run/env.json`. It retains the load evidence and synthetic
-seed files. Move the stopped `.run` directory aside before starting another
-environment.
+`down.sh` validates the launcher's ownership marker and calls
+`rstack dev stop RUN --clean` to remove the managed volume and project state.
+A plain stop keeps the managed data. The next `up.sh` archives a cleaned
+`.run` directory, preserving its load evidence and synthetic seed files.
+`up.sh` requires an active run to be stopped before starting another.
 
 ## Operations are not HTTP requests
 
@@ -198,7 +198,7 @@ shellcheck -x products/breg/loadtest/*.sh
 for profile in products/breg/loadtest/profiles/*.js; do
   k6 inspect -e \
     ESTABLISHMENT_IDS_FILE="$PWD/products/breg/loadtest/.run/seed/establishment-ids.txt" \
-    -e AUTHORIZATION_HEADER_FILE="$PWD/products/breg/loadtest/.run/project/.breg/dev/secrets/loadtest-driver.header" \
+    -e AUTHORIZATION_HEADER_FILE="${AUTHORIZATION_HEADER_FILE:?obtain a fresh loadtest-driver header with rstack dev token}" \
     "$profile" >/dev/null
 done
 ```

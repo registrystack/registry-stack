@@ -787,6 +787,7 @@ async fn real_postgres_refuses_the_active_package_again_and_binds_only_the_recor
     assert_eq!(
         recorded,
         RecordedRegistryState {
+            posture: initial.posture(),
             identity: active.clone(),
             ready: true,
             activation_applied: true,
@@ -1284,6 +1285,12 @@ async fn reviewed_fingerprint_mismatch_keeps_checkpoints_and_reconcile_finding()
 /// the reconciliation is unresolvable and refuses to execute; once it is gone
 /// the same reconciliation completes the activation exactly as an apply would.
 async fn reconciliation_completes_a_target_the_catalog_already_reached() {
+    reconcile_completable_target(false, false).await;
+}
+
+async fn reconcile_completable_target(check_mismatch: bool, legacy: bool) {
+    use registry_platform_config::Posture::{Development, Production};
+    let posture = if legacy { Production } else { Development };
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -1292,29 +1299,47 @@ async fn reconciliation_completes_a_target_the_catalog_already_reached() {
         .expect("administrator installs extension");
     let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
-    let initial = prepare_and_load_initial(&base, &fingerprint);
+    let initial = publish_and_load(
+        prepare_package(build_request(
+            Variant::Base,
+            None,
+            &fingerprint,
+            PackageMigrationPlanInput::InitialCompiledDdl,
+        ))
+        .unwrap(),
+        PackageLoadContext { posture },
+    );
     let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
         .await
         .expect("reconciliation scenario initial package activates");
     seed_backfill_rows(&database, &base, 5).await;
     let required = compile_variant(Variant::RankRequired);
     let target_fingerprint = required_target_fingerprint(&database, &required).await;
-    let package = prepare_and_load_reviewed(
-        &active,
-        &base,
+    let source = backfill_source(BackfillSourceRequest {
+        id: "reconcile-completable",
+        current: &active,
+        prior: &base,
+        candidate: &required,
+        final_fingerprint: &target_fingerprint,
+        pre: AssertionMode::True,
+        post: AssertionMode::True,
+        rehearsed_rows: 5,
+    });
+    let prepared = prepare_package(build_request(
         Variant::RankRequired,
+        Some(&active.package_digest),
         &target_fingerprint,
-        backfill_source(BackfillSourceRequest {
-            id: "reconcile-completable",
-            current: &active,
-            prior: &base,
-            candidate: &required,
-            final_fingerprint: &target_fingerprint,
-            pre: AssertionMode::True,
-            post: AssertionMode::True,
-            rehearsed_rows: 5,
-        }),
-    );
+        PackageMigrationPlanInput::ReviewedSuccessor {
+            prior_registry: Box::new(base.clone()),
+            prior_schema_fingerprint: active.schema_fingerprint.clone(),
+            migrations: vec![source],
+        },
+    ))
+    .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let target_path = root.path().join("successor");
+    prepared.publish_to_directory(&target_path).unwrap();
+    let package = load_package(&target_path, &PackageLoadContext { posture }).unwrap();
 
     database
         .admin
@@ -1412,6 +1437,54 @@ async fn reconciliation_completes_a_target_the_catalog_already_reached() {
     assert_eq!(failed[0]["correlation"], failed[1]["correlation"]);
     assert!(!failed[1].to_string().contains(RECONCILE_OPERATOR_CANARY));
 
+    if check_mismatch {
+        let other = load_package(
+            &target_path,
+            &PackageLoadContext {
+                posture: Production,
+            },
+        )
+        .unwrap();
+        let before = read_activation_status(
+            &database.migration_config,
+            &database.migration_role,
+            timeouts(),
+        )
+        .await
+        .unwrap();
+        let error = reconcile(&database, &other, &active, &base, true)
+            .await
+            .expect_err("reconciliation refuses a different posture");
+        assert_eq!(
+            error,
+            ReconcileError::PostureMismatch {
+                recorded: Development,
+                declared: Production,
+            }
+        );
+        assert_eq!(
+            before,
+            read_activation_status(
+                &database.migration_config,
+                &database.migration_role,
+                timeouts()
+            )
+            .await
+            .unwrap()
+        );
+        assert_activation_posture(&database, Development.as_str()).await;
+    }
+    if legacy {
+        database
+            .admin
+            .batch_execute(
+                "ALTER TABLE registry_internal.registry_state DROP COLUMN posture;
+             ALTER TABLE registry_internal.registry_migrations DROP COLUMN posture;",
+            )
+            .await
+            .unwrap();
+    }
+
     let completed = reconcile(&database, &package, &active, &base, true)
         .await
         .expect("the missing activation transition completes");
@@ -1420,6 +1493,7 @@ async fn reconciliation_completes_a_target_the_catalog_already_reached() {
     let mut target = target_identity(&package);
     target.activation_id = activation_at(&database, 2).await;
     assert_ready_target(&database, &target).await;
+    assert_activation_posture(&database, posture.as_str()).await;
     assert_eq!(
         ledger_snapshot(&database)
             .await
@@ -1668,6 +1742,7 @@ async fn real_postgres_each_activation_is_one_ledger_row_in_apply_order() {
         .await
         .expect("the initial package activates");
     assert_eq!(active.package_digest, initial.package_digest());
+    assert_activation_posture(&database, "development").await;
     let initial_activation =
         Uuid::parse_str(&active.activation_id).expect("the activation id is a UUID");
 
@@ -1698,6 +1773,7 @@ async fn real_postgres_each_activation_is_one_ledger_row_in_apply_order() {
     let successor_activation =
         Uuid::parse_str(&activated.activation_id).expect("the activation id is a UUID");
     assert_ne!(initial_activation, successor_activation);
+    assert_activation_posture(&database, "development").await;
 
     let rows = database
         .admin
@@ -1781,6 +1857,105 @@ async fn real_postgres_each_activation_is_one_ledger_row_in_apply_order() {
     assert_eq!(claim_table, None);
 
     database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_activation_refuses_posture_changes_and_upgrades_legacy_columns() {
+    use registry_breg::startup::{prepare_startup, StartupError};
+    use registry_platform_config::Posture::{Development, Production};
+
+    for (recorded, declared, message) in [
+        (Production, Development, "this database is recorded as production; a development process never opens it"),
+        (Development, Production, "this database was activated in the development posture; development data and settings are never promoted in place"),
+    ] {
+        let database = TestDatabase::create(1).await;
+        database.admin.batch_execute("CREATE EXTENSION btree_gist").await.unwrap();
+        let base = compile_variant(Variant::Base);
+        let fingerprint = initial_fingerprint(&database, &base).await;
+        let prepared = prepare_package(build_request(
+            Variant::Base, None, &fingerprint, PackageMigrationPlanInput::InitialCompiledDdl,
+        )).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("package");
+        prepared.publish_to_directory(&path).unwrap();
+        let initial = load_package(&path, &PackageLoadContext { posture: recorded }).unwrap();
+        let active = apply(&database, &initial, ApplyPrecondition::InitialActivation).await.unwrap();
+        assert_activation_posture(&database, recorded.as_str()).await;
+
+        let pool = database.runtime_config.build_pool().unwrap();
+        let mut client = pool.get_for_test().await.unwrap();
+        if recorded == Production {
+            database.admin.batch_execute(
+                "ALTER TABLE registry_internal.registry_state DROP COLUMN posture;
+                 ALTER TABLE registry_internal.registry_migrations DROP COLUMN posture;"
+            ).await.unwrap();
+            let legacy = read_activation_status(&database.migration_config, &database.migration_role, timeouts())
+                .await.unwrap().unwrap();
+            assert_eq!(legacy.active_entry().unwrap().posture, Production);
+            prepare_startup(&path, &PackageLoadContext { posture: Production }, DATABASE,
+                &mut client, &database.migration_role, &database.runtime_role).await.unwrap();
+        }
+
+        let startup = prepare_startup(&path, &PackageLoadContext { posture: declared }, DATABASE,
+            &mut client, &database.migration_role, &database.runtime_role).await.err().unwrap();
+        assert_eq!(startup, StartupError::PostureMismatch { recorded, declared });
+        assert_eq!(startup.to_string(), message);
+        drop(client);
+
+        let candidate = compile_variant(Variant::BatchAddedRequired);
+        let target_fingerprint = added_required_target_fingerprint(&database, &candidate).await;
+        let source = added_required_source("activation-posture", &active, &base, &candidate, &target_fingerprint, 0);
+        let target = prepare_package(build_request(
+            Variant::BatchAddedRequired, Some(&active.package_digest), &target_fingerprint,
+            PackageMigrationPlanInput::ReviewedSuccessor {
+                prior_registry: Box::new(base.clone()),
+                prior_schema_fingerprint: active.schema_fingerprint.clone(),
+                migrations: vec![source],
+            },
+        )).unwrap();
+        let target_path = root.path().join("successor");
+        target.publish_to_directory(&target_path).unwrap();
+        let successor = load_package(&target_path, &PackageLoadContext { posture: declared }).unwrap();
+        let precondition = || ApplyPrecondition::Successor { current: &active };
+        let before = read_activation_status(&database.migration_config, &database.migration_role, timeouts()).await.unwrap();
+        let planned = plan(&database, &successor, precondition(), false).await.unwrap_err();
+        assert_eq!(planned, MigrationError::PostureMismatch { recorded, declared });
+        assert_eq!(planned.to_string(), message);
+        let applied = apply(&database, &successor, precondition()).await.unwrap_err();
+        assert_eq!(applied, MigrationError::PostureMismatch { recorded, declared });
+        assert_eq!(read_activation_status(&database.migration_config, &database.migration_role, timeouts()).await.unwrap(), before);
+
+        let successor = load_package(&target_path, &PackageLoadContext { posture: recorded }).unwrap();
+        apply(&database, &successor, precondition()).await.unwrap();
+        assert_activation_posture(&database, recorded.as_str()).await;
+        drop(pool);
+        database.cleanup().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_reconcile_refuses_a_different_posture() {
+    reconcile_completable_target(true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_reconcile_upgrades_legacy_posture_columns() {
+    reconcile_completable_target(false, true).await;
+}
+
+async fn assert_activation_posture(database: &TestDatabase, expected: &str) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT s.posture, m.posture FROM registry_internal.registry_state s
+         JOIN registry_internal.registry_migrations m ON s.active_activation_id = m.activation_id
+         WHERE s.singleton",
+            &[],
+        )
+        .await
+        .expect("the active state and ledger both record posture");
+    assert_eq!(row.get::<_, String>(0), expected);
+    assert_eq!(row.get::<_, String>(1), expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2024,6 +2199,7 @@ async fn real_postgres_each_activation_audits_its_request_and_its_applied_respon
         "planKind": "initial",
         "databaseId": DATABASE,
         "environment": ENVIRONMENT,
+        "posture": "development",
         "instanceId": INSTANCE,
         "roleMode": "split",
         "operatorReference": reference_hash,
@@ -2051,6 +2227,7 @@ async fn real_postgres_each_activation_audits_its_request_and_its_applied_respon
         "planKind": "successor",
         "databaseId": DATABASE,
         "environment": ENVIRONMENT,
+        "posture": "development",
         "instanceId": INSTANCE,
         "roleMode": "single",
         "operatorReference": null,
@@ -4529,27 +4706,52 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     let predecessor_baseline =
         CompiledRegistryMigrationBaseline::from_compiled(&active.package_digest, &prior);
     let (mut migration, migration_task) = database.connect_migration().await;
-    let report = preflight_field_encryption_backfill(
-        &mut migration,
-        FieldEncryptionBackfillPreflightRequest {
-            expected: &active,
-            migration_role: &database.migration_role,
-            timeouts: FieldEncryptionBackfillTimeouts::new(
-                Duration::from_secs(5),
-                Duration::from_secs(5),
+    use registry_platform_config::Posture;
+    let preflight = |posture| FieldEncryptionBackfillPreflightRequest {
+        posture,
+        expected: &active,
+        migration_role: &database.migration_role,
+        timeouts: FieldEncryptionBackfillTimeouts::new(
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .expect("preflight timeouts are bounded"),
+        registry: &candidate,
+        plan: package
+            .reviewed_migration_plan()
+            .expect("the successor carries its reviewed plan"),
+        predecessor_baseline: Some(&predecessor_baseline),
+        target_package_revision: package.package_digest(),
+        field_encryption: None,
+    };
+    for (recorded, declared) in [
+        ("production", Posture::Development),
+        ("development", Posture::Production),
+    ] {
+        database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_state SET posture = $1 WHERE singleton",
+                &[&recorded],
             )
-            .expect("preflight timeouts are bounded"),
-            registry: &candidate,
-            plan: package
-                .reviewed_migration_plan()
-                .expect("the successor carries its reviewed plan"),
-            predecessor_baseline: Some(&predecessor_baseline),
-            target_package_revision: package.package_digest(),
-            field_encryption: None,
-        },
-    )
-    .await
-    .expect("the operator preflight counts stored copies and normalized collisions");
+            .await
+            .unwrap();
+        let refused = preflight_field_encryption_backfill(&mut migration, preflight(declared))
+            .await
+            .expect_err("a different posture is the only mismatch");
+        assert_eq!(refused, FieldEncryptionBackfillPreflightError::Unavailable);
+    }
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state SET posture = $1 WHERE singleton",
+            &[&initial.posture().as_str()],
+        )
+        .await
+        .unwrap();
+    let report = preflight_field_encryption_backfill(&mut migration, preflight(package.posture()))
+        .await
+        .expect("the operator preflight counts stored copies and normalized collisions");
     migration_task.abort();
     assert_eq!(report.steps.len(), 1);
     assert_eq!(report.steps[0].fields.len(), 1);
@@ -4855,6 +5057,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
     let report = preflight_field_encryption_backfill(
         &mut migration,
         FieldEncryptionBackfillPreflightRequest {
+            posture: package.posture(),
             expected: &active,
             migration_role: &database.migration_role,
             timeouts: FieldEncryptionBackfillTimeouts::new(
@@ -5607,7 +5810,7 @@ fn build_request(
 
 fn publish_and_load(
     prepared: registry_breg::package::PreparedPackage,
-    context: PackageLoadContext<'_>,
+    context: PackageLoadContext,
 ) -> VerifiedPackage {
     let root = tempfile::Builder::new()
         .prefix("registry-reviewed-runtime-")
@@ -5624,9 +5827,9 @@ fn publish_and_load(
     load_package(&package, &context).expect("published package loads with activation intent")
 }
 
-fn local_context() -> PackageLoadContext<'static> {
+fn local_context() -> PackageLoadContext {
     PackageLoadContext {
-        database_initialization_environment: "local",
+        posture: registry_platform_config::Posture::Development,
     }
 }
 
@@ -8987,6 +9190,7 @@ async fn real_postgres_operator_preflight_scans_blind_index_reindex_steps() {
         .reviewed_migration_plan()
         .expect("the successor carries its reviewed plan");
     let request = |field_encryption| FieldEncryptionBackfillPreflightRequest {
+        posture: scenario.package.posture(),
         expected: &scenario.active,
         migration_role: &scenario.database.migration_role,
         timeouts: FieldEncryptionBackfillTimeouts::new(
@@ -9114,8 +9318,9 @@ async fn runtime_asset_count(scenario: &ReindexScenario) -> i64 {
         Vec::new(),
     )
     .expect("claim context is compiler-bound");
-    let lock_key =
-        RegistryLockKey::derive(scenario.prior.registry_id()).expect("lock key is bounded");
+    let lock_key = RegistryLockKey::derive(scenario.prior.registry_id())
+        .expect("lock key is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let transaction = begin_record_transaction(
         &mut runtime,
         lock_key,

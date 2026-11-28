@@ -48,7 +48,7 @@ fn requests_json(args: &[std::ffi::OsString]) -> bool {
     false
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
     let args = std::env::args_os().collect::<Vec<_>>();
     if let Some(message) = retired_option(&args) {
         let problem = registry_render::RenderProblem::new(
@@ -70,6 +70,9 @@ fn main() {
                     .is_some_and(|value| value.starts_with("--format="))
         });
     let cli = registry_render::cli::Cli::parse_from(args);
+    if let registry_render::cli::Command::RstackDev(args) = cli.command {
+        return registry_rstack_dev::run(args, &mut std::io::stdout(), &mut std::io::stderr());
+    }
     let code = registry_render::cli::run(cli, format_supplied);
     registry_render::cli::flush();
     std::process::exit(code);

@@ -273,6 +273,7 @@ runtime = [
     "dep:registry-platform-audit",
     "dep:registry-platform-authcommon",
     "dep:registry-platform-buildinfo",
+    "dep:registry-platform-postgres",
     "dep:registry-platform-crypto",
     "registry-platform-crypto/transit",
     "registry-platform-crypto/xchacha-seal",
@@ -328,13 +329,14 @@ registry-platform-canonical-json.workspace = true
 registry-platform-calendar.workspace = true
 registry-manifest-core.workspace = true
 registry-platform-audit = { workspace = true, optional = true }
-registry-platform-authcommon = { workspace = true, optional = true }
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"], optional = true }
 registry-platform-buildinfo = { workspace = true, optional = true }
 registry-platform-config.workspace = true
+registry-platform-postgres = { workspace = true, optional = true }
 registry-platform-crypto = { workspace = true, optional = true }
 registry-platform-dispatch = { workspace = true, features = ["postgres"], optional = true }
 registry-platform-hooks = { workspace = true, features = ["rhai"] }
-registry-platform-httpsec = { workspace = true, features = ["server"], optional = true }
+registry-platform-httpsec = { workspace = true, features = ["server", "refusal-trace-id"], optional = true }
 registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-metrics = { workspace = true, optional = true }
 registry-platform-objectstore = { workspace = true, optional = true }
@@ -375,7 +377,7 @@ futures-core.workspace = true
 tempfile.workspace = true
 rcgen.workspace = true
 registry-evidence-authoring.workspace = true
-registry-platform-testing = { workspace = true, features = ["test-utils"] }
+registry-platform-testing = { workspace = true, features = ["test-utils", "token-fixtures"] }
 registry-breg-client.workspace = true
 tokio-rustls.workspace = true
 tower.workspace = true
@@ -512,6 +514,16 @@ path = "tests/http_auth.rs"
 required-features = ["runtime"]
 
 [[test]]
+name = "authentication_refusals"
+path = "tests/authentication_refusals.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "concealment_refusals"
+path = "tests/concealment_refusals.rs"
+required-features = ["runtime"]
+
+[[test]]
 name = "http_read_only"
 path = "tests/http_read_only.rs"
 required-features = ["runtime"]
@@ -519,6 +531,11 @@ required-features = ["runtime"]
 [[test]]
 name = "issuer_portability"
 path = "tests/issuer_portability.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "token_characterisation"
+path = "tests/token_characterisation.rs"
 required-features = ["runtime"]
 
 [[test]]

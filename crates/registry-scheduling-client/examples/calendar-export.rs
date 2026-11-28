@@ -10,7 +10,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use registry_scheduling_client::{
     render_icalendar, BearerToken, CalendarEvent, OperationalAppointmentQuery,
-    OperationalTimeBasis, SchedulingAuth, SchedulingClient, SchedulingClientConfig,
+    OperationalTimeBasis, PeerPolicy, SchedulingAuth, SchedulingClient, SchedulingClientConfig,
     MAXIMUM_CALENDAR_EVENTS,
 };
 use url::Url;
@@ -54,7 +54,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let token_text = env::var(TOKEN_ENVIRONMENT_VARIABLE)
         .map_err(|_| CliError("REGISTRY_SCHEDULING_TOKEN is required"))?;
     let token = BearerToken::new(token_text)?;
-    let client = SchedulingClient::new(SchedulingClientConfig::new(arguments.base_url))?;
+    let client = SchedulingClient::new(SchedulingClientConfig::new(
+        arguments.base_url,
+        PeerPolicy::AcceptDevelopmentPeer,
+    ))?;
 
     // Build the whole snapshot before touching stdout. Any failed read,
     // continuation, bound check, or projection therefore produces no partial
@@ -404,6 +407,7 @@ mod tests {
         });
         let client = SchedulingClient::new(SchedulingClientConfig::new(
             Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+            PeerPolicy::AcceptDevelopmentPeer,
         ))
         .expect("client");
         (client, calls)

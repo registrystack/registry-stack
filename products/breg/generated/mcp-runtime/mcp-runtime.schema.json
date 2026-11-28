@@ -53,6 +53,13 @@
           "default": "file",
           "description": "Where audit lines go: `file` or `stdout`."
         },
+        "hashKeyCustody": {
+          "$ref": "#/$defs/AuditKeyCustody",
+          "description": "Who provisioned the key. Absent means `operator-provisioned`.\n`development-generated` marks a key a development tool made.",
+          "x-registry-development-only": [
+            "platform.posture.generated-audit-key"
+          ]
+        },
         "hashKeyRef": {
           "$ref": "#/$defs/SecretReference",
           "description": "Secret reference to the audit hash key."
@@ -118,6 +125,21 @@
         }
       ]
     },
+    "AuditKeyCustody": {
+      "description": "Who provisioned the audit hash key.",
+      "oneOf": [
+        {
+          "const": "operator-provisioned",
+          "description": "The operator provisioned the key.",
+          "type": "string"
+        },
+        {
+          "const": "development-generated",
+          "description": "A development tool generated the key.",
+          "type": "string"
+        }
+      ]
+    },
     "DetailsConfig": {
       "additionalProperties": false,
       "description": "The Record type holding the citizen's own record, found through the agent\nprofile's linked lookup.",
@@ -154,7 +176,7 @@
         },
         "tokenEndpoint": {
           "$ref": "#/$defs/Url",
-          "description": "The authorization server's token endpoint. An https URL with no query\nor fragment; plain http is accepted only on a loopback host under\n`development-loopback`."
+          "description": "The authorization server's token endpoint. An https URL with no query\nor fragment; plain HTTP is accepted on loopback in both postures."
         }
       },
       "required": [
@@ -177,7 +199,7 @@
       "description": "The file secret provider.",
       "properties": {
         "root": {
-          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "description": "Absolute directory holding one file per secret. A name may be a\nrelative link that stays below this directory, through at most 8 links.\nThe file it reaches must be a regular file with one hard link, owned by\nthe runtime user with mode 0400 or 0600, or owned by root with no\naccess beyond group read (0440 or 0640) when the runtime is not root.\nA process that declared development loads a file with looser read or\nmode bits and logs a warning.",
           "pattern": "^/",
           "type": "string"
         }
@@ -231,6 +253,24 @@
             },
             "type": {
               "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, as `static` does, for a test issuer a\ndevelopment run supervises. Development only: production refuses it.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "test-issuer",
               "type": "string"
             }
           },
@@ -369,7 +409,7 @@
         },
         "baseUrl": {
           "$ref": "#/$defs/Url",
-          "description": "The registry deployment's base URL. An https URL with no query or\nfragment; plain http is accepted only on a loopback host under\n`development-loopback`."
+          "description": "The registry deployment's base URL. An https URL with no query or\nfragment; plain HTTP is accepted on loopback in both postures."
         },
         "scopes": {
           "description": "The scopes requested for the delegated registry token.",
@@ -406,8 +446,11 @@
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the declared issuer and to a JWKS\nURI declared in `jwksSource`.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the declared issuer and to a JWKS\nURI declared in `jwksSource`. Requires declared development posture.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
         },
         "allowedClients": {
           "description": "The chat-host clients whose tokens the gateway accepts.",
@@ -421,14 +464,20 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "The exact issuer accepted in access-token `iss` claims. An https URL\nwith no query or fragment; plain http is accepted only on a loopback\nhost under `development-loopback`."
+          "description": "The exact issuer accepted in access-token `iss` claims. An https URL\nwith no query or fragment. Plain HTTP requires development. Beyond\nloopback it also requires `allowInsecureHttp`.",
+          "x-registry-development-only": [
+            "platform.posture.mcp-http-published-issuer"
+          ]
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
           "default": {
             "type": "discovery"
           },
-          "description": "Where the issuer's signing keys come from. Omitted, they are read\nthrough the issuer's OpenID Connect discovery document."
+          "description": "Where the issuer's signing keys come from. Omitted, they are read\nthrough the issuer's OpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
         },
         "maximumTokenLifetimeSeconds": {
           "default": 3600,
@@ -450,7 +499,10 @@
         },
         "resource": {
           "$ref": "#/$defs/Url",
-          "description": "This gateway's resource identifier: the exact URL of its MCP endpoint,\nwhich every accepted token must name as its audience. An https URL\nwhose path is `/mcp`, with no query or fragment; plain http is\naccepted only on a loopback host under `development-loopback`."
+          "description": "This gateway's resource identifier: the exact URL of its MCP endpoint,\nwhich every accepted token must name as its audience. An https URL\nwhose path is `/mcp`, with no query or fragment; plain http is\naccepted when the process declares development.",
+          "x-registry-development-only": [
+            "platform.posture.mcp-http-resource"
+          ]
         },
         "scopeClaim": {
           "$ref": "#/$defs/ExternalId",
@@ -545,7 +597,10 @@
         },
         "reviewBaseUrl": {
           "$ref": "#/$defs/Url",
-          "description": "The citizen-facing review page; an application is reviewed and\nsubmitted there, never through the chat host. The review page's\n`publicOrigin`, with no path, query, or fragment."
+          "description": "The citizen-facing review page; an application is reviewed and\nsubmitted there, never through the chat host. The review page's\n`publicOrigin`, with no path, query, or fragment. Plain HTTP requires\ndeclared development posture.",
+          "x-registry-development-only": [
+            "breg.posture.review-http-public-origin"
+          ]
         }
       },
       "required": [
@@ -567,11 +622,20 @@
     },
     "TlsTermination": {
       "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
-      "enum": [
-        "operator-controlled-upstream",
-        "development-loopback"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "operator-controlled-upstream",
+            "development-loopback"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "loopback-plaintext",
+          "description": "Plaintext on a loopback bind, behind a proxy on the same host. Valid\nin every posture. It is placement only: it relaxes nothing a product\nrelaxes under `development-loopback`.",
+          "type": "string"
+        }
+      ]
     },
     "Url": {
       "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",

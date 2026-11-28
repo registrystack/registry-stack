@@ -31,10 +31,10 @@ fn write_runtime_with(
 kind: {RUNTIME_CONFIG_KIND}
 identity: {{databaseId: \"{database_id}\"}}
 package: {{root: {package}}}
-listener: {{bind: \"{bind}\", tlsTermination: development-loopback}}
+listener: {{bind: \"{bind}\", tlsTermination: loopback-plaintext}}
 secretProviders: {{file: {{root: {root}/secrets}}, environment: {{}}}}
 database: {{runtimeUrlRef: secret:env/RUNTIME, migrationUrlRef: secret:env/MIGRATION}}
-authentication: {{oidc: {{issuer: http://127.0.0.1:8091, audience: urn:example:casework, allowedClients: unrestricted}}}}
+authentication: {{oidc: {{issuers: {{main: {{issuer: http://127.0.0.1:8091, audience: urn:example:casework, allowedClients: [casework-test]}}}}}}}}
 audit: {{path: {root}/audit.ndjson, hashKeyRef: secret:file/audit}}
 contextProviders: {{}}
 {tail}",
@@ -44,6 +44,72 @@ contextProviders: {{}}
     )
     .expect("write runtime.yaml");
     runtime
+}
+
+#[test]
+fn runtime_read_refusal_ranks_the_misspelled_database_above_the_missing_member() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let runtime = write_runtime(&root, &root.join("package"));
+    let contents = std::fs::read_to_string(&runtime)
+        .unwrap()
+        .replace("database:", "databse:");
+    std::fs::write(&runtime, contents).unwrap();
+    let declared = registry_platform_config::declared_from(None, None).unwrap();
+    let refusal = registry_casework::RuntimeConfig::load_file(&runtime, declared).unwrap_err();
+    assert_eq!(refusal.code(), "config.unknown-key");
+    assert_eq!(refusal.pointer(), "/databse");
+    assert_eq!(
+        refusal.suggested_action(),
+        "Rename `databse` to `database`, or remove it."
+    );
+}
+
+#[test]
+fn runtime_decode_refusal_keeps_literal_unrestricted_clients() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let runtime = write_runtime(&root, &root.join("package"));
+    let contents = std::fs::read_to_string(&runtime)
+        .unwrap()
+        .replace(
+            "database: {runtimeUrlRef: secret:env/RUNTIME, migrationUrlRef: secret:env/MIGRATION}",
+            "database: false",
+        )
+        .replace(
+            "allowedClients: [casework-test]",
+            "allowedClients: unrestricted",
+        );
+    std::fs::write(&runtime, contents).unwrap();
+    let (exit, stderr) = serve(&runtime);
+    assert_eq!(exit, Some(1));
+    assert!(
+        stderr.contains("config.invalid-type") && stderr.contains("/database"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("casework.posture.unrestricted-clients")
+            && stderr.contains("/authentication/oidc/issuers/main/allowedClients"),
+        "{stderr}"
+    );
+    let declared = registry_platform_config::declared_from(None, None).unwrap();
+    let check = registry_casework::check_runtime(&runtime, None, false, declared);
+    for (code, path) in [
+        ("config.invalid-type", "/database"),
+        (
+            "casework.posture.unrestricted-clients",
+            "/authentication/oidc/issuers/main/allowedClients",
+        ),
+    ] {
+        assert!(
+            check
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == code && entry.path == path),
+            "{:?}",
+            check.diagnostics
+        );
+    }
 }
 
 #[test]
@@ -103,6 +169,7 @@ fn serve(runtime: &Path) -> (Option<i32>, String) {
         .arg(runtime)
         .arg("serve")
         .env_remove("CASEWORK_LOG")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .expect("run casework");
     assert!(output.stdout.is_empty());
@@ -182,6 +249,43 @@ fn a_runtime_file_breaking_casework_rules_prints_each_at_its_position() {
     assert_eq!(lines[7], "2 errors, 0 warnings in 1 file");
     assert!(!stderr.contains("padded"), "{stderr}");
     assert!(!stderr.contains("10.0.0.5"), "{stderr}");
+}
+
+fn assert_completion_credential_names_replacement(member: &str, value: &str) {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let runtime = write_runtime_with(
+        &root,
+        &root.join("package"),
+        "casework-test",
+        "127.0.0.1:8100",
+        &format!("reviewCompletionDestinations:\n  receiver:\n    url: https://receiver.example.test/completions\n    {member}: {value}\n"),
+    );
+
+    let (code, stderr) = serve(&runtime);
+    assert_eq!(code, Some(1));
+    assert!(
+        stderr.contains(&format!("/reviewCompletionDestinations/receiver/{member}")),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Configure hmacSha256KeyRef with a Standard Webhooks signing key"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("secret:file/retired"), "{stderr}");
+}
+
+#[test]
+fn a_completion_destination_with_a_bearer_token_names_its_replacement() {
+    assert_completion_credential_names_replacement("bearerTokenRef", "secret:file/retired");
+}
+
+#[test]
+fn a_completion_destination_with_auth_names_its_replacement() {
+    assert_completion_credential_names_replacement(
+        "auth",
+        "{header: x-api-key, secretRef: secret:file/retired}",
+    );
 }
 
 const CANONICAL: &str =
@@ -267,7 +371,7 @@ taskTemplates:
     let text = std::fs::read_to_string(&runtime)
         .expect("read runtime.yaml")
         .replace(
-            "allowedClients: unrestricted",
+            "allowedClients: [casework-test]",
             "allowedClients: [summary-client]",
         )
         .replace(
@@ -293,12 +397,25 @@ taskAuthority:
         );
     std::fs::write(&runtime, text).expect("write runtime.yaml");
 
-    let config = registry_casework::RuntimeConfig::load(&runtime).expect("runtime file");
+    let loaded = registry_casework::RuntimeConfig::load(
+        &runtime,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("runtime file");
+    let config = loaded.config;
     let package = config.load_package().expect("package");
     let secrets = registry_casework::secret_resolver(&config).expect("secrets");
-    let error = registry_casework::build_context_providers(&config, &package, &secrets)
-        .err()
-        .expect("runtime binding omits the required task-grant profile");
+    let error = registry_casework::build_context_providers(
+        &config,
+        &package,
+        &secrets,
+        registry_platform_config::Posture::Development,
+    )
+    .err()
+    .expect("runtime binding omits the required task-grant profile");
 
     assert!(matches!(
         &error,
@@ -309,4 +426,143 @@ taskAuthority:
         error.to_string(),
         "the Casework review-context provider facility-proposal-context is not configured for its declared capability and export"
     );
+}
+
+#[test]
+fn production_collects_development_settings_before_opening_the_package() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let runtime = write_runtime(&root, &root.join("absent-package"));
+    let contents = std::fs::read_to_string(&runtime).expect("runtime file");
+    std::fs::write(
+        &runtime,
+        contents
+            .replace(
+                "issuer: http://127.0.0.1:8091",
+                "issuer: http://10.0.0.5:8091, allowInsecureHttp: true",
+            )
+            .replace(
+                "allowedClients: [casework-test]",
+                "allowedClients: unrestricted",
+            ),
+    )
+    .expect("write runtime file");
+
+    for posture in [None, Some("production")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_casework"));
+        command.env_remove("REGISTRY_STACK_POSTURE");
+        command.arg("--runtime-config").arg(&runtime);
+        if let Some(value) = posture {
+            command.args(["--posture", value]);
+        }
+        let output = command.arg("serve").output().expect("run casework");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+        for needle in [
+            "platform.posture.insecure-issuer-http",
+            "casework.posture.unrestricted-clients",
+            "/authentication/oidc/issuers/main/allowedClients",
+            "rstack dev",
+            "REGISTRY_STACK_POSTURE=development",
+            "--posture development",
+        ] {
+            assert!(stderr.contains(needle), "missing {needle}: {stderr}");
+        }
+        assert_eq!(output.status.code(), Some(1));
+    }
+}
+
+#[test]
+fn development_startup_logs_the_settings_before_opening_dependencies() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let package = root.join("package");
+    std::fs::create_dir(&package).unwrap();
+    std::fs::write(package.join(POLICY_FILE), PROJECT).unwrap();
+    registry_platform_config::write_sum_file(&package, None, &package_limits(), PACKAGE_COMMAND)
+        .unwrap();
+    let runtime = write_runtime(&root, &package);
+    let contents = std::fs::read_to_string(&runtime).unwrap().replace(
+        "issuer: http://127.0.0.1:8091, audience: urn:example:casework, allowedClients: [casework-test]",
+        "issuer: http://10.0.0.5:8091, allowInsecureHttp: true, audience: urn:example:casework, allowedClients: unrestricted",
+    );
+    std::fs::write(&runtime, contents).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_casework"))
+        .arg("--runtime-config")
+        .arg(&runtime)
+        .args(["--posture", "development", "serve"])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .env_remove("CASEWORK_LOG")
+        .output()
+        .unwrap();
+    let lines = String::from_utf8(output.stdout).unwrap();
+    let logs: Vec<serde_json::Value> = lines
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        logs.iter()
+            .any(|log| log["fields"]["message"] == "posture declared"
+                && log["fields"]["posture"] == "development"
+                && log["fields"]["development_settings"] == 2),
+        "{lines}"
+    );
+    for code in [
+        "platform.posture.insecure-issuer-http",
+        "casework.posture.unrestricted-clients",
+    ] {
+        assert!(
+            logs.iter().any(|log| log["fields"]["error_code"] == code),
+            "{lines}"
+        );
+    }
+}
+
+#[test]
+fn invalid_posture_is_a_usage_error_before_runtime_loading() {
+    let output = Command::new(env!("CARGO_BIN_EXE_casework"))
+        .args([
+            "--posture",
+            "bogus",
+            "--runtime-config",
+            "/unused/runtime.yaml",
+            "serve",
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "casework: [platform.posture.invalid-value] --posture was given a value that is not a posture\n  next: Pass --posture development or --posture production.\n"
+    );
+}
+
+#[path = "support/marked_provider.rs"]
+mod marked_provider;
+
+#[tokio::test]
+async fn serving_provider_applies_peer_policy_to_marked_breg_response() {
+    let fixture = marked_provider::Fixture::new();
+    for posture in marked_provider::POSTURES {
+        let config = registry_casework::RuntimeConfig::load(&fixture.runtime, posture)
+            .unwrap()
+            .config;
+        let package = config.load_package().unwrap();
+        let resolver = registry_casework::secret_resolver(&config).unwrap();
+        let providers = registry_casework::build_context_providers(
+            &config,
+            &package,
+            &resolver,
+            posture.posture,
+        )
+        .unwrap();
+        let [provider] = providers.as_slice() else {
+            panic!("expected the one declared provider");
+        };
+        fixture
+            .assert_policy(provider.as_ref(), posture.posture)
+            .await;
+    }
+    fixture.finish();
 }

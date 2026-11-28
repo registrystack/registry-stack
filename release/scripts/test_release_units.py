@@ -167,6 +167,8 @@ class ReleaseUnitsTest(TestCase):
             with self.subTest(name=name):
                 self.assertEqual("adapter", registry.artifact_owner(name))
         self.assertEqual("clients", registry.artifact_owner("registrystack-client-0.45.0.tgz"))
+        self.assertEqual("clients", registry.artifact_owner("registrystack-client-0.49.0.tgz"))
+        self.assertEqual("clients", registry.artifact_owner("registrystack-client-node-0.49.0.tgz"))
         self.assertEqual("clients", registry.artifact_owner("registry_stack_client-0.45.0-cp311-abi3-manylinux.whl"))
         self.assertEqual("distribution", registry.artifact_owner("registry-docs-v0.45.0.tar.gz"))
         self.assertEqual("distribution", registry.artifact_owner("rstack-v0.45.0-linux-amd64"))

@@ -90,6 +90,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     fixture.activate_candidate_bundle();
     fixture.provision_target_secrets();
     let absent_authority = Command::new(evidence)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("check")
         .arg("--runtime-config")
         .arg(&fixture.target_runtime)
@@ -265,6 +266,7 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     fixture.write_verification_policy(&payload, &nonce, &published_revision);
     assert_success(
         Command::new(evidence)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg("verify")
             .arg("--jws")
             .arg(&fixture.response)
@@ -1605,6 +1607,7 @@ privacyExpectation:
     fn activate_target_authority(&self, evidence: &Path) {
         assert_success(
             Command::new(evidence)
+                .env_remove("REGISTRY_STACK_POSTURE")
                 .args(["authority", "activate", "--runtime-config"])
                 .arg(&self.target_runtime)
                 .arg("--document")
@@ -1752,6 +1755,7 @@ privacyExpectation:
     fn start_evidence(&self, evidence: &Path) -> Child {
         let log = owner_only_log(&self.root.join("evidence.log"));
         Command::new(evidence)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg("serve")
             .arg("--runtime-config")
             .arg(self.target_runtime.clone())
@@ -2225,7 +2229,9 @@ fn authority_grant(definition: &str, purpose: &str, subjects: Vec<(&str, &str)>)
 }
 
 fn evidencectl() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
+    command.env_remove("REGISTRY_STACK_POSTURE");
+    command
 }
 
 fn assert_success(output: Output, label: &str) -> Output {
@@ -2279,6 +2285,7 @@ fn assert_requirement_forms(
 fn check_package(evidence: &Path, runtime: &Path, label: &str) -> String {
     let output = assert_success(
         Command::new(evidence)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg("check")
             .arg("--runtime-config")
             .arg(runtime)

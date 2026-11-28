@@ -13,6 +13,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+const PRODUCTION_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Default,
+    };
+
 use axum::body::{to_bytes, Body};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{Request, StatusCode};
@@ -173,10 +179,13 @@ async fn runtime_startup_preserves_retryable_submissions_when_review_authority_i
         &idp,
         Some("0123456789abcdef0123456789abcdef"),
     );
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("missing optional review authority leaves unrelated Registry work usable");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("missing optional review authority leaves unrelated Registry work usable");
     let retained = database
         .admin
         .query(
@@ -271,17 +280,24 @@ async fn startup_refuses_an_instance_id_change_while_deliveries_are_pending() {
         CapturedDeliveryState::DeadLettered,
     )
     .await;
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("finished deliveries under another instance do not block startup");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("finished deliveries under another instance do not block startup");
     drop(prepared);
 
     insert_captured_delivery(&database, &previous_source, CapturedDeliveryState::Pending).await;
     assert_eq!(
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err(),
+        prepare_with_connection_config_for_test(
+            &config_path,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE
+        )
+        .await
+        .err(),
         Some(StartupError::InstanceIdChangedWithPendingDeliveries {
             stored_source: previous_source.clone(),
             configured_instance_id: INSTANCE.to_owned(),
@@ -289,11 +305,14 @@ async fn startup_refuses_an_instance_id_change_while_deliveries_are_pending() {
         })
     );
     insert_captured_delivery(&database, &previous_source, CapturedDeliveryState::Leased).await;
-    let refusal =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err()
-            .expect("a leased delivery under another instance refuses startup");
+    let refusal = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err()
+    .expect("a leased delivery under another instance refuses startup");
     assert_eq!(
         refusal,
         StartupError::InstanceIdChangedWithPendingDeliveries {
@@ -330,9 +349,13 @@ async fn startup_refuses_an_instance_id_change_while_deliveries_are_pending() {
     )
     .expect("restored runtime config writes");
     assert_eq!(
-        prepare_with_connection_config_for_test(&restored_path, database.runtime_config.clone())
-            .await
-            .err(),
+        prepare_with_connection_config_for_test(
+            &restored_path,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE
+        )
+        .await
+        .err(),
         Some(StartupError::RetainedHookBindings {
             retained_deliveries: 2
         })
@@ -487,10 +510,13 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
         &idp,
         Some("0123456789abcdef0123456789abcdef"),
     );
-    let empty =
-        prepare_with_connection_config_for_test(&database_config, database.runtime_config.clone())
-            .await
-            .expect("default database startup succeeds with no attachment rows");
+    let empty = prepare_with_connection_config_for_test(
+        &database_config,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("default database startup succeeds with no attachment rows");
     assert_ready(&empty, StatusCode::OK).await;
     drop(empty);
 
@@ -520,11 +546,12 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
     let s3_config = fixture.root.join("runtime-attachment-s3.yaml");
     let base_config = fs::read_to_string(&database_config).unwrap();
     fs::write(&s3_config,format!("{base_config}\nattachmentStorage:\n  type: s3\n  url: {endpoint}\n  bucket: startup-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-access\n  secretAccessKeyRef: secret:file/attachment-secret\n")).unwrap();
-    let activated = registry_breg::runtime_config::load_runtime_config(&s3_config)
-        .unwrap()
-        .activate_attachment_storage(verified.registry().registry_id())
-        .await
-        .unwrap();
+    let activated =
+        registry_breg::runtime_config::load_runtime_config(&s3_config, PRODUCTION_POSTURE)
+            .unwrap()
+            .activate_attachment_storage(verified.registry().registry_id())
+            .await
+            .unwrap();
     let original_backend = activated.binding_digest();
     let hash = "b".repeat(64);
     let tx = migration.transaction().await.unwrap();
@@ -545,17 +572,21 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
         assert_eq!(
             prepare_with_connection_config_for_test(
                 &database_config,
-                database.runtime_config.clone()
+                database.runtime_config.clone(),
+                PRODUCTION_POSTURE
             )
             .await
             .err(),
             Some(StartupError::AttachmentStorage),
             "actual runtime startup refuses backend changes while {state} storage remains",
         );
-        let restored =
-            prepare_with_connection_config_for_test(&s3_config, database.runtime_config.clone())
-                .await
-                .expect("restoring the original operator binding admits runtime startup");
+        let restored = prepare_with_connection_config_for_test(
+            &s3_config,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE,
+        )
+        .await
+        .expect("restoring the original operator binding admits runtime startup");
         assert_ready(&restored, StatusCode::OK).await;
         drop(restored);
     }
@@ -567,7 +598,8 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
     assert_eq!(
         prepare_with_connection_config_for_test(
             &changed_verifier_config,
-            database.runtime_config.clone()
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE
         )
         .await
         .err(),
@@ -584,15 +616,22 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
         .await
         .unwrap();
     assert_eq!(
-        prepare_with_connection_config_for_test(&database_config, database.runtime_config.clone())
-            .await
-            .err(),
+        prepare_with_connection_config_for_test(
+            &database_config,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE
+        )
+        .await
+        .err(),
         Some(StartupError::AttachmentStorage)
     );
-    let pinned =
-        prepare_with_connection_config_for_test(&s3_config, database.runtime_config.clone())
-            .await
-            .expect("original binding remains valid with only the permanent pin");
+    let pinned = prepare_with_connection_config_for_test(
+        &s3_config,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("original binding remains valid with only the permanent pin");
     drop(pinned);
     migration_task.abort();
     control_task.abort();
@@ -684,15 +723,107 @@ async fn production_startup_refuses_local_file_field_encryption_custody() {
         format!("{raw}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/field-dek\n"),
     )
     .expect("local-file runtime config writes");
-    assert_eq!(
-        prepare_with_connection_config_for_test(
-            &local_file_config,
-            database.runtime_config.clone()
-        )
+    let Some(StartupError::RuntimeConfig(error)) = prepare_with_connection_config_for_test(
+        &local_file_config,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err() else {
+        panic!("production must refuse local-file custody at configuration load");
+    };
+    assert!(error
+        .diagnostics(None)
+        .iter()
+        .any(|finding| finding.code == "breg.posture.local-key-custody"
+            && finding.path == "/fieldEncryption/provider"));
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn operator_services_preserve_a_posture_mismatch() {
+    use registry_breg::hooks::{HookOperatorError, HookOperatorService};
+    use registry_breg::timer_operator::{TimerOperatorError, TimerOperatorService};
+    use registry_platform_config::Posture::{Development, Production};
+
+    let database = TestDatabase::create(2).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let fixture = StartupFixture::new();
+    let package = PackageFixture::build(&fixture.root, fingerprint(1));
+    let verified = load_package(&package.root, &package.context()).unwrap();
+    install_compiled_schema(&migration, verified.registry(), &database.runtime_role)
         .await
-        .err(),
-        Some(StartupError::FieldEncryptionCustody),
-        "a databaseInitializationEnvironment other than local refuses plaintext data-key files"
+        .unwrap();
+    registry_breg::postgres::initialize_compiled_registry_state_with_posture_for_test(
+        &migration,
+        &database.runtime_role,
+        verified.registry(),
+        RegistryStateTestIdentity {
+            package_id: &verified.manifest().package_id,
+            database_id: DATABASE,
+            label: verified.package_digest(),
+        },
+        Development,
+    )
+    .await
+    .unwrap();
+
+    let idp = MockIdp::start().await;
+    let config = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let raw = fs::read_to_string(&config).unwrap();
+    fs::write(
+        &config,
+        raw.replace(
+            "database:\n",
+            "database:\n  transport: loopback-plaintext\n",
+        ),
+    )
+    .unwrap();
+    let database_url = fixture.secret_root.join("database-url");
+    let runtime = database.runtime_raw_config();
+    let mut url = url::Url::parse(&std::env::var("BREG_TEST_DATABASE_URL").unwrap()).unwrap();
+    url.set_username(runtime.get_user().unwrap()).unwrap();
+    let password = std::str::from_utf8(runtime.get_password().unwrap()).unwrap();
+    url.set_password(Some(password)).unwrap();
+    url.set_path(runtime.get_dbname().unwrap());
+    fs::write(&database_url, url.as_str()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&database_url, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let hooks = HookOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
+        .await
+        .err()
+        .unwrap();
+    let timers = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+        hooks,
+        HookOperatorError::PostureMismatch {
+            recorded: Development,
+            declared: Production,
+        }
+    );
+    assert_eq!(
+        timers.problem_code(),
+        "platform.activation.posture-mismatch"
+    );
+    assert_eq!(
+        timers,
+        TimerOperatorError::PostureMismatch {
+            recorded: Development,
+            declared: Production,
+        }
     );
     migration_task.abort();
     database.cleanup().await;
@@ -753,10 +884,13 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
         format!("{raw}metricsListener:\n  bind: {}\n", reserve_address()),
     )
     .expect("metrics listener runtime config writes");
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("prepared server verifies package, database, audit, and OIDC");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("prepared server verifies package, database, audit, and OIDC");
     assert_ready(&prepared, StatusCode::OK).await;
     assert_unknown_static_kid_refuses_value_free(&prepared).await;
     assert_metrics_publish_the_verified_package_and_every_queue(&database, &prepared, &verified)
@@ -770,9 +904,13 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
         Some("0123456789abcdef0123456789abcdef"),
     );
     assert_eq!(
-        prepare_with_connection_config_for_test(&wrong_role_path, database.runtime_config.clone())
-            .await
-            .err(),
+        prepare_with_connection_config_for_test(
+            &wrong_role_path,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE
+        )
+        .await
+        .err(),
         Some(StartupError::DatabaseUnready)
     );
 
@@ -867,10 +1005,13 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         Some("0123456789abcdef0123456789abcdef"),
     );
 
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("prepared server verifies package, database, audit, and OIDC");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("prepared server verifies package, database, audit, and OIDC");
     let pool = prepared
         .runtime_pool_for_test()
         .expect("the verified startup path exposes its runtime pool");
@@ -927,10 +1068,13 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         .batch_execute("CREATE EXTENSION pg_stat_statements")
         .await
         .expect("the test database installs pg_stat_statements");
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("catalog verification and startup accept pg_stat_statements without preload");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("catalog verification and startup accept pg_stat_statements without preload");
     assert_ready(&prepared, StatusCode::OK).await;
     let pg_stat_statements = prepared
         .postgres_advisories()
@@ -952,10 +1096,13 @@ async fn prepared_server_sessions_are_named_bounded_and_pg_stat_statements_stays
         ))
         .await
         .expect("the test role carries a placeholder pg_stat_statements setting");
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("startup accepts a placeholder pg_stat_statements setting");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("startup accepts a placeholder pg_stat_statements setting");
     let pg_stat_statements = prepared
         .postgres_advisories()
         .iter()
@@ -1067,10 +1214,13 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
         &idp,
         Some(AUDIT_KEY),
     );
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("the database that recorded the claim serves");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the database that recorded the claim serves");
     assert_ready(&prepared, StatusCode::OK).await;
 
     let claims = InstanceClaimService::new_for_test(
@@ -1120,9 +1270,13 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
         .expect("test simulates a restored copy");
     assert_ready(&prepared, StatusCode::SERVICE_UNAVAILABLE).await;
     assert_eq!(
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err(),
+        prepare_with_connection_config_for_test(
+            &config_path,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE
+        )
+        .await
+        .err(),
         Some(StartupError::InstanceClaimMismatch),
         "a copy the claim does not name refuses to serve by name"
     );
@@ -1140,9 +1294,13 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
     // One runtime holds the script engine at a time, so the running server
     // stops before the adopted copy starts afresh.
     drop(prepared);
-    prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-        .await
-        .expect("the adopted copy serves");
+    prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the adopted copy serves");
 
     let adoptions: Vec<serde_json::Value> = database
         .audit_entries()
@@ -1172,9 +1330,13 @@ async fn restored_copy_journey(withhold_system_identifier: bool) {
             readable.matches,
             "an unrecorded identifier compares the oid"
         );
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("the claim without an identifier keeps serving");
+        prepare_with_connection_config_for_test(
+            &config_path,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE,
+        )
+        .await
+        .expect("the claim without an identifier keeps serving");
     }
     idp.stop().await;
     database.cleanup().await;
@@ -1220,7 +1382,7 @@ async fn instance_claim_refuses_a_package_root_its_expected_digest_does_not_pin(
     .expect("pinned runtime config writes");
     let before = managed_database_snapshot(&database.admin).await;
 
-    let refusal = InstanceClaimService::from_runtime_config(&config_path)
+    let refusal = InstanceClaimService::from_runtime_config(&config_path, PRODUCTION_POSTURE)
         .await
         .err()
         .expect("a swapped package root is refused");
@@ -1257,10 +1419,13 @@ async fn startup_refuses_an_unapplied_database_naming_the_initial_apply_and_writ
     );
     let before = managed_database_snapshot(&database.admin).await;
 
-    let refusal =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err();
+    let refusal = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err();
 
     assert_eq!(refusal, Some(StartupError::DatabaseUninitialized));
     assert!(StartupError::DatabaseUninitialized
@@ -1304,10 +1469,13 @@ async fn startup_refuses_an_unrecognised_registry_state_and_writes_nothing() {
     );
     let before = managed_database_snapshot(&database.admin).await;
 
-    let refusal =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err();
+    let refusal = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err();
 
     assert_eq!(refusal, Some(StartupError::UnrecognizedDatabase));
     assert!(StartupError::UnrecognizedDatabase
@@ -1347,10 +1515,13 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
         &idp,
         Some("0123456789abcdef0123456789abcdef"),
     );
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("the split activation serves");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the split activation serves");
     assert_eq!(prepared.role_mode(), RoleMode::Split);
     drop(prepared);
 
@@ -1397,10 +1568,13 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
             .await
             .expect("administrator grants the runtime role write authority");
         let before = managed_database_snapshot(&database.admin).await;
-        let refusal =
-            prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-                .await
-                .err();
+        let refusal = prepare_with_connection_config_for_test(
+            &config_path,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE,
+        )
+        .await
+        .err();
         assert_eq!(
             refusal,
             Some(StartupError::RuntimeWriteAuthority),
@@ -1418,8 +1592,12 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
             .expect("administrator applies the named fix");
         // An ownership change carries the runtime role's own grants away with
         // the ownership, so startup then names the apply that reissues them.
-        match prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
+        match prepare_with_connection_config_for_test(
+            &config_path,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE,
+        )
+        .await
         {
             Ok(_) => {}
             Err(StartupError::RuntimeGrantsMissing) => {
@@ -1433,6 +1611,7 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
                 prepare_with_connection_config_for_test(
                     &config_path,
                     database.runtime_config.clone(),
+                    PRODUCTION_POSTURE,
                 )
                 .await
                 .expect("the reissued grants serve");
@@ -1451,10 +1630,13 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
         .await
         .expect("administrator revokes a runtime grant");
     let before = managed_database_snapshot(&database.admin).await;
-    let refusal =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err();
+    let refusal = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err();
     assert_eq!(refusal, Some(StartupError::RuntimeGrantsMissing));
     assert!(StartupError::RuntimeGrantsMissing
         .to_string()
@@ -1467,9 +1649,13 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
     )
     .await
     .expect("the apply reissues the revoked grant");
-    prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-        .await
-        .expect("the reissued grant serves");
+    prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the reissued grant serves");
 
     // A one-role runtime file over a database activated for a separate
     // runtime role is refused until the apply activates it for one role.
@@ -1478,6 +1664,7 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
     let refusal = prepare_with_connection_config_for_test(
         &single_config_path,
         database.migration_config.clone(),
+        PRODUCTION_POSTURE,
     )
     .await
     .err();
@@ -1501,6 +1688,7 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
     let prepared = prepare_with_connection_config_for_test(
         &single_config_path,
         database.migration_config.clone(),
+        PRODUCTION_POSTURE,
     )
     .await
     .expect("one role serves its own activation");
@@ -1509,10 +1697,13 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
 
     // The separate runtime role holds no grant of a one-role activation, so a
     // split runtime file names the apply that issues them.
-    let refusal =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err();
+    let refusal = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err();
     assert_eq!(refusal, Some(StartupError::RuntimeGrantsMissing));
     apply_startup_package_result(
         &database,
@@ -1521,9 +1712,13 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
     )
     .await
     .expect("the apply activates the package for the separate role");
-    prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-        .await
-        .expect("the separate role serves again");
+    prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the separate role serves again");
     idp.stop().await;
     database.cleanup().await;
 }
@@ -1547,10 +1742,13 @@ async fn startup_refuses_a_database_without_subject_access_log_storage_and_write
         &idp,
         Some("0123456789abcdef0123456789abcdef"),
     );
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("the activation serves with its access-log storage");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the activation serves with its access-log storage");
     drop(prepared);
 
     database
@@ -1562,10 +1760,13 @@ async fn startup_refuses_a_database_without_subject_access_log_storage_and_write
         .await
         .expect("administrator removes the access-log storage");
     let before = managed_database_snapshot(&database.admin).await;
-    let refusal =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err();
+    let refusal = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err();
     assert_eq!(refusal, Some(StartupError::RuntimeGrantsMissing));
     assert_eq!(
         managed_database_snapshot(&database.admin).await,
@@ -1580,9 +1781,13 @@ async fn startup_refuses_a_database_without_subject_access_log_storage_and_write
     )
     .await
     .expect("the apply reinstalls the access-log storage");
-    prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-        .await
-        .expect("the reinstalled storage serves");
+    prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the reinstalled storage serves");
 
     // One role serving its own activation is refused the same way: the
     // catalog it verifies before serving is closed over the storage.
@@ -1602,6 +1807,7 @@ async fn startup_refuses_a_database_without_subject_access_log_storage_and_write
     let prepared = prepare_with_connection_config_for_test(
         &single_config_path,
         database.migration_config.clone(),
+        PRODUCTION_POSTURE,
     )
     .await
     .expect("one role serves its own activation");
@@ -1618,6 +1824,7 @@ async fn startup_refuses_a_database_without_subject_access_log_storage_and_write
     let refusal = prepare_with_connection_config_for_test(
         &single_config_path,
         database.migration_config.clone(),
+        PRODUCTION_POSTURE,
     )
     .await
     .err();
@@ -1661,18 +1868,24 @@ async fn startup_refuses_the_v0_43_0_attachment_verification_shape_by_name() {
         &idp,
         Some("0123456789abcdef0123456789abcdef"),
     );
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("the activation serves with the current verification shape");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the activation serves with the current verification shape");
     drop(prepared);
 
     install_v0_43_0_attachment_verification(&database.admin).await;
     let before = managed_database_snapshot(&database.admin).await;
-    let refusal =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err();
+    let refusal = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err();
 
     assert_eq!(refusal, Some(StartupError::Pre1_0Schema));
     let message = StartupError::Pre1_0Schema.to_string();
@@ -1700,10 +1913,13 @@ async fn startup_refuses_the_v0_43_0_attachment_verification_shape_by_name() {
         )
         .await
         .expect("administrator removes the lease column");
-    let refusal =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .err();
+    let refusal = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err();
     assert_eq!(refusal, Some(StartupError::Pre1_0Schema));
     idp.stop().await;
     database.cleanup().await;
@@ -1954,10 +2170,13 @@ async fn one_database_role_applies_the_initial_package_and_serves_reads() {
         ),
     )
     .expect("single-role runtime config writes");
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.migration_config.clone())
-            .await
-            .expect("one role serves the applied package");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.migration_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("one role serves the applied package");
     assert_ready(&prepared, StatusCode::OK).await;
 
     let now = SystemTime::now()
@@ -1989,6 +2208,9 @@ async fn one_database_role_applies_the_initial_package_and_serves_reads() {
         )
         .await
         .expect("router responds");
+    assert!(response
+        .headers()
+        .contains_key(axum::http::header::STRICT_TRANSPORT_SECURITY));
     let status = response.status();
     let body = to_bytes(response.into_body(), 1024 * 1024)
         .await
@@ -2167,6 +2389,7 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
         &old_config,
         database.runtime_config.clone(),
         Arc::clone(&key_source),
+        PRODUCTION_POSTURE,
     )
     .await
     .expect("old exact package prepares");
@@ -2338,6 +2561,7 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
         &new_config,
         database.runtime_config.clone(),
         key_source,
+        PRODUCTION_POSTURE,
     )
     .await
     .expect("restart accepts only the exact active successor package");
@@ -2410,7 +2634,8 @@ async fn audit_and_oidc_failures_refuse_before_listener_bind() {
     assert_eq!(
         prepare_with_connection_config_for_test(
             &missing_audit_path,
-            database.runtime_config.clone()
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE
         )
         .await
         .err(),
@@ -2425,9 +2650,13 @@ async fn audit_and_oidc_failures_refuse_before_listener_bind() {
         Some("0123456789abcdef0123456789abcdef"),
     );
     assert_eq!(
-        prepare_with_connection_config_for_test(&bad_oidc_path, database.runtime_config.clone())
-            .await
-            .err(),
+        prepare_with_connection_config_for_test(
+            &bad_oidc_path,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE
+        )
+        .await
+        .err(),
         Some(StartupError::Oidc)
     );
     database.cleanup().await;
@@ -2784,6 +3013,21 @@ async fn assert_ready(prepared: &PreparedServer, expected: StatusCode) {
         .await
         .expect("router responds");
     assert_eq!(response.status(), expected);
+    assert!(!response.headers().contains_key("registry-posture"));
+    if expected == StatusCode::OK {
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        let ready: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            ready,
+            serde_json::json!({
+                "status": "ready",
+                "posture": "production",
+                "developmentSettings": [],
+            })
+        );
+    }
 }
 
 /// A serving process holds its audit file's single-writer lock, so a second
@@ -2809,25 +3053,37 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
             None,
         )
         .expect("the configured audit destination is valid"),
+        registry_platform_config::Posture::Production,
     )
     .await
     .expect("the serving writer takes the audit file lock");
-    let refusal =
-        prepare_with_connection_config_for_test(serving_config, database.runtime_config.clone())
-            .await
-            .err();
+    let refusal = prepare_with_connection_config_for_test(
+        serving_config,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .err();
     assert!(
         matches!(&refusal, Some(StartupError::AuditDestination(reason)) if reason.contains("stop it")),
         "a second writer over the serving audit file refuses to start and says to stop the other one: {refusal:?}"
     );
-    check_with_connection_config_for_test(serving_config, database.runtime_config.clone())
-        .await
-        .expect("the startup check runs beside the serving writer");
+    check_with_connection_config_for_test(
+        serving_config,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the startup check runs beside the serving writer");
     drop(serving_writer);
 
-    check_with_connection_config_for_test(unopened, database.runtime_config.clone())
-        .await
-        .expect("the startup check accepts a destination no writer has opened");
+    check_with_connection_config_for_test(
+        unopened,
+        database.runtime_config.clone(),
+        PRODUCTION_POSTURE,
+    )
+    .await
+    .expect("the startup check accepts a destination no writer has opened");
     let audit_path = configured_audit_path(unopened);
     assert!(
         !audit_path.exists() && !audit_path.parent().expect("audit directory").exists(),
@@ -2865,9 +3121,13 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
         // A torn final line is recoverable: the writer moves it to the
         // `.torn` side file when it opens, so the check accepts it and
         // changes nothing.
-        check_with_connection_config_for_test(unopened, database.runtime_config.clone())
-            .await
-            .expect("the startup check accepts a recoverable torn companion entry");
+        check_with_connection_config_for_test(
+            unopened,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE,
+        )
+        .await
+        .expect("the startup check accepts a recoverable torn companion entry");
         assert_eq!(
             fs::read_to_string(&companion_path).expect("companion audit file reads"),
             format!("{complete_entry}{{"),
@@ -2885,19 +3145,26 @@ async fn assert_audit_destination_has_one_writer_and_checks_take_none(
         fs::write(&torn_line, "earlier").expect("conflicting side file is written");
         fs::set_permissions(&torn_line, fs::Permissions::from_mode(0o600))
             .expect("side file mode is set");
-        let refusal =
-            check_with_connection_config_for_test(unopened, database.runtime_config.clone())
-                .await
-                .err();
+        let refusal = check_with_connection_config_for_test(
+            unopened,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE,
+        )
+        .await
+        .err();
         assert!(
             matches!(&refusal, Some(StartupError::AuditDestination(reason)) if reason.contains("archive the side file")),
             "a torn companion entry beside a conflicting side file refuses the startup check and names the recovery: {refusal:?}"
         );
         fs::remove_file(&torn_line).expect("side file cleanup");
         fs::write(&companion_path, complete_entry).expect("companion entry is completed");
-        check_with_connection_config_for_test(unopened, database.runtime_config.clone())
-            .await
-            .expect("the startup check accepts a completed companion destination");
+        check_with_connection_config_for_test(
+            unopened,
+            database.runtime_config.clone(),
+            PRODUCTION_POSTURE,
+        )
+        .await
+        .expect("the startup check accepts a completed companion destination");
     }
     fs::remove_dir_all(companion_directory).expect("companion audit directory cleanup");
 }
@@ -2965,7 +3232,7 @@ async fn mock_idp_key_source(idp: &MockIdp) -> Arc<JwksFetcher> {
             discovery_timeout: Duration::from_secs(5),
             max_doc_bytes: 16 * 1024,
         },
-        &FetchUrlPolicy::dev(),
+        &FetchUrlPolicy::https_or_loopback(),
     )
     .await
     .expect("MockIdp discovery fetch succeeds");
@@ -2979,7 +3246,7 @@ async fn mock_idp_key_source(idp: &MockIdp) -> Arc<JwksFetcher> {
             request_timeout: Duration::from_secs(5),
             outage_tolerance: Duration::ZERO,
         },
-        FetchUrlPolicy::dev(),
+        FetchUrlPolicy::https_or_loopback(),
     ))
 }
 
@@ -3059,9 +3326,10 @@ impl StartupFixture {
         let raw = fs::read_to_string(&path).expect("runtime config reads");
         fs::write(
             &path,
-            raw.replace(
-                "    jwksCache:\n",
-                "    jwksSource:\n      type: static\n      documentRef: secret:file/oidc-jwks\n    jwksCache:\n",
+            raw.replacen(
+                "\n        jwksCache:\n",
+                "\n        jwksSource:\n          type: static\n          documentRef: secret:file/oidc-jwks\n        jwksCache:\n",
+                1,
             ),
         )
         .expect("static JWKS runtime config writes");
@@ -3113,7 +3381,6 @@ identity:
   environment: production
   instanceId: {INSTANCE}
   databaseId: {DATABASE}
-  databaseInitializationEnvironment: production
 secretProviders:
   file:
     root: {}
@@ -3132,22 +3399,25 @@ package:
   root: {}
 authentication:
   oidc:
-    issuer: {}
-    audience: urn:breg:test
-    allowedAlgorithm: EdDSA
-    accessTokenType: JWT
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: unrestricted
-    maximumTokenLifetimeSeconds: 300
-    leewayMilliseconds: 60000
-    jwksCache:
-      cacheTtlSeconds: 600
-      negativeCacheTtlSeconds: 60
-      refreshCooldownSeconds: 30
-      maximumDocumentBytes: 65536
-      attemptTimeoutMilliseconds: 200
-      outageToleranceSeconds: 0
+    issuers:
+      primary:
+        issuer: {}
+        audience: urn:breg:test
+        allowedAlgorithm: EdDSA
+        accessTokenType: JWT
+        scopeClaim: scope
+        scopeSeparator: " "
+        actorKind: service
+        allowedClients: unrestricted
+        maximumTokenLifetimeSeconds: 300
+        leewayMilliseconds: 60000
+        jwksCache:
+          cacheTtlSeconds: 600
+          negativeCacheTtlSeconds: 60
+          refreshCooldownSeconds: 30
+          maximumDocumentBytes: 65536
+          attemptTimeoutMilliseconds: 200
+          outageToleranceSeconds: 0
   authorityClaims:
     principal: principal
 audit:
@@ -3265,9 +3535,9 @@ impl PackageFixture {
         Self { root }
     }
 
-    fn context(&self) -> PackageLoadContext<'static> {
+    fn context(&self) -> PackageLoadContext {
         PackageLoadContext {
-            database_initialization_environment: "production",
+            posture: registry_platform_config::Posture::Production,
         }
     }
 }

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-03"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -33,6 +33,13 @@ with `rstack dev stop RUN_ID` first.
     'Internet access',
   ]}
 />
+
+For the local commands in this tutorial, declare development in your shell.
+`rstack dev` sets this value for the processes it starts.
+
+```sh
+export REGISTRY_STACK_POSTURE=development
+```
 
 ## What Evidence needs from your API
 
@@ -84,7 +91,10 @@ Evidence project check: complete
 Project: .
 Target: local-target.yaml
 Deployment inputs missing: signer.publicJwkFile; the compiled-target bundle check was skipped. Supply them and rerun check to prove the target.
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 PASS: check
 PASS: fixtures/coverage-status.yaml (8 cases)
 PASS: fixtures/healthcare-establishment.yaml (11 cases)

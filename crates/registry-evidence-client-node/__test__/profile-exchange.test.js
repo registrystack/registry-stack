@@ -29,7 +29,7 @@ test('profile and exchange compose without losing pins or authority binding', as
   let revision = contracts.definitions[0].configurationRevision;
   const stub = await startStubServer({
     'GET /.well-known/oauth-protected-resource': (_req, res) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
+      res.writeHead(200, { 'content-type': 'application/json', 'registry-posture': 'development' });
       res.end(JSON.stringify({ resource: origin, authorization_servers: [origin],
         jwks_uri: `${origin}/.well-known/evidence/jwks.json`, bearer_methods_supported: ['header'] }));
     },
@@ -80,6 +80,11 @@ test('profile and exchange compose without losing pins or authority binding', as
         responseFormat: 'signed-jws',
       } } },
     }), { mode: 0o600 });
+    const profileClient = EvidenceClient.fromProfile(profilePath, key());
+    await profileClient.refreshMetadata();
+    assert.ok(stub.requests.some(request => request.url === '/.well-known/evidence/jwks.json'));
+    assert.equal(stub.requests.filter(request => request.url === '/token').length, 0);
+
     const authorization = (resource) => ({ exchange: {
       client: { tokenEndpoint: `${origin}/token`, audience: origin, clientId: 'profile-staff',
         clientKey: key(), resource, scopes: ['evidence:invoke'] },

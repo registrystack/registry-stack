@@ -30,6 +30,9 @@ if [[ -n "$runtime_library_path" ]]; then
   export DYLD_FALLBACK_LIBRARY_PATH="$runtime_library_path${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 fi
 
-RSTACK_DEV_STATE_DIR="$run_dir/state" "$rstack" --format json dev stop "$run_id" >"$run_dir/stop-report.json"
+build_dir=$(dirname -- "$rstack")
+export RSTACK_DEV_STATE_DIR="$run_dir/state" RSTACK_CASEWORKCTL_BIN="$build_dir/caseworkctl" RSTACK_CASEWORK_BIN="$build_dir/casework"
+# Clean the database even if the run already stopped.
+"$rstack" --install-root "$build_dir" --format json dev stop "$run_id" --clean >"$run_dir/stop-report.json"
 printf '%s\n' 'Load-test services and their owned database were removed through rstack dev.'
-printf '%s\n' "Evidence and synthetic seeds remain at $run_dir; move that directory aside before another start."
+printf '%s\n' "Evidence and synthetic seeds remain at $run_dir. The next start archives that directory."

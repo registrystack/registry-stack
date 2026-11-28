@@ -48,12 +48,12 @@ use convert::{
 };
 use registry_platform_crypto::PrivateJwk;
 
-// Every instance also carries a `kind` attribute, one of the ten stable
+// Every instance also carries a `kind` attribute, one of the stable
 // strings `EvidenceClientError::kind` reports: "configuration", "nonce",
 // "token", "transport", "denied", "not-available", "invalid-request",
-// "unavailable", "protocol", or "verification". Branch on `kind`, never on
-// the rendered message, which
-// this crate does not freeze.
+// "unavailable", "protocol", or "verification". Branch on `kind` for stable
+// handling, never on the rendered message, which this crate does not freeze.
+// The Python client accepts development peers.
 //
 // Where the failure has them, an instance also carries `status`, `code`,
 // `trace_id`, `retry_after_seconds`, `transport_kind` (set for a "transport"
@@ -161,11 +161,8 @@ pyo3::create_exception!(
      policy. See the `code` attribute for the verifier's own kind."
 );
 
-/// Build the Python exception matching one of the ten stable kinds. Every
-/// kind [`evidence_client_sdk::EvidenceClientError::kind`] can report is
-/// listed; a [`MappedError`] can only carry an eleventh if the wrapped crate's
-/// error enum (`#[non_exhaustive]`) grows one this crate does not yet know
-/// about, in which case the base class still reports it faithfully.
+/// Build the specialized Python exception where one exists. Other errors use
+/// the base exception and carry their stable `kind` as an attribute.
 fn exception_for_kind(kind: &str, message: String) -> PyErr {
     match kind {
         "configuration" => ConfigurationError::new_err(message),
@@ -208,7 +205,7 @@ fn to_py_err(py: Python<'_>, mapped: &MappedError) -> PyErr {
 
 /// A serialization failure on a value this crate itself constructed (a
 /// policy document, a definitions document, a key set, a verified payload) is
-/// not a caller mistake: it has no `kind` among the ten stable ones, so it
+/// not a caller mistake: it has no `kind` among the stable response error kinds, so it
 /// is reported as a plain `ValueError` rather than forced into that envelope.
 fn serialization_error(what: &str, error: serde_json::Error) -> PyErr {
     PyValueError::new_err(format!("{what} could not be described: {error}"))
@@ -885,6 +882,14 @@ struct EvidenceClient {
     runtime: tokio::runtime::Runtime,
 }
 
+fn peer_policy(refuse_development_peer: bool) -> evidence_client_sdk::PeerPolicy {
+    if refuse_development_peer {
+        evidence_client_sdk::PeerPolicy::RefuseDevelopmentPeer
+    } else {
+        evidence_client_sdk::PeerPolicy::AcceptDevelopmentPeer
+    }
+}
+
 #[pymethods]
 impl EvidenceClient {
     /// Build a client for one deployment.
@@ -913,6 +918,7 @@ impl EvidenceClient {
         maximum_response_bytes=None,
         max_metadata_bytes=None,
         authorization=None,
+        refuse_development_peer=false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -928,6 +934,7 @@ impl EvidenceClient {
         maximum_response_bytes: Option<&Bound<'_, PyAny>>,
         max_metadata_bytes: Option<&Bound<'_, PyAny>>,
         authorization: Option<&Bound<'_, PyAny>>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let trusted_jwks_json = python_to_json(trusted_jwks)
             .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
@@ -960,6 +967,7 @@ impl EvidenceClient {
             max_metadata_bytes
                 .map(|value| configuration_u64(py, value, "max_metadata_bytes"))
                 .transpose()?,
+            peer_policy(refuse_development_peer),
         )
         .map_err(|error| to_py_err(py, &map_config_error(&error)))?;
         let inner = py
@@ -984,11 +992,12 @@ impl EvidenceClient {
     /// it replaces the profile's file or environment key reference, which is
     /// the intended integration point for a deployment secret manager.
     #[staticmethod]
-    #[pyo3(signature = (profile_path, private_key_jwk=None))]
+    #[pyo3(signature = (profile_path, private_key_jwk=None, refuse_development_peer=false))]
     fn from_profile(
         py: Python<'_>,
         profile_path: &str,
         private_key_jwk: Option<&Bound<'_, PyAny>>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let profile = RealEvidenceClientProfile::from_file(profile_path).map_err(|error| {
             // A profile path and the private-key reference are deployment
@@ -1006,7 +1015,7 @@ impl EvidenceClient {
             to_py_err(py, &mapped)
         })?;
         let inner = match private_key_jwk {
-            None => RealEvidenceClient::from_profile(profile),
+            None => RealEvidenceClient::from_profile(profile, peer_policy(refuse_development_peer)),
             Some(value) => {
                 let value = python_to_json(value)
                     .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
@@ -1020,7 +1029,11 @@ impl EvidenceClient {
                         )),
                     )
                 })?;
-                RealEvidenceClient::from_profile_with_key(profile, key)
+                RealEvidenceClient::from_profile_with_key(
+                    profile,
+                    key,
+                    peer_policy(refuse_development_peer),
+                )
             }
         }
         .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
@@ -1039,10 +1052,12 @@ impl EvidenceClient {
     /// through a context-bound staff exchange. The exchange must match the
     /// discovered issuer and the profile's fixed OAuth request parameters.
     #[staticmethod]
+    #[pyo3(signature = (profile_path, authorization, refuse_development_peer=false))]
     fn from_profile_with_authorization(
         py: Python<'_>,
         profile_path: &str,
         authorization: &Bound<'_, PyAny>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let profile = RealEvidenceClientProfile::from_file(profile_path).map_err(|_| {
             to_py_err(
@@ -1063,8 +1078,12 @@ impl EvidenceClient {
             .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
         let exchange = exchange_from_authorization_json(&authorization)
             .map_err(|error| to_py_err(py, &map_config_error(&error)))?;
-        let inner = RealEvidenceClient::from_profile_with_authorization(profile, exchange)
-            .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+        let inner = RealEvidenceClient::from_profile_with_authorization(
+            profile,
+            exchange,
+            peer_policy(refuse_development_peer),
+        )
+        .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

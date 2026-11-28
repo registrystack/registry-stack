@@ -75,6 +75,7 @@ pub(crate) struct TestLifecycleOutcome {
 pub(crate) struct SchemaMeasurement {
     pub registry_revision: String,
     pub schema_fingerprint: String,
+    pub postgres_major: u16,
 }
 
 /// The receipt destination, held as its resolved parent descriptor plus the
@@ -229,9 +230,10 @@ pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycl
 }
 
 pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     request: TestLifecycleRequest<'_>,
 ) -> Result<TestLifecycleOutcome, TestLifecycleError> {
-    let config = load_test_runtime_config(request.runtime_config)?;
+    let config = load_test_runtime_config(posture, request.runtime_config)?;
     request
         .candidate
         .prevalidate()
@@ -327,10 +329,11 @@ pub(crate) fn run(
 /// is, without validating journeys, resolving credentials, or writing a
 /// receipt.
 pub(crate) fn measure(
+    posture: registry_platform_config::DeclaredPosture,
     candidate: CapturedPackageCandidate,
     runtime_config: &Path,
 ) -> Result<SchemaMeasurement, TestLifecycleError> {
-    let config = load_test_runtime_config(runtime_config)?;
+    let config = load_test_runtime_config(posture, runtime_config)?;
     candidate
         .prevalidate()
         .map_err(|error| TestLifecycleError::Candidate {
@@ -341,11 +344,12 @@ pub(crate) fn measure(
         .enable_all()
         .build()
         .map_err(|_| TestLifecycleError::Runtime)?;
-    let schema_fingerprint = runtime.block_on(async {
-        startup::rehearse_schema_fingerprint(&config, candidate.registry())
+    let installed = runtime.block_on(async {
+        startup::measure_schema_install(&config, candidate.registry())
             .await
             .map_err(schema_preparation_error)
     })?;
+    let schema_fingerprint = installed.fingerprint;
     let prepared = candidate
         .prepare(schema_fingerprint.clone())
         .map_err(|error| TestLifecycleError::Candidate {
@@ -355,14 +359,18 @@ pub(crate) fn measure(
     Ok(SchemaMeasurement {
         registry_revision: prepared.registry().revision().to_owned(),
         schema_fingerprint,
+        postgres_major: installed.postgres_major,
     })
 }
 
-fn load_test_runtime_config(path: &Path) -> Result<RuntimeConfig, TestLifecycleError> {
+fn load_test_runtime_config(
+    posture: registry_platform_config::DeclaredPosture,
+    path: &Path,
+) -> Result<RuntimeConfig, TestLifecycleError> {
     if !path.is_absolute() || super::has_parent_component(path) {
         return Err(TestLifecycleError::RuntimeConfigPath);
     }
-    load_runtime_config(path).map_err(TestLifecycleError::RuntimeConfig)
+    load_runtime_config(path, posture).map_err(TestLifecycleError::RuntimeConfig)
 }
 
 fn load_credentials(
@@ -798,6 +806,7 @@ mod tests {
         )
         .unwrap();
         let candidate = CapturedPackageCandidate {
+            posture_diagnostics: Vec::new(),
             compiled,
             compiler_source_revision: "candidate-regression".to_owned(),
             from_package_digest: None,
@@ -827,17 +836,20 @@ mod tests {
         let errors = [
             (
                 "prevalidate",
-                run(TestLifecycleRequest {
-                    candidate: candidate.clone(),
-                    runtime_config: &runtime,
-                    credentials: &root.join("credentials-canary.yaml"),
-                    output,
-                })
+                run(
+                    crate::DEFAULT_POSTURE,
+                    TestLifecycleRequest {
+                        candidate: candidate.clone(),
+                        runtime_config: &runtime,
+                        credentials: &root.join("credentials-canary.yaml"),
+                        output,
+                    },
+                )
                 .unwrap_err(),
             ),
             (
                 "measure.prevalidate",
-                measure(candidate, &runtime).unwrap_err(),
+                measure(crate::DEFAULT_POSTURE, candidate, &runtime).unwrap_err(),
             ),
         ];
         for (stage, error) in errors {
@@ -1128,6 +1140,18 @@ bindings:
     }
 
     #[test]
+    fn schema_test_destination_inventory_refusal_names_the_recovery() {
+        use registry_breg::event_destination::EventDestinationActivationError;
+
+        let error = SchemaTestRuntimeSetupError::EventDestinations(
+            EventDestinationActivationError::InventoryMismatch,
+        );
+        let report =
+            crate::test_lifecycle_failure(execution_error(FixtureError::RuntimeSetup(error)));
+        assert_eq!(report.diagnostics[0].message, "schema-test event destination activation requires an exact compiled binding set; configure exactly the logical destination bindings required by the candidate event deliveries before retrying");
+    }
+
+    #[test]
     fn runtime_setup_failures_report_the_configuration_boundary_without_database_advice() {
         use registry_breg::event_destination::EventDestinationActivationError;
 
@@ -1174,8 +1198,11 @@ bindings:
             EventDestinationActivationError::InvalidBinding,
             EventDestinationActivationError::DeliveryCeilingWidening,
             EventDestinationActivationError::Secret,
-            EventDestinationActivationError::InvalidSigningMaterial,
             EventDestinationActivationError::InvalidTlsMaterial,
+            EventDestinationActivationError::RepeatedSigningKey {
+                first: "destinations.hooks.receiver.hmacSha256KeyRef".to_owned(),
+                second: "reviewAuthorities.casework.completion.hmacSha256KeyRef".to_owned(),
+            },
         ] {
             cases.push((
                 SchemaTestRuntimeSetupError::EventDestinations(error),
@@ -1184,6 +1211,12 @@ bindings:
             ));
         }
         for (error, code, path) in cases {
+            let activation_message = match &error {
+                SchemaTestRuntimeSetupError::EventDestinations(
+                    cause @ EventDestinationActivationError::RepeatedSigningKey { .. },
+                ) => Some(cause.to_string()),
+                _ => None,
+            };
             let report =
                 crate::test_lifecycle_failure(execution_error(FixtureError::RuntimeSetup(error)));
             let diagnostic = &report.diagnostics[0];
@@ -1198,7 +1231,11 @@ bindings:
                 crate::SuggestedAction::CorrectRuntimeConfiguration
             );
             assert!(!diagnostic.message.contains("recreate"));
-            assert!(diagnostic.message.contains("before retrying"));
+            if let Some(activation_message) = activation_message {
+                assert_eq!(diagnostic.message, activation_message);
+            } else {
+                assert!(diagnostic.message.contains("before retrying"));
+            }
             let serialized = serde_json::to_string(&report).expect("failure report serializes");
             assert!(!serialized.contains("recreate_disposable_database"));
         }

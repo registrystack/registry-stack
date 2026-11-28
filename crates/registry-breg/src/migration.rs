@@ -10,6 +10,7 @@ use std::{
 };
 
 use registry_platform_audit::{AuditEntry, AuditRequest};
+use registry_platform_config::Posture;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -48,11 +49,36 @@ const ACTIVATION_AUDIT_OPERATION_ID: &str = "breg.activation";
 /// The audit schema of each activation's request and response entries.
 pub const ACTIVATION_AUDIT_SCHEMA: &str = "breg-activation-audit/v1";
 
+pub const POSTURE_MISMATCH_CODE: &str = "platform.activation.posture-mismatch";
+
+pub const fn posture_mismatch_message(recorded: Posture) -> &'static str {
+    match recorded {
+        Posture::Production => "this database is recorded as production; a development process never opens it",
+        Posture::Development => "this database was activated in the development posture; development data and settings are never promoted in place",
+    }
+}
+
+pub const fn posture_mismatch_action(recorded: Posture) -> &'static str {
+    match recorded {
+        Posture::Production => {
+            "Start it as production. To develop, use a fresh database: a fresh apply is the way."
+        }
+        Posture::Development => {
+            "Create a fresh database and apply the package as production: a fresh apply is the way."
+        }
+    }
+}
+
 /// Value-free apply failures. Authored identifiers cross this boundary, and
 /// a refused statement adds its SQLSTATE and the object names PostgreSQL
 /// reported; SQL, PostgreSQL messages, and stored values do not.
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum MigrationError {
+    #[error("{}", posture_mismatch_message(*.recorded))]
+    PostureMismatch {
+        recorded: Posture,
+        declared: Posture,
+    },
     #[error("the verified package is not a valid activation successor")]
     PackageBinding,
     /// The database already records this package digest as active.
@@ -396,6 +422,7 @@ fn role_change_ledger_entry(
     roles: ApplyRoles<'_>,
 ) -> MigrationLedgerEntry {
     MigrationLedgerEntry {
+        posture: package.posture(),
         activation_id: uuid::Uuid::nil(),
         package_digest: package.package_digest().to_owned(),
         predecessor_package_digest: Some(current.package_digest.clone()),
@@ -430,6 +457,7 @@ pub(crate) fn package_ledger_entry(
     compiler_checksums: &[String],
 ) -> Result<MigrationLedgerEntry> {
     let mut ledger = MigrationLedgerEntry {
+        posture: package.posture(),
         activation_id: uuid::Uuid::nil(),
         package_digest: package.package_digest().to_owned(),
         predecessor_package_digest: current.map(|identity| identity.package_digest.clone()),
@@ -545,6 +573,7 @@ impl ApplyTimeouts {
 /// whether maintenance is ready, read under the exclusive apply lock.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordedRegistryState {
+    pub posture: Posture,
     pub identity: ExpectedRegistryIdentity,
     pub ready: bool,
     /// Whether the ledger records the active activation as applied. It is
@@ -617,6 +646,7 @@ pub async fn read_recorded_registry_state(
             ready: snapshot.maintenance_status == "ready"
                 && snapshot.maintenance_target_package_digest.is_none(),
             identity: snapshot.identity,
+            posture: snapshot.posture,
             activation_applied,
         })),
         Err(crate::postgres::PostgresKernelError::RegistryUnavailable) => Ok(None),
@@ -628,6 +658,7 @@ pub async fn read_recorded_registry_state(
 /// it. It names no value, SQL, credential, or operator reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivationStatus {
+    pub posture: Posture,
     pub identity: ExpectedRegistryIdentity,
     /// `ready`, `applying`, or `failed`.
     pub maintenance_status: String,
@@ -650,6 +681,7 @@ impl ActivationStatus {
 /// One recorded activation. Timestamps are RFC 3339 in UTC.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivationLedgerEntry {
+    pub posture: Posture,
     pub activation_id: String,
     pub apply_order: i64,
     pub package_digest: String,
@@ -690,12 +722,14 @@ pub async fn read_activation_status(
     };
     Ok(Some(ActivationStatus {
         identity: recorded.snapshot.identity,
+        posture: recorded.snapshot.posture,
         maintenance_status: recorded.snapshot.maintenance_status,
         maintenance_target_package_digest: recorded.snapshot.maintenance_target_package_digest,
         ledger: recorded
             .ledger
             .into_iter()
             .map(|entry| ActivationLedgerEntry {
+                posture: entry.posture,
                 activation_id: entry.activation_id,
                 apply_order: entry.apply_order,
                 package_digest: entry.package_digest,
@@ -1307,6 +1341,20 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
             return Err(MigrationError::UnrecognizedDatabase);
         }
         Ok(crate::postgres::RegistryStateShape::Ledger) => {
+            match connection.active_activation_posture().await {
+                Ok(Some(recorded)) if recorded != ledger.posture => {
+                    let _ = connection.release().await;
+                    return Err(MigrationError::PostureMismatch {
+                        recorded,
+                        declared: ledger.posture,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = connection.release().await;
+                    return Err(refusal_before_maintenance(error));
+                }
+            }
             match connection.pre_1_0_attachment_verification_present().await {
                 Ok(false) => {}
                 Ok(true) => {
@@ -1347,6 +1395,13 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         .await
     {
         Ok(Some(activation)) => {
+            if activation.posture != ledger.posture {
+                let _ = connection.release().await;
+                return Err(MigrationError::PostureMismatch {
+                    recorded: activation.posture,
+                    declared: ledger.posture,
+                });
+            }
             if activation.role_mode != ledger.role_mode.as_str()
                 || activation.runtime_role != ledger.runtime_role
             {
@@ -2067,6 +2122,7 @@ impl ActivationAttempt {
             "planKind": ledger.plan_kind.as_str(),
             "databaseId": deployment.database_id(),
             "environment": deployment.environment(),
+            "posture": ledger.posture.as_str(),
             "instanceId": deployment.instance_id(),
             "roleMode": ledger.role_mode.as_str(),
             "operatorReference": ledger.operator_reference_hash,
@@ -2595,6 +2651,14 @@ mod tests {
     use crate::physical_names::PhysicalNameInventory;
 
     use super::*;
+
+    #[test]
+    fn activation_posture_mismatch_uses_the_platform_code() {
+        assert_eq!(
+            POSTURE_MISMATCH_CODE,
+            "platform.activation.posture-mismatch"
+        );
+    }
 
     #[test]
     fn premaintenance_pool_failures_and_initial_invariants_keep_distinct_recovery() {

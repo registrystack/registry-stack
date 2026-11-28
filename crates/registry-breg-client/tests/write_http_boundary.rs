@@ -189,7 +189,7 @@ async fn serve_test_client(responses: Vec<MockResponse>, max_mutation_retries: u
         .expect("serve mock Base Registry Engine");
     });
     let token = Arc::new(CountingToken(AtomicUsize::new(0)));
-    let config = BaseRegistryClientConfig::new(
+    let config = BaseRegistryClientConfig::new_without_peer_policy(
         Url::parse(&format!("http://{address}/tenant/base")).expect("base URL"),
     )
     .with_token_provider(token.clone())
@@ -2084,7 +2084,11 @@ fn problem_response(code: BRegProblemCode) -> MockResponse {
             "https://id.registrystack.org/problems/registry-breg/{}",
             code.code().replace('.', "/")
         ),
-        "title": problem_title(code.status()),
+        "title": if code == BRegProblemCode::DevelopmentTaskAssertion {
+            "Development task assertion"
+        } else {
+            problem_title(code.status())
+        },
         "status": code.status(),
         "detail": problem_detail(code),
         "code": code.code(),
@@ -2144,7 +2148,7 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
             "The record attachment slot already holds a file and is write-once."
         }
         Code::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
-        Code::AuthenticationRefused => "The bearer credential is missing or refused.",
+        Code::AuthenticationRefused => "The bearer token or delivery signature was not accepted.",
         Code::ExternalViewIncomplete => {
             "The external view's indexed coverage is incomplete for this request."
         }
@@ -2161,6 +2165,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::IngestionRunNotOpen => "The ingestion run is not open for this transition.",
         Code::LookupUnresolved => "The lookup did not resolve exactly one record.",
         Code::MutationConflict => "The mutation conflicts with current state.",
+        Code::DevelopmentTaskAssertion => {
+            "A production registry refuses task assertions issued in development."
+        }
         Code::PreconditionFailed => "The mutation precondition failed.",
         Code::PreconditionRequired => "The mutation precondition is required.",
         Code::ProposalRejected => {
@@ -2498,7 +2505,16 @@ async fn action_availability_is_metadata_bound_validated_and_sent_once() {
         json!({"availability":{"available":null,"observedRevision":7,
             "reason":"input-required","guardReason":"misplaced","recovery":"correct-input",
             "missingInputs":["legalName"]}}),
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardLabel":"A label without its reason.","recovery":"none"}}),
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardReason":"legal_name_unchanged",
+            "guardLabel":"é".repeat(257),"recovery":"none"}}),
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardReason":"legal_name_unchanged",
+            "guardLabel":"label\ncanary","recovery":"none"}}),
     ];
+    let malformed_count = malformed.len();
     let fixture = test_client(
         std::iter::once(MockResponse::json(StatusCode::OK, metadata))
         .chain(std::iter::once(MockResponse::json(
@@ -2512,6 +2528,14 @@ async fn action_availability_is_metadata_bound_validated_and_sent_once() {
             StatusCode::OK,
             json!({"availability":{"available":false,"observedRevision":8,
                 "reason":"guard-not-satisfied","guardReason":"legal_name_unchanged","recovery":"none"}}),
+        )
+        .with_header("cache-control", "no-store")
+        .with_header("vary", "authorization, accept")))
+        .chain(std::iter::once(MockResponse::json(
+            StatusCode::OK,
+            json!({"availability":{"available":false,"observedRevision":9,
+                "reason":"guard-not-satisfied","guardReason":"legal_name_unchanged",
+                "guardLabel":"The legal name cannot change here.","recovery":"none"}}),
         )
         .with_header("cache-control", "no-store")
         .with_header("vary", "authorization, accept")))
@@ -2568,7 +2592,17 @@ async fn action_availability_is_metadata_bound_validated_and_sent_once() {
     assert_eq!(unavailable.available(), Some(false));
     assert_eq!(unavailable.observed_revision(), Some(8));
     assert_eq!(unavailable.guard_reason(), Some("legal_name_unchanged"));
-    for _ in 0..6 {
+    // An authored guard label rides beside its reason. The client checks its
+    // bounds and, like every refusal text, does not retain it.
+    let labelled = fixture
+        .client
+        .action_availability(&action, &request)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(labelled.observed_revision(), Some(9));
+    assert_eq!(labelled.guard_reason(), Some("legal_name_unchanged"));
+    for _ in 0..malformed_count {
         let error = fixture
             .client
             .action_availability(&action, &request)

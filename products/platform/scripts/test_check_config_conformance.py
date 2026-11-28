@@ -445,6 +445,44 @@ pub struct SampleRuntime {
         )
         self.assertEqual([], self.problems(self.block_row()))
 
+    def test_a_posture_gated_shared_type_passes(self) -> None:
+        for written in (
+            "Gated<PackageConfig>",
+            "registry_platform_config::Gated<PackageConfig>",
+        ):
+            with self.subTest(written=written):
+                self.with_runtime_struct(
+                    self.RUNTIME_STRUCT.replace(
+                        "pub package: PackageConfig", f"pub package: {written}"
+                    ),
+                    imports="Gated, PackageConfig",
+                )
+                self.assertEqual([], self.problems(self.block_row()))
+
+    def test_a_posture_gated_field_of_another_type_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.RUNTIME_STRUCT.replace(
+                "pub package: PackageConfig", "pub package: Gated<PackageRuntime>"
+            ),
+            imports="Gated, PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs SampleRuntime.package is not typed "
+            "PackageConfig",
+            self.block_row(),
+        )
+
+    def test_an_attribute_holding_an_array_does_not_hide_later_fields(self) -> None:
+        self.with_runtime_struct(
+            self.RUNTIME_STRUCT.replace(
+                "    pub listener: ListenerRuntime,\n",
+                "    #[cfg_attr(feature = \"schema\", schemars(extend("
+                "\"x-registry-development-only\" = [\"sample.posture.http-origin\"])))]\n"
+                "    pub listener: ListenerRuntime,\n",
+            )
+        )
+        self.assertEqual([], self.problems(self.block_row()))
+
     def test_a_missing_runtime_struct_is_refused(self) -> None:
         self.assert_one_problem(
             "sample: crates/sample/src/lib.rs has no struct SampleRuntime",

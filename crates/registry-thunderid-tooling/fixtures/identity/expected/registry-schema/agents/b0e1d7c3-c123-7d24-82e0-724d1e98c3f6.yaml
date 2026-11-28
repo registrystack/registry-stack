@@ -32,6 +32,7 @@ inboundAuthConfig:
           - registry_approver
           - evidence_audience
           - evidence_tags
+          - registry_posture
           - registry_assertion_issuer
           validityPeriod: 300
     tokenEndpointAuthMethod: private_key_jwt

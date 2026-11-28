@@ -5,6 +5,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::GenericClient;
 use deadpool_postgres::Transaction;
 use registry_casework_core::*;
+use registry_platform_authcommon::FailedCheck;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -107,8 +108,10 @@ pub enum ReviewRuntimeError {
     QueryTooBroad,
     #[error("the review resource was not found")]
     NotFound,
+    #[error("the review resource was not found")]
+    NotHeldByReader,
     #[error("the caller is not authorized for this review operation")]
-    Forbidden,
+    Forbidden(FailedCheck),
     #[error("the retained submission has different canonical content")]
     SubmissionConflict,
     #[error("the retained review result has expired")]
@@ -175,8 +178,12 @@ fn map_review_decision_error(error: ReviewDecisionError) -> ReviewRuntimeError {
         }
         ReviewDecisionError::InitiatorExcluded => ReviewRuntimeError::InitiatorExcluded,
         ReviewDecisionError::DuplicateReviewer
-        | ReviewDecisionError::PreviousStageReviewerExcluded
-        | ReviewDecisionError::ProfileNotEligible => ReviewRuntimeError::Forbidden,
+        | ReviewDecisionError::PreviousStageReviewerExcluded => {
+            ReviewRuntimeError::Forbidden(FailedCheck::SeparationOfDuties)
+        }
+        ReviewDecisionError::ProfileNotEligible => {
+            ReviewRuntimeError::Forbidden(FailedCheck::AccessProfile)
+        }
         ReviewDecisionError::Validation(error) => review_validation_error(error),
         ReviewDecisionError::Policy(_) => ReviewRuntimeError::Corrupt,
         ReviewDecisionError::OutcomeNotAllowed { declared, .. } => ReviewRuntimeError::Validation(
@@ -492,7 +499,7 @@ impl CaseworkService {
     ) -> Result<SupervisoryReviewTaskPage, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
         if actor.role != CaseworkActsAs::Supervisor {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         let page = self
             .review_task_page(
@@ -620,7 +627,7 @@ impl CaseworkService {
                 match tokio::time::timeout_at(deadline_at, preflight).await {
                     Ok(Ok(())) => {}
                     Ok(Err(
-                        ReviewRuntimeError::Forbidden
+                        ReviewRuntimeError::Forbidden(_)
                         | ReviewRuntimeError::NotFound
                         | ReviewRuntimeError::ResultExpired
                         | ReviewRuntimeError::SourceProfileRequired
@@ -764,7 +771,7 @@ impl CaseworkService {
                         }
                         Ok(_) => {}
                         Err(
-                            ReviewRuntimeError::Forbidden
+                            ReviewRuntimeError::Forbidden(_)
                             | ReviewRuntimeError::NotFound
                             | ReviewRuntimeError::ResultExpired,
                         ) => {
@@ -799,7 +806,7 @@ impl CaseworkService {
                         skipped_without_source_profile = true;
                     }
                     Ok(Err(
-                        ReviewRuntimeError::Forbidden
+                        ReviewRuntimeError::Forbidden(_)
                         | ReviewRuntimeError::NotFound
                         | ReviewRuntimeError::SourceProfileNotApplicable,
                     )) => {
@@ -964,7 +971,7 @@ impl CaseworkService {
             .await
         {
             Err(
-                ReviewRuntimeError::Forbidden
+                ReviewRuntimeError::Forbidden(_)
                 | ReviewRuntimeError::NotFound
                 | ReviewRuntimeError::ResultExpired,
             ) => {
@@ -1135,7 +1142,7 @@ impl CaseworkService {
             .source_namespaces
             .contains(&request.subject.source)
         {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         self.store
             .cancel_review(
@@ -1359,7 +1366,7 @@ impl CaseworkService {
         event_id: Uuid,
     ) -> Result<ReviewAccountabilityRecord, ReviewRuntimeError> {
         if actor.role != CaseworkActsAs::Supervisor {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         self.store.review_accountability(actor, event_id).await
     }
@@ -1379,7 +1386,7 @@ impl CaseworkService {
             }
             let producer = self.producer_for_actor(actor)?.producer;
             if request.audience != ReviewHistoryAudience::Requester {
-                return Err(ReviewRuntimeError::Forbidden);
+                return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
             }
             Some(producer)
         } else {
@@ -1671,7 +1678,7 @@ impl CaseworkService {
                 .contains(&request.subject.source)
             || request.subject.source != request.subject.source.trim()
         {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         Ok(admission)
     }
@@ -1681,7 +1688,7 @@ impl CaseworkService {
         actor: &ActorContext,
     ) -> Result<ProducerAdmission, ReviewRuntimeError> {
         if actor.role != registry_casework_core::CaseworkActsAs::Requester {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         self.project
             .trusted_producers
@@ -1693,7 +1700,7 @@ impl CaseworkService {
             })
             .cloned()
             .map(|producer| ProducerAdmission { producer })
-            .ok_or(ReviewRuntimeError::Forbidden)
+            .ok_or(ReviewRuntimeError::Forbidden(FailedCheck::AccessProfile))
     }
 
     /// The producer itself, or else a person whose profile some producer
@@ -1705,7 +1712,7 @@ impl CaseworkService {
     ) -> Result<RequesterReader, ReviewRuntimeError> {
         match self.producer_for_actor(actor) {
             Ok(admission) => return Ok(RequesterReader::Producer(Box::new(admission.producer))),
-            Err(ReviewRuntimeError::Forbidden) => {}
+            Err(ReviewRuntimeError::Forbidden(_)) => {}
             Err(error) => return Err(error),
         }
         let producers = self
@@ -1716,7 +1723,7 @@ impl CaseworkService {
             .map(|producer| producer.id.clone())
             .collect::<std::collections::BTreeSet<_>>();
         if producers.is_empty() {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::AccessProfile));
         }
         Ok(RequesterReader::Initiator(producers))
     }
@@ -1820,7 +1827,7 @@ impl PostgresStore {
             CaseworkActsAs::Staff => "staff",
             CaseworkActsAs::Supervisor => "supervisor",
             CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
-                return Err(ReviewRuntimeError::Forbidden);
+                return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
             }
         };
         // The UUID names an immutable scan position, not a claim about the
@@ -1888,7 +1895,7 @@ impl PostgresStore {
             CaseworkActsAs::Staff => "staff",
             CaseworkActsAs::Supervisor => "supervisor",
             CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
-                return Err(ReviewRuntimeError::Forbidden);
+                return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
             }
         };
         let supervisory = view.is_supervisory();
@@ -1978,7 +1985,7 @@ impl PostgresStore {
         let membership = match actor.role {
             CaseworkActsAs::Staff => "staff",
             CaseworkActsAs::Supervisor => "supervisor",
-            _ => return Err(ReviewRuntimeError::Forbidden),
+            _ => return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation)),
         };
         let position = match cursor {
             Some(id) => Some(
@@ -2049,7 +2056,7 @@ impl PostgresStore {
         let membership = match actor.role {
             CaseworkActsAs::Staff => "staff",
             CaseworkActsAs::Supervisor => "supervisor",
-            _ => return Err(ReviewRuntimeError::Forbidden),
+            _ => return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation)),
         };
         let client = self.client().await?;
         client
@@ -2180,7 +2187,7 @@ impl PostgresStore {
             CaseworkActsAs::Staff => "staff",
             CaseworkActsAs::Supervisor => "supervisor",
             CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
-                return Err(ReviewRuntimeError::Forbidden);
+                return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
             }
         };
         let client = self.client().await?;
@@ -2681,7 +2688,7 @@ impl PostgresStore {
             .review_policies
             .iter()
             .find(|policy| policy.id == request.policy.id)
-            .ok_or(ReviewRuntimeError::Forbidden)?;
+            .ok_or(ReviewRuntimeError::Forbidden(FailedCheck::Operation))?;
         let snapshot = project
             .compile_policy(&policy.id)
             .map_err(|_| ReviewRuntimeError::Corrupt)?;
@@ -2719,7 +2726,7 @@ impl PostgresStore {
                     .as_ref()
                     .ok_or(ReviewRuntimeError::Corrupt)?;
                 if request.subject.source != provider.source_namespace {
-                    return Err(ReviewRuntimeError::Forbidden);
+                    return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
                 }
             }
             _ => return Err(ReviewRuntimeError::Invalid),
@@ -3291,7 +3298,7 @@ impl PostgresStore {
             .get(usize::from(stage_index))
             .ok_or(ReviewRuntimeError::Corrupt)?;
         if !stage.deciding_profiles.contains(&actor.profile_id) {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::AccessProfile));
         }
         ensure_actor_serves_review_queue(&transaction, actor, &row.get::<_, String>(2)).await?;
         if stage.exclude_initiator && record.initiator.as_ref() == Some(&actor.principal) {
@@ -3315,14 +3322,14 @@ impl PostgresStore {
             return Err(if previous.get::<_, i32>(0) == i32::from(stage_index) {
                 ReviewRuntimeError::DistinctApproverRequired
             } else {
-                ReviewRuntimeError::Forbidden
+                ReviewRuntimeError::Forbidden(FailedCheck::SeparationOfDuties)
             });
         }
         if !active_review_absences(&transaction, &actor.principal, now)
             .await?
             .is_empty()
         {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         let state: String = row.get(3);
         let held_by_caller = state == "claimed"
@@ -3515,7 +3522,7 @@ impl PostgresStore {
             ensure_review_mutation_actor_authorized(&transaction, &record, actor, task_id).await?;
         } else {
             if actor.role != CaseworkActsAs::Supervisor {
-                return Err(ReviewRuntimeError::Forbidden);
+                return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
             }
             ensure_actor_serves_review_queue(&transaction, actor, &task_queue).await?;
         }
@@ -3558,10 +3565,10 @@ impl PostgresStore {
             .get(usize::from(stage_index))
             .ok_or(ReviewRuntimeError::Corrupt)?;
         if delegate && !stage.deciding_profiles.contains(&actor.profile_id) {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::AccessProfile));
         }
         if !delegate && actor.role != CaseworkActsAs::Supervisor {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         let holder = match (
             row.get::<_, Option<String>>(4),
@@ -3574,7 +3581,7 @@ impl PostgresStore {
         let queue = row.get::<_, String>(2);
         if delegate {
             if holder.as_ref() != Some(&actor.principal) {
-                return Err(ReviewRuntimeError::Forbidden);
+                return Err(ReviewRuntimeError::Forbidden(FailedCheck::Ownership));
             }
             ensure_actor_serves_review_queue(&transaction, actor, &queue).await?;
         } else if transaction
@@ -3588,7 +3595,7 @@ impl PostgresStore {
             .await?
             .is_none()
         {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
         ensure_review_identity_eligible(
             &transaction,
@@ -4172,7 +4179,7 @@ impl PostgresStore {
         .await
         {
             Ok(()) => {}
-            Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound) => return Ok(()),
+            Err(ReviewRuntimeError::Forbidden(_) | ReviewRuntimeError::NotFound) => return Ok(()),
             Err(error) => return Err(error),
         }
 
@@ -5037,7 +5044,7 @@ async fn insert_stage_tasks(
                     .map_err(map_review_source_error)?;
                     observed.check(&expected).map_err(map_review_source_error)?;
                     if !observed.reviewable {
-                        return Err(ReviewRuntimeError::Forbidden);
+                        return Err(ReviewRuntimeError::Forbidden(FailedCheck::SourceAuthority));
                     }
                     observed.fields
                 }
@@ -5896,7 +5903,9 @@ async fn ensure_review_identity_eligible(
     membership_kinds: &[String],
 ) -> Result<(), ReviewRuntimeError> {
     if stage.exclude_initiator && record.initiator.as_ref() == Some(person) {
-        return Err(ReviewRuntimeError::Forbidden);
+        return Err(ReviewRuntimeError::Forbidden(
+            FailedCheck::SeparationOfDuties,
+        ));
     }
     if transaction
         .query_opt(
@@ -5914,7 +5923,9 @@ async fn ensure_review_identity_eligible(
         .await?
         .is_some()
     {
-        return Err(ReviewRuntimeError::Forbidden);
+        return Err(ReviewRuntimeError::Forbidden(
+            FailedCheck::SeparationOfDuties,
+        ));
     }
     if transaction
         .query_opt(
@@ -5927,7 +5938,7 @@ async fn ensure_review_identity_eligible(
         .await?
         .is_none()
     {
-        return Err(ReviewRuntimeError::Forbidden);
+        return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
     }
     Ok(())
 }
@@ -5941,7 +5952,7 @@ async fn ensure_actor_serves_review_queue(
         CaseworkActsAs::Staff => "staff",
         CaseworkActsAs::Supervisor => "supervisor",
         CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
     };
     if transaction
@@ -5960,7 +5971,7 @@ async fn ensure_actor_serves_review_queue(
         .await?
         .is_none()
     {
-        return Err(ReviewRuntimeError::Forbidden);
+        return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
     }
     Ok(())
 }
@@ -6315,7 +6326,7 @@ fn require_human_reviewer(actor: &ActorContext) -> Result<(), ReviewRuntimeError
             | registry_casework_core::CaseworkActsAs::Supervisor
     )
     .then_some(())
-    .ok_or(ReviewRuntimeError::Forbidden)
+    .ok_or(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
 }
 
 fn ensure_review_result_retained(record: &ReviewRequestRecord) -> Result<(), ReviewRuntimeError> {
@@ -6368,7 +6379,7 @@ async fn ensure_review_stage_queue_access(
         CaseworkActsAs::Staff => "staff",
         CaseworkActsAs::Supervisor => "supervisor",
         CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
-            return Err(ReviewRuntimeError::Forbidden);
+            return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
         }
     };
     if eligible_stages.is_empty() {
@@ -6411,7 +6422,9 @@ async fn ensure_review_mutation_actor_authorized(
     task_id: Uuid,
 ) -> Result<(), ReviewRuntimeError> {
     match ensure_review_reviewer_access(transaction, record, actor, Some(task_id), true).await {
-        Err(ReviewRuntimeError::NotFound) => Err(ReviewRuntimeError::Forbidden),
+        Err(ReviewRuntimeError::NotFound) => {
+            Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
+        }
         result => result,
     }
 }
@@ -6475,7 +6488,7 @@ fn map_reviewer_conflict(error: tokio_postgres::Error) -> ReviewRuntimeError {
         .as_db_error()
         .is_some_and(|error| error.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION)
     {
-        ReviewRuntimeError::Forbidden
+        ReviewRuntimeError::Forbidden(FailedCheck::SeparationOfDuties)
     } else {
         ReviewRuntimeError::Store(StoreError::Postgres(error))
     }
@@ -6622,7 +6635,7 @@ impl CaseworkService {
                         .get(field)
                         .cloned()
                         .map(|value| (field.clone(), value))
-                        .ok_or(crate::ServiceError::Forbidden)
+                        .ok_or(crate::ServiceError::Forbidden(FailedCheck::Operation))
                 })
                 .collect(),
             (
@@ -6652,7 +6665,7 @@ impl CaseworkService {
                         return Err(ReviewContextError::Invalid.into());
                     }
                     if !observed.reviewable {
-                        return Err(crate::ServiceError::Forbidden);
+                        return Err(crate::ServiceError::Forbidden(FailedCheck::SourceAuthority));
                     }
                     return Ok(Default::default());
                 }
@@ -6678,7 +6691,7 @@ impl CaseworkService {
                 .map_err(|_| crate::ServiceError::Context(ReviewContextError::Unavailable))??;
                 observed.check(&expected)?;
                 if !observed.reviewable {
-                    return Err(crate::ServiceError::Forbidden);
+                    return Err(crate::ServiceError::Forbidden(FailedCheck::SourceAuthority));
                 }
                 Ok(observed.fields)
             }
@@ -6696,10 +6709,11 @@ fn review_service_error(error: ReviewRuntimeError) -> crate::ServiceError {
             ReviewContextError::VersionUnavailable.into()
         }
         ReviewRuntimeError::NotFound | ReviewRuntimeError::ResultExpired => {
-            crate::ServiceError::NotFound
+            crate::ServiceError::NotFound(FailedCheck::Visibility)
         }
         ReviewRuntimeError::RevisionConflict => StoreError::Conflict.into(),
-        _ => crate::ServiceError::Forbidden,
+        ReviewRuntimeError::Forbidden(check) => crate::ServiceError::Forbidden(check),
+        _ => crate::ServiceError::Forbidden(FailedCheck::Operation),
     }
 }
 
@@ -6791,5 +6805,76 @@ mod tests {
         assert_eq!(actor_reference(&first), actor_reference(&first));
         assert_ne!(actor_reference(&first), actor_reference(&second));
         assert!(!actor_reference(&first).contains("person"));
+    }
+
+    fn refused_check(error: ReviewRuntimeError) -> FailedCheck {
+        match error {
+            ReviewRuntimeError::Forbidden(check) => check,
+            other => panic!("expected a forbidden answer, got {other:?}"),
+        }
+    }
+
+    fn actor(role: CaseworkActsAs) -> ActorContext {
+        ActorContext {
+            principal: IssuerPrincipal {
+                issuer: "https://issuer.example".to_owned(),
+                subject: "person".to_owned(),
+            },
+            profile_id: "profile".to_owned(),
+            role,
+        }
+    }
+
+    #[test]
+    fn a_reviewer_who_already_acted_is_refused_for_separation_of_duties() {
+        for error in [
+            ReviewDecisionError::DuplicateReviewer,
+            ReviewDecisionError::PreviousStageReviewerExcluded,
+        ] {
+            assert_eq!(
+                refused_check(map_review_decision_error(error)),
+                FailedCheck::SeparationOfDuties
+            );
+        }
+    }
+
+    #[test]
+    fn a_profile_outside_the_stage_is_refused_for_its_access_profile() {
+        assert_eq!(
+            refused_check(map_review_decision_error(
+                ReviewDecisionError::ProfileNotEligible
+            )),
+            FailedCheck::AccessProfile
+        );
+    }
+
+    #[test]
+    fn only_staff_and_supervisors_pass_the_human_reviewer_check() {
+        assert!(require_human_reviewer(&actor(CaseworkActsAs::Staff)).is_ok());
+        assert!(require_human_reviewer(&actor(CaseworkActsAs::Supervisor)).is_ok());
+        for role in [CaseworkActsAs::Administrator, CaseworkActsAs::Requester] {
+            assert_eq!(
+                refused_check(require_human_reviewer(&actor(role)).unwrap_err()),
+                FailedCheck::Operation
+            );
+        }
+    }
+
+    #[test]
+    fn a_service_refusal_keeps_the_check_the_review_layer_named() {
+        for check in [
+            FailedCheck::SeparationOfDuties,
+            FailedCheck::AccessProfile,
+            FailedCheck::Ownership,
+        ] {
+            assert!(matches!(
+                review_service_error(ReviewRuntimeError::Forbidden(check)),
+                crate::ServiceError::Forbidden(kept) if kept == check
+            ));
+        }
+        assert!(matches!(
+            review_service_error(ReviewRuntimeError::TaskNotHeld),
+            crate::ServiceError::Forbidden(FailedCheck::Operation)
+        ));
     }
 }

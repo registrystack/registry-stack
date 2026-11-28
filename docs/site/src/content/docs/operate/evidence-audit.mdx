@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - operator
@@ -25,6 +25,9 @@ is tamper-evident only once it reaches the append-only storage you ship it to.
     crates/registry-evidence/src/runtime_tests.rs, "authentication failures are not audited" and
     "pre-material selector failures are not audited";
     products/evidence/OPERATOR-CONTRACT.md, "Audit destinations, rotation, and retention". */}
+
+Audit records include a `posture` member. Credential-free source bindings and the local
+signing key file are available in the development posture.
 
 ## Choose where the audit log is written
 
@@ -98,10 +101,14 @@ Next: Another Evidence instance holds this audit destination's writer lock. To c
 
 Rerun with `--without-audit-lock`. Doctor still checks the destination's ownership, modes, write
 access, and final entry, and its `Proof:` line says a second writer is not detected.
+When the declared posture conflicts with the package's assurance profile, doctor reports
+the conflict and checks the local audit destination. It exits 1 and leaves live dependencies
+unchecked. Change the posture or select a matching package, then rerun doctor.
+
 See [`evidencectl doctor`](../../reference/cli/evidencectl/doctor/) for every option.
 
 {/* Evidence: crates/registry-evidencectl/src/runtime.rs, HELD_LOCK_ACTION, proof_boundary, and
-    LOCK_FREE_PROOF_BOUNDARY. */}
+    LOCK_FREE_PROOF_BOUNDARY; crates/registry-evidence/src/main.rs, run_check. */}
 
 ## Ship audit to append-only storage
 
@@ -143,9 +150,22 @@ rather than restarting, which can lose queued entries.
     products/evidence/OPERATOR-CONTRACT.md, "Audit destinations, rotation, and retention" and
     "Ship audit to append-only storage". */}
 
+## Inspect target authority history
+
+`evidence authority history --runtime-config FILE` validates the runtime configuration and
+its posture, then reads the activation records from the configured authority store. You can
+inspect recorded activations even when their packages have been removed. For a new activation,
+`evidence authority activate` checks the pinned package and its posture before opening the audit
+destination or writing authority state.
+
+{/* Evidence: crates/registry-evidence/src/main.rs, AuthorityCommand::History;
+    crates/registry-evidence/src/bundle.rs, preflight_runtime_package;
+    crates/registry-evidence/tests/cli.rs, authority_activation_requires_development_for_a_local_bundle. */}
+
 ## Read what an entry establishes
 
-Each entry is one JSON line. New authorised operations use
+Each entry is one JSON line. New lines include a `posture` of `development` or `production`.
+Retained lines can omit this member. New authorised operations use
 `registry.evidence.audit/v3` or `registry.evidence.audit.request-batch/v3`;
 authorisation refusals keep `registry.evidence.audit.authorization-refusal/v2`.
 Retained authorised `/v2` entries remain readable history. Entries are not chained. The

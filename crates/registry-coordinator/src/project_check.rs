@@ -45,13 +45,51 @@ pub(crate) fn check_runtime(
     path: &Path,
     definition: Option<&Definition>,
     environment: bool,
-) -> (Report, u8) {
-    let checked = runtime::RuntimeConfig::check_file_with(path, environment, |checked, config| {
-        workflow_binding_diagnostics(checked, config, definition)
+    declared: registry_platform_config::DeclaredPosture,
+) -> (
+    Report,
+    u8,
+    Option<Vec<registry_cli_report::ExplicitSettingLine>>,
+) {
+    let (checked, diagnostics) = runtime::RuntimeConfig::collect_file_diagnostics(
+        path,
+        environment,
+        declared,
+        |checked, config| workflow_binding_diagnostics(checked, config, definition),
+    );
+    let settings = (!checked.unavailable).then(|| {
+        checked
+            .loaded
+            .as_ref()
+            .into_iter()
+            .flat_map(|loaded| loaded.posture.explicit_settings())
+            .filter(|found| {
+                !found.pointer.as_ref().is_some_and(|pointer| {
+                    checked
+                        .diagnostics
+                        .iter()
+                        .chain(&diagnostics)
+                        .any(|diagnostic| {
+                            diagnostic.severity == Severity::Error
+                                && (&diagnostic.path == pointer
+                                    || diagnostic
+                                        .path
+                                        .strip_prefix(pointer)
+                                        .is_some_and(|suffix| suffix.starts_with('/')))
+                        })
+                })
+            })
+            .map(|found| registry_cli_report::ExplicitSettingLine::from_found(found, path.to_str()))
+            .collect()
     });
     (
-        Report::new(checked.diagnostics),
+        Report::new(
+            checked
+                .report_with(runtime::KIND, diagnostics)
+                .into_diagnostics(),
+        ),
         if checked.unavailable { 3 } else { 1 },
+        settings,
     )
 }
 
@@ -132,6 +170,7 @@ pub(crate) fn check_directory(
     project: Option<(&Definition, &Document)>,
     explicit_runtime: Option<&Path>,
     environment: bool,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> (Report, u8) {
     let definition = project.map(|(definition, _)| definition);
     let mut report = Report::default();
@@ -242,6 +281,17 @@ pub(crate) fn check_directory(
             exit = 3;
             continue;
         }
+        if name != "runtime.yaml"
+            && name != "scenarios.yaml"
+            && Reader::new(path.display().to_string())
+                .scan(&bytes)
+                .ok()
+                .flatten()
+                .as_ref()
+                .is_some_and(registry_rstack_dev::is_development_companion)
+        {
+            continue;
+        }
         let document =
             match Reader::new(path.display().to_string()).read(&bytes, &Expect::new(FORMATS)) {
                 Ok(document) => document,
@@ -266,7 +316,8 @@ pub(crate) fn check_directory(
             continue;
         }
         if expected == "runtime.yaml" {
-            let (findings, runtime_exit) = check_runtime(&path, definition, environment);
+            let (findings, runtime_exit, _) =
+                check_runtime(&path, definition, environment, declared);
             report.extend(findings);
             exit = exit.max(runtime_exit);
         } else {
@@ -334,4 +385,60 @@ fn unreadable(path: &Path) -> Diagnostic {
         "the project entry could not be read",
         "Restore a readable project root and regular authored files.",
     )
+}
+
+#[cfg(test)]
+mod development_companion_tests {
+    use super::*;
+
+    #[test]
+    fn development_plans_cannot_occupy_reserved_project_paths() {
+        for file in ["runtime.yaml", "scenarios.yaml"] {
+            let root = tempfile::tempdir().unwrap();
+            fs::write(
+                root.path().join(file),
+                "apiVersion: id.registrystack.org/formats/rstack/dev/v1alpha1\nkind: RStackDev\n",
+            )
+            .unwrap();
+            let posture = registry_platform_config::declared_from(None, None).unwrap();
+            let (report, _) = check_directory(root.path(), None, None, false, posture);
+            assert!(report.has_errors(), "{file}");
+        }
+    }
+
+    #[test]
+    fn checks_distinguish_development_companions() {
+        let root = tempfile::tempdir().unwrap();
+        for (version, kind, accepted) in [
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "RStackDev",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+                "RStackScenarios",
+                true,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v2",
+                "RStackDev",
+                false,
+            ),
+            (
+                "id.registrystack.org/formats/rstack/dev/v1alpha1",
+                "Unknown",
+                false,
+            ),
+        ] {
+            fs::write(
+                root.path().join("dev.yaml"),
+                format!("apiVersion: {version}\nkind: {kind}\n"),
+            )
+            .unwrap();
+            let posture = registry_platform_config::declared_from(None, None).unwrap();
+            let (report, _) = check_directory(root.path(), None, None, false, posture);
+            assert_eq!(!report.has_errors(), accepted, "{kind} {version}");
+        }
+    }
 }

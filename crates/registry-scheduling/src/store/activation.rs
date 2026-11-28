@@ -8,6 +8,7 @@
 //! Startup, `schedulingctl plan`, and `schedulingctl status` read it and write
 //! nothing.
 
+use registry_platform_config::Posture;
 use std::future::Future;
 
 use registry_platform_activation::{
@@ -20,12 +21,16 @@ use uuid::Uuid;
 use super::{
     check_policy_publication, current_schema_in, lock_publication, mark_allocation_writer,
     publish_policy, refuse_combined_conflicts, refuse_pre_1_0_schema, PolicyPublication,
-    PostgresStore, StoreError, MIGRATION_LOCK_KEY, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
+    PostgresStore, StoreError, ACTIVATION_POSTURE_MIGRATION, MIGRATION_LOCK_KEY,
+    SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
 };
 
 /// Supported SQL in application order. Keep the version ledger and dispatcher
 /// aligned: adding a known version without its implementation must not compile.
-const SUPPORTED_MIGRATIONS: [(i64, &str); SCHEMA_VERSIONS.len()] = [(200, SCHEDULING_MIGRATION)];
+const SUPPORTED_MIGRATIONS: [(i64, &str); SCHEMA_VERSIONS.len()] = [
+    (200, SCHEDULING_MIGRATION),
+    (201, ACTIVATION_POSTURE_MIGRATION),
+];
 const _: () = {
     let mut index = 0;
     while index < SCHEMA_VERSIONS.len() {
@@ -176,6 +181,7 @@ pub struct DeployedPolicy {
 /// package the operator's configuration names.
 #[derive(Clone, Copy, Debug)]
 pub struct ActivePackage<'a> {
+    pub posture: Posture,
     pub database_id: &'a str,
     pub package_digest: &'a str,
 }
@@ -183,6 +189,7 @@ pub struct ActivePackage<'a> {
 /// Everything one apply records.
 #[derive(Clone, Debug)]
 pub struct ActivationRequest<'a> {
+    pub posture: Posture,
     pub activation_id: Uuid,
     pub package_digest: &'a str,
     pub database_id: &'a str,
@@ -232,6 +239,25 @@ pub struct ActivationPlan {
     /// Whether an apply of the candidate would record an activation: false
     /// whenever the plan names a refusal.
     pub changes_pending: bool,
+}
+
+/// The shared code used when the database and process postures differ.
+pub const POSTURE_MISMATCH: &str = "platform.activation.posture-mismatch";
+
+pub fn posture_mismatch(recorded: Posture, declared: Posture) -> Option<StoreError> {
+    let (message, action) = match (recorded, declared) {
+        (Posture::Production, Posture::Development) => (
+            "this database was activated in the production posture; a development process never opens it",
+            "Start it as production. To develop, use a fresh database: a fresh apply is the way.",
+        ),
+        (Posture::Development, Posture::Production) => (
+            "this database was activated in the development posture; development data and settings are never promoted in place",
+            "Create a fresh database and apply the package as production: a fresh apply is the way.",
+        ),
+        (Posture::Production, Posture::Production)
+        | (Posture::Development, Posture::Development) => return None,
+    };
+    Some(StoreError::PostureMismatch { message, action })
 }
 
 impl PostgresStore {
@@ -339,6 +365,9 @@ impl PostgresStore {
             .await?
             .get(0);
         if let Some(active) = &active {
+            if let Some(error) = posture_mismatch(active.posture, request.posture) {
+                return Err(error);
+            }
             if active.database_id != request.database_id {
                 return Err(StoreError::DatabaseIdMismatch);
             }
@@ -454,6 +483,7 @@ impl PostgresStore {
                 operator_reference_hash: request.operator_reference_hash,
                 backup_references: request.backup_references,
                 role_mode,
+                posture: request.posture,
                 runtime_role: Some(request.runtime_role),
             },
         )
@@ -479,6 +509,7 @@ impl PostgresStore {
         database_id: &str,
         package_digest: &str,
         policy: &SchedulingPolicy,
+        posture: Posture,
         verify_retained: F,
     ) -> Result<ActivationPlan, StoreError>
     where
@@ -509,6 +540,9 @@ impl PostgresStore {
         }
         let mut changes_pending = true;
         if let Some(active) = &active {
+            if let Some(error) = posture_mismatch(active.posture, posture) {
+                refusals.push(error);
+            }
             if active.database_id != database_id {
                 refusals.push(StoreError::DatabaseIdMismatch);
             }
@@ -1031,6 +1065,7 @@ pub(super) async fn check_active_package_in(
         &activation_layout(),
         expected.database_id,
         expected.package_digest,
+        expected.posture,
     )
     .await
     .map_err(|error| match error {
@@ -1040,6 +1075,9 @@ pub(super) async fn check_active_package_in(
         }
         platform_activation::ActivePackageError::PackageNotActive { active, candidate } => {
             StoreError::PackageNotActive { active, candidate }
+        }
+        platform_activation::ActivePackageError::PostureMismatch { recorded, declared } => {
+            posture_mismatch(recorded, declared).expect("different postures")
         }
         platform_activation::ActivePackageError::Activation(error) => platform_error(error),
     })
@@ -1218,7 +1256,7 @@ mod tests {
             assert!(message.contains("pre-1.0 schema"), "{message}");
             assert!(message.contains("fresh database"), "{message}");
         }
-        for applied in [vec![], vec![200]] {
+        for applied in [vec![], vec![200], vec![200, 201]] {
             SchemaState {
                 applied,
                 pending: Vec::new(),
@@ -1234,10 +1272,14 @@ mod tests {
             SchemaState::default(),
             SchemaState {
                 applied: vec![],
-                pending: vec![200],
+                pending: vec![200, 201],
             },
             SchemaState {
                 applied: vec![200],
+                pending: vec![201],
+            },
+            SchemaState {
+                applied: vec![200, 201],
                 pending: vec![],
             },
         ] {
@@ -1256,11 +1298,11 @@ mod tests {
             },
             SchemaState {
                 applied: vec![],
-                pending: vec![201],
+                pending: vec![202],
             },
             SchemaState {
                 applied: vec![],
-                pending: vec![200, 201],
+                pending: vec![200, 201, 202],
             },
             SchemaState {
                 applied: vec![],

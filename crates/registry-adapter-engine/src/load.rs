@@ -16,13 +16,15 @@ use std::sync::Arc;
 use registry_adapter_core::{
     check_project_pins, check_workspace, AdapterPack, AdapterProfile, AdapterProject,
     AdapterRuntimeConfig, AggregationStrategy, ComponentKind, Endpoint, SendComponent,
-    ServedFilter, Step, ToParameters, Workspace, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
-    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
-    ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    ServedFilter, Step, ToParameters, Workspace, ADAPTER_FACADE_REMOVED_KEYS,
+    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
+    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_API_VERSION,
+    ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
-    sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, SecretError,
-    SecretProvider, SecretProvidersConfig, SecretResolver,
+    sha256_uri, AuthoredExpressions, DeclaredPosture, DevelopmentWitness, Posture, PostureReport,
+    PostureSource, RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretProvider,
+    SecretProvidersConfig, SecretResolver,
 };
 use registry_platform_yaml::{
     ApiVersion, Digest, EnvelopeRule, Expect, FormatSpec, Reader, Severity,
@@ -259,6 +261,8 @@ pub struct Loaded {
     pub problem_envelope: CompiledEnvelope,
     pub project: AdapterProject,
     pub runtime: AdapterRuntimeConfig,
+    pub posture: PostureReport,
+    pub development: Option<DevelopmentWitness>,
     pub scripts: ScriptSet,
     /// The deployment's declared code maps, shared by the conversion
     /// steps and the Rhai `code_map` helper.
@@ -341,8 +345,9 @@ fn path_conflict(served: &[ServedOperation], candidate: &ServedOperation) -> Opt
 /// The facade path a served operation answers, with its record type in
 /// place of the record-type parameter.
 fn concrete_path(operation: &ServedOperation) -> String {
-    operation.method_path.replace(
-        &format!("{{{}}}", operation.record_type_parameter),
+    registry_adapter_core::concrete_facade_path(
+        &operation.method_path,
+        &operation.record_type_parameter,
         &operation.record_type,
     )
 }
@@ -407,7 +412,7 @@ pub(crate) fn read<T: DeserializeOwned>(
 
 /// One reader finding as a sentence an author can act on: the code, the
 /// pointer to the faulty member, the reader's message, and its fix.
-fn located_reason(diagnostic: &registry_platform_yaml::Diagnostic) -> String {
+pub(crate) fn located_reason(diagnostic: &registry_platform_yaml::Diagnostic) -> String {
     let at = if diagnostic.path.is_empty() {
         String::new()
     } else {
@@ -509,11 +514,9 @@ fn secret_refusal_fix(error: &SecretError) -> &'static str {
             "declare at least one provider under secretProviders and give file.root an absolute path"
         }
         SecretError::Unavailable => {
-            "create the file under secretProviders.file.root or set the variable; a symlink reads as missing"
+            "create the file under secretProviders.file.root or set the variable"
         }
-        SecretError::UnsafeFile => {
-            "make it a regular file owned by the service user, mode 0600 or 0400, with one hard link"
-        }
+        SecretError::UnsafeFile(check) => check.suggested_action(),
         SecretError::Read => "check that the service user can read the secret file",
         SecretError::InvalidValue => {
             "store a non-empty value with no NUL byte, within the secret size limit"
@@ -596,13 +599,9 @@ pub fn load(
     pack_path: Option<&Path>,
     runtime_path: &Path,
 ) -> Result<Loaded, LoadError> {
-    load_inner(
-        project_directory,
-        profile_path,
-        pack_path,
-        runtime_path,
-        None,
-    )
+    load_inner(project_directory, profile_path, pack_path, None, || {
+        read_runtime(runtime_path, default_posture())
+    })
 }
 
 /// A runtime host callback that derives immutable fixed-target metadata from
@@ -620,21 +619,112 @@ pub fn load_with_target(
     runtime_path: &Path,
     target_builder: TargetBuilder,
 ) -> Result<Loaded, LoadError> {
-    load_inner(
+    load_with_target_in_posture(
         project_directory,
         profile_path,
         pack_path,
         runtime_path,
-        Some(target_builder),
+        target_builder,
+        default_posture(),
     )
+}
+
+/// The declaration in Adapter command reports.
+pub fn posture_member(declared: DeclaredPosture) -> Value {
+    let source = declared.source.as_str();
+    serde_json::json!({"value": declared.posture.as_str(), "source": source})
+}
+
+fn default_posture() -> DeclaredPosture {
+    DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Default,
+    }
+}
+
+pub fn load_with_target_in_posture(
+    project_directory: &Path,
+    profile_path: Option<&Path>,
+    pack_path: Option<&Path>,
+    runtime_path: &Path,
+    target_builder: TargetBuilder,
+    declared: DeclaredPosture,
+) -> Result<Loaded, LoadError> {
+    load_inner(
+        project_directory,
+        profile_path,
+        pack_path,
+        Some(target_builder),
+        || read_runtime(runtime_path, declared),
+    )
+}
+
+/// Compile against the process's already checked runtime document.
+pub fn load_with_target_from_runtime(
+    project_directory: &Path,
+    profile_path: Option<&Path>,
+    pack_path: Option<&Path>,
+    runtime_path: &Path,
+    loaded: registry_platform_config::LoadedRuntimeConfig<AdapterRuntimeConfig>,
+    target_builder: TargetBuilder,
+) -> Result<Loaded, LoadError> {
+    loaded
+        .posture
+        .decide(runtime_path)
+        .map_err(|error| LoadError::Runtime(error.to_string()))?;
+    load_inner(
+        project_directory,
+        profile_path,
+        pack_path,
+        Some(target_builder),
+        || Ok(loaded),
+    )
+}
+
+fn read_runtime(
+    runtime_path: &Path,
+    declared: DeclaredPosture,
+) -> Result<registry_platform_config::LoadedRuntimeConfig<AdapterRuntimeConfig>, LoadError> {
+    let absolute = std::fs::canonicalize(runtime_path).map_err(|_| LoadError::Unreadable {
+        path: runtime_path.display().to_string(),
+    })?;
+    let mut loaded = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: ADAPTER_RUNTIME_API_VERSION,
+            kind: ADAPTER_RUNTIME_KIND,
+        },
+        declared,
+    )
+    .removed_keys(ADAPTER_FACADE_REMOVED_KEYS)
+    .load::<AdapterRuntimeConfig>(&absolute)
+    .map_err(|error| LoadError::Runtime(format!("the runtime config was refused: {error}")))?;
+    let issuers = &loaded.config.oidc.set;
+    let diagnostics = issuers
+        .check("/oidc/issuers")
+        .into_iter()
+        .chain(issuers.check_one_audience("/oidc/issuers", "published effective contract"))
+        .map(|diagnostic| diagnostic.render_human())
+        .collect::<String>();
+    if !diagnostics.is_empty() {
+        return Err(LoadError::Runtime(diagnostics));
+    }
+    registry_adapter_core::record_endpoint_posture(&loaded.config.endpoints, &mut loaded.posture);
+    loaded
+        .posture
+        .decide(&absolute)
+        .map_err(|error| LoadError::Runtime(error.to_string()))?;
+    Ok(loaded)
 }
 
 fn load_inner(
     project_directory: &Path,
     profile_path: Option<&Path>,
     pack_path: Option<&Path>,
-    runtime_path: &Path,
     target_builder: Option<TargetBuilder>,
+    load_runtime: impl FnOnce() -> Result<
+        registry_platform_config::LoadedRuntimeConfig<AdapterRuntimeConfig>,
+        LoadError,
+    >,
 ) -> Result<Loaded, LoadError> {
     let (project, project_bytes): (AdapterProject, _) = read(
         &project_directory.join("project.yaml"),
@@ -678,17 +768,8 @@ fn load_inner(
             ));
         }
     };
-    let absolute = std::fs::canonicalize(runtime_path).map_err(|_| LoadError::Unreadable {
-        path: runtime_path.display().to_string(),
-    })?;
-    let runtime = RuntimeConfigLoader::new(RuntimeEnvelope {
-        api_version: ADAPTER_RUNTIME_API_VERSION,
-        kind: ADAPTER_RUNTIME_KIND,
-    })
-    .removed_keys(ADAPTER_REMOVED_KEYS)
-    .load::<AdapterRuntimeConfig>(&absolute)
-    .map_err(|error| LoadError::Runtime(format!("the runtime config was refused: {error}")))?
-    .config;
+    let loaded = load_runtime()?;
+    let runtime = loaded.config;
 
     let mut findings: Vec<String> = Vec::new();
     for diagnostic in check_project_pins(
@@ -698,7 +779,7 @@ fn load_inner(
         &pack.version,
         &digest_of(&pack_bytes),
     ) {
-        findings.push(format!("{} {}", diagnostic.code, diagnostic.message));
+        findings.push(located_reason(&diagnostic));
     }
     for diagnostic in check_workspace(&Workspace {
         profile: &profile,
@@ -708,7 +789,7 @@ fn load_inner(
         fixtures: &[],
     }) {
         if diagnostic.severity == Severity::Error {
-            findings.push(format!("{} {}", diagnostic.code, diagnostic.message));
+            findings.push(located_reason(&diagnostic));
         }
     }
     if !findings.is_empty() {
@@ -789,6 +870,8 @@ fn load_inner(
         problem_envelope: authored.problem_envelope,
         project,
         runtime,
+        posture: loaded.posture,
+        development: loaded.development,
         scripts: authored.scripts,
         code_maps: authored.code_maps,
         endpoints: authored.endpoints,
@@ -1226,14 +1309,21 @@ fn compile_binding<S: ArtifactSource + ?Sized>(
                 "the binding names no profile operation",
             )
         })?;
-    let concrete_method_path = operation.path.replace(
-        &format!("{{{}}}", operation.record_type_parameter.as_str()),
+    let concrete_method_path = registry_adapter_core::concrete_facade_path(
+        &operation.path,
+        operation.record_type_parameter.as_str(),
         binding.record_type.as_str(),
     );
-    if concrete_method_path == crate::effective_contract::WELL_KNOWN_PATH {
+    if [
+        crate::effective_contract::WELL_KNOWN_PATH,
+        registry_platform_httputil::probe::HEALTH_PATH,
+        registry_platform_httputil::probe::READY_PATH,
+    ]
+    .contains(&concrete_method_path.as_str())
+    {
         return Err(not_served(
             UnservedReason::ReservedFacadePath,
-            "the facade path is reserved for the Adapter effective-contract route",
+            "the facade path is reserved for the Adapter effective-contract, health and ready routes",
         ));
     }
     let is_post_read =
@@ -1885,6 +1975,116 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const RUNTIME_PREFIX: &str = "\
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: engine-load-test
+endpoints: []
+listener: {bind: '127.0.0.1:8080'}
+database: {runtimeUrlRef: 'secret:env/DB', migrationUrlRef: 'secret:env/DB'}
+allowedPrivateCidrs: [10.0.0.0/8]
+audit: {retentionDays: 90}
+";
+
+    #[test]
+    fn engine_load_refuses_issuers_with_different_audiences() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = directory.path().join("runtime.yaml");
+        std::fs::write(&runtime, format!("{RUNTIME_PREFIX}oidc:\n  issuers:\n    first: {{issuer: 'https://first.example.test', audience: first-api, allowedClients: [first-client]}}\n    second: {{issuer: 'https://second.example.test', audience: second-api, allowedClients: [second-client]}}\n")).unwrap();
+        let Err(LoadError::Runtime(message)) = read_runtime(&runtime, default_posture()) else {
+            panic!("expected runtime refusal");
+        };
+        assert!(
+            message.contains("platform.oidc.audiences-differ"),
+            "{message}"
+        );
+        assert!(
+            message.contains("published effective contract"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn engine_load_names_the_destination_of_every_moved_facade_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = directory.path().join("runtime.yaml");
+        for removed in ADAPTER_FACADE_REMOVED_KEYS {
+            let (text, pointer) = if removed.path == "endpoints.*.caBundleRef" {
+                (RUNTIME_PREFIX.replace("endpoints: []\n", "endpoints:\n  - endpoint: tracker\n    baseUrl: https://tracker.example.test\n    caBundleRef: secret:file/legacy-ca.pem\n"),
+                 "/endpoints/0/caBundleRef".to_owned())
+            } else {
+                let (prefix, member) = removed.path.rsplit_once('.').unwrap_or(("", removed.path));
+                let fragment = if prefix.is_empty() {
+                    format!("{member}: legacy\n")
+                } else {
+                    format!("{prefix}:\n  {member}: legacy\n")
+                };
+                (
+                    format!("{RUNTIME_PREFIX}{fragment}"),
+                    format!("/{}", removed.path.replace('.', "/")),
+                )
+            };
+            std::fs::write(&runtime, text).unwrap();
+            let Err(LoadError::Runtime(message)) = read_runtime(&runtime, default_posture()) else {
+                panic!("expected runtime refusal");
+            };
+            assert!(message.contains("config.removed-key"), "{message}");
+            assert!(message.contains(&pointer), "{message}");
+            assert!(message.contains(removed.replacement), "{message}");
+        }
+    }
+
+    /// D1 (b) at load: Adapter sources are https or loopback only. The
+    /// maintained example, with its source moved to plain http beyond
+    /// loopback, is refused by the workspace check whatever range the
+    /// runtime lists, and a binding that declares `transport` is refused
+    /// when the runtime file is read, since a binding takes no such member.
+    #[test]
+    fn a_plain_text_source_beyond_loopback_refuses_the_load() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let project = repository.join("products/adapter/examples/dhis2-tracker");
+        let profile = repository.join("products/adapter/profiles/breg-records/profile.yaml");
+        let pack = repository.join("products/adapter/packs/dhis2-tracker/pack.yaml");
+        let example = std::fs::read_to_string(project.join("runtime.example.yaml"))
+            .expect("the example runtime");
+        let directory = tempfile::tempdir().expect("runtime directory");
+        let load_with = |from: &str, to: &str| {
+            assert!(example.contains(from), "the example runtime holds {from}");
+            let runtime = directory.path().join("runtime.yaml");
+            std::fs::write(&runtime, example.replacen(from, to, 1)).expect("write the runtime");
+            load(&project, Some(&profile), Some(&pack), &runtime).map(drop)
+        };
+
+        match load_with(
+            "baseUrl: https://tracker.example.invalid",
+            "baseUrl: http://10.0.0.7:8080",
+        ) {
+            Err(LoadError::Workspace(findings)) => {
+                // Startup names the pointer and the migration `check` prints.
+                assert!(
+                    findings.contains("adapter.runtime.insecure-origin at /endpoints/0/baseUrl"),
+                    "{findings}"
+                );
+                assert!(
+                    findings.contains(
+                        "Serve the source over https, or reach it on loopback through a sidecar that carries the connection over TLS."
+                    ),
+                    "{findings}"
+                );
+            }
+            other => panic!("plain http beyond loopback loaded: {other:?}"),
+        }
+        match load_with(
+            "    tlsTrustProfile: dhis2-private-ca\n",
+            "    transport: private-network-plaintext\n",
+        ) {
+            Err(LoadError::Runtime(message)) => {
+                assert!(message.contains("transport"), "{message}");
+            }
+            other => panic!("a declared transport loaded: {other:?}"),
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn facade_file_provider_resolves_an_owner_only_secret() {
@@ -2042,10 +2242,10 @@ mod tests {
         }
         assert_ne!(unsafe_file, missing, "the two causes must read differently");
         assert!(unsafe_file.contains("unsafe"), "{unsafe_file}");
-        assert!(unsafe_file.contains("0600 or 0400"), "{unsafe_file}");
-        assert!(unsafe_file.contains("owned by"), "{unsafe_file}");
+        assert!(unsafe_file.contains("0400 or 0600"), "{unsafe_file}");
+        assert!(unsafe_file.contains("runtime user"), "{unsafe_file}");
         assert!(missing.contains("unavailable"), "{missing}");
-        assert!(missing.contains("symlink"), "{missing}");
+        assert!(missing.contains("secretProviders.file.root"), "{missing}");
         assert!(disabled.contains("disabled provider"), "{disabled}");
         assert!(disabled.contains("secretProviders"), "{disabled}");
     }

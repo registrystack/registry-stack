@@ -37,7 +37,7 @@ async function run(args, env = {}) {
 
 const fence = (meta, code) => `\`\`\`${meta}\n${code}\n\`\`\`\n\n`;
 
-async function fakeRstack(dir) {
+async function fakeRstack(dir, stopScript = 'printf "rstack dev %s\\n" "$*" >>"${RSTACK_FAKE_CALLS:?}"') {
   const path = join(dir, 'rstack');
   await writeFile(
     path,
@@ -59,7 +59,7 @@ async function fakeRstack(dir) {
       '  casework) entrypoint=caseworkctl ;;',
       '  evidence) entrypoint=evidencectl ;;',
       '  discovery) entrypoint=discoveryctl ;;',
-      '  dev) printf "rstack dev %s\\n" "$*" >>"${RSTACK_FAKE_CALLS:?}"; exit 0 ;;',
+      `  dev) ${stopScript}; exit 0 ;;`,
       '  *) printf "unsupported fixture product: %s\\n" "$product" >&2; exit 2 ;;',
       'esac',
       'exec "$install_root/current/components/$product/$entrypoint/$entrypoint" "$@"',
@@ -132,7 +132,7 @@ test('an annotation error fails before anything runs', async () => {
 test('the breg toolset serves the given binaries and stops every dev session, even after a failure', async () => {
   const body =
     '## Start\n\n' +
-    fence('sh', 'breg --version\nbregctl dev work/project\nmkdir -p work/project/.breg/dev\necho {} >work/project/.breg/dev/state.json') +
+    fence('sh', 'breg --version\nrstack dev start work/project\nmkdir "$RSTACK_DEV_STATE_DIR/0123456789abcdef0123456789abcdef"') +
     fence('sh', 'false');
   await withPage(body, async ({ dir, page }) => {
     const calls = join(dir, 'calls.log');
@@ -144,12 +144,13 @@ test('the breg toolset serves the given binaries and stops every dev session, ev
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
       RSTACK_BIN: await fakeRstack(dir),
+      RSTACK_FAKE_CALLS: calls,
     });
     assert.equal(code, 1, output);
     const log = await readFile(calls, 'utf8');
     assert.match(log, /^breg --version$/mu);
-    assert.match(log, /^bregctl dev work\/project$/mu);
-    assert.match(log, /^bregctl dev stop \/\S+\/work\/project --remove$/mu);
+    assert.match(log, /^rstack dev start work\/project$/mu);
+    assert.match(log, /^rstack dev stop 0123456789abcdef0123456789abcdef$/mu);
   });
 });
 
@@ -213,7 +214,7 @@ async function fakeClientPackages(dir) {
   const source = join(dir, 'client-source');
   await mkdir(packages);
   await mkdir(source);
-  await writeFile(join(source, 'package.json'), JSON.stringify({ name: '@registrystack/client', version: '0.0.0-tutorial', main: 'index.js' }));
+  await writeFile(join(source, 'package.json'), JSON.stringify({ name: '@registrystack/client-node', version: '0.0.0-tutorial', main: 'index.js' }));
   await writeFile(join(source, 'index.js'), "module.exports = 'assembled';\n");
   await execFileAsync('npm', ['pack', '--ignore-scripts', '--pack-destination', packages], { cwd: source });
   await writeFile(join(packages, 'registry_stack_client-0.0.0-py3-none-any.whl'), '');
@@ -225,8 +226,8 @@ test('the breg toolset serves the client packages to a journey that installs the
     '## Install\n\n' +
     fence(
       'sh',
-      'npm init -y >/dev/null\nnpm install "@registrystack/client@0.0.0-tutorial" >/dev/null\n' +
-        "node -p \"require('@registrystack/client')\"\n" +
+      'npm init -y >/dev/null\nnpm install "@registrystack/client-node@0.0.0-tutorial" >/dev/null\n' +
+        "node -p \"require('@registrystack/client-node')\"\n" +
         'printf \'%s %s\\n\' "$PIP_NO_INDEX" "$(basename "$PIP_FIND_LINKS")"',
     ) +
     fence('text test-expect', 'assembled\n1 packages');
@@ -278,7 +279,7 @@ test('the casework toolset serves all four binaries and stops the rstack dev run
     fence(
       'sh',
       'casework --version\nbreg --version\n' +
-        'mkdir -p -m 700 "$RSTACK_DEV_STATE_DIR/0123abcd" "$RSTACK_DEV_STATE_DIR/4567ef01"\n' +
+        'mkdir -p -m 700 "$RSTACK_DEV_STATE_DIR/0123abcd0123abcd0123abcd0123abcd" "$RSTACK_DEV_STATE_DIR/4567ef014567ef014567ef014567ef01"\n' +
         'rstack dev start .',
     ) +
     fence('sh', 'false');
@@ -298,14 +299,14 @@ test('the casework toolset serves all four binaries and stops the rstack dev run
     });
     assert.equal(code, 1, output);
     const log = (await readFile(calls, 'utf8')).trim().split('\n');
-    assert.deepEqual(log, ['casework --version', 'breg --version', 'rstack dev start .', 'rstack dev stop 0123abcd', 'rstack dev stop 4567ef01']);
+    assert.deepEqual(log, ['casework --version', 'breg --version', 'rstack dev start .', 'rstack dev stop 0123abcd0123abcd0123abcd0123abcd', 'rstack dev stop 4567ef014567ef014567ef014567ef01']);
   });
 });
 
 test('the breg toolset stops the rstack dev runs a journey started', async () => {
   const body =
     '## Start\n\n' +
-    fence('sh', 'mkdir -p -m 700 "$RSTACK_DEV_STATE_DIR/0123abcd"\nrstack dev start .');
+    fence('sh', 'mkdir -p -m 700 "$RSTACK_DEV_STATE_DIR/0123abcd0123abcd0123abcd0123abcd"\nrstack dev start .');
   await withPage(body, async ({ dir, page }) => {
     const calls = join(dir, 'calls.log');
     const { code, output } = await run(['--toolset', 'breg', page], {
@@ -313,15 +314,15 @@ test('the breg toolset stops the rstack dev runs a journey started', async () =>
       RSTACK_FAKE_CALLS: calls,
     });
     assert.equal(code, 0, output);
-    assert.deepEqual((await readFile(calls, 'utf8')).trim().split('\n'), ['rstack dev start .', 'rstack dev stop 0123abcd']);
+    assert.deepEqual((await readFile(calls, 'utf8')).trim().split('\n'), ['rstack dev start .', 'rstack dev stop 0123abcd0123abcd0123abcd0123abcd']);
   });
 });
 
 test('an expectation ignores the notice rstack dev prints when other runs are live', async () => {
   const body =
     '## Start\n\n' +
-    fence('sh', "echo 'rstack dev: run 0123abcd is still live; stop it with rstack dev stop 0123abcd' >&2\n" +
-      "echo 'rstack dev: 2 runs are still live (0123abcd, 4567ef01); stop one with rstack dev stop 0123abcd' >&2\necho ready") +
+    fence('sh', "echo 'rstack dev: run 0123abcd is still live; stop it with rstack dev stop 0123abcd0123abcd0123abcd0123abcd' >&2\n" +
+      "echo 'rstack dev: 2 runs are still live (0123abcd, 4567ef01); stop one with rstack dev stop 0123abcd0123abcd0123abcd0123abcd' >&2\necho ready") +
     fence('text test-expect', 'ready');
   await withPage(body, async ({ page }) => {
     const { code, output } = await run([page]);
@@ -593,14 +594,14 @@ test('a journey whose page asks for the checkout starts at the root of a copy of
   }
 });
 
-test('teardown stops only the sessions the journey started, not a committed example\'s state file', async () => {
+test('teardown stops only run IDs and ignores retained project state', async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'tutorial-runner-inherited.')));
   try {
     const page = join(dir, 'page.mdx');
     await writeFile(
       page,
       '---\ntitle: t\ntutorial_test:\n  toolset: breg\n  checkout: true\n---\n\n' +
-        fence('sh', 'test -f products/breg/examples/formats/dev-session/.breg/dev/state.json\nmkdir -p started/.breg/dev\necho {} >started/.breg/dev/state.json'),
+        fence('sh', 'mkdir "$RSTACK_DEV_STATE_DIR/0123456789abcdef0123456789abcdef" "$RSTACK_DEV_STATE_DIR/development-project-fixture"'),
     );
     const calls = join(dir, 'calls.log');
     for (const name of ['breg', 'bregctl']) {
@@ -611,11 +612,12 @@ test('teardown stops only the sessions the journey started, not a committed exam
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
       RSTACK_BIN: await fakeRstack(dir),
+      RSTACK_FAKE_CALLS: calls,
     });
     assert.equal(code, 0, output);
-    const stops = (await readFile(calls, 'utf8')).split('\n').filter((line) => line.startsWith('bregctl dev stop'));
+    const stops = (await readFile(calls, 'utf8')).split('\n').filter((line) => line.startsWith('rstack dev stop'));
     assert.equal(stops.length, 1, stops.join('\n'));
-    assert.match(stops[0], /\/started --remove$/u);
+    assert.equal(stops[0], 'rstack dev stop 0123456789abcdef0123456789abcdef');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -687,23 +689,21 @@ test('teardown finds a session\'s control socket and runtime file as the journey
     '## Start\n\n' +
     fence(
       'sh',
-      'mkdir -p project/.breg/dev\ncd project/.breg/dev\necho {} >state.json\n' +
+      'mkdir "$RSTACK_DEV_STATE_DIR/0123456789abcdef0123456789abcdef"\ncd "$RSTACK_DEV_STATE_DIR/0123456789abcdef0123456789abcdef"\n' +
         "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"control.sock\")'\n" +
         'chmod 600 control.sock\ntouch runtime.yaml\nchmod 400 runtime.yaml',
     );
   await withPage(body, async ({ dir, page }) => {
     const modes = join(dir, 'modes.log');
     await writeFile(join(dir, 'breg'), '#!/bin/sh\n');
-    await writeFile(
-      join(dir, 'bregctl'),
-      `#!/bin/sh\npython3 -c 'import os, sys; print(*(oct(os.lstat(p).st_mode & 0o777) for p in sys.argv[1:]))' "$3/.breg/dev/control.sock" "$3/.breg/dev/runtime.yaml" >'${modes}'\n`,
-    );
+    const fakeStop = `python3 -c 'import os, sys; print(*(oct(os.lstat(p).st_mode & 0o777) for p in sys.argv[1:]))' "$RSTACK_DEV_STATE_DIR/$2/control.sock" "$RSTACK_DEV_STATE_DIR/$2/runtime.yaml" >'${modes}'`;
+    await writeFile(join(dir, 'bregctl'), '#!/bin/sh\n');
     await chmod(join(dir, 'breg'), 0o755);
     await chmod(join(dir, 'bregctl'), 0o755);
     const { code, output } = await run(['--toolset', 'breg', page], {
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
-      RSTACK_BIN: await fakeRstack(dir),
+      RSTACK_BIN: await fakeRstack(dir, fakeStop),
     });
     assert.equal(code, 0, output);
     assert.equal(await readFile(modes, 'utf8'), '0o600 0o400\n');
@@ -711,7 +711,7 @@ test('teardown finds a session\'s control socket and runtime file as the journey
 });
 
 test('--keep-failed retains private diagnostics after stopping owned sessions', async () => {
-  const body = '## Fail\n\n' + fence('sh', 'mkdir -p project/.breg/dev\necho {} >project/.breg/dev/state.json\necho startup-category >diagnostic.log\nfalse');
+  const body = '## Fail\n\n' + fence('sh', 'mkdir "$RSTACK_DEV_STATE_DIR/0123456789abcdef0123456789abcdef"\necho startup-category >diagnostic.log\nfalse');
   await withPage(body, async ({ dir, page }) => {
     const temp = join(dir, 'tmp');
     await mkdir(temp);
@@ -725,10 +725,11 @@ test('--keep-failed retains private diagnostics after stopping owned sessions', 
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
       RSTACK_BIN: await fakeRstack(dir),
+      RSTACK_FAKE_CALLS: stopped,
     });
     assert.equal(code, 1, output);
     assert.match(output, /failed journey artifacts retained/u);
-    assert.match(await readFile(stopped, 'utf8'), /^dev stop \/\S+\/project --remove$/mu);
+    assert.match(await readFile(stopped, 'utf8'), /^rstack dev stop 0123456789abcdef0123456789abcdef$/mu);
     const roots = await readdir(temp);
     assert.equal(roots.length, 1);
     const retained = join(temp, roots[0]);
@@ -738,7 +739,7 @@ test('--keep-failed retains private diagnostics after stopping owned sessions', 
 });
 
 test('a session that cannot be stopped keeps the work directory and fails the journey', async () => {
-  const body = '## Start\n\n' + fence('sh', 'mkdir -p project/.breg/dev\necho {} >project/.breg/dev/state.json');
+  const body = '## Start\n\n' + fence('sh', 'mkdir "$RSTACK_DEV_STATE_DIR/0123456789abcdef0123456789abcdef"');
   await withPage(body, async ({ dir, page }) => {
     const temp = join(dir, 'tmp');
     await mkdir(temp);
@@ -750,7 +751,7 @@ test('a session that cannot be stopped keeps the work directory and fails the jo
       TMPDIR: temp,
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
-      RSTACK_BIN: await fakeRstack(dir),
+      RSTACK_BIN: await fakeRstack(dir, 'echo "stop refused" >&2; exit 1'),
     });
     assert.equal(code, 1, output);
     assert.match(output, /tutorial PASS/u);
@@ -1050,7 +1051,7 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
         "python3 - <<'PY'\nimport registry_client\nprint(registry_client.NAME)\nPY\n" +
         'python3 -c "import os, urllib.request; print(urllib.request.urlopen(os.environ[\'FHIR_TUTORIAL_TEST_BASE_URL\'] + \'/healthz\').status)"\n' +
         'tar -tzf evidence-examples.tar.gz | grep -x fhir/.gitignore\n' +
-        'mkdir -p -m 700 "$RSTACK_DEV_STATE_DIR/0123abcd"',
+        'mkdir -p -m 700 "$RSTACK_DEV_STATE_DIR/0123abcd0123abcd0123abcd0123abcd"',
     ) +
     fence('text test-expect', 'unpacked\n200\nfhir/.gitignore') +
     fence('sh', 'false');
@@ -1064,7 +1065,7 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
     });
     assert.equal(code, 1, output);
     const log = (await readFile(calls, 'utf8')).trim().split('\n');
-    assert.deepEqual(log, ['evidence --version', 'rstack dev start .', 'evidence-oid4vci --version', 'rstack dev stop 0123abcd']);
+    assert.deepEqual(log, ['evidence --version', 'rstack dev start .', 'evidence-oid4vci --version', 'rstack dev stop 0123abcd0123abcd0123abcd0123abcd']);
     await assert.rejects(fetch('http://127.0.0.1:8003/healthz'), 'the FHIR mock must stop with the journey');
   });
 });

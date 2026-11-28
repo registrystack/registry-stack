@@ -31,6 +31,12 @@ pub enum PaymentsCommand {
         /// AdapterPayments configuration file to validate.
         #[arg(value_name = "FILE")]
         file: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
+        /// Declare the production posture.
+        #[arg(long)]
+        production: bool,
         /// Exact provider pack pinned by a payment connection. Repeat for every active pin.
         #[arg(long, value_name = "FILE")]
         provider_pack: Vec<PathBuf>,
@@ -38,11 +44,15 @@ pub enum PaymentsCommand {
         #[arg(long, value_name = "FILE")]
         fixtures: Vec<PathBuf>,
         /// Refuse warnings as well as errors.
+        /// Development posture listings do not count.
         #[arg(long)]
         deny_warnings: bool,
     },
     /// Export fixed payment routes, authority and schemas for configured connections.
     Contract {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// AdapterPayments configuration file whose contract is exported.
         #[arg(value_name = "FILE")]
         file: PathBuf,
@@ -61,6 +71,9 @@ pub enum PaymentsCommand {
 pub enum PaymentsFixturesCommand {
     /// Compare the pinned provider request and response mappings with fixtures.
     Replay {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// Payment connection configuration used for replay.
         #[arg(value_name = "FILE")]
         file: PathBuf,
@@ -203,7 +216,10 @@ impl ProviderPackRegistry {
     }
 }
 
-pub fn run(command: &PaymentsCommand) -> PaymentCheck {
+pub fn run(
+    command: &PaymentsCommand,
+    declared: registry_platform_config::DeclaredPosture,
+) -> PaymentCheck {
     if let PaymentsCommand::CheckPack { file } = command {
         return check_pack(file);
     }
@@ -213,6 +229,7 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
             provider_pack,
             fixtures,
             deny_warnings,
+            ..
         } => (
             file,
             provider_pack.as_slice(),
@@ -222,6 +239,7 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
         PaymentsCommand::Contract {
             file,
             provider_pack,
+            ..
         } => (file, provider_pack.as_slice(), &[][..], false),
         PaymentsCommand::Fixtures {
             command:
@@ -229,6 +247,7 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
                     file,
                     provider_pack,
                     fixtures,
+                    ..
                 },
         } => (
             file,
@@ -254,16 +273,22 @@ pub fn run(command: &PaymentsCommand) -> PaymentCheck {
             };
         }
     };
-    let check = RuntimeConfigLoader::new(RuntimeEnvelope {
-        api_version: API_VERSION,
-        kind: KIND,
-    })
+    let check = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: API_VERSION,
+            kind: KIND,
+        },
+        declared,
+    )
     .check_offline::<PaymentsConfig>(&absolute, true, |_| DEFAULT_STAND_IN);
     let mut additional = Vec::new();
     let mut companion_diagnostics = Vec::new();
     let mut value = json!({});
     if let Some(loaded) = &check.loaded {
-        if let Err(error) = loaded.config.validate() {
+        if let Err(error) = loaded
+            .config
+            .validate_for_check(loaded.development.as_ref())
+        {
             additional.push(if error == ConfigError::COLLECTION_SIMULATION_ONLY {
                 check.error_at(KIND, error.code(), "/connections",
                     "A collection connection names a live provider; collections run only against the synthetic simulator.",
@@ -318,7 +343,14 @@ fn check_provider_pack_bindings(
     registry: &ProviderPackRegistry,
     additional: &mut Vec<Diagnostic>,
 ) {
+    let development = check
+        .loaded
+        .as_ref()
+        .and_then(|loaded| loaded.development.as_ref());
     for (index, connection) in config.connections.iter().enumerate() {
+        let Ok(connector) = connection.binding.connector_kind(development) else {
+            continue;
+        };
         let path = format!("/connections/{index}/binding/providerPack");
         let Some(pin) = connection.binding.provider_pack.as_ref() else {
             if connection.binding.simulation {
@@ -352,7 +384,7 @@ fn check_provider_pack_bindings(
                 continue;
             }
         };
-        if selected.pack.connector != connection.binding.connector_kind()
+        if selected.pack.connector != connector
             || !selected
                 .pack
                 .capabilities
@@ -368,8 +400,8 @@ fn check_provider_pack_bindings(
             continue;
         }
         if matches!(
-            &connection.binding.provider,
-            registry_adapter::payments::config::CollectionProvider::Http { .. }
+            connection.binding.provider(None),
+            Ok(registry_adapter::payments::config::CollectionProvider::Http { .. })
         ) && selected
             .pack
             .mapping

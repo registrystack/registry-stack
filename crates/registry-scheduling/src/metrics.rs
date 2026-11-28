@@ -13,6 +13,10 @@
 //! runtime's own loops. Paths, appointment or hold identifiers, principals,
 //! and problem details never become labels.
 //!
+//! The refusal counter, `scheduling_request_refusals_total`, is labelled by
+//! the check a request failed. The check is a closed set of 45 names, never a
+//! value a caller sent.
+//!
 //! The outbox and hook-delivery series are gauges sampled from the store when
 //! the metrics are scraped. When a queue cannot be read its gauges have no
 //! samples for that scrape, so the series goes stale rather than reporting an
@@ -36,6 +40,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use registry_platform_authcommon::RefusalRecorder;
 use registry_platform_metrics::{
     CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline,
     CONTENT_TYPE as METRICS_CONTENT_TYPE,
@@ -124,6 +129,9 @@ impl SampledQueue {
 pub struct Metrics {
     requests: CounterVec,
     sample_failures: CounterVec,
+    /// The recorder the HTTP edge reports each refusal to. Its counter is
+    /// written into the exposition when one is attached.
+    refusals: Option<Arc<RefusalRecorder>>,
     started: Instant,
     /// Seconds after `started` at which each worker last completed a pass.
     last_success: [AtomicU64; 2],
@@ -156,6 +164,7 @@ impl Default for Metrics {
                 LabelSpace::closed_zero_filled(&["queue"], &queues).expect(DECLARATION),
             )
             .expect(DECLARATION),
+            refusals: None,
             started: Instant::now(),
             last_success: [AtomicU64::new(0), AtomicU64::new(0)],
         }
@@ -171,6 +180,14 @@ pub struct Sampled {
 }
 
 impl Metrics {
+    /// Expose `scheduling_request_refusals_total`, the counter of `refusals`,
+    /// beside the other series.
+    #[must_use]
+    pub fn with_refusals(mut self, refusals: Arc<RefusalRecorder>) -> Self {
+        self.refusals = Some(refusals);
+        self
+    }
+
     /// Count one answered request under its closed labels.
     pub fn record_request(&self, route: &str, method: &Method, status: StatusCode) {
         count(
@@ -204,6 +221,9 @@ impl Metrics {
         let mut out = Exposition::new();
         self.requests.write(&mut out).expect(DECLARATION);
         self.sample_failures.write(&mut out).expect(DECLARATION);
+        if let Some(refusals) = &self.refusals {
+            refusals.counter().write(&mut out).expect(DECLARATION);
+        }
         write_queue(
             &mut out,
             "scheduling_outbox_items",
@@ -427,6 +447,30 @@ mod tests {
         assert!(text.contains(
             "scheduling_http_requests_total{route=\"unmatched\",method=\"other\",status=\"2xx\"} 1"
         ));
+    }
+
+    #[test]
+    fn the_refusal_counter_is_exposed_for_every_check_once_attached() {
+        use registry_platform_authcommon::FailedCheck;
+        let recorder = Arc::new(RefusalRecorder::new("scheduling").unwrap());
+        let unattached = Metrics::default().render(&Sampled::default());
+        assert!(!unattached.contains("scheduling_request_refusals_total"));
+
+        let metrics = Metrics::default().with_refusals(Arc::clone(&recorder));
+        assert!(recorder.record(FailedCheck::Scope).is_some());
+        let text = metrics.render(&Sampled::default());
+        assert!(text.contains("# TYPE scheduling_request_refusals_total counter"));
+        assert!(text.contains("scheduling_request_refusals_total{check=\"scope\"} 1"));
+        for check in FailedCheck::ALL {
+            assert!(
+                text.contains(&format!(
+                    "scheduling_request_refusals_total{{check=\"{}\"}}",
+                    check.as_str()
+                )),
+                "{} has no series",
+                check.as_str()
+            );
+        }
     }
 
     #[test]
