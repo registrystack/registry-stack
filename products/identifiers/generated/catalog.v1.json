@@ -6394,7 +6394,7 @@
       },
       "artifact": {
         "path": "products/scheduling/generated/fixture/fixture.schema.json",
-        "sha256": "8a3010dde6db912e705724dbd14bb987fd2cbaf1b6b1c7f2304c8dacab4efedf",
+        "sha256": "71f8f476fba19f21f76af96962fa01b5b1569c8082f25be2992019de6ae8f2d1",
         "mediaType": "application/schema+json"
       }
     },
