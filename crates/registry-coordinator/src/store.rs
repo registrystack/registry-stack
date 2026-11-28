@@ -739,22 +739,11 @@ impl Store {
         security: StoreSecurity,
         tls: Option<tokio_postgres_rustls::MakeRustlsConnect>,
     ) -> Result<Self> {
-        let config: tokio_postgres::Config = database_url.parse().map_err(unavailable)?;
-        let local = !config.get_hosts().is_empty()
-            && config.get_hosts().iter().all(|host| match host {
-                // The name `localhost` is accepted without a pin: a database
-                // address is checked here by spelling only.
-                tokio_postgres::config::Host::Tcp(name) => {
-                    registry_platform_httputil::loopback::loopback_host(name).is_some()
-                }
-                #[cfg(unix)]
-                tokio_postgres::config::Host::Unix(_) => true,
-            });
-        if tls.is_none() && !local
-            || tls.is_some() && config.get_ssl_mode() != tokio_postgres::config::SslMode::Require
-        {
-            return Err(refused("database-tls-required", "use verified TLS with sslmode=require for PostgreSQL; plaintext is restricted to an explicit local connection"));
-        }
+        let config = open_driver_config(
+            database_url,
+            tls.is_some(),
+            &registry_platform_config::resolve_database_host,
+        )?;
         Self::open_config(config, namespace, security, tls).await
     }
 
@@ -3536,11 +3525,95 @@ impl Store {
     }
 }
 
+/// The driver configuration [`Store::open`] hands to the pool. Plaintext is
+/// restricted to an explicit local connection, which then passes the shared
+/// `loopback-plaintext` check and dials only the loopback addresses it
+/// accepted, so the driver never resolves `localhost` again.
+fn open_driver_config(
+    database_url: &str,
+    tls: bool,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<tokio_postgres::Config> {
+    let config: tokio_postgres::Config = database_url.parse().map_err(unavailable)?;
+    let local = !config.get_hosts().is_empty()
+        && config.get_hosts().iter().all(|host| match host {
+            // The spelling is checked here; the shared check below
+            // resolves `localhost` once and pins its loopback answers.
+            tokio_postgres::config::Host::Tcp(name) => {
+                registry_platform_httputil::loopback::loopback_host(name).is_some()
+            }
+            #[cfg(unix)]
+            tokio_postgres::config::Host::Unix(_) => true,
+        });
+    if !tls && !local || tls && config.get_ssl_mode() != tokio_postgres::config::SslMode::Require {
+        return Err(refused("database-tls-required", "use verified TLS with sslmode=require for PostgreSQL; plaintext is restricted to an explicit local connection"));
+    }
+    if tls {
+        return Ok(config);
+    }
+    registry_platform_postgres::loopback_postgres_connection(config, resolve).map_err(|error| {
+        CoordinatorError::new(error.code(), error.to_string()).suggest(error.suggested_action())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use registry_platform_testing::MIGRATION_PIN_RULE;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn the_public_constructor_pins_localhost_and_refuses_what_the_deployment_path_refuses() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        let fixed = |name: &str| -> std::io::Result<Vec<IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 9)),
+                IpAddr::V6(Ipv6Addr::LOCALHOST),
+            ])
+        };
+        let pinned =
+            open_driver_config("postgresql://app@localhost:5433/coordinator", false, &fixed)
+                .unwrap();
+        assert!(pinned.get_hosts().is_empty());
+        assert_eq!(
+            pinned.get_hostaddrs(),
+            &[
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 9)),
+                IpAddr::V6(Ipv6Addr::LOCALHOST)
+            ]
+        );
+        assert_eq!(pinned.get_ports(), &[5433, 5433]);
+
+        let elsewhere = |_: &str| -> std::io::Result<Vec<IpAddr>> {
+            Ok(vec![IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))])
+        };
+        for (url, resolve, code) in [
+            (
+                "postgresql://app@localhost:5433/coordinator",
+                &elsewhere as &registry_platform_config::HostResolver,
+                "platform.database.transport-host-mismatch",
+            ),
+            (
+                "host=localhost hostaddr=10.0.0.5 user=app dbname=coordinator",
+                &fixed,
+                "platform.database.transport-host-mismatch",
+            ),
+            (
+                "host=[::1] user=app dbname=coordinator",
+                &fixed,
+                "platform.database.bracketed-host",
+            ),
+            (
+                "postgresql://app@db.example.com/coordinator",
+                &fixed,
+                "database-tls-required",
+            ),
+        ] {
+            let error = open_driver_config(url, false, resolve).unwrap_err();
+            assert_eq!(error.code, code, "{url}");
+        }
+    }
 
     #[test]
     fn an_uncertain_mutation_with_a_read_receipt_is_sent_to_reconcile() {

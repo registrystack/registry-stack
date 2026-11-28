@@ -187,7 +187,10 @@ When they name one role, or the runtime role can still write the ledger, apply r
 `database.transport` defaults to `verified-tls`. Use `loopback-plaintext`
 when every database host is a Unix socket, a numeric loopback address, or
 `localhost`. Development also permits `private-network-plaintext` for private
-database hosts. `testOnlyPlaintext: true` is available in builds with the
+database hosts.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+`testOnlyPlaintext: true` is available in builds with the
 `postgres-test` feature.
 
 Unless a database URL sets them, every Casework connection uses these values, all in seconds as Casework reads the URL:
@@ -203,7 +206,7 @@ A connection to a server that stopped answering therefore fails within seconds.
 The TCP user timeout applies on Linux only.
 
 {/* Evidence: crates/registry-casework/src/activation.rs grant_runtime_role, observe_role;
-    crates/registry-casework/src/store.rs tcp_user_timeout, plaintext_permitted;
+    crates/registry-casework/src/store.rs tcp_user_timeout, driver_config;
     crates/registry-casework/src/config.rs check_database */}
 
 ## Authentication

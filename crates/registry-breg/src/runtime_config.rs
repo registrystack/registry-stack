@@ -16,12 +16,11 @@ use jsonwebtoken::jwk::JwkSet;
 use registry_platform_audit::{AuditDestination, AuditDestinationKind, AuditProfile};
 use registry_platform_config::{
     check_metrics_bind_address, check_metrics_bind_apart, Admitted, AllowedClients, AuditKeyConfig,
-    CallerIssuerCore, CallerIssuerEntry, CallerIssuers, ClientRule, DatabaseHost,
-    DatabaseTransport, DatabaseTransportError, DeclaredPosture, DevelopmentWitness,
-    FoundExplicitSetting, JwksSource, LoadedRuntimeConfig, MetricsBindError,
-    PackageConfig as SharedPackageConfig, Posture, PostureReport, RemovedKey, RuntimeConfigLoader,
-    RuntimeEnvelope, SecretError, SecretFileCheck, SecretReference, SecretResolver,
-    TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
+    CallerIssuerCore, CallerIssuerEntry, CallerIssuers, ClientRule, DatabaseTransport,
+    DatabaseTransportError, DeclaredPosture, DevelopmentWitness, FoundExplicitSetting, JwksSource,
+    LoadedRuntimeConfig, MetricsBindError, PackageConfig as SharedPackageConfig, Posture,
+    PostureReport, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretFileCheck,
+    SecretReference, SecretResolver, TaskGrantStatusConfig, REMOVED_OIDC_JWKS_SOURCE_KIND,
 };
 use registry_platform_crypto::{delivery_signature::DeliveryKeys, PublicJwk, SigningAlgorithm};
 #[cfg(feature = "schema")]
@@ -2079,35 +2078,16 @@ impl RuntimeConfig {
             return ConnectionConfig::from_test_config(postgres, self.database.pool_bounds)
                 .map_err(|_| RuntimeConfigError::InvalidDatabase);
         }
-        // libpq-style URLs may supply hostaddr as well as host. The driver
-        // connects to hostaddr when both are supplied, so validate both.
-        let hosts: Vec<_> = postgres
-            .get_hosts()
-            .iter()
-            .map(|host| match host {
-                tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
-                #[cfg(unix)]
-                tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
-            })
-            .chain(
-                postgres
-                    .get_hostaddrs()
-                    .iter()
-                    .map(|address| DatabaseHost::Tcp(address.to_string())),
-            )
-            .collect();
-        let transport = self
-            .database
-            .transport
-            .plaintext_permitted(&hosts, self.development_witness())
-            .map_err(RuntimeConfigError::DatabaseTransport)?;
-        match transport {
-            DatabaseTransport::VerifiedTls => {}
-            DatabaseTransport::LoopbackPlaintext | DatabaseTransport::PrivateNetworkPlaintext => {
-                return ConnectionConfig::plaintext_config(postgres, self.database.pool_bounds)
-                    .map_err(|_| RuntimeConfigError::InvalidDatabase);
-            }
-        }
+        let postgres = match checked_connection(
+            &self.database.transport,
+            postgres,
+            self.development_witness(),
+            self.database.pool_bounds,
+            &registry_platform_config::resolve_database_host,
+        )? {
+            CheckedConnection::Plaintext(connection) => return Ok(connection),
+            CheckedConnection::VerifiedTls(postgres) => postgres,
+        };
         let connection = match &self.database.ca_bundle_ref {
             Some(roots_ref) => {
                 let roots = self.secret_resolver()?.resolve_reference(roots_ref)?;
@@ -5080,10 +5060,87 @@ fn oidc_leeway(milliseconds: u64) -> Option<Duration> {
         .then(|| Duration::from_millis(milliseconds))
 }
 
+enum CheckedConnection {
+    /// The plaintext connection, dialling only the checked addresses.
+    Plaintext(ConnectionConfig),
+    /// The configuration as written, for the caller to secure with TLS.
+    VerifiedTls(tokio_postgres::Config),
+}
+
+/// Check every host and hostaddr of `postgres` against the configured
+/// transport. Under a plaintext transport every TCP host is replaced by the
+/// numeric addresses its check accepted, so the driver never resolves a name
+/// again.
+fn checked_connection(
+    database: &registry_platform_config::DatabaseConfig,
+    postgres: tokio_postgres::Config,
+    witness: Option<&DevelopmentWitness>,
+    pool_bounds: PoolBounds,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<CheckedConnection> {
+    let (transport, postgres) =
+        registry_platform_postgres::postgres_connection(database, postgres, witness, resolve)
+            .map_err(RuntimeConfigError::DatabaseTransport)?;
+    match transport {
+        DatabaseTransport::VerifiedTls => Ok(CheckedConnection::VerifiedTls(postgres)),
+        DatabaseTransport::LoopbackPlaintext | DatabaseTransport::PrivateNetworkPlaintext => {
+            ConnectionConfig::plaintext_config(postgres, pool_bounds)
+                .map(CheckedConnection::Plaintext)
+                .map_err(|_| RuntimeConfigError::InvalidDatabase)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::RuntimeConfigError;
     use crate::attachment_verification_worker::ATTEMPT_BUDGET;
+
+    #[test]
+    fn a_loopback_name_reaches_the_pool_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        use registry_platform_config::{DatabaseTransport, Gated};
+        let database = registry_platform_config::DatabaseConfig {
+            runtime_url_ref: "secret:env/DB_RUNTIME".to_owned(),
+            migration_url_ref: "secret:env/DB_MIGRATION".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap()),
+        };
+        let bounds = super::PoolBounds::new(
+            4,
+            super::Duration::from_secs(1),
+            super::Duration::from_secs(1),
+            super::Duration::from_secs(1),
+        )
+        .unwrap();
+        let postgres = "postgresql://registry_runtime@localhost:5433/registry"
+            .parse()
+            .unwrap();
+        let Ok(super::CheckedConnection::Plaintext(connection)) =
+            super::checked_connection(&database, postgres, None, bounds, &fixed)
+        else {
+            panic!("a loopback name under loopback-plaintext is a plaintext connection");
+        };
+        let postgres = connection.postgres();
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
+    }
 
     #[test]
     fn declared_posture_selects_task_grant_peer_policy() {

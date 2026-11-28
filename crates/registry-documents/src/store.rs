@@ -16,7 +16,7 @@ use thiserror::Error;
 use tokio_postgres::Config as PgConfig;
 
 use registry_platform_config::{
-    DatabaseHost, DatabaseTransport, DatabaseTransportError, DevelopmentWitness, Posture,
+    DatabaseTransport, DatabaseTransportError, DevelopmentWitness, Posture,
 };
 
 use crate::config::{describe_secret_failure, DatabaseConfig};
@@ -162,37 +162,20 @@ impl PostgresStore {
         })?;
         let url = std::str::from_utf8(protected.expose_secret())
             .map_err(|_| StoreError::Configuration)?;
-        let mut postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
-        if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
-            return Err(StoreError::Configuration);
-        }
+        let (postgres, verified_tls) = driver_config(
+            config,
+            url,
+            witness,
+            &registry_platform_config::resolve_database_host,
+        )?;
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
-        config.check(cfg!(feature = "postgres-test"))?;
-        let mut hosts: Vec<_> = postgres
-            .get_hosts()
-            .iter()
-            .map(|host| match host {
-                tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
-                #[cfg(unix)]
-                tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
-            })
-            .collect();
-        hosts.extend(
-            postgres
-                .get_hostaddrs()
-                .iter()
-                .map(|address| DatabaseHost::Tcp(address.to_string())),
-        );
-        let transport = config.plaintext_permitted(&hosts, witness)?;
-        let manager = if config.test_only_plaintext || transport != DatabaseTransport::VerifiedTls {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
-            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
-        } else {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
+        let manager = if verified_tls {
             let connector = tls_connector(config, secrets)?;
             Manager::from_config(postgres, connector, manager_config)
+        } else {
+            Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
         };
         let pool = Pool::builder(manager)
             .max_size(32)
@@ -520,5 +503,75 @@ mod tests {
             (100, ""),
             (100, "")
         ]));
+    }
+}
+
+/// The driver configuration the pool is built from, and whether it requires
+/// verified TLS. Under a plaintext transport every TCP host is replaced by
+/// the numeric addresses its check accepted, so the driver never resolves a
+/// name again.
+fn driver_config(
+    config: &DatabaseConfig,
+    url: &str,
+    witness: Option<&DevelopmentWitness>,
+    resolve: &registry_platform_config::HostResolver,
+) -> Result<(PgConfig, bool), StoreError> {
+    let postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
+    if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
+        return Err(StoreError::Configuration);
+    }
+    config.check(cfg!(feature = "postgres-test"))?;
+    let (transport, mut postgres) =
+        registry_platform_postgres::postgres_connection(config, postgres, witness, resolve)?;
+    let verified_tls = transport == DatabaseTransport::VerifiedTls && !config.test_only_plaintext;
+    postgres.ssl_mode(if verified_tls {
+        tokio_postgres::config::SslMode::Require
+    } else {
+        tokio_postgres::config::SslMode::Disable
+    });
+    Ok((postgres, verified_tls))
+}
+
+#[cfg(test)]
+mod driver_config_tests {
+    use registry_platform_config::Gated;
+
+    use super::*;
+
+    #[test]
+    fn a_loopback_name_reaches_the_pool_as_numeric_loopback_addresses() {
+        // A fixed answer, so the test needs no particular `localhost` mapping
+        // on the machine that runs it.
+        let fixed = |name: &str| -> std::io::Result<Vec<std::net::IpAddr>> {
+            assert_eq!(name, "localhost");
+            Ok(vec![
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ])
+        };
+        let config = DatabaseConfig {
+            runtime_url_ref: "secret:env/DB_RUNTIME".to_owned(),
+            migration_url_ref: "secret:env/DB_MIGRATION".to_owned(),
+            ca_bundle_ref: None,
+            test_only_plaintext: false,
+            transport: Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap()),
+        };
+        let (postgres, verified_tls) = driver_config(
+            &config,
+            "postgresql://app@localhost:5433/documents",
+            None,
+            &fixed,
+        )
+        .unwrap();
+        assert!(!verified_tls);
+        assert!(postgres.get_hosts().is_empty());
+        assert_eq!(
+            postgres.get_hostaddrs(),
+            &[
+                std::net::IpAddr::from([127, 0, 0, 9]),
+                std::net::Ipv6Addr::LOCALHOST.into(),
+            ]
+        );
+        assert!(postgres.get_ports().iter().all(|port| *port == 5433));
     }
 }

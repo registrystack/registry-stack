@@ -6,6 +6,9 @@
 
 - Document Store accepts development S3 and content-verifier responses when the runtime declares development.
 
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, the database connection goes to the numeric addresses its host check accepted at startup. A host name such as `localhost` is no longer looked up again for each connection, so a later, different answer cannot send the connection to an address that was not checked.
+- Under `database.transport: loopback-plaintext` or `private-network-plaintext`, a keyword connection string host written as an IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`, is skipped when the transport otherwise permits it and the driver would dial it, as the driver itself fails that entry and tries the next. When no other host is left, the connection is refused when it is configured, with `platform.database.bracketed-host` naming the address. Write `host=::1`. When a keyword host has an authored `hostaddr`, the connection still uses that `hostaddr`. A bracketed IPv6 address in a URL, such as `postgresql://app@[::1]/registry`, still works.
+
 - Start a local development run from the starter with `rstack dev start`.
 
 - A reservation may omit `custodian` when the caller is a person: the document is

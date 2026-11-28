@@ -33,6 +33,7 @@ integration-test fixtures.
 | [`registry-platform-metrics`](../../crates/registry-platform-metrics/README.md) | Prometheus text exposition (format 0.0.4) writer and counter and histogram state with bounded, value-free label sets. |
 | [`registry-platform-objectstore`](../../crates/registry-platform-objectstore/README.md) | S3-compatible object storage and HTTP content verification transports, bound to a caller-supplied namespace, with fixed refusals and no retries. |
 | [`registry-platform-oidc`](../../crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
+| [`registry-platform-postgres`](../../crates/registry-platform-postgres/README.md) | The `tokio-postgres` configuration that dials only the database addresses the shared transport check accepted. |
 | [`registry-platform-posture`](../../crates/registry-platform-posture/README.md) | The declared posture (development or production), the `REGISTRY_STACK_POSTURE` variable and `--posture` flag rules, and the refusals before any file is read; `std` only. |
 | [`registry-platform-ratelimit`](../../crates/registry-platform-ratelimit/README.md) | Bounded in-memory keyed rate limiting: a token bucket and a fixed window counter over opaque caller keys. |
 | [`registry-platform-resilience`](../../crates/registry-platform-resilience/README.md) | Bounded in-process resilience: the retry delay computation and a process-local circuit breaker state machine. |

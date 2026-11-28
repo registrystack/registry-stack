@@ -9,6 +9,22 @@
 
 - Checks with `--deny-warnings` still list development-only settings accepted under a development declaration.
 
+- BREAKING (Rust API): `DatabaseConfig::plaintext_permitted` is replaced by
+  `DatabaseConfig::permitted_transport`, which also returns the numeric addresses
+  each host was checked as. A host name is looked up once.
+  `DatabaseConfig::permitted_transport_with_resolver` and
+  `check_database_hosts` take the resolver as an argument. The new
+  `registry-platform-postgres` crate keeps `tokio-postgres` out of
+  `registry-platform-config`: its `postgres_connection` returns the
+  `tokio-postgres` configuration that dials only those addresses under a
+  plaintext transport, and `loopback_postgres_connection` does the same under
+  `loopback-plaintext` for a caller with no database block. A keyword host written as an IP address in
+  brackets, such as `host=[::1]`, that the transport otherwise permits and the
+  driver would dial is dropped from the pinned list, and when no other host is
+  left the connection is refused with `DatabaseTransportError::BracketedHost`.
+  With `load_balance_hosts=random`, the random choice is over each checked TCP
+  address and each Unix socket entry, not over the hosts as written.
+
 - The TypeScript client README gives the matching `bregctl` release requirement and shows the incompatible-version diagnostic.
 
 - Generated TypeScript services export a Proposal type for each register member, such as `FacilityProposal`, with that member's Action types.

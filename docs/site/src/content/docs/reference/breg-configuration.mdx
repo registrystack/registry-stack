@@ -56,7 +56,10 @@ Delete the retired `identity.databaseInitializationEnvironment` key.
 Production uses Transit for field encryption. `fieldEncryption.provider.type: local-file`
 requires development. PostgreSQL uses `database.transport: verified-tls` by default.
 Use `loopback-plaintext` for a Unix socket, a numeric loopback address, or `localhost`.
-`private-network-plaintext` requires development. For event destinations,
+`private-network-plaintext` requires development.
+Under a plaintext transport, a host name such as `localhost` is looked up once when the runtime starts, and each connection goes to the addresses that lookup returned.
+With `load_balance_hosts=random`, the random choice is over each checked TCP address and each Unix socket entry, not over the hosts as written.
+For event destinations,
 `networkProfile: loopback-http` permits a loopback HTTP receiver in either posture.
 
 A successful `GET /ready` includes `status`, `posture` and `developmentSettings`.
