@@ -132,8 +132,8 @@ For each service, request the resource it names and make sure the token carries 
   It requires a configured maximum token lifetime of 1 to 7200 seconds and a `leewayMilliseconds` of whole seconds, 0 to 300000 ms.
   The resource server never refreshes; you obtain a replacement token.
 - Casework: `requiredScopes` in the selected Requester, Staff, or Supervisor profile.
-  The scope claim defaults to `registry_scopes`.
-  Human routes require the configured `humanIdentity`, which defaults to `registry_actor_kind: human`.
+  The scope claim defaults to `scope`.
+  Human routes require a caller whose actor kind resolves to `human`: the issuer entry's `actorKind` or `clientActorKinds`, else the token's `registry_actor_kind: human`.
   Task clients use their separate actor profile.
   `exp` and `nbf` are enforced, with an optional `maximumTokenLifetimeSeconds` and zero verifier skew.
   You obtain another per-resource token on expiry.

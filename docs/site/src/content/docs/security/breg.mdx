@@ -572,13 +572,13 @@ The residuals refer to these obligations by number.
    `database.testOnlyPlaintext` is refused unless BReg was built with its test-only PostgreSQL
    feature.
    Loopback HTTP is accepted for an issuer in either posture. Non-loopback
-   HTTP requires development and `authentication.oidc.allowInsecureHttp: true`
+   HTTP requires development and `allowInsecureHttp: true` in the issuer's entry
    (`BREG-RES-17`).
    Set `listener.publicOrigin` to HTTPS in production. A loopback HTTP public
    origin requires development and a root path.
    {/* Evidence: crates/registry-breg/tests/runtime_config.rs, http_public_origin_requires_development_posture, malformed_loopback_public_origins_get_listener_diagnostics_in_both_postures. */}
    For an issuer and for `listener.publicOrigin`, loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case. BReg connects to an issuer named `localhost` only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
-   A pinned key set (`authentication.oidc.jwksSource.type: static`) holds public keys only.
+   A pinned key set (`authentication.oidc.issuers.ISSUER_ID.jwksSource.type: static`) holds public keys only.
    BReg refuses a key that carries a private or symmetric member (`d`, `p`, `q`, `dp`, `dq`, `qi`,
    `oth`, `k`), a repeated member name, a missing or repeated `kid`, or a key that does not match
    `allowedAlgorithm`.
@@ -605,7 +605,7 @@ The residuals refer to these obligations by number.
    `bregctl idempotency-retention erase-expired` is the only thing that clears raw caller and key
    values from spent rows; the engine schedules nothing.
    Resolve uncertain writes and finish or cancel open ingestion runs before changing
-   `authentication.oidc.issuer` or the principal claim (`BREG-RES-05`).
+   `authentication.oidc.issuers.ISSUER_ID.issuer` or the principal claim (`BREG-RES-05`).
    {/* Evidence: crates/registry-breg/tests/postgres_mutation.rs,
         real_postgres_receipt_sweep_clears_the_raw_caller_of_every_expired_spent_key,
         real_postgres_retry_after_receipt_horizon_is_refused_and_the_sweep_keeps_the_key_spent;
@@ -848,7 +848,7 @@ Each lists the condition, the consequence, the mitigation, and the related matri
 
 ### `BREG-RES-05`: idempotency keys and run ownership are scoped to issuer and principal
 
-- Condition: `authentication.oidc.issuer` or the principal claim changes; an operator never runs
+- Condition: `authentication.oidc.issuers.ISSUER_ID.issuer` or the principal claim changes; an operator never runs
   the sweep; a first response is lost and the retry arrives past the receipt horizon (seven days by
   default).
 - Consequence: after a mapping change, a retry is another caller's fresh request and an open

@@ -174,9 +174,11 @@ Its `audience` and principal claim must match what the issuer will put in the to
 ```yaml title="population/runtime.yaml"
 authentication:
   oidc:
-    issuer: https://issuer.example.com
-    audience: urn:breg:population
-    allowedClients: [esignet-source, registry-admin]
+    issuers:
+      main:
+        issuer: https://issuer.example.com
+        audience: urn:breg:population
+        allowedClients: [esignet-source, registry-admin]
   authorityClaims:
     principal: registry_principal
 ```

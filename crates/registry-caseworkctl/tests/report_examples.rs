@@ -142,7 +142,8 @@ fn check_with_a_runtime_file_lists_each_explicit_production_setting_it_states() 
         &runtime,
         source.replace(
             anchor,
-            &format!("{anchor}        accessTokenType: JWT\n        scopeClaim: scp\n"),
+            // A production file lists its clients; the stated settings follow.
+            "        allowedClients: [casework-console]\n        accessTokenType: JWT\n        scopeClaim: scp\n",
         ),
     )
     .expect("runtime file is written");

@@ -64,7 +64,7 @@ Use `--posture development` for a development runtime file.
 The listener's `tlsTermination: loopback-plaintext` restricts its bind address to loopback in either posture.
 `database.transport: loopback-plaintext` allows a PostgreSQL socket, a loopback IP, or `localhost`.
 `database.transport: private-network-plaintext` requires development.
-A non-loopback HTTP issuer requires development and `authentication.oidc.allowInsecureHttp: true`.
+A non-loopback HTTP issuer requires development and `allowInsecureHttp: true` in its entry under `authentication.oidc.issuers`.
 A loopback HTTP issuer needs no opt-in.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs finish_load, check_database, check_oidc;
@@ -286,7 +286,7 @@ After `REVOKE TRIGGER ON <table> FROM <grantee>`, `REVOKE CREATE ON SCHEMA <sche
 
 ## Authentication
 
-`authentication.oidc` requires `issuer` and `audience`.
+Each entry under `authentication.oidc.issuers` requires `issuer` and `audience`.
 `jwksSource` defaults to `type: discovery`.
 `type: uri` with `uri` fetches the key set from a fixed HTTPS address instead of the one discovery
 names; plain `http` is accepted only for a loopback host under development loopback.
@@ -302,7 +302,7 @@ read never discloses.
 A read or explain request whose token lacks the required scope is refused with
 `profile.not-authorized`.
 A rate-limited `info` diagnostic names the fixed `scope` stage and the
-`authentication.oidc.scopeClaim`, `readsScope`, and `explainScope` remediation keys, without claim
+`authentication.oidc.issuers.ISSUER_ID.scopeClaim`, `readsScope`, and `explainScope` remediation keys, without claim
 or scope values.
 
 `allowedClients` lists the exact client ids the runtime admits, and every file writes it,

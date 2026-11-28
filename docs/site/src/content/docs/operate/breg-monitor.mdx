@@ -46,8 +46,8 @@ Advisories:
     unavailable when diagnosing load
 ```
 
-`breg` logs the same advisories at startup. When the runtime file sets
-`authentication.oidc.allowInsecureHttp: true`, the list also carries an
+`breg` logs the same advisories at startup. When an issuer entry in the runtime file sets
+`allowInsecureHttp: true`, the list also carries an
 `authentication.insecure-http` warning; it stays until the issuer is served over HTTPS. Set the baseline once, before the registry takes
 traffic, then run `doctor` until only the connection budget remains. On a dedicated host, start
 from these values and adjust them against your own measurements:
@@ -128,12 +128,12 @@ and keep the old one published while its tokens are valid. If the issuer is unre
 key stays usable for the cache lifetime plus `outageToleranceSeconds` (900 seconds), counted from
 the last successful fetch. A static JWKS document rotates only by editing it and restarting.
 
-For a compromised key, list its identifier under `authentication.oidc.revokedKeyIds` and restart every
+For a compromised key, list its identifier under the issuer entry's `revokedKeyIds` and restart every
 replica; every token it signed is refused. The trap: once the last revoked key leaves the issuer,
 delete `revokedKeyIds` entirely. An empty list refuses the runtime file:
 
 ```text
-error config.invalid-value /authentication/oidc/revokedKeyIds
+error config.invalid-value /authentication/oidc/issuers/main/revokedKeyIds
 expected at least one key identifier; next: List at least one key identifier to refuse, or delete revokedKeyIds to refuse no key.
 ```
 

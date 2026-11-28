@@ -37,8 +37,8 @@ current-source policy also needs a read-only context provider.
 
 Establish issuer signing-key trust and TLS trust separately. The
 [OIDC connection guide](../advanced/connect-an-oidc-issuer/) explains issuer configuration and
-key discovery; the Casework runtime's `authentication.oidc` block binds the accepted resource,
-clients, and human identity claim. Configure downstream HTTPS trust through the owning connection's
+key discovery; each entry under the Casework runtime's `authentication.oidc.issuers` binds the
+accepted resource, clients, and declared actor kinds. Configure downstream HTTPS trust through the owning connection's
 certificate setting, rather than weakening verification.
 
 Present a resource-specific access token and select the authored profile with
@@ -104,13 +104,12 @@ database:
   migrationUrlRef: secret:file/migration-database-url
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:casework
-    allowedClients: [casework-console, review-producer]
-    scopeClaim: scope
-    humanIdentity:
-      claim: registry_actor_kind
-      value: human
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:casework
+        allowedClients: [casework-console, review-producer]
+        scopeClaim: scope
 audit:
   path: /var/lib/registry-casework/audit/casework.ndjson
   hashKeyRef: secret:file/casework-audit-key
