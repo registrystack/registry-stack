@@ -12,7 +12,7 @@
 
 use std::{
     fmt,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -206,9 +206,9 @@ pub enum ValidationMode {
     /// The published credential issuer uses HTTPS.
     #[default]
     Strict,
-    /// One supervised process group on loopback: the credential issuer is a
-    /// canonical `http://127.0.0.1:<port>` origin the listener binds exactly,
-    /// when the issuer uses HTTP. Requires the development posture.
+    /// One supervised process group on loopback. An HTTP credential issuer
+    /// uses a loopback origin with an explicit port matching the listener.
+    /// Requires the development posture.
     SupervisedLocalDevelopment,
 }
 
@@ -1275,35 +1275,48 @@ impl DeliveryDocument {
 
     /// A supervised HTTP credential issuer must match the bound address.
     fn supervised_local_development_findings(&self, issuer: &str, findings: &mut Vec<Finding>) {
+        use registry_platform_httputil::loopback::{loopback_host, LoopbackHost};
+
         if self.credential_issuer.is_https() {
             credential_issuer_findings(issuer, findings);
-        } else {
-            match canonical_supervised_local_port(issuer) {
-                None => findings.push(
-                    Finding::error(
-                        "evidence.oid4vci.supervised-issuer",
-                        "/credentialIssuer",
-                        "a supervised local development credential issuer must be https or a canonical 127.0.0.1 HTTP origin with an explicit non-zero port",
-                        "Write the credential issuer as http://127.0.0.1:<port>, with the port the listener binds.",
-                    )
-                    .reading(TRANSPORT_READS),
-                ),
-                Some(port) => {
-                    if self.listener.address.bind.socket_addr()
-                        != SocketAddr::from((Ipv4Addr::LOCALHOST, port))
-                    {
-                        findings.push(
-                            Finding::error(
-                                "evidence.oid4vci.supervised-listener",
-                                "/listener/bind",
-                                "the supervised local development listener must exactly match its canonical credential issuer origin",
-                                "Bind the listener to 127.0.0.1 on the port the credential issuer names.",
-                            )
-                            .reading(&["/credentialIssuer", "/validationMode"]),
-                        );
-                    }
-                }
+            return;
+        }
+        let endpoint = issuer.get("http://".len()..).and_then(|authority| {
+            let (host, port) = authority.rsplit_once(':')?;
+            let host = loopback_host(host)?;
+            let number: u16 = port.parse().ok()?;
+            (number != 0 && port == number.to_string()).then_some((host, number))
+        });
+        let Some((host, port)) = endpoint else {
+            findings.push(
+                Finding::error(
+                    "evidence.oid4vci.supervised-issuer",
+                    "/credentialIssuer",
+                    "a supervised credential issuer must use HTTPS or a bare loopback HTTP origin with an explicit non-zero port",
+                    "Write a loopback HTTP origin with the port the listener binds.",
+                )
+                .reading(TRANSPORT_READS),
+            );
+            return;
+        };
+        let binding = self.listener.address.bind.socket_addr();
+        let host_matches = match host {
+            LoopbackHost::Literal(ip) => ip == binding.ip(),
+            LoopbackHost::LocalhostName => {
+                binding.ip() == IpAddr::V4(Ipv4Addr::LOCALHOST)
+                    || binding.ip() == IpAddr::V6(Ipv6Addr::LOCALHOST)
             }
+        };
+        if !host_matches || port != binding.port() {
+            findings.push(
+                Finding::error(
+                    "evidence.oid4vci.supervised-listener",
+                    "/listener/bind",
+                    "the supervised local development listener must match its loopback credential issuer origin",
+                    "Bind the listener on loopback to the address and port the credential issuer names.",
+                )
+                .reading(&["/credentialIssuer", "/validationMode"]),
+            );
         }
     }
 
@@ -1707,21 +1720,6 @@ fn credential_issuer_findings(issuer: &str, findings: &mut Vec<Finding>) {
             "Write the credential issuer as scheme, host, and port only, such as https://wallet.example.org.",
         ));
     }
-}
-
-/// Parse the only HTTP origin admitted as a supervised credential issuer.
-///
-/// Exact reconstruction rejects URL-parser aliases such as a trailing slash,
-/// leading-zero port, alternate IPv4 spelling, credentials, query, or fragment.
-/// The configured issuer identity is compared exactly, not merely resolved.
-fn canonical_supervised_local_port(value: &str) -> Option<u16> {
-    let port = value
-        .strip_prefix("http://127.0.0.1:")
-        .filter(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
-        .filter(|port| !port.starts_with('0'))
-        .and_then(|port| port.parse::<u16>().ok())
-        .filter(|port| *port != 0)?;
-    (value == format!("http://127.0.0.1:{port}")).then_some(port)
 }
 
 /// The exposure key a wildcard metrics refusal names.
@@ -2812,9 +2810,24 @@ store:
             refused_in(&mismatched),
             ["evidence.oid4vci.supervised-listener"]
         );
+        for (issuer, bind) in [
+            ("http://localhost:8090", "127.0.0.1:8090"),
+            ("http://127.0.0.2:8090", "127.0.0.2:8090"),
+            ("http://[0:0:0:0:0:0:0:1]:8090", "[::1]:8090"),
+        ] {
+            let text = local
+                .replace(
+                    "credentialIssuer: http://127.0.0.1:8090",
+                    &format!("credentialIssuer: {issuer}"),
+                )
+                .replace("bind: 127.0.0.1:8090", &format!("bind: '{bind}'"));
+            load_in(&text, registry_platform_config::Posture::Development)
+                .unwrap_or_else(|error| panic!("{issuer}: {error:?}"));
+        }
         for issuer in [
             "http://127.0.0.1:08090",
-            "http://localhost:8090",
+            "http://192.0.2.1:8090",
+            "http://127.0.0.1:8090/other",
             "http://127.0.0.1",
         ] {
             let text = local.replace(

@@ -215,7 +215,28 @@ the rehearsal does not restore an S3 bucket.
 | `registry-documentsctl` | Configuration checks, packaging, activation, dead-letter replay, and the `documentsctl` binary |
 | `registry-documents-client` | Bounded Rust client over the runtime's HTTP contract |
 
-## Configuration
+## Start a development run
+
+Install the product with `rstack install` or set the binary overrides for a source build.
+See [Build from source](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#build-from-source) for the override names. Start Docker before running the example.
+
+```sh
+documentsctl init ./documents
+rstack dev start ./documents
+```
+
+Copy the run ID and loopback URL from the report. Ask for the starter reader’s token
+and use the header file the command prints.
+Set `RUN` and `ORIGIN` to those reported values before running the commands.
+Set `HEADERS` to the header file path before calling curl.
+
+```sh
+rstack dev token "$RUN" --as reader
+curl --fail --header @"$HEADERS" "$ORIGIN/v1/document-policies"
+rstack dev stop "$RUN"
+```
+
+## Configure a deployment you operate
 
 Two operator documents configure a deployment:
 

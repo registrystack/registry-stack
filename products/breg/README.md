@@ -29,6 +29,17 @@ AI-assisted authoring remains outside the production authority boundary. It
 may propose configuration and run deterministic checks, but it cannot bypass
 package review or the separate migration database role.
 
+## Start a development run
+
+With Docker running, create and start a small directory registry.
+
+```sh
+bregctl init ./directory
+rstack dev start ./directory
+```
+
+Copy the run ID to stop the run with `rstack dev stop RUN`.
+
 ## First-hour local quickstart
 
 Use the adopter guides for authoring, local evaluation, and operation.

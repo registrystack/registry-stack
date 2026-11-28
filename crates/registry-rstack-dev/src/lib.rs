@@ -185,7 +185,7 @@ impl RunInput {
         self.plan
             .products
             .iter()
-            .any(|entry| entry.product != Product::Evidence)
+            .any(|entry| entry.product.needs_database())
     }
 
     fn requires_postgis(&self) -> bool {
@@ -385,9 +385,8 @@ fn provisioned_labels(root: &Path) -> Result<Vec<(&'static str, bool)>> {
                 labels.push(("breg_test", spatial));
                 labels.push(("breg", spatial));
             }
-            Product::Casework => labels.push(("casework", false)),
-            Product::Messaging => labels.push(("messaging", false)),
-            Product::Evidence => {}
+            product if product.needs_database() => labels.push((product.name(), false)),
+            _ => {}
         }
     }
     Ok(labels)
@@ -531,7 +530,11 @@ fn require_development(
     declaration: Result<DeclaredPosture, PostureError>,
 ) -> std::result::Result<(), (&'static str, &'static str, &'static str)> {
     match declaration {
-        Err(error) => Err((error.code(), error.message(), error.suggested_action())),
+        Err(error) => Err((
+            error.code(),
+            error.message(),
+            "Unset REGISTRY_STACK_POSTURE, or set it to development.",
+        )),
         Ok(DeclaredPosture {
             posture: Posture::Production,
             source: PostureSource::Environment,
@@ -746,6 +749,9 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
             }
         }
     }
+    if let Some(received) = report["bregHookSink"]["receivedUrl"].as_str() {
+        writeln!(output, "  BReg hook deliveries at {received}")?;
+    }
     if let Some(issuer) = report["issuer"].as_str() {
         writeln!(output, "  Issuer {issuer}")?;
     }
@@ -907,7 +913,7 @@ fn write_check_json(stdout: &mut dyn Write, mut payload: Value) -> Result<()> {
 }
 
 fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> Result<Value> {
-    let ttl_seconds = parse_ttl(ttl.unwrap_or("30m"))?;
+    let ttl_seconds = parse_ttl(ttl.unwrap_or(DEFAULT_TTL))?;
     let project = project.canonicalize().with_context(|| {
         format!(
             "cannot open the development project directory {}",
@@ -944,7 +950,7 @@ fn start(project: &Path, application_root: Option<&Path>, ttl: Option<&str>) -> 
     let needs_database = plan
         .products
         .iter()
-        .any(|entry| entry.product != Product::Evidence);
+        .any(|entry| entry.product.needs_database());
     let managed_database = needs_database && !named(DATABASE_URL);
     if managed_database {
         ensure!(
@@ -1267,6 +1273,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         if sinks.as_object().is_some_and(|sinks| !sinks.is_empty()) {
             report["sinks"] = sinks;
         }
+        if let Some(hook_sink) = products.breg_hook_report() {
+            report["bregHookSink"] = hook_sink;
+        }
         report["runtimeConfigs"] = products.runtime_configs();
         report["scenarios"] = json!(journey_reports);
         report["scenarioDigest"] = json!(input.scenario_digest);
@@ -1452,11 +1461,9 @@ fn token(run_id: &str, person: &str) -> Result<Value> {
         ));
         let headers = match product {
             Product::Breg => format!("Authorization: Bearer {}\n", &*token),
-            Product::Evidence | Product::Messaging => {
-                format!("Authorization: Bearer {}\n", &*token)
-            }
             Product::Casework => format!("Authorization: Bearer {}\nRegistry-Casework-Profile: {}\nRegistry-Review-Profile: {}\n",
                 &*token, grant.profile, grant.profile),
+            _ => format!("Authorization: Bearer {}\n", &*token),
         };
         write_private(&path, Zeroizing::new(headers).as_bytes())?;
         credentials
@@ -1671,37 +1678,42 @@ fn binary(product: Product, name: &str) -> Result<PathBuf> {
 }
 
 fn product_tool(product: Product) -> Result<PathBuf> {
-    binary(
-        product,
-        match product {
-            Product::Breg => "RSTACK_BREGCTL_BIN",
-            Product::Casework => "RSTACK_CASEWORKCTL_BIN",
-            Product::Evidence => "RSTACK_EVIDENCECTL_BIN",
-            Product::Messaging => "RSTACK_MESSAGINGCTL_BIN",
-        },
-    )
+    binary(product, product_tool_info(product).1)
+}
+
+fn product_tool_info(product: Product) -> (&'static str, &'static str) {
+    match product {
+        Product::Breg => ("bregctl", "RSTACK_BREGCTL_BIN"),
+        Product::Casework => ("caseworkctl", "RSTACK_CASEWORKCTL_BIN"),
+        Product::Evidence => ("evidencectl", "RSTACK_EVIDENCECTL_BIN"),
+        Product::Messaging => ("messagingctl", "RSTACK_MESSAGINGCTL_BIN"),
+        Product::Scheduling => ("schedulingctl", "RSTACK_SCHEDULINGCTL_BIN"),
+        Product::Documents => ("documentsctl", "RSTACK_DOCUMENTSCTL_BIN"),
+        Product::Coordinator => ("coordinatorctl", "RSTACK_COORDINATORCTL_BIN"),
+        Product::Adapter => ("adapterctl", "RSTACK_ADAPTERCTL_BIN"),
+        Product::Render => ("registry-render", "RSTACK_RENDER_BIN"),
+        Product::Discovery => ("discoveryctl", "RSTACK_DISCOVERYCTL_BIN"),
+    }
 }
 
 fn binaries(product: Product) -> Result<Binaries> {
-    Ok(match product {
-        Product::Breg => Binaries {
-            tool: product_tool(product)?,
-            runtime: binary(product, "RSTACK_BREG_BIN")?,
-        },
-        Product::Casework => Binaries {
-            tool: product_tool(product)?,
-            runtime: binary(product, "RSTACK_CASEWORK_BIN")?,
-        },
-        Product::Evidence => Binaries {
-            tool: product_tool(product)?,
-            runtime: binary(product, "RSTACK_EVIDENCE_BIN")?,
-        },
-        Product::Messaging => Binaries {
-            tool: product_tool(product)?,
-            runtime: binary(product, "RSTACK_MESSAGING_BIN")?,
-        },
-    })
+    let tool = product_tool(product)?;
+    let runtime = match product {
+        Product::Breg => binary(product, "RSTACK_BREG_BIN")?,
+        Product::Casework => binary(product, "RSTACK_CASEWORK_BIN")?,
+        Product::Evidence => binary(product, "RSTACK_EVIDENCE_BIN")?,
+        Product::Messaging => binary(product, "RSTACK_MESSAGING_BIN")?,
+        Product::Scheduling => binary(product, "RSTACK_SCHEDULING_BIN")?,
+        Product::Documents => binary(product, "RSTACK_DOCUMENTS_BIN")?,
+        Product::Coordinator => binary(product, "RSTACK_COORDINATOR_BIN")?,
+        Product::Adapter => binary(product, "RSTACK_ADAPTER_BIN")?,
+        Product::Discovery => binary(product, "RSTACK_DISCOVERY_BIN")?,
+        Product::Render => tool.clone(),
+    };
+    Ok(Binaries { tool, runtime })
 }
+
+const DEFAULT_TTL: &str = "8h";
 
 fn parse_ttl(value: &str) -> Result<u64> {
     let error = || {
@@ -1892,6 +1904,39 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> Result<
     Ok(serde_json::from_slice(&plan::read(path, limit)?)?)
 }
 
+/// Whether an authored document is a runner companion. Product checkers use
+/// this to leave plan and scenario validation to `rstack dev check`.
+pub fn is_development_companion(document: &registry_platform_yaml::Node) -> bool {
+    let text = |name| match &document.get(name)?.value.value {
+        registry_platform_yaml::NodeValue::String(value) => Some(value.text.as_str()),
+        _ => None,
+    };
+    matches!(
+        (text("apiVersion"), text("kind")),
+        (Some(plan::API_VERSION), Some(plan::KIND))
+            | (
+                Some(plan::SCENARIOS_API_VERSION),
+                Some(plan::SCENARIOS_KIND)
+            )
+    )
+}
+
+/// Create a fresh project from a host's embedded starter assets.
+pub fn write_starter(directory: &Path, files: &[(&str, &[u8])]) -> Result<()> {
+    let mut private = fs::DirBuilder::new();
+    private.mode(0o700);
+    private
+        .create(directory)
+        .context("choose a new starter directory under an existing parent")?;
+    private.recursive(true);
+    for (relative, bytes) in files {
+        let path = directory.join(relative);
+        private.create(path.parent().expect("embedded starter file has a parent"))?;
+        write_private(&path, bytes)?;
+    }
+    Ok(())
+}
+
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file =
         tempfile::NamedTempFile::new_in(path.parent().context("file has no directory")?)?;
@@ -1924,6 +1969,10 @@ mod tests {
         assert_eq!(
             posture(Some("staging")).unwrap_err().0,
             "platform.posture.invalid-value"
+        );
+        assert_eq!(
+            posture(Some("staging")).unwrap_err().2,
+            "Unset REGISTRY_STACK_POSTURE, or set it to development."
         );
     }
 
@@ -2092,6 +2141,7 @@ mod tests {
     fn ttl_is_bounded_and_requires_a_unit() {
         assert_eq!(parse_ttl("1s").unwrap(), 1);
         assert_eq!(parse_ttl("30m").unwrap(), 1800);
+        assert_eq!(parse_ttl(DEFAULT_TTL).unwrap(), 8 * 3600);
         assert_eq!(parse_ttl("24h").unwrap(), 86400);
         for invalid in ["", "0s", "3600", "25h", "18446744073709551615h", "é"] {
             assert!(parse_ttl(invalid).is_err(), "{invalid}");

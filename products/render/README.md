@@ -27,7 +27,28 @@ with the same rendering guarantees:
 - **Library** — `registry_render::render(bundle, document, request)` for
   embedding.
 
-## The 10-minute path
+## Start a development run
+
+Install the product with `rstack install` or set the binary overrides for a source build.
+See [Build from source](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#build-from-source) for the override names.
+
+```sh
+registry-render init ./bundle
+rstack dev start ./bundle
+```
+
+Copy the run ID and loopback URL from the report. Ask for the starter reader’s token
+and use the header file the command prints.
+Set `RUN` and `ORIGIN` to those reported values before running the commands.
+Set `HEADERS` to the header file path before calling curl.
+
+```sh
+rstack dev token "$RUN" --as reader
+curl --fail --header @"$HEADERS" "$ORIGIN/v1/documents"
+rstack dev stop "$RUN"
+```
+
+## Package a bundle for a deployment you operate
 
 ```bash
 cargo run -p registry-render -- init ./my-bundle

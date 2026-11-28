@@ -38,6 +38,8 @@ const STARTERS: &[Starter] = &[
         id: DEFAULT_TEMPLATE,
         replacements: &[],
         files: &[
+            ("dev.yaml", include_bytes!("../../../products/breg/examples/minimal/dev.yaml")),
+            ("dev/scenarios.yaml", include_bytes!("../../../products/breg/examples/minimal/dev/scenarios.yaml")),
             (
                 "README.md",
                 include_bytes!("../../../products/breg/examples/minimal/README.md"),
@@ -97,6 +99,8 @@ const STARTERS: &[Starter] = &[
             },
         ],
         files: &[
+            ("dev.yaml", include_bytes!("../../../products/breg/examples/facility/dev.yaml")),
+            ("dev/scenarios.yaml", include_bytes!("../../../products/breg/examples/facility/dev/scenarios.yaml")),
             (
                 "README.md",
                 include_bytes!("../../../products/breg/examples/facility/README.md"),
@@ -361,14 +365,10 @@ mod tests {
                 _ => panic!("unregistered template"),
             });
         // The optional console is a separate application, not project input.
-        // The `rstack dev` plan and its scenarios are read by `rstack`, not by
-        // `bregctl`, so the starter does not ship them.
         let starter = lookup(id).expect("registered template");
         walk_files(&root)
             .into_iter()
-            .filter(|(path, _)| {
-                !path.starts_with("console/") && path != "dev.yaml" && !path.starts_with("dev/")
-            })
+            .filter(|(path, _)| !path.starts_with("console/"))
             .map(|(path, bytes)| {
                 let contents = materialize(starter, &path, &bytes);
                 (path, contents)

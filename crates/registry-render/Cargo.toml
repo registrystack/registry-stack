@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+registry-rstack-dev.workspace = true
 registry-platform-audit = { workspace = true }
 registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo = { workspace = true }

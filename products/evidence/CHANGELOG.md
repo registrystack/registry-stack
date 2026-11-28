@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `evidencectl init --starter` copies the development plan and the scenario file it names.
+
 - BREAKING: An undeclared posture is production. Migration: Set `REGISTRY_STACK_POSTURE=development` for laptop and test runs; `rstack dev` sets it for you.
 - BREAKING: Evidence, OID4VCI and OID4VP checks and `evidencectl check`, `test` and `package` report development settings as errors under the default posture. Migration: Pass `--posture development`, or set `REGISTRY_STACK_POSTURE`, when checking a laptop file.
 - BREAKING: Evidence runs local assurance in development and production or evidence-grade assurance in production. Migration: Use `assuranceProfile: local` under development, and build a production bundle for production.
@@ -13,6 +15,12 @@
 - BREAKING: Development responses carry `Registry-Posture: development`. Production runtimes refuse development task assertions with `platform.task-grant.development-assertion`, and production peers refuse marked development responses where peer policy is configured. Migration: Point production runtimes at production peers.
 - Added `--posture` to the runtime configuration commands and to the corresponding `evidencectl` commands. Tool reports include the declared posture.
 - OID4VCI called origins and OID4VP issuers permit loopback HTTP in either posture. Strict OID4VCI requires HTTPS for `tokenClient.clientAssertionAudience`.
+
+- The local assurance profile accepts loopback HTTP OIDC issuers and JWKS endpoints without `allowInsecureHttp`.
+- BREAKING: `evidencectl doctor --format json` preserves each runtime diagnostic's code, path and artifact. Migration: Read `diagnostics[].code` on each entry.
+- Doctor checks the configured audit path after any runtime posture refusal.
+- Production Evidence refuses development-marked signed-source and wallet-presentation responses.
+- Supervised OID4VCI accepts loopback HTTP credential issuer origins with an explicit port matching the listener.
 
 - `evidence doctor` judges secret files with the runtime's rule. It no
   longer demands exactly `0400` or `0600`, and it accepts a link chain that

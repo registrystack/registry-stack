@@ -263,7 +263,7 @@ fn check(
         .posture
         .ready_member()
         .remove("developmentSettings")
-        .expect("the shared ready report includes development settings");
+        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
     report["explicitProductionSettings"] = runtime_config
         .posture
         .explicit_settings()

@@ -224,7 +224,7 @@ fn configuration_error(artifact: &str, file: &Path, error: ConfigError) -> Bundl
 // retain their exit class and recovery action. A package read or pin failure
 // can only have runtime findings, and the runtime currently has no gated
 // settings. If one is added, report those findings separately at that call site.
-fn with_posture_findings(
+fn with_runtime_posture_findings(
     error: BundleError,
     path: &Path,
     mut diagnostics: Vec<registry_platform_yaml::Diagnostic>,
@@ -757,7 +757,7 @@ impl Bundle {
             });
         if invalid_pin {
             let error = semantic.expect_err("a refused pin is a runtime finding");
-            return Err(with_posture_findings(
+            return Err(with_runtime_posture_findings(
                 configuration_error(RUNTIME_FILE, path, error),
                 path,
                 loaded.posture.diagnostics(path),
@@ -770,7 +770,7 @@ impl Bundle {
                 let error = semantic.err().map_or(error, |error| {
                     configuration_error(RUNTIME_FILE, path, error)
                 });
-                return Err(with_posture_findings(
+                return Err(with_runtime_posture_findings(
                     error,
                     path,
                     loaded.posture.diagnostics(path),
@@ -778,7 +778,7 @@ impl Bundle {
             }
         };
         if let Err(error) = semantic {
-            return Err(with_posture_findings(
+            return Err(with_runtime_posture_findings(
                 configuration_error(RUNTIME_FILE, path, error),
                 path,
                 bundle.posture_findings(&mut loaded.posture, Some(runtime), path),
@@ -840,12 +840,6 @@ impl Bundle {
         }
         let local = self.config.assurance_profile == AssuranceProfile::Local;
         if local {
-            report.record(FoundSetting {
-                setting: &LOCAL_ASSURANCE,
-                pointer: Some("/assuranceProfile".to_owned()),
-                position: None,
-                origin: SettingOrigin::Package,
-            });
             if let Some(runtime) = runtime {
                 let mut seen = BTreeSet::new();
                 for (id, source) in self.config.sources.iter() {
@@ -963,14 +957,23 @@ impl Bundle {
     ) -> Result<Self, BundleError> {
         let files = capture_bundle_files(root, verified, capture)?;
         let config_bytes = files.get(CONFIG_FILE).ok_or(BundleError::Unavailable)?;
-        let (config, mut development_settings) =
-            collect_development_settings(|| EvidenceConfig::parse_yaml(config_bytes));
+        let mut assurance = None;
+        let (config, mut development_settings) = collect_development_settings(|| {
+            EvidenceConfig::parse_yaml_observing(config_bytes, |profile| assurance = Some(profile))
+        });
         for found in &mut development_settings {
             found.origin = SettingOrigin::Package;
         }
-        let config = config.map_err(|error| {
-            let path = root.join(CONFIG_FILE);
-            let error = configuration_error(CONFIG_FILE, &path, error);
+        if assurance == Some(AssuranceProfile::Local) {
+            development_settings.push(FoundSetting {
+                setting: &LOCAL_ASSURANCE,
+                pointer: Some("/assuranceProfile".to_owned()),
+                position: None,
+                origin: SettingOrigin::Package,
+            });
+        }
+        let path = root.join(CONFIG_FILE);
+        let attach_findings = |error| {
             let Some(posture) = posture else {
                 return error;
             };
@@ -982,11 +985,39 @@ impl Bundle {
                 report.record(setting.clone());
             }
             let mut diagnostics = report.diagnostics(&path);
+            if diagnostics.is_empty() {
+                return error;
+            }
             for diagnostic in &mut diagnostics {
                 diagnostic.artifact = Some(crate::config::EVIDENCE_BUNDLE_KIND.to_owned());
             }
-            with_posture_findings(error, &path, diagnostics)
-        })?;
+            let mut refusal = match error {
+                BundleError::Refused(report) => *report,
+                other => match crate::check::package_fault_diagnostic(&other, root) {
+                    Some(diagnostic) => Report::new(vec![diagnostic]),
+                    None => return other,
+                },
+            };
+            refusal.extend(Report::new(diagnostics));
+            BundleError::Refused(Box::new(refusal))
+        };
+        let config = config
+            .map_err(|error| configuration_error(CONFIG_FILE, &path, error))
+            .map_err(&attach_findings)?;
+        Self::load_artifacts(root, verified, files, config)
+            .map_err(attach_findings)
+            .map(|mut bundle| {
+                bundle.development_settings = development_settings;
+                bundle
+            })
+    }
+
+    fn load_artifacts(
+        root: &Path,
+        verified: &VerifiedPackage,
+        files: BTreeMap<String, Vec<u8>>,
+        config: EvidenceConfig,
+    ) -> Result<Self, BundleError> {
         let source_packs = load_source_packs(&config, &files)?;
         validate_source_authority_paths(&config, &source_packs)?;
         validate_file_closure(&config, &source_packs, &files)?;
@@ -1024,7 +1055,7 @@ impl Bundle {
         let requirement_revisions = compute_requirement_revisions(&config, &source_packs, &files)?;
 
         Ok(Self {
-            development_settings,
+            development_settings: Vec::new(),
             authority_snapshot: None,
             effective_grant_digest: None,
             root: root.to_path_buf(),
@@ -4391,7 +4422,11 @@ mod tests {
         });
         let path = Path::new("runtime.yaml");
         assert!(matches!(
-            with_posture_findings(BundleError::Unavailable, path, posture.diagnostics(path)),
+            with_runtime_posture_findings(
+                BundleError::Unavailable,
+                path,
+                posture.diagnostics(path)
+            ),
             BundleError::Unavailable
         ));
     }

@@ -16,7 +16,7 @@ use std::{
     collections::BTreeMap,
     fs,
     io::{Read as _, Write as _},
-    os::unix::fs::OpenOptionsExt as _,
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 pub(crate) const LOCAL_PACKAGE_DIRECTORY: &str = ".casework/package";
@@ -166,7 +166,6 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     fs::create_dir_all(stage.path().join("fixtures"))?;
     // Init owns this fresh staging directory and creates .casework owner-only.
     {
-        use std::os::unix::fs::DirBuilderExt;
         fs::DirBuilder::new()
             .mode(0o700)
             .create(stage.path().join(".casework"))?;
@@ -275,11 +274,67 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
             &json!({"yaml.schemas":{"./.casework/schemas/project.schema.json":"casework.yaml","./.casework/schemas/runtime.schema.json":"runtime.example.yaml","./.casework/schemas/fixture.schema.json":"fixtures/*.yaml"}}),
         )?,
     )?;
-    load_and_check_policy(stage.path())?;
+    let policy = load_and_check_policy(stage.path())?;
+    let (plan, scenarios) = development_plan(&policy)?;
+    fs::DirBuilder::new()
+        .mode(0o755)
+        .create(stage.path().join("tests"))?;
+    for (relative, content) in [("dev.yaml", plan), ("tests/scenarios.yaml", scenarios)] {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(stage.path().join(relative))?
+            .write_all(content.as_bytes())?;
+    }
     fs::rename(stage.path(), project)?;
     Ok(
-        json!({"ok":true,"command":"init","created":project,"template":template,"next":if canonical_review { "Run caseworkctl check, then pair the BReg provider and configure source transport. Write a dev.yaml plan beside casework.yaml and run rstack dev start. To use this runtime file directly, set REGISTRY_STACK_POSTURE=development or pass --posture development." } else { "Run caseworkctl check, test and types. Write a dev.yaml plan beside casework.yaml and run rstack dev start. To use this runtime file directly, set REGISTRY_STACK_POSTURE=development or pass --posture development." }}),
+        json!({"ok":true,"command":"init","created":project,"template":template,"next":if canonical_review { "Run caseworkctl check, then pair the BReg provider and configure source transport. Run rstack dev start with the generated dev.yaml. To use this runtime file directly, set REGISTRY_STACK_POSTURE=development or pass --posture development." } else { "Run caseworkctl check, test and types. Run rstack dev start with the generated dev.yaml. To use this runtime file directly, set REGISTRY_STACK_POSTURE=development or pass --posture development." }}),
     )
+}
+
+fn development_plan(project: &CaseworkProject) -> Result<(String, String)> {
+    let staff = project
+        .access_profiles
+        .iter()
+        .find(|profile| profile.acts_as == CaseworkActsAs::Staff)
+        .context("the template needs a staff profile for the development scenario")?;
+    // A logical HTTPS issuer for the run. The starter's producer pins may
+    // identify a different teaching issuer and stay in the authored policy.
+    let issuer = "https://identity.casework.example.test";
+    let people = project.access_profiles.iter().map(|profile| {
+        let producer = project.trusted_producers.iter().find(|producer| producer.profile == profile.id);
+        let subject = producer.map_or(profile.id.as_str(), |producer| producer.subject.as_str());
+        let claims = if profile.acts_as == CaseworkActsAs::Requester {
+            json!({})
+        } else {
+            json!({"registry_actor_kind": "human"})
+        };
+        (profile.id.clone(), json!({
+            "subject": subject, "client": profile.id,
+            "grants": {"casework": {"profile": profile.id, "scopes": profile.required_scopes, "claims": claims}},
+        }))
+    }).collect::<BTreeMap<_, _>>();
+    let plan = serde_norway::to_string(&json!({
+        "apiVersion": "id.registrystack.org/formats/rstack/dev/v1alpha1",
+        "kind": "RStackDev",
+        "issuer": issuer,
+        "products": [{"product": "casework", "project": ".", "audience": "urn:example:casework"}],
+        "people": people,
+        "scenarioFile": "tests/scenarios.yaml",
+    }))?;
+    let scenarios = serde_norway::to_string(&json!({
+        "apiVersion": "id.registrystack.org/formats/rstack/scenarios/v1alpha1",
+        "kind": "RStackScenarios",
+        "scenarios": [{"id": "read-starter", "steps": [{
+            "id": "list-policies", "product": "casework", "as": staff.id,
+            "method": "GET", "path": "/v1/review-policies", "expect": {"status": 200},
+        }]}],
+    }))?;
+    Ok((
+        format!("# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/dev/dev.v1alpha1.schema.json\n{plan}"),
+        format!("# yaml-language-server: $schema=https://id.registrystack.org/schemas/rstack/scenarios/scenarios.v1alpha1.schema.json\n{scenarios}"),
+    ))
 }
 
 pub(crate) fn read_project(project: &Path) -> Result<Decoded<CaseworkProject>> {

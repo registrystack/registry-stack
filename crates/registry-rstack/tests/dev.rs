@@ -1114,7 +1114,7 @@ fn unreadable_plan_is_reported_by_the_first_available_host() {
     for plan in [
         Some("products: [\n"),
         Some("issuer: https://issuer.example\n"),
-        Some("products:\n  - {product: coordinator, project: c, audience: c}\n"),
+        Some("products:\n  - {product: unrecognised, project: c, audience: c}\n"),
         None,
     ] {
         match plan {

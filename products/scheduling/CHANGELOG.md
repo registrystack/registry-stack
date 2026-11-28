@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Start a local development run from the starter with `rstack dev start`.
+
 - BREAKING: `schedulingctl records apply` reports a swap the store refuses (`package-not-active`, `deployment-identity`, `not-activated`, `database-id-mismatch`, `combined-invariant`) as a domain refusal with exit 1 and its own code, as the other activation commands do. It was exit 3 `store-unavailable`. Migration: Scripts that retry on exit 3 no longer retry these refusals. Run the command the message names.
 - BREAKING: Scheduling signs every reminder delivery with Standard Webhooks.
   The POST carries `accept`, `content-type`, `webhook-id`,

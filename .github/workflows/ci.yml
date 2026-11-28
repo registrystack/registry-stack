@@ -866,6 +866,13 @@ jobs:
         if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-rstack')
         run: cargo build --locked -p registry-bregctl -p registry-caseworkctl -p registry-evidencectl -p registry-evidence --bins
 
+      - name: Build the additional rstack dev hosts
+        if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-rstack')
+        run: |
+          cargo build --locked -p registry-messagingctl -p registry-schedulingctl --bins
+          cargo build --locked -p registry-documentsctl -p registry-coordinator -p registry-adapterctl --bins
+          cargo build --locked -p registry-render -p registry-discoveryctl --bins
+
       - name: Test affected packages
         run: python3 .github/scripts/run_cargo_packages.py test
 
@@ -2767,6 +2774,17 @@ jobs:
           [[ -n "$test_binary" ]]
           cp "$test_binary" \
             target/debug/inji-oid4vci-interop-test
+
+      - name: Verify Evidence doctor preserves diagnostics from the runtime
+        shell: bash
+        env:
+          EVIDENCECTL_BIN: ${{ github.workspace }}/target/debug/evidencectl
+        run: |
+          set -euo pipefail
+          cargo test --locked -p registry-evidence --test cli -- \
+            --ignored --exact doctor_preserves_real_posture_and_audit_diagnostics_without_opening_a_writer \
+            | tee "${RUNNER_TEMP}/evidence-doctor.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-doctor.log"
 
       - name: Assemble the client package the application tutorial imports
         shell: bash

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Start a local development run from the starter with `rstack dev start`.
+
 - BREAKING: An undeclared posture is production. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
 - BREAKING: `check` without a declared posture reports development settings as errors. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
 - BREAKING: Render accepts `assuranceProfile: local` in development and `assuranceProfile: production` in production. Migration: Use assuranceProfile: local under development, and build a production bundle for production.

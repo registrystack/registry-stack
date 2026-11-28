@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Start a local development run from the starter with `rstack dev start`.
+
 - BREAKING: an Adapter job sends each Coordinator event with Standard
   Webhooks. The POST carries `accept`, `content-type`, `webhook-id`,
   `webhook-timestamp` and `webhook-signature`. The signature covers the

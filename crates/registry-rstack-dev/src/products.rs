@@ -326,9 +326,11 @@ pub(super) struct ProductRunner<'a> {
     issuer_listener: Option<TcpListener>,
     /// The loopback key set server Evidence's target names, stopped with the run.
     jwks: Option<evidence::JwksServer>,
+    coordinator_issuer: Option<evidence::JwksServer>,
     /// The mock gateway Messaging's `http` providers send to, stopped with the
     /// run.
     gateway: Option<GatewayServer>,
+    hook_sink: Option<GatewayServer>,
     /// Where each Messaging provider's sent messages can be read, by provider
     /// ID.
     sinks: BTreeMap<String, Value>,
@@ -363,7 +365,9 @@ impl<'a> ProductRunner<'a> {
             issuer: None,
             issuer_listener: None,
             jwks: None,
+            coordinator_issuer: None,
             gateway: None,
+            hook_sink: None,
             sinks: BTreeMap::new(),
             messaging_providers: None,
             runtime_configs: BTreeMap::new(),
@@ -396,11 +400,26 @@ impl<'a> ProductRunner<'a> {
                 )?;
                 continue;
             }
-            if entry.product == Product::Messaging {
+            if matches!(
+                entry.product,
+                Product::Messaging
+                    | Product::Documents
+                    | Product::Discovery
+                    | Product::Coordinator
+                    | Product::Render
+            ) {
                 self.tool(
                     entry.product,
                     "check",
-                    &["--project".as_ref(), project.as_os_str()],
+                    &[
+                        if entry.product == Product::Render {
+                            "--bundle"
+                        } else {
+                            "--project"
+                        }
+                        .as_ref(),
+                        project.as_os_str(),
+                    ],
                 )?;
                 continue;
             }
@@ -430,6 +449,19 @@ impl<'a> ProductRunner<'a> {
         issuer: Arc<Issuer>,
     ) -> Result<BTreeMap<Product, String>> {
         self.issuer = Some(issuer.clone());
+        if self
+            .input
+            .plan
+            .products
+            .iter()
+            .any(|entry| entry.product == Product::Coordinator)
+        {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+            self.coordinator_issuer = Some(evidence::JwksServer::start(
+                listener,
+                &issuer.public_jwks(),
+            )?);
+        }
         // Keep the reservations for later products until each is ready to bind.
         let ports: Vec<_> = self
             .input
@@ -488,6 +520,9 @@ impl<'a> ProductRunner<'a> {
                     &project,
                     bind,
                 )?,
+                other => {
+                    self.activate_additional(other, database.as_deref_mut(), &project, bind)?
+                }
             };
             let binaries = &self.input.binaries[&product];
             let mut command = guard::Command::new(
@@ -496,12 +531,21 @@ impl<'a> ProductRunner<'a> {
                 &binaries.runtime,
             )
             .map_err(operational)?;
-            if product == Product::Evidence {
+            if matches!(
+                product,
+                Product::Evidence | Product::Adapter | Product::Render
+            ) {
                 command.arg("serve");
             }
             command.arg("--runtime-config").arg(&config);
             self.runtime_configs.insert(product, config);
-            if matches!(product, Product::Casework | Product::Messaging) {
+            if product == Product::Adapter {
+                command.arg("--project").arg(&project);
+            }
+            if matches!(
+                product,
+                Product::Casework | Product::Messaging | Product::Scheduling | Product::Documents
+            ) {
                 command.arg("serve");
             }
             let log = open_log(self.root, &format!("{}-runtime", product.name()))?;
@@ -517,7 +561,12 @@ impl<'a> ProductRunner<'a> {
                 .map_err(operational)?;
             self.children.push((RuntimeKind::Product(product), child));
             self.record_processes()?;
-            self.ready(RuntimeKind::Product(product), url, "/ready", READINESS_WAIT)?;
+            let ready = if product == Product::Scheduling {
+                "/readyz"
+            } else {
+                "/ready"
+            };
+            self.ready(RuntimeKind::Product(product), url, ready, READINESS_WAIT)?;
         }
         Ok(urls)
     }
@@ -697,7 +746,7 @@ impl<'a> ProductRunner<'a> {
     }
 
     fn activate_breg(
-        &self,
+        &mut self,
         database: &mut Database,
         issuer: &Issuer,
         project: &Path,
@@ -715,6 +764,7 @@ impl<'a> ProductRunner<'a> {
         let rehearsal = database
             .provision("breg_test", true, requires_postgis)
             .map_err(operational)?;
+        self.prepare_breg_hooks(project)?;
         let empty_package = self.root.join("breg-test-package");
         fs::create_dir(&empty_package)?;
         let config = self.config(
@@ -828,6 +878,92 @@ impl<'a> ProductRunner<'a> {
         Ok(path)
     }
 
+    fn prepare_breg_hooks(&mut self, project: &Path) -> Result<()> {
+        let (status, report) = tool_report(
+            &self.input.binaries[&Product::Breg].tool,
+            "bregctl",
+            "explain",
+            &["events".as_ref(), project.as_os_str()],
+            self.terminate,
+        )?;
+        ensure!(
+            status.success() && report["ok"] == true,
+            "bregctl explain events failed"
+        );
+        let deliveries = report
+            .pointer("/explanation/deliveries")
+            .and_then(Value::as_array)
+            .context("bregctl explain events did not return an event inventory")?;
+        let mut destinations = BTreeMap::<String, (u8, u64, u64)>::new();
+        for delivery in deliveries {
+            let Some(id) = delivery["destinationId"].as_str() else {
+                continue;
+            };
+            registry_platform_yaml::LocalId::new(id)
+                .context("invalid BReg hook destination identifier")?;
+            let classification = match delivery["classificationCeiling"].as_str() {
+                Some("public") => 0,
+                Some("internal") => 1,
+                Some("restricted") => 2,
+                _ => anyhow::bail!("invalid BReg hook classification ceiling"),
+            };
+            let timeout = delivery["attemptTimeoutMs"]
+                .as_u64()
+                .context("missing BReg hook timeout")?;
+            let maximum_attempts = delivery["maximumAttempts"]
+                .as_u64()
+                .context("missing BReg hook attempt ceiling")?;
+            let limits = destinations.entry(id.to_owned()).or_insert((
+                classification,
+                timeout,
+                maximum_attempts,
+            ));
+            limits.0 = limits.0.max(classification);
+            limits.1 = limits.1.min(timeout);
+            limits.2 = limits.2.min(maximum_attempts);
+        }
+        if destinations.is_empty() {
+            return Ok(());
+        }
+        let sink = GatewayServer::start_hooks()?;
+        let mut hooks = serde_json::Map::new();
+        for (id, (classification, timeout, maximum_attempts)) in destinations {
+            let key = self.secret(&format!("breg-hook-{id}"), random_secret()?.as_bytes())?;
+            let classification = ["public", "internal", "restricted"][usize::from(classification)];
+            hooks.insert(
+                id,
+                json!({
+                    "origin": sink.origin,
+                    "path": "/events",
+                    "networkProfile": "loopback-http",
+                    "dnsFamily": "dual-stack-strict",
+                    "allowedPrivateCidrs": [],
+                    "hmacSha256KeyRef": key,
+                    "classificationCeiling": classification,
+                    "deliveryCeilings": {
+                        "attemptTimeoutMilliseconds": timeout,
+                        "maximumAttempts": maximum_attempts,
+                    },
+                }),
+            );
+        }
+        write_private(
+            &self.root.join("breg-hook-bindings.json"),
+            &serde_json::to_vec(&hooks)?,
+        )?;
+        self.hook_sink = Some(sink);
+        Ok(())
+    }
+
+    pub(super) fn breg_hook_report(&self) -> Option<Value> {
+        self.hook_sink.as_ref().map(|sink| {
+            json!({
+                "origin": sink.origin,
+                "receivedUrl": format!("{}/received", sink.origin),
+            })
+        })
+    }
+
     fn activate_casework(
         &self,
         database: &mut Database,
@@ -892,6 +1028,274 @@ impl<'a> ProductRunner<'a> {
         Ok(config)
     }
 
+    fn activate_additional(
+        &self,
+        product: Product,
+        database: Option<&mut Database>,
+        project: &Path,
+        bind: &str,
+    ) -> Result<PathBuf> {
+        let name = product.name();
+        let package = self.root.join(format!("{name}-package"));
+        if product != Product::Adapter {
+            let mut args = Vec::new();
+            match product {
+                Product::Coordinator | Product::Discovery => args.push("--project".as_ref()),
+                Product::Render => args.push("--bundle".as_ref()),
+                _ => {}
+            }
+            args.extend([
+                project.as_os_str(),
+                "--output".as_ref(),
+                package.as_os_str(),
+            ]);
+            self.tool(product, "package", &args)?;
+        }
+
+        let database_urls = if product.needs_database() {
+            let urls = database
+                .context(NEEDS_DATABASE)?
+                .provision(name, false, false)
+                .map_err(operational)?;
+            self.secret(&format!("{name}-runtime-url"), urls.runtime.as_bytes())?;
+            self.secret(&format!("{name}-migration-url"), urls.migration.as_bytes())?;
+            Some(urls)
+        } else {
+            None
+        };
+        let configuration =
+            self.additional_config(product, project, bind, &package, database_urls.as_ref())?;
+        let path = self.root.join(format!("{name}-runtime.yaml"));
+        write_private(&path, &serde_json::to_vec(&configuration)?)?;
+
+        if matches!(
+            product,
+            Product::Scheduling | Product::Documents | Product::Coordinator
+        ) {
+            let args = ["--runtime-config".as_ref(), path.as_os_str()];
+            self.tool(product, "apply", &args)?;
+            if product == Product::Scheduling {
+                self.tool(
+                    product,
+                    "records",
+                    &[
+                        "apply".as_ref(),
+                        args[0],
+                        args[1],
+                        project.join("records.yaml").as_os_str(),
+                    ],
+                )?;
+            }
+        }
+        Ok(path)
+    }
+
+    fn additional_config(
+        &self,
+        product: Product,
+        project: &Path,
+        bind: &str,
+        package: &Path,
+        urls: Option<&DatabaseUrls>,
+    ) -> Result<Value> {
+        let name = product.name();
+        let identity = format!("dev-{}-{name}", self.input.run_id);
+        let (mut config, mut oidc) = shared_config(
+            &self.input.plan,
+            product,
+            name,
+            self.root,
+            package,
+            &BTreeSet::new(),
+        );
+        config["apiVersion"] = json!(format!(
+            "id.registrystack.org/formats/{name}/runtime/v1alpha1"
+        ));
+        config["listener"] = json!({"bind": bind, "tlsTermination": "loopback-plaintext"});
+        match product {
+            Product::Scheduling | Product::Documents => {
+                self.secret(&format!("{name}-audit-key"), random_secret()?.as_bytes())?;
+                config["kind"] = json!(if product == Product::Scheduling {
+                    "SchedulingRuntimeConfig"
+                } else {
+                    "DocumentsRuntimeConfig"
+                });
+                config["identity"] = json!({"databaseId": identity});
+                config["authentication"] = json!({"oidc": oidc});
+                if product == Product::Scheduling {
+                    config["taskGrantStatus"] = json!("unchecked-final-fifteen-minutes");
+                    config["retention"] = json!({});
+                } else {
+                    config["storage"] = json!({"type": "database"});
+                    config["contentVerification"] = json!({"type": "disabled"});
+                    config["cleanup"] = json!({"erasure": "active"});
+                }
+            }
+            Product::Coordinator => {
+                let runtime = authored_document(&project.join("runtime.yaml"))?;
+                let workflow = authored_document(&project.join("workflow.yaml"))?;
+                let workflow_id = workflow
+                    .pointer("/project/id")
+                    .and_then(Value::as_str)
+                    .context("coordinator workflow does not name an id")?;
+                let checksum =
+                    registry_platform_config::sha256_uri(&fs::read(package.join("SHA256SUMS"))?);
+                let mut policies = serde_json::Map::new();
+                for person in self.input.plan.people.values() {
+                    if let Some(grant) = person.grants.get(&product) {
+                        let policy = policies.entry(person.client.clone()).or_insert_with(|| json!({
+                            "subjects": [], "requiredScopes": grant.scopes, "workflows": [workflow_id],
+                            "actions": ["status", "start"]
+                        }));
+                        let subjects = policy["subjects"].as_array_mut().expect("subjects array");
+                        if !subjects.contains(&json!(person.subject)) {
+                            subjects.push(json!(person.subject));
+                        }
+                    }
+                }
+                oidc.as_object_mut()
+                    .expect("OIDC object")
+                    .remove("allowedClients");
+                oidc["policies"] = json!(policies);
+                let key = |file| self.secret(file, random_key_bytes()?.as_slice());
+                let mut connections = runtime["connections"].clone();
+                if let Some(connections) = connections.as_object_mut() {
+                    for (id, connection) in connections {
+                        registry_platform_yaml::LocalId::new(id.as_str())
+                            .context("invalid Coordinator connection identifier")?;
+                        for field in ["authorization", "observationAuthorization"] {
+                            let Some(authorization) =
+                                connection.get_mut(field).and_then(Value::as_object_mut)
+                            else {
+                                continue;
+                            };
+                            let origin = self
+                                .coordinator_issuer
+                                .as_ref()
+                                .context("missing Coordinator development issuer")?
+                                .origin();
+                            let client_key = registry_platform_crypto::generate_private_jwk(
+                                registry_platform_crypto::GeneratedKeyAlgorithm::Es256,
+                            )?;
+                            let reference = self.secret(
+                                &format!("coordinator-{id}-{field}-key"),
+                                &super::bindings::encode_private_jwk(&client_key)?,
+                            )?;
+                            // The starter reads workflow metadata. Its outbound
+                            // clients cannot acquire tokens from an external issuer.
+                            authorization
+                                .insert("tokenEndpoint".into(), json!(format!("{origin}/token")));
+                            authorization.insert("clientAssertionAudience".into(), json!(origin));
+                            authorization.insert("signingKeyRef".into(), json!(reference));
+                        }
+                    }
+                }
+                return Ok(json!({
+                    "apiVersion": config["apiVersion"],
+                    "kind": "CoordinatorRuntimeConfig",
+                    "secretProviders": config["secretProviders"],
+                    "database": config["database"],
+                    "namespace": "coordinator_dev",
+                    "connections": connections,
+                    "deployment": {
+                        "databaseId": identity,
+                        "runtimeRole": url::Url::parse(&urls.context(NEEDS_DATABASE)?.runtime)?.username(),
+                        "packages": [{"root": package, "expectedDigest": checksum}],
+                        "listener": config["listener"],
+                        "authentication": oidc,
+                        "auditFile": config["audit"]["path"],
+                        "auditKeyRef": key("coordinator-audit-key")?,
+                        "activeStateKey": 1,
+                        "stateKeys": {"1": {"keyRef": key("coordinator-state-key")?}},
+                        "admissionKeyRef": key("coordinator-admission-key")?,
+                    }
+                }));
+            }
+            Product::Adapter => {
+                let template = authored_document(&project.join("runtime.example.yaml"))?;
+                let mut endpoints = template["endpoints"]
+                    .as_array()
+                    .context("adapter development endpoints must be an array")?
+                    .clone();
+                for (index, endpoint) in endpoints.iter_mut().enumerate() {
+                    let url = endpoint["baseUrl"]
+                        .as_str()
+                        .context("adapter development endpoint needs a loopback URL")?;
+                    ensure!(
+                        url::Url::parse(url)?.host().is_some_and(|host| match host {
+                            url::Host::Ipv4(address) => address.is_loopback(),
+                            url::Host::Ipv6(address) => address.is_loopback(),
+                            url::Host::Domain(_) => false,
+                        }),
+                        "adapter development endpoints must use a numeric loopback URL"
+                    );
+
+                    if endpoint["credential"]["type"] == "basic" {
+                        endpoint["credential"] = json!({
+                            "type": "basic",
+                            "usernameRef": self.secret(&format!("adapter-upstream-{index}-username"), b"development")?,
+                            "passwordRef": self.secret(&format!("adapter-upstream-{index}-password"), random_secret()?.as_bytes())?,
+                        });
+                    }
+                }
+                let oidc_fields = oidc.as_object_mut().expect("OIDC object");
+                let clients = oidc_fields
+                    .remove("allowedClients")
+                    .expect("allowed clients");
+                oidc_fields.remove("scopeClaim");
+                return Ok(json!({
+                    "apiVersion": config["apiVersion"],
+                    "kind": "AdapterRuntimeConfig",
+                    "id": identity,
+                    "endpoints": endpoints,
+                    // The Adapter policy requires a nonempty list. The authored
+                    // endpoints above must still be numeric loopback addresses.
+                    "allowedPrivateCidrs": ["10.0.0.1/32"],
+                    "listener": {"bind": bind},
+                    "database": config["database"],
+                    "secretProviders": config["secretProviders"],
+                    "oidc": oidc,
+                    "allowedClients": clients,
+                    "audit": {"retentionDays": 1},
+                    "idempotency": {"responseRetentionSeconds": 3600},
+                    "cursorKeyRef": self.secret("adapter-cursor-key", random_key_bytes()?.as_slice())?,
+                }));
+            }
+            Product::Render => {
+                oidc.as_object_mut()
+                    .expect("OIDC object")
+                    .remove("scopeClaim");
+                return Ok(json!({
+                    "apiVersion": config["apiVersion"],
+                    "kind": "RenderRuntimeConfig",
+                    "listener": {"bind": bind},
+                    "package": config["package"],
+                    "secretProviders": config["secretProviders"],
+                    "authentication": {"oidc": oidc},
+                    "audit": {"path": config["audit"]["path"]},
+                }));
+            }
+            Product::Discovery => {
+                return Ok(json!({
+                    "apiVersion": config["apiVersion"],
+                    "kind": "DiscoveryRuntimeConfig",
+                    "listener": {"bind": bind, "requestTimeoutMilliseconds": 10_000},
+                    "package": config["package"],
+                    "limits": {
+                        "maximumRequestBytes": 65_536,
+                        "maximumResponseBytes": 1_048_576,
+                        "maximumResultRecords": 100,
+                        "maximumResultAlternatives": 100,
+                        "shutdownGraceMilliseconds": 10_000,
+                    },
+                    "logLevel": "info",
+                }));
+            }
+            _ => unreachable!("only additional products use this configuration"),
+        }
+        Ok(config)
+    }
+
     fn config(
         &self,
         product: Product,
@@ -919,11 +1323,7 @@ impl<'a> ProductRunner<'a> {
                 oidc["allowedAlgorithm"] = json!("ES256");
                 oidc["accessTokenType"] = json!("at+jwt");
                 oidc["scopeSeparator"] = json!(" ");
-                oidc["maximumTokenLifetimeSeconds"] = json!(if plan.application.is_some() {
-                    super::issuer::BROWSER_TOKEN_LIFETIME_SECONDS
-                } else {
-                    300
-                });
+                oidc["maximumTokenLifetimeSeconds"] = json!(super::issuer::TOKEN_LIFETIME_SECONDS);
                 oidc["leewayMilliseconds"] = json!(1000);
                 oidc["jwksCache"] = json!({
                     "cacheTtlSeconds": 600, "negativeCacheTtlSeconds": 60,
@@ -963,7 +1363,12 @@ impl<'a> ProductRunner<'a> {
                 config["cursor"] = json!({
                     "secretRef": self.secret(&format!("{name}-cursor-key"), random_secret()?.as_bytes())?, "maximumAgeSeconds": 300
                 });
-                config["destinations"] = json!({"hooks": {}});
+                let bindings = match fs::read(self.root.join("breg-hook-bindings.json")) {
+                    Ok(bytes) => serde_json::from_slice::<Value>(&bytes)?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+                    Err(error) => return Err(error.into()),
+                };
+                config["destinations"] = json!({"hooks": bindings});
                 config["operationalTimeouts"] = json!({
                     "httpRequestMilliseconds": 10000, "shutdownGraceMilliseconds": 1000,
                     "recordLockMilliseconds": 5000, "migrationLockMilliseconds": 30000,
@@ -984,6 +1389,7 @@ impl<'a> ProductRunner<'a> {
             Product::Evidence => {
                 unreachable!("Evidence writes its runtime configuration by packaging")
             }
+            _ => unreachable!("additional products write their own runtime configuration"),
         };
         if let Some(bindings) = &self.bindings {
             bindings.configure(product, &mut config);
@@ -1002,7 +1408,12 @@ impl<'a> ProductRunner<'a> {
         self.ensure_active()?;
         let mut arguments = vec![std::ffi::OsStr::new(stage)];
         arguments.extend_from_slice(args);
-        arguments.extend(["--format", "json"].map(std::ffi::OsStr::new));
+        if !matches!(
+            (product, stage),
+            (Product::Discovery | Product::Render, "package")
+        ) {
+            arguments.extend(["--format", "json"].map(std::ffi::OsStr::new));
+        }
         run_logged_tool(
             &self.input.binaries[&product].tool,
             &arguments,
@@ -1115,7 +1526,9 @@ impl<'a> ProductRunner<'a> {
         );
         drop(self.bindings.take());
         drop(self.jwks.take());
+        drop(self.coordinator_issuer.take());
         drop(self.gateway.take());
+        drop(self.hook_sink.take());
         Ok(())
     }
 
@@ -1363,6 +1776,12 @@ fn shared_config(
         .chain(
             plan.application
                 .iter()
+                .filter(|_| {
+                    matches!(
+                        product,
+                        Product::Breg | Product::Casework | Product::Messaging
+                    )
+                })
                 .map(|application| application.client.as_str()),
         )
         .chain(extra_clients.iter().map(String::as_str))
@@ -1406,7 +1825,7 @@ fn casework_config(
     identity: &str,
     bind: &str,
 ) -> Value {
-    let (mut config, oidc) = shared_config(
+    let (mut config, mut oidc) = shared_config(
         plan,
         Product::Casework,
         name,
@@ -1416,16 +1835,38 @@ fn casework_config(
     );
     config["apiVersion"] = json!("id.registrystack.org/formats/casework/runtime/v1alpha1");
     config["kind"] = json!("CaseworkRuntimeConfig");
+    oidc["maximumTokenLifetimeSeconds"] = json!(super::issuer::TOKEN_LIFETIME_SECONDS);
     config["listener"] = json!({"bind": bind, "tlsTermination": "loopback-plaintext"});
     config["identity"] = json!({"databaseId": identity});
     config["authentication"] = json!({"oidc": oidc});
     config
 }
 
-fn random_secret() -> Result<zeroize::Zeroizing<String>> {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+fn authored_document(path: &Path) -> Result<Value> {
+    use registry_platform_yaml::{Reader, MAXIMUM_DOCUMENT_BYTES};
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(MAXIMUM_DOCUMENT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= MAXIMUM_DOCUMENT_BYTES,
+        "project document exceeds the development limit"
+    );
+    Reader::new(path.display().to_string())
+        .scan(&bytes)?
+        .map(|node| node.to_json_value())
+        .context("project document is empty")
+}
+
+fn random_key_bytes() -> Result<zeroize::Zeroizing<[u8; 32]>> {
     let mut bytes = zeroize::Zeroizing::new([0u8; 32]);
     getrandom::fill(bytes.as_mut()).map_err(|_| anyhow::anyhow!("cannot generate a local key"))?;
+    Ok(bytes)
+}
+
+fn random_secret() -> Result<zeroize::Zeroizing<String>> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    let bytes = random_key_bytes()?;
     let mut encoded = zeroize::Zeroizing::new(String::new());
     URL_SAFE_NO_PAD.encode_string(bytes.as_slice(), &mut encoded);
     Ok(encoded)
@@ -1531,12 +1972,7 @@ fn inspection_failed(
     if terminate.load(Ordering::Relaxed) {
         return error;
     }
-    let (tool, variable) = match product {
-        Product::Breg => ("bregctl", "RSTACK_BREGCTL_BIN"),
-        Product::Casework => ("caseworkctl", "RSTACK_CASEWORKCTL_BIN"),
-        Product::Evidence => ("evidencectl", "RSTACK_EVIDENCECTL_BIN"),
-        Product::Messaging => ("messagingctl", "RSTACK_MESSAGINGCTL_BIN"),
-    };
+    let (tool, variable) = super::product_tool_info(product);
     InspectionUnavailable::new(
         field,
         &format!("The selected `{tool}` helper could not {action}: {error:#}."),
@@ -1598,12 +2034,7 @@ fn product_root(
         "The selected product project directory is outside the development project.",
         "Select a product project directory inside the development project.",
     )?;
-    let manifest_name = match product {
-        Product::Breg => "registry.yaml",
-        Product::Casework => "casework.yaml",
-        Product::Evidence => "evidence.yaml",
-        Product::Messaging => "messaging.yaml",
-    };
+    let manifest_name = product.manifest();
     let manifest = project.join(manifest_name).canonicalize().map_err(|_| {
         plan::SemanticRefusal::new(
             &field,
@@ -3357,7 +3788,7 @@ mod tests {
                 }
                 assert_eq!(
                     breg["authentication"]["oidc"]["maximumTokenLifetimeSeconds"],
-                    300
+                    3600
                 );
             }
 
@@ -3443,6 +3874,10 @@ mod tests {
             &package,
             &identity,
             "127.0.0.1:0",
+        );
+        assert_eq!(
+            rendered["authentication"]["oidc"]["maximumTokenLifetimeSeconds"],
+            3600
         );
         assert_eq!(written, rendered);
         assert_eq!(
@@ -4168,6 +4603,100 @@ mod tests {
         check_breg_grants(&facts, &valid).unwrap();
     }
 
+    #[test]
+    fn additional_runtime_configuration_uses_run_authority_and_loopback() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        fs::create_dir(&package).unwrap();
+        fs::write(package.join("SHA256SUMS"), b"test checksum file").unwrap();
+        fs::write(
+            root.path().join("workflow.yaml"),
+            "project: {id: standalone}",
+        )
+        .unwrap();
+        fs::write(root.path().join("runtime.yaml"), "connections: {}").unwrap();
+        fs::write(
+            root.path().join("runtime.example.yaml"),
+            "endpoints: [{endpoint: example, baseUrl: 'http://127.0.0.1:1'}]",
+        )
+        .unwrap();
+        let database = DatabaseUrls {
+            runtime: "postgresql://runtime@localhost/database".to_owned(),
+            migration: "postgresql://migration@localhost/database".to_owned(),
+        };
+        for product in [
+            Product::Scheduling,
+            Product::Documents,
+            Product::Coordinator,
+            Product::Adapter,
+            Product::Render,
+            Product::Discovery,
+        ] {
+            let mut input = breg_input(false);
+            input.plan.products = serde_json::from_value(json!([{
+                "product": product, "project": ".", "audience": "urn:example:local"
+            }]))
+            .unwrap();
+            input.plan.people.clear();
+            if product.verifies_tokens() {
+                input.plan.people.insert(
+                    "tester".to_owned(),
+                    serde_json::from_value(json!({
+                        "subject": "tester", "client": "console",
+                        "grants": {product.name(): {"profile": "console", "scopes": ["read"]}}
+                    }))
+                    .unwrap(),
+                );
+            }
+            let terminate = AtomicBool::new(false);
+            let runner = ProductRunner::new(Arc::new(input), root.path(), &terminate).unwrap();
+            let config = runner
+                .additional_config(
+                    product,
+                    root.path(),
+                    "127.0.0.1:34567",
+                    &package,
+                    Some(&database),
+                )
+                .unwrap();
+            let (listener, auth, clients) = match product {
+                Product::Coordinator => (
+                    &config["deployment"]["listener"],
+                    &config["deployment"]["authentication"],
+                    json!(["console"]),
+                ),
+                Product::Adapter => (
+                    &config["listener"],
+                    &config["oidc"],
+                    config["allowedClients"].clone(),
+                ),
+                _ => (
+                    &config["listener"],
+                    &config["authentication"]["oidc"],
+                    config["authentication"]["oidc"]["allowedClients"].clone(),
+                ),
+            };
+            match product {
+                Product::Scheduling => assert_eq!(config["retention"], json!({})),
+                Product::Documents => assert_eq!(config["cleanup"], json!({"erasure": "active"})),
+                Product::Adapter => {
+                    assert_eq!(config["allowedPrivateCidrs"], json!(["10.0.0.1/32"]))
+                }
+                Product::Discovery => assert_eq!(listener["requestTimeoutMilliseconds"], 10_000),
+                _ => {}
+            }
+            assert_eq!(listener["bind"], "127.0.0.1:34567");
+            if product.verifies_tokens() {
+                assert_eq!(auth["issuer"], runner.input.plan.issuer);
+                assert_eq!(auth["audience"], "urn:example:local");
+                assert_eq!(auth["jwksSource"]["documentRef"], secret_ref("jwks"));
+                assert_eq!(clients, json!(["console"]));
+            } else {
+                assert!(config.get("authentication").is_none());
+            }
+        }
+    }
+
     fn breg_input(encrypts_fields: bool) -> RunInput {
         RunInput {
             run_id: "0123456789abcdef0123456789abcdef".to_owned(),
@@ -4198,6 +4727,64 @@ mod tests {
             casework_principals: BTreeMap::new(),
             binaries: BTreeMap::new(),
             managed_database: false,
+        }
+    }
+
+    #[test]
+    fn breg_config_binds_two_url_hook_destinations_from_the_inventory() {
+        let root = tempfile::tempdir().unwrap();
+        let tool = root.path().join("bregctl");
+        fs::write(&tool, r#"#!/bin/sh
+[ "$1 $2 $3 $4" = "--format json explain events" ] || exit 9
+cat <<'INVENTORY'
+{"ok":true,"explanation":{"deliveries":[
+    {"destinationId":"first","classificationCeiling":"public","attemptTimeoutMs":2000,"maximumAttempts":4},
+    {"destinationId":"first","classificationCeiling":"restricted","attemptTimeoutMs":3000,"maximumAttempts":2},
+    {"destinationId":"second","classificationCeiling":"internal","attemptTimeoutMs":1500,"maximumAttempts":3}
+]}}
+INVENTORY
+"#).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut input = breg_input(false);
+        input.binaries.insert(
+            Product::Breg,
+            crate::Binaries {
+                tool: tool.clone(),
+                runtime: tool,
+            },
+        );
+        let terminate = AtomicBool::new(false);
+        let mut runner = ProductRunner::new(Arc::new(input), root.path(), &terminate).unwrap();
+        runner.prepare_breg_hooks(root.path()).unwrap();
+        let (config, _) = breg_config(&runner, root.path(), "breg");
+        let hooks = config["destinations"]["hooks"].as_object().unwrap();
+        assert_eq!(hooks.len(), 2);
+        let report = runner.breg_hook_report().unwrap();
+        let origin = report["origin"].as_str().unwrap();
+        assert!(origin.starts_with("http://127.0.0.1:"));
+        assert_eq!(report["receivedUrl"], format!("{origin}/received"));
+        for (id, ceiling, timeout, attempts) in [
+            ("first", "restricted", 2000, 2),
+            ("second", "internal", 1500, 3),
+        ] {
+            let binding = &hooks[id];
+            assert_eq!(binding["origin"], origin);
+            assert_eq!(binding["path"], "/events");
+            assert_eq!(binding["networkProfile"], "loopback-http");
+            assert_eq!(binding["classificationCeiling"], ceiling);
+            assert_eq!(
+                binding["hmacSha256KeyRef"],
+                format!("secret:file/breg-hook-{id}")
+            );
+            assert!(root.path().join(format!("breg-hook-{id}")).is_file());
+            assert_eq!(
+                binding["deliveryCeilings"],
+                json!({
+                    "attemptTimeoutMilliseconds": timeout,
+                    "maximumAttempts": attempts,
+                })
+            );
         }
     }
 

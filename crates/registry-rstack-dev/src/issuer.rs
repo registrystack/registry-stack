@@ -16,9 +16,9 @@ use super::{
 };
 
 /// How long a token the local issuer signs stays valid.
-pub(super) const TOKEN_LIFETIME_SECONDS: u64 = 300;
+pub(super) const TOKEN_LIFETIME_SECONDS: u64 = 3600;
 /// Browser sessions need enough time to complete a bounded preview journey.
-pub(super) const BROWSER_TOKEN_LIFETIME_SECONDS: u64 = 900;
+pub(super) const BROWSER_TOKEN_LIFETIME_SECONDS: u64 = 3600;
 
 /// When a token issued at `now` expires: one lifetime later, or with the run
 /// if that comes first.
@@ -78,6 +78,26 @@ impl Issuer {
     ) -> Result<Zeroizing<String>> {
         self.runtime
             .block_on(self.sign(input, person, product, expires))
+    }
+
+    pub(super) fn startup_token(
+        &self,
+        input: &RunInput,
+        person: &TestPerson,
+        product: Product,
+    ) -> Result<Zeroizing<String>> {
+        // Ready runs get their expiry after startup. A token issued now with
+        // at most the requested run lifetime cannot extend past that expiry.
+        self.runtime.block_on(self.sign_access(
+            input,
+            person,
+            product,
+            &person.client,
+            &person.grants[&product].scopes,
+            u64::MAX,
+            input.ttl_seconds.min(300),
+            None,
+        ))
     }
 
     pub(super) async fn sign(
@@ -177,8 +197,7 @@ impl Issuer {
                         .principal
                 }
                 Product::Casework => &input.casework_principals[&grant.profile],
-                Product::Evidence => anyhow::bail!("Evidence has no browser application"),
-                Product::Messaging => anyhow::bail!("Messaging has no browser application"),
+                _ => anyhow::bail!("{} has no browser application", product.name()),
             };
             ensure!(
                 !matches!(principal.as_str(), "name" | "registry_scopes")
@@ -326,9 +345,29 @@ mod tests {
     }
 
     #[test]
-    fn a_token_expires_five_minutes_after_issue_or_with_the_run() {
-        assert_eq!(token_expiry(10_000, 1_000), 1_000 + TOKEN_LIFETIME_SECONDS);
-        assert_eq!(token_expiry(1_100, 1_000), 1_100);
+    fn startup_tokens_fit_even_the_shortest_run() {
+        let root = tempfile::tempdir().unwrap();
+        let issuer = Issuer::create(root.path()).unwrap();
+        let mut input = browser_input();
+        let (alias, _) = input.plan.people.iter().next().unwrap();
+        let alias = alias.clone();
+        for (ttl, lifetime) in [(1, 1), (900, 300)] {
+            input.ttl_seconds = ttl;
+            let person = &input.plan.people[&alias];
+            let product = *person.grants.keys().next().unwrap();
+            let token = issuer.startup_token(&input, person, product).unwrap();
+            let claims = payload(&token);
+            assert_eq!(
+                claims["exp"].as_u64().unwrap() - claims["iat"].as_u64().unwrap(),
+                lifetime
+            );
+        }
+    }
+
+    #[test]
+    fn a_token_expires_one_hour_after_issue_or_with_the_run() {
+        assert_eq!(token_expiry(10_000, 1_000), 4_600);
+        assert_eq!(token_expiry(1_600, 1_000), 1_600);
     }
 
     #[test]
@@ -486,7 +525,7 @@ mod tests {
         assert_eq!(payload(&access)["exp"], near_expiry);
         assert_eq!(payload(&identity)["exp"], near_expiry);
 
-        let distant_expiry = clock().unwrap() + 3600;
+        let distant_expiry = clock().unwrap() + 7200;
         let access = issuer
             .browser_access_token(
                 &input,
@@ -499,6 +538,6 @@ mod tests {
             .unwrap();
         let claims = payload(&access);
         let lifetime = claims["exp"].as_u64().unwrap() - claims["iat"].as_u64().unwrap();
-        assert_eq!(lifetime, BROWSER_TOKEN_LIFETIME_SECONDS);
+        assert_eq!(lifetime, 3600);
     }
 }

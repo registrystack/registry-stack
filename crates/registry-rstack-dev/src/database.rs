@@ -443,6 +443,7 @@ impl Database {
         let runtime_password = random_password()?;
         let batches = Batches::new(
             &names,
+            label,
             breg,
             requires_postgis,
             &migration_password,
@@ -852,6 +853,7 @@ struct Batches {
 impl Batches {
     fn new(
         names: &Names,
+        label: &str,
         breg: bool,
         requires_postgis: bool,
         migration_password: &str,
@@ -866,6 +868,8 @@ impl Batches {
                         .map(|schema| (*schema).to_owned())
                         .collect(),
                 )
+            } else if label == "coordinator" {
+                SchemaLayout::CreatedByApply
             } else {
                 SchemaLayout::PublicForMigration
             },
@@ -956,10 +960,20 @@ fn validate_run_id(run_id: &str) -> Result<()> {
 }
 
 fn validate_label(label: &str) -> Result<()> {
-    if matches!(label, "breg" | "breg_test" | "casework" | "messaging") {
+    if matches!(
+        label,
+        "breg"
+            | "breg_test"
+            | "casework"
+            | "messaging"
+            | "scheduling"
+            | "documents"
+            | "coordinator"
+            | "adapter"
+    ) {
         Ok(())
     } else {
-        bail!("the database label must be breg, breg_test, casework, or messaging")
+        bail!("the database label must identify a development PostgreSQL workload")
     }
 }
 
@@ -1582,8 +1596,15 @@ mod tests {
             assert_eq!(spatial_bbox_role(&names), expected);
             assert!(expected.starts_with("breg_bbox_"));
             assert!(expected.len() <= 63);
-            let batches =
-                Batches::new(&names, true, true, "migration-secret", "runtime-secret").unwrap();
+            let batches = Batches::new(
+                &names,
+                "breg",
+                true,
+                true,
+                "migration-secret",
+                "runtime-secret",
+            )
+            .unwrap();
             let statement = batches.bbox_role.unwrap();
             assert_eq!(
                 statement,
@@ -1642,6 +1663,31 @@ mod tests {
         assert!(run_object_names(RUN_ID, "other", false).is_err());
     }
 
+    #[test]
+    fn coordinator_apply_can_create_its_own_schema() {
+        let names = Names::new(RUN_ID, "coordinator");
+        let batches = Batches::new(
+            &names,
+            "coordinator",
+            false,
+            false,
+            "migration-secret",
+            "runtime-secret",
+        )
+        .unwrap();
+        let grant = registry_platform_provision::sql::grant_create_sql(
+            &names.database,
+            &names.migration_role,
+        );
+        assert!(batches.access.contains(&grant));
+        assert!(!batches
+            .access
+            .contains(&registry_platform_provision::sql::grant_create_sql(
+                &names.database,
+                &names.runtime_role
+            )));
+    }
+
     /// The statements `rstack dev` issued before it used the shared plan,
     /// written out as text. The shared plan must keep rendering exactly this
     /// for the same input.
@@ -1654,8 +1700,15 @@ mod tests {
             ("messaging", false, false),
         ] {
             let names = Names::new(RUN_ID, label);
-            let batches =
-                Batches::new(&names, breg, postgis, "migration-secret", "runtime-secret").unwrap();
+            let batches = Batches::new(
+                &names,
+                label,
+                breg,
+                postgis,
+                "migration-secret",
+                "runtime-secret",
+            )
+            .unwrap();
             let (database, migration, runtime) = (
                 quote_identifier(&names.database),
                 quote_identifier(&names.migration_role),
@@ -1735,9 +1788,16 @@ mod tests {
     fn casework_setup_gives_the_runtime_role_usage_on_public_and_only_the_migration_role_creation()
     {
         let names = Names::new(RUN_ID, "casework");
-        let sql = Batches::new(&names, false, false, "migration-secret", "runtime-secret")
-            .unwrap()
-            .setup;
+        let sql = Batches::new(
+            &names,
+            "casework",
+            false,
+            false,
+            "migration-secret",
+            "runtime-secret",
+        )
+        .unwrap()
+        .setup;
         assert!(
             sql.starts_with("REVOKE CREATE ON SCHEMA public FROM PUBLIC;"),
             "{sql}"
@@ -1756,9 +1816,16 @@ mod tests {
     #[test]
     fn messaging_setup_gives_the_runtime_role_no_public_schema_creation() {
         let names = Names::new(RUN_ID, "messaging");
-        let sql = Batches::new(&names, false, false, "migration-secret", "runtime-secret")
-            .unwrap()
-            .setup;
+        let sql = Batches::new(
+            &names,
+            "messaging",
+            false,
+            false,
+            "migration-secret",
+            "runtime-secret",
+        )
+        .unwrap()
+        .setup;
         assert!(
             sql.starts_with("REVOKE CREATE ON SCHEMA public FROM PUBLIC;"),
             "{sql}"

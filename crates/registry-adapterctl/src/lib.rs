@@ -60,6 +60,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Write a local Adapter starter and its development plan.
+    Init {
+        /// New directory to create.
+        directory: std::path::PathBuf,
+    },
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Check an authored adapter project, its pinned profile and pack, and
     /// its fixtures, offline, and print the findings.
     Check(check::CheckArgs),
@@ -151,7 +158,12 @@ where
     if let Command::Provision(args) = &command {
         return provision(args, format);
     }
+    if let Command::RstackDev(args) = command {
+        return registry_rstack_dev::run(args, stdout, stderr);
+    }
     let command_name = match &command {
+        Command::Init { .. } => "init",
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Check(_) => "check",
         Command::Job(job) => match job.command {
             job::JobCommand::Check(_) => "job check",
@@ -171,6 +183,37 @@ where
         Command::Verify(_) => "verify",
     };
     let outcome = match command {
+        Command::Init { directory } => match init(&directory) {
+            Ok(()) => {
+                let checked = Report::new(vec![]);
+                let report = json!({
+                    "ok": true,
+                    "command": command_name,
+                    "status": "initialized",
+                    "directory": directory,
+                    "diagnostics": [],
+                    "nextStep": format!("rstack dev start {}", directory.display()),
+                });
+                write_success(&report, &checked, format, stdout)
+            }
+            Err(error) => {
+                let exit = DOMAIN_REFUSAL_EXIT;
+                let report = failure(
+                    command_name,
+                    exit,
+                    vec![json!({
+                        "severity": "error",
+                        "code": "adapterctl.init.refused",
+                        "artifact": "filesystem",
+                        "path": directory,
+                        "message": error,
+                        "suggestedAction": "Choose a new directory under an existing writable parent.",
+                    })],
+                );
+                write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
+            }
+        },
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Check(args) => check_command(args, format, command_name, stdout, stderr),
         Command::Job(job) => match job.command {
             job::JobCommand::Check(args) => job_command(args, format, command_name, stdout, stderr),
@@ -191,6 +234,45 @@ where
         Ok(exit) => exit,
         Err(()) => output_failed(stderr),
     }
+}
+
+fn init(directory: &std::path::Path) -> Result<(), String> {
+    registry_rstack_dev::write_starter(
+        directory,
+        &[
+            (
+                "project.yaml",
+                include_bytes!("../../../products/adapter/examples/facade-recovery/project.yaml"),
+            ),
+            (
+                "profile.yaml",
+                include_bytes!("../../../products/adapter/profiles/breg-records/profile.yaml"),
+            ),
+            (
+                "pack.yaml",
+                include_bytes!("../../../products/adapter/examples/facade-recovery/pack.yaml"),
+            ),
+            (
+                "fixtures/recovery.yaml",
+                include_bytes!("../../../products/adapter/examples/facade-recovery/fixture.yaml"),
+            ),
+            (
+                "runtime.example.yaml",
+                include_bytes!(
+                    "../../../products/adapter/examples/dev-starter/runtime.example.yaml"
+                ),
+            ),
+            (
+                "dev.yaml",
+                include_bytes!("../../../products/adapter/examples/dev-starter/dev.yaml"),
+            ),
+            (
+                "dev-scenarios.yaml",
+                include_bytes!("../../../products/adapter/examples/dev-starter/dev-scenarios.yaml"),
+            ),
+        ],
+    )
+    .map_err(|error| format!("{error:#}"))
 }
 
 /// Runs the shared `provision` command, which writes its own report and sets

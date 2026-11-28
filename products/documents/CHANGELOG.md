@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Start a local development run from the starter with `rstack dev start`.
+
 - BREAKING: Document Store hook deliveries use Standard Webhooks. Each POST
   carries `accept`, `content-type`, `webhook-id`, `webhook-timestamp` and
   `webhook-signature`. The signature covers `webhook-id`, the attempt

@@ -31,7 +31,7 @@ You need:
 - `curl`.
 - A checkout of Registry Stack at the release you installed, for the example projects.
 
-A plan that lists only Evidence starts no database and needs no Docker.
+Evidence, Render, and Discovery can run on their own without a database or Docker.
 
 ## Install the components
 
@@ -67,9 +67,20 @@ export RSTACK_BREGCTL_BIN="$PWD/target/debug/bregctl"
 export RSTACK_BREG_BIN="$PWD/target/debug/breg"
 ```
 
-Casework uses `RSTACK_CASEWORKCTL_BIN` and `RSTACK_CASEWORK_BIN` the same way, and Evidence uses
-`RSTACK_EVIDENCECTL_BIN` and `RSTACK_EVIDENCE_BIN`. Rebuild after every source change, because a
-stale binary fails the run in confusing ways.
+Set the tool and runtime paths for the products in your plan.
+
+| Product | Tool override | Runtime override |
+| --- | --- | --- |
+| BReg | `RSTACK_BREGCTL_BIN` | `RSTACK_BREG_BIN` |
+| Casework | `RSTACK_CASEWORKCTL_BIN` | `RSTACK_CASEWORK_BIN` |
+| Evidence | `RSTACK_EVIDENCECTL_BIN` | `RSTACK_EVIDENCE_BIN` |
+| Messaging | `RSTACK_MESSAGINGCTL_BIN` | `RSTACK_MESSAGING_BIN` |
+| Scheduling | `RSTACK_SCHEDULINGCTL_BIN` | `RSTACK_SCHEDULING_BIN` |
+| Documents | `RSTACK_DOCUMENTSCTL_BIN` | `RSTACK_DOCUMENTS_BIN` |
+| Coordinator | `RSTACK_COORDINATORCTL_BIN` | `RSTACK_COORDINATOR_BIN` |
+| Adapter | `RSTACK_ADAPTERCTL_BIN` | `RSTACK_ADAPTER_BIN` |
+| Render | `RSTACK_RENDER_BIN` | `RSTACK_RENDER_BIN` |
+| Discovery | `RSTACK_DISCOVERYCTL_BIN` | `RSTACK_DISCOVERY_BIN` |
 
 On macOS, a source build of the products links a dynamic FIPS library that the loader cannot find,
 so a binary started outside Cargo aborts with `Library not loaded`. Source the helper in your
@@ -78,7 +89,7 @@ releases do not need this.
 
 The development runner is the `crates/registry-rstack-dev` crate. Each supported product CLI links
 it behind a hidden subcommand, and `rstack dev` runs it through the CLI of the plan's first product
-in the order BReg, Casework, Evidence, Messaging.
+in the order BReg, Casework, Evidence, Messaging, Scheduling, Documents, Coordinator, Adapter, Render, and Discovery.
 
 {/* Evidence: crates/registry-rstack-dev/src/lib.rs COMMAND. */}
 
@@ -93,7 +104,7 @@ cp -R path/to/registry-stack/products/breg/examples/minimal ./directory
 
 `rstack dev` reads `dev.yaml` and the scenario file it names. Product files stay byte-for-byte
 unchanged, and generated settings, keys and packages live in the run's owner-only scratch
-directory. Check the plan, then start the run:
+directory. Check the plan, then start a shorter run with an explicit time limit:
 
 ```sh test-skip="needs the installed release and Docker"
 rstack dev check ./directory
@@ -108,7 +119,7 @@ Fix every error before you start: the report names the plan field that caused it
 
 `start` pulls the PostgreSQL image on the first run, creates databases and logins for the run,
 starts BReg on a loopback port, runs the scenario, and returns while BReg keeps running. The time to
-live (TTL) begins when the run is ready and defaults to 30 minutes. `--ttl` takes one whole number
+live (TTL) begins when the run is ready and defaults to eight hours. `--ttl` takes one whole number
 from `1s` to `24h` with an `s`, `m` or `h` suffix:
 
 ```text test-excerpt
@@ -127,7 +138,7 @@ it back. `rstack dev status RUN_ID` repeats this report at any time.
 ### Call the product with a token
 
 `token` writes a short-lived bearer header file for a test person and prints where it is. Tokens
-expire five minutes after issue, or with the run if that is sooner, so ask again when one lapses.
+expire one hour after issue, or with the run if that is sooner, so ask again when one lapses.
 Pass the header file to curl with `--header @FILE`:
 
 ```sh test-skip="needs a running development run"
@@ -206,6 +217,7 @@ The human report prints the same facts.
   `evidencectl request prepare --runtime-config` instead of guessing it. The human report prints
   one `Runtime config PRODUCT PATH` line per product. Only the address line starts with the
   product name, so `awk '$1 == "breg" {print $2}'` reads the address.
+- `bregHookSink` gives the loopback origin and the URL where you can read received BReg hooks.
 - `sinks` maps each Messaging provider to its sink, where you can read what the run sent:
   `{"type":"smtp","smtp":"HOST:PORT","url":"MAILPIT_URL"}` for Mailpit, or
   `{"type":"http","url":"GATEWAY_ORIGIN/sent"}` for the mock gateway. It is absent when the run has
@@ -233,7 +245,7 @@ the plan as before:
 
 ```sh test-skip="needs the installed release and Docker"
 rstack dev check ./licensing
-rstack dev start ./licensing --ttl 30m
+rstack dev start ./licensing
 ```
 
 The report names a URL for each product and a scenario result, and lists every test person:
@@ -291,16 +303,16 @@ To adapt a plan to your own project, change these parts and leave the structure 
 
 - `issuer` names the identity issuer the local test tokens claim. Use a name that is yours.
 - `products` lists each product's project directory and token audience, in any order. Name any
-  non-empty subset of `breg`, `casework`, `evidence` and `messaging`. The run starts BReg before
-  Casework. An application needs BReg.
+  nonempty subset of `breg`, `casework`, `evidence`, `messaging`, `scheduling`,
+  `documents`, `coordinator`, `adapter`, `render` and `discovery`. The run starts
+  BReg before Casework. An application needs BReg.
 - `people` declares synthetic test people, each with a subject and one grant per product. A grant
   selects an access profile of that product's project, its scopes, and extra claims. A BReg grant
   must name a profile the BReg project declares. When several people could fill a BReg schema-test
   step, `schemaTestPeople` names the one that does.
 - `scenarioFile` names the project-relative file (for example `tests/scenarios.yaml`) whose
-  scenarios the run makes before it reports ready. The plan must set it; an inline `journey` key is
-  refused, so move those steps into the file. Each step names a person, a product, a method, a path
-  starting with `/v1/`, and what it expects back. The file path cannot contain `..` or backslashes.
+  scenarios the run makes before it reports ready. Move any inline `journey` steps into this file.
+  Follow the [scenario step rules](#scenario-steps). Keep `..` and backslashes out of the file path.
   The start and status reports include `scenarioDigest` for the exact file bytes captured at start.
   When the BReg project is the development project root (`project: .`), keep the scenario file out
   of `tests/`, as the minimal example does with `dev/scenarios.yaml`: `bregctl check` reads every
@@ -379,8 +391,8 @@ fields.
 
 ## The managed PostgreSQL server
 
-With no `--database-url` and no `RSTACK_DEV_DATABASE_URL`, a run that lists `breg`, `casework` or `messaging` starts its own server.
-A plan with only `evidence` starts no database and needs no Docker.
+The run starts PostgreSQL for BReg, Casework, Messaging, Scheduling, Documents, Coordinator and
+Adapter unless you supply a database address. Evidence, Render and Discovery need no database.
 
 - The server is a `postgres:18.7` container, pinned by digest.
   A BReg project that requires PostGIS gets `postgis/postgis:18-3.6` instead.
@@ -640,7 +652,9 @@ A step path that names `accessProfile` itself is accepted only when it names tha
 ### Scenario steps
 
 A scenario runs 1 to 32 steps in order.
-Each step names the test person it runs as (`as`), the product, the method, and a relative path that starts with `/v1/`.
+Each step names the product, HTTP method and relative path. Include `as` for products that verify
+tokens. Omit it for Discovery. Use a path under `/v1/` or the Adapter contract path
+`/.well-known/registry-adapter/effective-contract`.
 A step sends one of two request bodies:
 
 - `body` is a JSON body.
@@ -682,7 +696,7 @@ A scenario can make at most 512 requests and transfer at most 8 MiB of request a
 
 `token` writes a short-lived bearer header file for each grant.
 Its human report prints one `PRODUCT headers PATH` line per grant.
-Its JSON report, with the global `--format json` option, gives the person's `alias`, the `expires_at` time when the tokens expire (five minutes after issue, or with the run if that is sooner), and a `credentials` list whose entries carry the `product`, the selected `profile`, and the `header_file` path.
+Its JSON report, with the global `--format json` option, gives the person's `alias`, the `expires_at` time when the tokens expire (one hour after issue, or with the run if that is sooner), and a `credentials` list whose entries carry the `product`, the selected `profile`, and the `header_file` path.
 Pass the file to curl with `--header @HEADER_FILE`.
 With BReg, include the selected profile as the `accessProfile` query parameter.
 With Casework, the header file carries the profile.
@@ -726,7 +740,7 @@ Do not use either as a BReg or Casework principal claim or as an additional auth
 One browser session can obtain a second product grant for the same person, and `prompt=login` opens the person picker again.
 The authored BReg and Casework profiles still decide which client and person can use each operation.
 Declare the browser client in the relevant BReg requester profiles; the runner adds it to the runtime's accepted-client list but does not change the authored package.
-Browser tokens last at most 15 minutes and expire with the run; `rstack dev token` continues to issue five-minute CLI tokens.
+Browser and CLI tokens last up to one hour and expire sooner when the run ends.
 
 {/* Evidence: crates/registry-rstack-dev/src/browser.rs S256, prompt;
     crates/registry-rstack-dev/src/issuer.rs BROWSER_TOKEN_LIFETIME_SECONDS, TOKEN_LIFETIME_SECONDS. */}
@@ -813,7 +827,8 @@ A running product lists its accepted development settings at `/ready`, sends `Re
 Use one posture across your stack because a production product refuses responses marked as development.
 If Evidence signs assertions with a local key file, run the stack in development. For production assertion signing, configure Transit.
 
-The runner configures the run's test issuer key set and generated audit key for BReg, Casework, and Messaging.
+The runner configures authentication for each product that verifies tokens. It supplies run-owned
+audit keys where the product's runtime configuration requires them.
 For BReg it also uses the development package posture, which accepts placeholder identity, and supplies a local field encryption key when the project encrypts fields.
 The Casework and Messaging listeners and Mailpit SMTP connection use `loopback-plaintext`, which is valid in either posture on loopback.
 

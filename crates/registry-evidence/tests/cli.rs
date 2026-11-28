@@ -3628,11 +3628,23 @@ fn bundle_check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_c
             "{}: bundle-check wrote output",
             case.label
         );
-        assert!(
-            stderr.starts_with(case.prefix) && stderr.ends_with(case.suffix),
-            "{}: unexpected diagnostic {stderr:?}",
-            case.label
-        );
+        if stderr.contains("warning[evidence.posture.local-assurance]") {
+            let diagnostic = legacy_diagnostics(&output.stderr);
+            let (code, message) = case.check;
+            assert!(
+                diagnostic.contains(&format!("error[{code}]"))
+                    && diagnostic.contains(message)
+                    && diagnostic.contains("  next: "),
+                "{}: unexpected diagnostic {stderr:?}",
+                case.label
+            );
+        } else {
+            assert!(
+                stderr.starts_with(case.prefix) && stderr.ends_with(case.suffix),
+                "{}: unexpected diagnostic {stderr:?}",
+                case.label
+            );
+        }
         assert!(
             !stdout.contains(CANARY) && !stderr.contains(CANARY),
             "{}: diagnostic disclosed a document value",
@@ -5743,6 +5755,73 @@ fn cli_reports_deployable_http_opt_in_as_both_semantic_and_posture_errors() {
 }
 
 #[test]
+fn refused_packages_keep_their_diagnostic_and_development_settings() {
+    for code in [
+        "evidence.bundle.invalid-script",
+        "evidence.bundle.invalid-configuration",
+        "evidence.bundle.invalid-authentication",
+    ] {
+        let deployment = Deployment::stage("adult-status");
+        deployment.replace_line(
+            "bundle/evidence.yaml",
+            "    issuer: ",
+            "    issuer: https://identity.invalid\n    allowInsecureHttp: true\n",
+        );
+        match code {
+            "evidence.bundle.invalid-script" => {
+                deployment.append("bundle/derivations/adult-status.rhai", "\nfn broken(\n");
+            }
+            "evidence.bundle.invalid-configuration" => {
+                deployment.mutate_yaml("bundle/evidence.yaml", |document| {
+                    document["project"] = json!("adult-status");
+                    document["requirements"][0]["grantCeiling"] = json!({
+                        "authorities": ["statutory"],
+                        "actorKinds": ["service"],
+                        "valueOrigins": ["request"],
+                        "audiences": ["urn:example:audience:fixture"]
+                    });
+                    document["requirements"][0]["representations"] = json!(["signed-jws"]);
+                });
+            }
+            _ => deployment.replace_line(
+                "bundle/evidence.yaml",
+                "      uri: https://identity.invalid",
+                "      uri: http://127.0.0.1:8082/jwks\n    tlsTrustProfile: issuer-ca\n",
+            ),
+        }
+        deployment.seal();
+        for name in ["check", "serve", "bundle-check"] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+            command
+                .args([name, "--posture", "production"])
+                .env_remove("REGISTRY_STACK_POSTURE");
+            if name == "bundle-check" {
+                command.arg("--bundle").arg(deployment.path("bundle"));
+            } else {
+                command
+                    .arg("--runtime-config")
+                    .arg(deployment.path("runtime.yaml"));
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(1));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            for expected in [
+                code,
+                "evidence.posture.local-assurance",
+                "platform.posture.insecure-issuer-http",
+                "REGISTRY_STACK_POSTURE=development",
+            ] {
+                assert!(stderr.contains(expected), "{name}, {expected}: {stderr}");
+            }
+            if code != "evidence.bundle.invalid-authentication" {
+                assert!(stderr.contains("evidencectl package"), "{name}: {stderr}");
+            }
+        }
+        deployment.unseal();
+    }
+}
+
+#[test]
 fn check_refuses_offline_dependency_proof_without_a_posture_refusal() {
     let deployment = Deployment::stage_production("adult-status");
     deployment.seal();
@@ -6946,7 +7025,8 @@ fn bundle_check_json_retains_fixture_unknown_duplicate_and_bounded_diagnostics()
         deployment.write("bundle/fixtures/cases.yaml", &text);
         deployment.seal();
         let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
-            .args(["bundle-check", "--bundle"])
+            .args(["bundle-check", "--posture", "development", "--bundle"])
+            .env_remove("REGISTRY_STACK_POSTURE")
             .arg(deployment.path("bundle"))
             .arg("--json")
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -6976,7 +7056,17 @@ fn bundle_check_json_retains_fixture_unknown_duplicate_and_bounded_diagnostics()
             assert_eq!(diagnostic["related"][0]["line"], 5);
         }
         if code == "config.too-many-problems" {
-            assert_eq!(diagnostics.len(), 101);
+            assert_eq!(
+                diagnostics
+                    .iter()
+                    .filter(|item| item["severity"] == "error")
+                    .count(),
+                101
+            );
+            assert!(diagnostics
+                .iter()
+                .any(|item| item["code"] == "evidence.posture.local-assurance"
+                    && item["severity"] == "warning"));
         }
     }
 }

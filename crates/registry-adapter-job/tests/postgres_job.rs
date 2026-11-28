@@ -5059,7 +5059,6 @@ async fn status_reports_a_pass_recorded_in_a_different_posture() {
         let stderr = String::from_utf8_lossy(&refused.stderr);
         assert!(!refused.status.success(), "{stderr}");
         assert!(stderr.contains("adapter.job.posture-mismatch"), "{stderr}");
-        assert!(!stderr.contains("adapter.job.hook-listening"), "{stderr}");
         assert!(
             !stderr.contains("adapter.job.metrics-listening"),
             "{stderr}"

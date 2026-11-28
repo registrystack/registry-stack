@@ -68,6 +68,13 @@ enum OutputFormat {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Write a local Discovery starter and its development plan.
+    Init {
+        /// New directory to create.
+        directory: PathBuf,
+    },
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Send one raw HTTP request to a Discovery endpoint.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage named Discovery API connections.
@@ -290,6 +297,7 @@ where
                 stderr,
             )
         }
+        Command::RstackDev(args) => registry_rstack_dev::run(args, stdout, stderr),
         Command::Serve(args) => serve(args, stderr),
         Command::Check {
             project,
@@ -506,9 +514,22 @@ fn run(
     declared: Option<DeclaredPosture>,
 ) -> Result<(String, Vec<Diagnostic>), String> {
     match command {
+        Command::Init { directory } => {
+            registry_rstack_dev::write_starter(&directory, &[
+                ("origins.yaml", include_bytes!("../../../products/discovery/examples/starter/origins.yaml")),
+                ("mappings/adult-status.yaml", include_bytes!("../../../products/discovery/examples/starter/mappings/adult-status.yaml")),
+                ("dev.yaml", include_bytes!("../../../products/discovery/examples/starter/dev.yaml")),
+                ("dev-scenarios.yaml", include_bytes!("../../../products/discovery/examples/starter/dev-scenarios.yaml")),
+            ]).map_err(|error| format!("discoveryctl init: {error:#}"))?;
+            Ok((
+                format!("Next: rstack dev start {}", directory.display()),
+                vec![],
+            ))
+        }
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
         }
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Check { .. } => unreachable!("check reports through its own path"),
         Command::Package {

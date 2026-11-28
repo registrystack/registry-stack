@@ -54,6 +54,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(name = registry_rstack_dev::COMMAND, hide = true)]
+    RstackDev(registry_rstack_dev::Args),
     /// Send one raw HTTP request using a saved Scheduling connection.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage named Scheduling API connections.
@@ -435,6 +437,7 @@ where
             return serve(args, declared, format, format_requested, stdout, stderr);
         }
         Command::Provision(args) => return provision(&args, format, declared),
+        Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
         command => command,
     };
     let command_name = command_path(&command);
@@ -518,6 +521,7 @@ fn api_command(
 /// The subcommand path a parsed invocation selected, as its report names it.
 fn command_path(command: &Command) -> &'static str {
     match command {
+        Command::RstackDev(_) => "rstack-dev",
         Command::Api(_) => "api",
         Command::Connection { .. } => "connection",
         Command::Serve(_) => "serve",
@@ -563,6 +567,7 @@ fn run(cli: Cli, declared: DeclaredPosture) -> Result<Value> {
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
         }
+        Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Provision(_) => {
             unreachable!("provision writes its own report before report dispatch")

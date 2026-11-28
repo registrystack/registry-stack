@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Start a local development run from the starter with `rstack dev start`.
+
 - BREAKING: An undeclared posture is production.
   Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
 

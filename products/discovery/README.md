@@ -58,7 +58,25 @@ authority, and does not make Discovery a native-provider proxy. Endpoint and
 request handling follow the shared
 [`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
 
-## Independent release installation
+## Start a development run
+
+Install the product with `rstack install` or set the binary overrides for a source build.
+See [Build from source](https://docs.registrystack.org/configure/run-a-project-with-rstack-dev/#build-from-source) for the override names.
+
+```sh
+discoveryctl init ./discovery
+rstack dev start ./discovery
+```
+
+Copy the run ID and loopback URL from the report. Read the local index with curl.
+Set `RUN` and `ORIGIN` to those reported values before running the commands.
+
+```sh
+curl --fail "$ORIGIN/v1/services"
+rstack dev stop "$RUN"
+```
+
+## Install a deployment you operate
 
 For a published Discovery unit release, download its `discovery-vX.Y.Z-install.sh`
 from the `discovery/vX.Y.Z` GitHub Release, authenticate its checksum chain as

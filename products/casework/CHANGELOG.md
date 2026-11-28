@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Every `caseworkctl init` template includes a development plan and scenario for reading a review policy.
+
 - BREAKING: review completion wakes use Standard Webhooks. Casework signs
   `webhook-id`, `webhook-timestamp` and the exact JSON bytes with
   HMAC-SHA-256. `webhook-id` is the `eventId` and stays the same on every

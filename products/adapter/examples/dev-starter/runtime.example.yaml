@@ -1,0 +1,5 @@
+endpoints:
+  - endpoint: reference
+    baseUrl: http://127.0.0.1:1
+    credential:
+      type: basic

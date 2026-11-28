@@ -196,7 +196,7 @@ enum DevCommand {
         /// without either, the run starts its own PostgreSQL server in Docker.
         #[arg(long, value_name = "URL")]
         database_url: Option<String>,
-        /// Lifetime after readiness, from 1s to 24h. Defaults to 30m.
+        /// Lifetime after readiness, from 1s to 24h. Defaults to 8h.
         #[arg(long, value_name = "DURATION")]
         ttl: Option<String>,
     },
@@ -1364,7 +1364,7 @@ struct DevHost {
 /// anyway. The first one available hosts `status`, `token` and `stop`: a run
 /// keeps its state in its run directory, so any host of the same release
 /// serves a run another host started.
-const DEV_HOSTS: [DevHost; 4] = [
+const DEV_HOSTS: [DevHost; 10] = [
     DevHost {
         component: "breg",
         tool: "bregctl",
@@ -1388,6 +1388,42 @@ const DEV_HOSTS: [DevHost; 4] = [
         tool: "messagingctl",
         tool_variable: "RSTACK_MESSAGINGCTL_BIN",
         runtime_variable: "RSTACK_MESSAGING_BIN",
+    },
+    DevHost {
+        component: "scheduling",
+        tool: "schedulingctl",
+        tool_variable: "RSTACK_SCHEDULINGCTL_BIN",
+        runtime_variable: "RSTACK_SCHEDULING_BIN",
+    },
+    DevHost {
+        component: "documents",
+        tool: "documentsctl",
+        tool_variable: "RSTACK_DOCUMENTSCTL_BIN",
+        runtime_variable: "RSTACK_DOCUMENTS_BIN",
+    },
+    DevHost {
+        component: "coordinator",
+        tool: "coordinatorctl",
+        tool_variable: "RSTACK_COORDINATORCTL_BIN",
+        runtime_variable: "RSTACK_COORDINATOR_BIN",
+    },
+    DevHost {
+        component: "adapter",
+        tool: "adapterctl",
+        tool_variable: "RSTACK_ADAPTERCTL_BIN",
+        runtime_variable: "RSTACK_ADAPTER_BIN",
+    },
+    DevHost {
+        component: "render",
+        tool: "registry-render",
+        tool_variable: "RSTACK_RENDER_BIN",
+        runtime_variable: "RSTACK_RENDER_BIN",
+    },
+    DevHost {
+        component: "discovery",
+        tool: "discoveryctl",
+        tool_variable: "RSTACK_DISCOVERYCTL_BIN",
+        runtime_variable: "RSTACK_DISCOVERY_BIN",
     },
 ];
 
@@ -1433,8 +1469,10 @@ impl DevNeeds {
         self.products
             .iter()
             .flat_map(|product| {
-                std::iter::once(product.tool_variable)
-                    .chain(self.services.then_some(product.runtime_variable))
+                std::iter::once(product.tool_variable).chain(
+                    (self.services && product.runtime_variable != product.tool_variable)
+                        .then_some(product.runtime_variable),
+                )
             })
             .collect()
     }
@@ -1534,7 +1572,11 @@ fn admit_dev(action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure
     }
     // The hosted commands also enforce this when called directly.
     let (code, message, fix) = match declared(None) {
-        Err(error) => (error.code(), error.message(), error.suggested_action()),
+        Err(error) => (
+            error.code(),
+            error.message(),
+            "Unset REGISTRY_STACK_POSTURE, or set it to development.",
+        ),
         Ok(DeclaredPosture {
             posture: Posture::Production,
             source: PostureSource::Environment,
@@ -1939,6 +1981,11 @@ fn set_selected_generation_environment(
         ("scheduling", "scheduling", "RSTACK_SCHEDULING_BIN"),
         ("coordinator", "coordinatorctl", "RSTACK_COORDINATORCTL_BIN"),
         ("coordinator", "coordinator", "RSTACK_COORDINATOR_BIN"),
+        ("documents", "documentsctl", "RSTACK_DOCUMENTSCTL_BIN"),
+        ("documents", "documents", "RSTACK_DOCUMENTS_BIN"),
+        ("adapter", "adapterctl", "RSTACK_ADAPTERCTL_BIN"),
+        ("adapter", "adapter", "RSTACK_ADAPTER_BIN"),
+        ("render", "registry-render", "RSTACK_RENDER_BIN"),
     ] {
         if !selection
             .components

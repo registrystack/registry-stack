@@ -2769,6 +2769,8 @@ fn init_creates_the_complete_canonical_minimal_project_that_checks_immediately()
     let files = [
         ("README.md", "text/markdown"),
         ("dev-clients.yaml", "text/yaml"),
+        ("dev.yaml", "text/yaml"),
+        ("dev/scenarios.yaml", "text/yaml"),
         ("examples/inputs/contact.json", "application/json"),
         ("examples/inputs/email-update.json", "application/json"),
         ("examples/inputs/registration.json", "application/json"),
@@ -4659,6 +4661,8 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         [
             "README.md",
             "dev-clients.yaml",
+            "dev.yaml",
+            "dev/scenarios.yaml",
             "model/selection.yaml",
             "registry.yaml",
             "runtime.example.yaml",
@@ -5107,7 +5111,7 @@ fn init_from_publicschema_reports_the_derived_project_in_the_report_shape() {
     let stdout = String::from_utf8(output.stdout).expect("init stdout is UTF-8");
     assert!(
         stdout.starts_with(
-            "Initialized a registry project. 6 artifacts written.\n  revision  sha256:"
+            "Initialized a registry project. 8 artifacts written.\n  revision  sha256:"
         ),
         "a derived project opens with the report lead sentence: {stdout}"
     );

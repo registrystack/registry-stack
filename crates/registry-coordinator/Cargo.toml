@@ -129,6 +129,7 @@ path = "tests/compare_worker_postgres.rs"
 required-features = ["postgres-test"]
 
 [dependencies]
+registry-rstack-dev.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true

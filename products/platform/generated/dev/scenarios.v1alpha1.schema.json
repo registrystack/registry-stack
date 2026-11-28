@@ -285,7 +285,13 @@
         "breg",
         "casework",
         "evidence",
-        "messaging"
+        "messaging",
+        "scheduling",
+        "documents",
+        "coordinator",
+        "adapter",
+        "render",
+        "discovery"
       ],
       "type": "string"
     },
@@ -314,7 +320,7 @@
       "properties": {
         "as": {
           "$ref": "#/$defs/LocalId",
-          "description": "The test person who sends the request. The person needs a grant for this step's product."
+          "description": "The test person who sends the request. Omit for a public Discovery request."
         },
         "body": {
           "description": "JSON request body, at most 1 MiB once encoded. String values may contain `{{name}}` references to earlier captures. Do not combine with `raw`."
@@ -370,7 +376,7 @@
           "description": "The HTTP method."
         },
         "path": {
-          "description": "Request path, starting with `/v1/`, at most 2048 characters, without whitespace, control characters, backslashes or fragments. It may contain `{{name}}` references to earlier captures.",
+          "description": "Request path, starting with `/v1/` or using the Adapter effective-contract path, at most 2048 characters, without whitespace, control characters, backslashes or fragments. It may contain `{{name}}` references to earlier captures.",
           "type": "string"
         },
         "poll": {
@@ -389,7 +395,6 @@
       "required": [
         "id",
         "product",
-        "as",
         "method",
         "path",
         "expect"
