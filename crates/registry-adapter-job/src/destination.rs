@@ -275,8 +275,9 @@ impl FixtureDestination {
             .rsplit_once(':')
             .map(|(host, _)| host)
             .unwrap_or(authority);
-        let loopback = matches!(host, "127.0.0.1" | "::1" | "[::1]" | "localhost");
-        if !loopback {
+        // The fixture receiver is never a real hop, so the name `localhost`
+        // is accepted without pinning the connection.
+        if registry_platform_loopback::loopback_host(host).is_none() {
             return Err(format!(
                 "the fixture url host {host} is not a loopback address; the fixture receiver runs on this machine"
             ));

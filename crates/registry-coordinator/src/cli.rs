@@ -633,8 +633,12 @@ async fn remote(
         .suggest("Add --url with the Coordinator service origin, such as --url https://coordinator.example.org.")
     })?;
     let loopback = match url.host() {
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv4(ip)) => {
+            registry_platform_httputil::loopback::loopback_address(ip.into())
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            registry_platform_httputil::loopback::loopback_address(ip.into())
+        }
         _ => false,
     };
     if !(url.scheme() == "https" || url.scheme() == "http" && loopback)

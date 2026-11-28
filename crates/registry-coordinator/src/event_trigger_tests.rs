@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
+use registry_platform_authcommon::RefusalNote;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use serde_json::json;
@@ -121,7 +122,7 @@ fn verify(body: &[u8], headers: &HeaderMap) -> Result<VerifiedEvent> {
 
 #[test]
 fn event_authentication_challenges_the_signature_transport() {
-    let response = event_problem(unauthenticated());
+    let response = event_problem(unauthenticated(FailedCheck::DeliverySignature));
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(
         response.headers()[axum::http::header::WWW_AUTHENTICATE],
@@ -322,6 +323,89 @@ fn substituted_signature_destination_source_and_contract_are_refused() {
         verify(&body, &duplicate).is_err(),
         "ambiguous signed headers are refused"
     );
+}
+
+#[test]
+fn a_refused_delivery_names_the_check_that_failed() {
+    let value = event();
+    let (body, original) = signed(&value, TARGET, 1, "delivery");
+    let refusal = |headers: &HeaderMap| verify(&body, headers).err().expect("refused");
+    for (name, replacement) in [
+        (
+            "x-registry-signature",
+            "v1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        ("ce-specversion", "0.3"),
+        ("x-registry-event-generation", "0"),
+    ] {
+        let mut headers = original.clone();
+        headers.insert(name, HeaderValue::from_static(replacement));
+        assert_eq!(refusal(&headers).code, "event-unauthenticated", "{name}");
+        assert_eq!(
+            refusal(&headers).check,
+            Some(FailedCheck::DeliverySignature),
+            "{name}"
+        );
+    }
+    let mut duplicate = original.clone();
+    duplicate.append("ce-source", HeaderValue::from_static(BREG_SOURCE));
+    assert_eq!(
+        refusal(&duplicate).check,
+        Some(FailedCheck::DeliverySignature)
+    );
+    let wrong_target = verify_delivery(
+        &source(),
+        "registry",
+        &trigger(),
+        "record-saved",
+        &Method::POST,
+        "/different-target",
+        &original,
+        &body,
+        KEY,
+        SystemTime::now(),
+    )
+    .err()
+    .expect("a signature over another target is refused");
+    assert_eq!(wrong_target.check, Some(FailedCheck::DeliverySignature));
+
+    let mut stale = original.clone();
+    stale.insert(
+        "x-registry-delivery-time",
+        HeaderValue::from_static("2020-01-01T00:00:00Z"),
+    );
+    sign_headers(&mut stale, &body, TARGET);
+    assert_eq!(refusal(&stale).check, Some(FailedCheck::DeliveryFreshness));
+
+    // Authentic deliveries that name another source, type or schema.
+    for (name, replacement) in [
+        ("ce-source", "urn:example:another-source"),
+        ("ce-type", "another-event-v1"),
+        ("ce-dataschema", "urn:example:another-schema"),
+    ] {
+        let mut headers = original.clone();
+        headers.insert(name, HeaderValue::from_static(replacement));
+        sign_headers(&mut headers, &body, TARGET);
+        let error = refusal(&headers);
+        assert_eq!(error.code, "event-unauthenticated", "{name}");
+        assert_eq!(error.check, Some(FailedCheck::DeliveryBinding), "{name}");
+    }
+}
+
+#[test]
+fn an_event_refusal_carries_its_check_in_the_response_extensions() {
+    for check in [
+        FailedCheck::DeliverySignature,
+        FailedCheck::DeliveryFreshness,
+        FailedCheck::DeliveryBinding,
+    ] {
+        let response = event_problem(unauthenticated(check));
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.extensions().get::<RefusalNote>().map(|n| n.check),
+            Some(check)
+        );
+    }
 }
 
 #[test]

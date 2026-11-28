@@ -29,6 +29,7 @@ use crate::correlation::RequestCorrelation;
 use crate::cursor::{CursorAdapter, CursorRepresentation};
 use crate::model::{CompiledEntity, CompiledQueryKind, CompiledQueryOperation, CompiledRoute};
 use crate::query as strict_query;
+use registry_platform_authcommon::FailedCheck;
 
 const GIS_ROOT: &str = "/v1/gis";
 const SERVICE_DESC_MEDIA_TYPE: &str = "application/vnd.oai.openapi+json;version=3.0";
@@ -247,8 +248,10 @@ async fn collection(
     RawQuery(raw_query): RawQuery,
     Path(collection): Path<String>,
 ) -> Response {
-    let Some(collection) = authorize_gis_collection(&service, &claims, &collection) else {
-        return concealed();
+    let collection = match authorize_gis_collection_with_reason(&service, &claims, &collection) {
+        Some(Ok(collection)) => collection,
+        Some(Err(refusal)) => return concealed(refusal.refusal.check),
+        None => return concealed(FailedCheck::Visibility),
     };
     if parse_metadata_query(raw_query.as_deref()).is_err() {
         return invalid_query();
@@ -270,7 +273,7 @@ async fn items(
     let mut authorized = match authorize_gis_collection_with_reason(&service, &claims, &collection)
     {
         Some(Ok(authorized)) => authorized,
-        Some(Err(refusal)) if refusal.reason == ReadRefusalReason::ProfileAdmission => {
+        Some(Err(refusal)) if refusal.refusal.reason == ReadRefusalReason::ProfileAdmission => {
             return audited_read_concealment(
                 &service,
                 refusal.route,
@@ -278,11 +281,12 @@ async fn items(
                 &claims,
                 None,
                 &correlation,
-                refusal.reason,
+                refusal.refusal,
             )
             .await;
         }
-        Some(Err(_)) | None => return concealed(),
+        Some(Err(refusal)) => return concealed(refusal.refusal.check),
+        None => return concealed(FailedCheck::Visibility),
     };
     if let Err(binding) = authorized
         .surface
@@ -400,7 +404,7 @@ async fn items(
             &claims,
             None,
             &correlation,
-            crate::audit::ReadRefusalReason::SelectOverreach,
+            super::RouteRefusal::select_overreach(),
         )
         .await;
     }
@@ -434,7 +438,7 @@ async fn items(
 struct GisAdmissionRefusal<'a> {
     route: &'a CompiledRoute,
     profile_id: &'a str,
-    reason: ReadRefusalReason,
+    refusal: super::RouteRefusal,
 }
 
 struct AuthorizedGisCollection<'a> {
@@ -547,11 +551,11 @@ fn authorize_gis_collection_with_reason<'a>(
     let options = profile_query_options(&operation.profile_id);
     let surface = match authorize_route_with_reason(service, route, claims, &options) {
         Ok(surface) => surface,
-        Err(reason) => {
+        Err(refusal) => {
             return Some(Err(GisAdmissionRefusal {
                 route,
                 profile_id: &operation.profile_id,
-                reason,
+                refusal,
             }))
         }
     };

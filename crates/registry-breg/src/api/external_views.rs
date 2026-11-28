@@ -178,20 +178,27 @@ fn root_context(
     access_profile: Option<String>,
     claims: &VerifiedRequestClaims,
     headers: &HeaderMap,
-) -> Option<AuthorizedRequestContext> {
-    let route = service.registry.routes().routes.iter().find(|route| {
-        route.entity_id == view.record_type.as_str()
-            && route.operation == operation
-            && read_path_for_route(service, route).is_none()
-    })?;
+) -> Result<AuthorizedRequestContext, FailedCheck> {
+    let route = service
+        .registry
+        .routes()
+        .routes
+        .iter()
+        .find(|route| {
+            route.entity_id == view.record_type.as_str()
+                && route.operation == operation
+                && read_path_for_route(service, route).is_none()
+        })
+        .ok_or(FailedCheck::AccessProfile)?;
     let mut options = QueryOptions::default();
     options.parsed.access_profile = access_profile;
-    let authorised = authorize_route(service, route, claims, &options)?;
+    let authorised = authorize_route_with_reason(service, route, claims, &options)
+        .map_err(|refusal| refusal.check)?;
     let mut context = authorised.context;
     context
         .bind_access_attribution(authorised.response_entity, headers)
-        .ok()?;
-    Some(context)
+        .map_err(|_| FailedCheck::Delegation)?;
+    Ok(context)
 }
 
 fn refresh_deadline(
@@ -354,7 +361,7 @@ fn worker_request(
         &claims,
         &HeaderMap::new(),
     )
-    .ok_or(ExternalViewError::Concealed)?;
+    .map_err(|_| ExternalViewError::Concealed)?;
     Ok(ExternalViewRequest {
         context,
         correlation: RequestCorrelation::breg_created(),
@@ -378,25 +385,43 @@ async fn admit_source_change(
     request: axum::extract::Request,
 ) -> Response {
     let Some(backend) = service.external_views.as_ref() else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Some(plan) = backend.managed_plan(&id) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let permits = |notifier: &crate::external_refresh_config::ResolvedExternalRefreshNotifier| {
-        claims.actor_kind() == Some(ActorKind::Service)
-            && claims.principal().is_some()
-            && claims.requester_client() == Some(notifier.requester_client.as_str())
-            && claims.has_scope(&notifier.required_scope)
+        if claims.actor_kind() != Some(ActorKind::Service) {
+            Err(FailedCheck::ActorKind)
+        } else if claims.principal().is_none() {
+            Err(FailedCheck::TokenClaims)
+        } else if claims.requester_client() != Some(notifier.requester_client.as_str()) {
+            Err(FailedCheck::RequesterClient)
+        } else if !claims.has_scope(&notifier.required_scope) {
+            Err(FailedCheck::Scope)
+        } else {
+            Ok(())
+        }
     };
-    if !plan.notifiers.values().any(permits) {
-        return concealed();
+    if !plan
+        .notifiers
+        .values()
+        .any(|notifier| permits(notifier).is_ok())
+    {
+        let check = plan
+            .notifiers
+            .values()
+            .find_map(|notifier| permits(notifier).err())
+            .unwrap_or(FailedCheck::AccessProfile);
+        return concealed(check);
     }
     let Some(change) = refresh_body::<ExternalSourceChange>(request).await else {
         return invalid_request();
     };
-    if !plan.notifiers.get(&change.projection).is_some_and(permits) {
-        return concealed();
+    match plan.notifiers.get(&change.projection).map(permits) {
+        Some(Ok(())) => {}
+        Some(Err(check)) => return concealed(check),
+        None => return concealed(FailedCheck::AccessProfile),
     }
     if !service
         .registry
@@ -404,7 +429,7 @@ async fn admit_source_change(
         .projections
         .contains_key(&change.projection)
     {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     }
     if !registry_adapter_core::projection_token_valid(&change.selector) {
         return invalid_request();
@@ -516,14 +541,14 @@ async fn handle(
 ) -> Response {
     let inventory = service.registry.external_views();
     let Some(view) = inventory.views.get(&target.view) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Some(link) = view
         .links
         .iter()
         .find(|link| link.id.as_str() == target.link)
     else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Some(projection) = inventory.projections.get(link.projection.as_str()) else {
         return unavailable();
@@ -535,26 +560,27 @@ async fn handle(
         Operation::List
     };
     let profile_selection = admission_profile(raw.as_deref());
-    let Some(context) = root_context(
+    let context = match root_context(
         service,
         view,
         root_operation,
         profile_selection.clone(),
         claims,
         headers,
-    ) else {
-        return concealed();
+    ) {
+        Ok(context) => context,
+        Err(check) => return concealed(check),
     };
     let profile = context.selected_profile();
     if context.purpose() != Some(projection.purpose.as_str()) {
-        return concealed();
+        return concealed(FailedCheck::Purpose);
     }
     let grant = if target.refresh {
         let Some(ids) = inventory.refresh.get(profile) else {
-            return concealed();
+            return concealed(FailedCheck::Visibility);
         };
         if projection.mode != ExternalProjectionMode::Indexed || !ids.contains(&projection.id) {
-            return concealed();
+            return concealed(FailedCheck::Visibility);
         }
         None
     } else {
@@ -564,20 +590,20 @@ async fn handle(
             .and_then(|views| views.get(&target.view))
             .and_then(|grant| grant.links.iter().find(|grant| grant.link == link.id))
         else {
-            return concealed();
+            return concealed(FailedCheck::Visibility);
         };
         if !is_detail
             && (projection.mode != ExternalProjectionMode::Indexed
                 || projection.cardinality != ExternalCardinality::One)
         {
-            return concealed();
+            return concealed(FailedCheck::Visibility);
         }
         Some(grant)
     };
     let root = match target.root {
         Some(root) => match Uuid::parse_str(&root) {
             Ok(id) if id.hyphenated().to_string() == root => Some(id),
-            _ => return concealed(),
+            _ => return concealed(FailedCheck::Visibility),
         },
         None => None,
     };
@@ -627,7 +653,7 @@ async fn handle(
 
 fn external_view_problem(error: ExternalViewError) -> Response {
     match error {
-        ExternalViewError::Concealed => concealed(),
+        ExternalViewError::Concealed => concealed(FailedCheck::Visibility),
         ExternalViewError::InvalidCursor => cursor_invalid(),
         ExternalViewError::Incomplete => fixed_problem(ProblemCode::ExternalViewIncomplete),
         ExternalViewError::Unavailable => unavailable(),
@@ -880,8 +906,10 @@ mod tests {
         plan.worker.required_scopes = BTreeSet::from(["registry:licensing:read".to_owned()]);
         let officer = &service.registry.entities()["licence"].access_profiles["officer"];
         assert_eq!(
-            crate::api::authorize_profile_claims(officer, &plan.worker_claims().unwrap()).err(),
-            Some("actor-kind-mismatched")
+            crate::api::authorize_profile_claims(officer, &plan.worker_claims().unwrap())
+                .err()
+                .map(|refusal| (refusal.reason, refusal.check)),
+            Some(("actor-kind-mismatched", FailedCheck::ActorKind))
         );
         assert!(refused(&service, &plan));
     }

@@ -17,6 +17,7 @@ use registry_documents_core::{
     grant_expiry_hours, ActorKind, Caller, DocumentGrantPage, DocumentGrantView, GrantState,
     GranteeRef, IssueGrantRequest, ProblemCode,
 };
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_yaml::ExternalId;
 use serde_json::{json, Value};
 use tokio_postgres::Row;
@@ -24,7 +25,7 @@ use uuid::Uuid;
 
 use super::{
     checked, key_digest, next_cursor, record_key, replay, request_digest, timestamp, unavailable,
-    Cursor, DocumentService, PageRequest, Record, Replay,
+    Cursor, DocumentService, PageRequest, Record, Replay, ServiceError,
 };
 use crate::audit::{GRANT_ISSUE_EVENT, GRANT_REVOKE_EVENT};
 use crate::hooks::{DocumentEvent, GrantChange};
@@ -101,14 +102,14 @@ impl Grant {
     }
 }
 
-fn decode_grants(rows: &[Row]) -> Result<Vec<Grant>, ProblemCode> {
+fn decode_grants(rows: &[Row]) -> Result<Vec<Grant>, ServiceError> {
     rows.iter()
         .map(Grant::from_row)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| unavailable("grant decode", &error))
 }
 
-fn grant_views(grants: &[Grant], limit: u32) -> Result<Vec<DocumentGrantView>, ProblemCode> {
+fn grant_views(grants: &[Grant], limit: u32) -> Result<Vec<DocumentGrantView>, ServiceError> {
     grants
         .iter()
         .take(limit as usize)
@@ -132,14 +133,14 @@ impl DocumentService {
         caller: &Caller,
         document_id: Uuid,
         managing: bool,
-    ) -> Result<Record, ProblemCode> {
+    ) -> Result<Record, ServiceError> {
         let record = self
             .record(document_id)
             .await?
-            .ok_or(ProblemCode::ResourceNotFound)?;
+            .ok_or_else(|| ServiceError::concealed(FailedCheck::Visibility))?;
         let access = self.access(caller, &record).await?;
         if !access.sees() {
-            return Err(ProblemCode::ResourceNotFound);
+            return Err(ServiceError::concealed(FailedCheck::Visibility));
         }
         let allowed = if managing {
             access.standing.may_grant
@@ -147,7 +148,7 @@ impl DocumentService {
             access.standing.may_list_grants()
         };
         if !allowed {
-            return Err(ProblemCode::ProfileNotAuthorized);
+            return Err(ServiceError::not_authorized(FailedCheck::Operation));
         }
         Ok(record)
     }
@@ -162,7 +163,7 @@ impl DocumentService {
         key: &str,
         document_id: Uuid,
         request: &IssueGrantRequest,
-    ) -> Result<DocumentGrantView, ProblemCode> {
+    ) -> Result<DocumentGrantView, ServiceError> {
         let reference = self.actor_reference(caller)?;
         let version_id = Uuid::parse_str(&request.version_id).ok();
         let audit = self
@@ -200,20 +201,20 @@ impl DocumentService {
         document_id: Uuid,
         version_id: Option<Uuid>,
         request: &IssueGrantRequest,
-    ) -> Result<DocumentGrantView, ProblemCode> {
+    ) -> Result<DocumentGrantView, ServiceError> {
         let record = self.grantable(caller, document_id, true).await?;
         let version_id = version_id
             .filter(|id| *id == record.version_id)
-            .ok_or(ProblemCode::ResourceNotFound)?;
+            .ok_or_else(|| ServiceError::concealed(FailedCheck::Visibility))?;
         if record
             .releasable_digest(&self.settings.verifier_binding)
             .is_none()
         {
-            return Err(ProblemCode::DocumentVersionNotReleasable);
+            return Err(ProblemCode::DocumentVersionNotReleasable.into());
         }
         let policy = self
             .policy(&record.policy_id)
-            .ok_or(ProblemCode::ResourceNotFound)?;
+            .ok_or_else(|| ServiceError::concealed(FailedCheck::Visibility))?;
         let hours = i32::try_from(grant_expiry_hours(policy, request.expiry_hours)?)
             .map_err(|_| ProblemCode::RequestUnprocessable)?;
         let days = i32::try_from(self.settings.idempotency_days)
@@ -289,7 +290,7 @@ impl DocumentService {
         &self,
         caller: &Caller,
         grant_id: Uuid,
-    ) -> Result<DocumentGrantView, ProblemCode> {
+    ) -> Result<DocumentGrantView, ServiceError> {
         let reference = self.actor_reference(caller)?;
         let audit = self
             .begin(
@@ -319,7 +320,7 @@ impl DocumentService {
         &self,
         caller: &Caller,
         grant_id: Uuid,
-    ) -> Result<DocumentGrantView, ProblemCode> {
+    ) -> Result<DocumentGrantView, ServiceError> {
         let document_id: Uuid = {
             let client = self.client().await?;
             client
@@ -329,7 +330,7 @@ impl DocumentService {
                 )
                 .await
                 .map_err(|error| unavailable("grant read", &error))?
-                .ok_or(ProblemCode::ResourceNotFound)?
+                .ok_or_else(|| ServiceError::concealed(FailedCheck::Visibility))?
                 .try_get(0)
                 .map_err(|error| unavailable("grant decode", &error))?
         };
@@ -390,7 +391,7 @@ impl DocumentService {
         caller: &Caller,
         grant_id: Uuid,
         change: GrantChange,
-    ) -> Result<(), ProblemCode> {
+    ) -> Result<(), ServiceError> {
         let event = DocumentEvent::grant(transaction, grant_id, change, caller.kind)
             .await
             .map_err(|error| unavailable("grant event read", &error))?;
@@ -407,7 +408,7 @@ impl DocumentService {
         caller: &Caller,
         document_id: Uuid,
         page: &PageRequest,
-    ) -> Result<DocumentGrantPage, ProblemCode> {
+    ) -> Result<DocumentGrantPage, ServiceError> {
         self.grantable(caller, document_id, false).await?;
         let (after, after_id) = Cursor::bounds(page.cursor);
         let client = self.client().await?;
@@ -440,7 +441,7 @@ impl DocumentService {
         &self,
         caller: &Caller,
         page: &PageRequest,
-    ) -> Result<DocumentGrantPage, ProblemCode> {
+    ) -> Result<DocumentGrantPage, ServiceError> {
         let (after, after_id) = Cursor::bounds(page.cursor);
         let policies: Vec<&str> = self
             .project

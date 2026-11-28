@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Evidence counts every `401`, `403` and `429` answer by the check that failed
+  in `evidence_request_refusals_total{check}` on the private metrics listener,
+  and writes one `request refused` log line with the check and the request's
+  trace id, at most five per check per minute. No response status, header or
+  body changes.
+- Evidence OID4VCI and Evidence OID4VP count each refused request in
+  `evidence_oid4vci_request_refusals_total{check}` and
+  `evidence_oid4vp_request_refusals_total{check}`, published at zero for every
+  check, and log it once as `request refused` with the failed check, at most
+  five lines per check per minute. This bounded `INFO` line replaces the
+  key-source `WARN` line of both services: alert on the counter under
+  `key-source-unavailable` instead. Responses are unchanged.
+- Evidence names the refusal check more precisely, with no change to any
+  answer. An expired task grant counts under `task-grant-expired` at the
+  request as it does at release, a grant bound to another principal counts
+  under `task-grant-binding`, and a caller whose actor kind or audience falls
+  outside a definition's grant ceiling counts under `actor-kind` or
+  `access-profile` unless it presented a task grant. The key-source `WARN`
+  line now follows the same classification as the `key-source-unavailable`
+  count.
+- Evidence OID4VP states the rule a refused static key set broke in its
+  startup message, still under `evidence.oid4vp.issuer-unavailable`. A request
+  whose `Authorization` header is present but unreadable as text counts under
+  `credential-malformed`. The answer is unchanged.
+
 - BREAKING (experimental surface): `evidencectl check` and `evidencectl package`
   refuse a `publicCheck` definition whose Source facts schema states more than
   types (`public-check-facts-content`). A bound, a pattern, a vocabulary or a

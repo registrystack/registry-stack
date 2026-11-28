@@ -11,20 +11,18 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use registry_casework::{
-    secret_resolver, AuthenticationError, CaseworkAuthenticator, RuntimeConfig,
-};
+use registry_casework::{secret_resolver, CaseworkAuthenticator, RuntimeConfig};
 use registry_casework_core::{
     AccessProfile, CaseworkActsAs, CaseworkProject, InboxPolicy, ProjectIdentity, QueuePolicy,
     CASEWORK_API_VERSION, CASEWORK_KIND,
 };
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_oidc::JwksFetcher;
 use registry_platform_testing::{
-    Against, CapturedDiagnosticLogs, ClaimValue, Configuration, FixtureCase, Outcome, Stage,
-    TokenCorpus, TokenFixture, TokenSigner,
+    Against, ClaimValue, Configuration, FixtureCase, Outcome, Stage, TokenCorpus, TokenFixture,
+    TokenSigner,
 };
 use serde_json::{json, Value};
-use tracing::instrument::WithSubscriber;
 
 const ISSUER: &str = "https://issuer.example.test";
 const AUDIENCE: &str = "urn:casework:test";
@@ -225,36 +223,31 @@ async fn observe(case: FixtureCase, secrets: &Secrets) -> Outcome {
         Against::PlainRead => "requester",
         Against::HumanOnlyProfile => "staff",
     };
-    let logs = CapturedDiagnosticLogs::default();
-    let result = authenticator
+    match authenticator
         .authenticate(case.token.expose(), profile)
-        .with_subscriber(logs.subscriber())
-        .await;
-    match result {
+        .await
+    {
         Ok(_) => Outcome::Admitted(None),
-        Err(AuthenticationError::Claims) => Outcome::Refused(Stage::Claims),
-        Err(
-            AuthenticationError::Refused
-            | AuthenticationError::Profile
-            | AuthenticationError::NotHuman,
-        ) => logged_stage(&logs).map_or(Outcome::Unknown, Outcome::Refused),
+        Err(error) => Outcome::Refused(stage_of(error.failed_check())),
     }
 }
 
-/// The stage of the one value-free diagnostic a refusal logged, when there is
-/// exactly one.
-fn logged_stage(logs: &CapturedDiagnosticLogs) -> Option<Stage> {
-    let text = logs.text();
-    let stages: Vec<String> = text
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter_map(|line| line["fields"]["stage"].as_str().map(str::to_owned))
-        .collect();
-    match stages.as_slice() {
-        [stage] => match format!("refused/{stage}").parse::<Outcome>() {
-            Ok(Outcome::Refused(stage)) => Some(stage),
-            other => panic!("the logged stage is not a known stage: {other:?}"),
-        },
-        _ => None,
+/// The refusal stage the corpus names for the check a refusal failed.
+fn stage_of(check: FailedCheck) -> Stage {
+    match check {
+        FailedCheck::CredentialMissing | FailedCheck::CredentialMalformed => Stage::Header,
+        FailedCheck::TokenAlgorithm => Stage::Algorithm,
+        FailedCheck::TokenType => Stage::TokenType,
+        FailedCheck::TokenKey => Stage::Key,
+        FailedCheck::TokenSignature => Stage::Signature,
+        FailedCheck::TokenIssuer => Stage::Issuer,
+        FailedCheck::TokenAudience => Stage::Audience,
+        FailedCheck::TokenTime => Stage::Time,
+        FailedCheck::TokenClient | FailedCheck::TokenAssertionIssuer => Stage::Client,
+        FailedCheck::Scope => Stage::Scope,
+        FailedCheck::AccessProfile | FailedCheck::ActorKind => Stage::Profile,
+        FailedCheck::KeySourceUnavailable => Stage::Unavailable,
+        FailedCheck::TokenClaims => Stage::Claims,
+        other => panic!("the corpus has no stage for the check {}", other.as_str()),
     }
 }

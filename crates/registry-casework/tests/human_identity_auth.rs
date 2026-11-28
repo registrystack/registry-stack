@@ -7,6 +7,7 @@ use registry_casework_core::{
     AccessProfile, CaseworkActsAs, CaseworkProject, InboxPolicy, ProjectIdentity, QueuePolicy,
     CASEWORK_API_VERSION, CASEWORK_KIND,
 };
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
@@ -56,7 +57,10 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             .expect_err(
                 "a service, missing, or non-string actor kind cannot produce an ActorContext",
             );
-        assert_eq!(refusal, AuthenticationError::NotHuman);
+        assert_eq!(
+            refusal,
+            AuthenticationError::NotHuman(FailedCheck::ActorKind)
+        );
     }
 
     let requester = authenticator
@@ -81,7 +85,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
                 .authenticate(&requester_with_human_assertion, human_profile)
                 .await
                 .expect_err("the dedicated Requester scope cannot select a human profile"),
-            AuthenticationError::Profile
+            AuthenticationError::Profile(FailedCheck::Scope)
         );
     }
 
@@ -93,7 +97,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             )
             .await
             .expect_err("selecting Staff does not union the Requester scope or identity class"),
-        AuthenticationError::Profile
+        AuthenticationError::Profile(FailedCheck::Scope)
     );
 
     let wrong_audience = idp.mint_token(json!({
@@ -107,7 +111,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             .authenticate(&wrong_audience, "staff")
             .await
             .expect_err("the verifier preserves audience enforcement"),
-        AuthenticationError::Refused
+        AuthenticationError::Refused(FailedCheck::TokenAudience)
     );
 
     let expired = idp.mint_token(json!({
@@ -122,7 +126,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             .authenticate(&expired, "staff")
             .await
             .expect_err("the verifier preserves expiry enforcement"),
-        AuthenticationError::Refused
+        AuthenticationError::Refused(FailedCheck::TokenTime)
     );
 
     assert_eq!(
@@ -133,7 +137,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             )
             .await
             .expect_err("the selected profile still requires its configured scope"),
-        AuthenticationError::Profile
+        AuthenticationError::Profile(FailedCheck::Scope)
     );
 
     let missing_principal = idp.mint_token(json!({
@@ -146,7 +150,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             .authenticate(&missing_principal, "staff")
             .await
             .expect_err("a human assertion cannot replace the configured principal claim"),
-        AuthenticationError::Claims
+        AuthenticationError::Claims(FailedCheck::TokenClaims)
     );
 
     let custom_authenticator = authenticator_with_human_identity(
@@ -173,7 +177,7 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
             .authenticate(&default_assertion_only, "staff")
             .await
             .expect_err("the default assertion cannot satisfy a custom claim contract"),
-        AuthenticationError::NotHuman
+        AuthenticationError::NotHuman(FailedCheck::ActorKind)
     );
 
     idp.stop().await;
@@ -208,7 +212,11 @@ async fn delegated_or_grant_bearing_tokens_are_refused_for_officer_profiles_only
                     .authenticate(&idp.mint_token(claims), profile)
                     .await
                     .expect_err("delegated authority cannot enter an officer session"),
-                AuthenticationError::Refused
+                AuthenticationError::Refused(if extra.get("act").is_some() {
+                    FailedCheck::Delegation
+                } else {
+                    FailedCheck::TaskGrantClaims
+                })
             );
         }
 
@@ -318,7 +326,7 @@ async fn same_role_profiles_on_one_principal_claim_are_selected_by_their_own_sco
             )
             .await
             .expect_err("the scope of one staff profile cannot select the other"),
-        AuthenticationError::Profile
+        AuthenticationError::Profile(FailedCheck::Scope)
     );
     let selected = authenticator
         .authenticate(

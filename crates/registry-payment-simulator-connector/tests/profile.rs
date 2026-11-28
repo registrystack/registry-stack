@@ -43,6 +43,23 @@ fn synthetic_transport_cannot_point_to_live_or_named_remote_hosts() {
     }
 }
 #[test]
+fn the_synthetic_transport_takes_loopback_address_literals_and_no_name() {
+    for base in ["http://127.0.0.1/", "http://[::1]/"] {
+        let mut config = connection();
+        config.base_url = base.into();
+        assert!(config.validate().is_ok(), "{base}");
+    }
+    for base in [
+        "http://localhost/",
+        "http://10.0.0.1/",
+        "http://a.localhost/",
+    ] {
+        let mut config = connection();
+        config.base_url = base.into();
+        assert!(config.validate().is_err(), "{base}");
+    }
+}
+#[test]
 fn request_amount_is_an_exact_json_number_even_near_the_portable_bound() {
     let mut cmd = command();
     cmd.money.value = "90071992547409.91".into();

@@ -746,11 +746,10 @@ impl Store {
         let config: tokio_postgres::Config = database_url.parse().map_err(unavailable)?;
         let local = !config.get_hosts().is_empty()
             && config.get_hosts().iter().all(|host| match host {
+                // The name `localhost` is accepted without a pin: a database
+                // address is checked here by spelling only.
                 tokio_postgres::config::Host::Tcp(name) => {
-                    name == "localhost"
-                        || name
-                            .parse::<std::net::IpAddr>()
-                            .is_ok_and(|ip| ip.is_loopback())
+                    registry_platform_httputil::loopback::loopback_host(name).is_some()
                 }
                 #[cfg(unix)]
                 tokio_postgres::config::Host::Unix(_) => true,

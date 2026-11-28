@@ -18,7 +18,7 @@ use std::sync::Arc;
 use registry_messaging_core::{
     AccessProfiles, AccessRefusal, ActorKind, ActorKindClaim, Caller, VerifiedTokenFacts,
 };
-use registry_platform_authcommon::validate_compact_access_token;
+use registry_platform_authcommon::{validate_compact_access_token, FailedCheck};
 use registry_platform_oidc::{
     actor_kind, ClaimError, ClaimNames, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
     ASSERTION_ISSUER_CLAIM,
@@ -34,14 +34,6 @@ pub struct MessagingAuthenticator {
 }
 
 impl MessagingAuthenticator {
-    pub(crate) fn record_header_refusal(&self) {
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            registry_platform_oidc::AuthenticationStage::Header,
-            "Messaging authentication refused"
-        );
-    }
-
     #[must_use]
     pub fn new(
         verifier: TokenVerifierConfig,
@@ -63,18 +55,13 @@ impl MessagingAuthenticator {
 
     /// Verify one credential and resolve it to exactly one access profile.
     pub async fn authenticate(&self, token: &str) -> Result<Caller, AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| {
-            self.record_header_refusal();
-            AuthenticationError::Refused
-        })?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                error.authentication_stage(),
-                "Messaging authentication refused"
-            );
-            verifier_failure(&error)
-        })?;
+        validate_compact_access_token(token)
+            .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
+        let verified = self
+            .verifier
+            .verify(token)
+            .await
+            .map_err(|error| verifier_failure(&error))?;
         // An exchanged token names the authority whose assertion produced it.
         // The platform applies no rule while the deployment's map is empty, so
         // an empty map would trust every authority the issuer federates.
@@ -83,14 +70,13 @@ impl MessagingAuthenticator {
         if !self.binds_assertion_issuers
             && verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM)
         {
-            tracing::debug!(
-                "an exchanged credential arrived at a deployment that declared no assertion authority"
-            );
-            return Err(AuthenticationError::Profile);
+            return Err(AuthenticationError::Profile(
+                FailedCheck::TokenAssertionIssuer,
+            ));
         }
         let client_id = verified
             .matched_client_id()
-            .map_err(|_| AuthenticationError::Claims)?;
+            .map_err(|_| AuthenticationError::Claims(FailedCheck::TokenClient))?;
         let facts = VerifiedTokenFacts {
             issuer: verified.claims.iss.as_deref(),
             subject: verified.claims.sub.as_deref(),
@@ -101,23 +87,42 @@ impl MessagingAuthenticator {
         };
         self.profiles
             .resolve(&facts)
-            .map_err(|refusal| match refusal {
-                AccessRefusal::Profile => {
-                    let (stage, remedy) = if self.profiles.missing_scope(&facts).is_some() {
-                        (registry_platform_oidc::AuthenticationStage::Scope, "check authentication.oidc.scopeClaim and accessProfiles requiredScopes")
-                    } else {
-                        (registry_platform_oidc::AuthenticationStage::Profile, "check accessProfiles actorKind and requesterClients")
-                    };
-                    registry_platform_oidc::log_authentication_refusal!(
-                        self.verifier,
-                        stage,
-                        "Messaging authentication profile refused",
-                        remedy = remedy
-                    );
-                    AuthenticationError::Profile
-                }
-                AccessRefusal::Claims => AuthenticationError::Claims,
-            })
+            .map_err(|refusal| self.access_refusal(refusal, &facts))
+    }
+
+    /// The error a refused profile resolution answers with, and the check it
+    /// names.
+    fn access_refusal(
+        &self,
+        refusal: AccessRefusal,
+        facts: &VerifiedTokenFacts<'_>,
+    ) -> AuthenticationError {
+        match refusal {
+            AccessRefusal::Profile => {
+                let check = if self.profiles.missing_scope(facts).is_some() {
+                    FailedCheck::Scope
+                } else if self.profiles.iter().any(|profile| {
+                    facts.client_id.is_some_and(|client| {
+                        profile
+                            .requester_clients
+                            .iter()
+                            .any(|named| named == client)
+                    })
+                }) {
+                    FailedCheck::ActorKind
+                } else {
+                    FailedCheck::AccessProfile
+                };
+                AuthenticationError::Profile(check)
+            }
+            AccessRefusal::Claims => AuthenticationError::Claims(
+                if matches!(facts.actor_kind, ActorKindClaim::Malformed) {
+                    FailedCheck::ActorKind
+                } else {
+                    FailedCheck::TokenClaims
+                },
+            ),
+        }
     }
 }
 
@@ -134,11 +139,11 @@ impl std::fmt::Debug for MessagingAuthenticator {
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum AuthenticationError {
     #[error("the bearer credential was refused")]
-    Refused,
+    Refused(FailedCheck),
     #[error("the verified identity claims are invalid")]
-    Claims,
+    Claims(FailedCheck),
     #[error("the caller's access profile is not authorized for this request")]
-    Profile,
+    Profile(FailedCheck),
     /// The verifier could not reach a verdict at all.
     #[error("the credential could not be verified because this verifier cannot answer")]
     Unavailable,
@@ -168,7 +173,7 @@ fn verifier_failure(error: &OidcError) -> AuthenticationError {
         // signal, and answering 503 there would let a caller probe the key
         // set. A variant the platform adds later reads as a refusal until it
         // is classified here, so a new outcome can never widen the door.
-        _ => AuthenticationError::Refused,
+        _ => AuthenticationError::Refused(error.failed_check()),
     }
 }
 
@@ -197,8 +202,6 @@ pub(crate) mod tests {
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    use crate::smtp::tests::Captured;
 
     pub(crate) const ISSUER: &str = "https://task-token.test";
     pub(crate) const AUDIENCE: &str = "urn:registry-messaging:test";
@@ -366,26 +369,38 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_credential_that_is_not_a_compact_token_is_refused() {
         for credential in ["", "not-a-jwt", "a.b", "a b.c.d"] {
-            assert_eq!(refusal(credential).await, AuthenticationError::Refused);
+            assert_eq!(
+                refusal(credential).await,
+                AuthenticationError::Refused(FailedCheck::CredentialMalformed)
+            );
         }
     }
 
     #[tokio::test]
     async fn a_forged_signature_is_refused() {
         let forged = token_signed_with(sender_claims(), b"another-secret-another-secret-another!");
-        assert_eq!(refusal(&forged).await, AuthenticationError::Refused);
+        assert_eq!(
+            refusal(&forged).await,
+            AuthenticationError::Refused(FailedCheck::TokenSignature)
+        );
     }
 
     #[tokio::test]
     async fn a_token_for_another_audience_or_issuer_is_refused() {
         let other_audience = token(with(sender_claims(), "aud", json!("urn:elsewhere")));
-        assert_eq!(refusal(&other_audience).await, AuthenticationError::Refused);
+        assert_eq!(
+            refusal(&other_audience).await,
+            AuthenticationError::Refused(FailedCheck::TokenAudience)
+        );
         let other_issuer = token(with(
             sender_claims(),
             "iss",
             json!("https://elsewhere.test"),
         ));
-        assert_eq!(refusal(&other_issuer).await, AuthenticationError::Refused);
+        assert_eq!(
+            refusal(&other_issuer).await,
+            AuthenticationError::Refused(FailedCheck::TokenIssuer)
+        );
     }
 
     #[tokio::test]
@@ -396,7 +411,10 @@ pub(crate) mod tests {
             "iat",
             json!(now - 900),
         ));
-        assert_eq!(refusal(&expired).await, AuthenticationError::Refused);
+        assert_eq!(
+            refusal(&expired).await,
+            AuthenticationError::Refused(FailedCheck::TokenTime)
+        );
     }
 
     #[tokio::test]
@@ -412,19 +430,28 @@ pub(crate) mod tests {
         header.typ = Some("JWT".to_owned());
         let id_token =
             jsonwebtoken::encode(&header, &claims, &EncodingKey::from_secret(SECRET)).unwrap();
-        assert_eq!(refusal(&id_token).await, AuthenticationError::Refused);
+        assert_eq!(
+            refusal(&id_token).await,
+            AuthenticationError::Refused(FailedCheck::TokenType)
+        );
     }
 
     #[tokio::test]
     async fn a_client_the_deployment_does_not_admit_is_refused() {
         let stranger = token(with(sender_claims(), "azp", json!("unrelated-app")));
-        assert_eq!(refusal(&stranger).await, AuthenticationError::Refused);
+        assert_eq!(
+            refusal(&stranger).await,
+            AuthenticationError::Refused(FailedCheck::TokenClient)
+        );
     }
 
     #[tokio::test]
     async fn an_admitted_client_without_a_profile_is_not_authorized() {
         let unprofiled = token(with(sender_claims(), "azp", json!(UNPROFILED_CLIENT)));
-        assert_eq!(refusal(&unprofiled).await, AuthenticationError::Profile);
+        assert_eq!(
+            refusal(&unprofiled).await,
+            AuthenticationError::Profile(FailedCheck::AccessProfile)
+        );
     }
 
     #[tokio::test]
@@ -434,70 +461,58 @@ pub(crate) mod tests {
             "registry_scopes",
             json!("messaging:read"),
         ));
-        assert_eq!(refusal(&no_scope).await, AuthenticationError::Profile);
+        assert_eq!(
+            refusal(&no_scope).await,
+            AuthenticationError::Profile(FailedCheck::Scope)
+        );
         let mut absent = sender_claims();
         absent.as_object_mut().unwrap().remove("registry_scopes");
-        assert_eq!(refusal(&token(absent)).await, AuthenticationError::Profile);
-    }
-
-    #[tokio::test]
-    async fn a_scope_refusal_logs_only_a_fixed_stage_and_no_values() {
-        let captured = Captured::install();
-        let credential = token(with(
-            sender_claims(),
-            "registry_scopes",
-            json!("messaging:read"),
-        ));
-        assert_eq!(refusal(&credential).await, AuthenticationError::Profile);
-        let logs = captured.finish();
-        assert!(logs.contains("scope"), "{logs}");
-        for needle in [
-            credential.as_str(),
-            "messaging:read",
-            "case-system",
-            "registry_actor_kind",
-            "registry_scopes",
-            "messaging:send",
-            "case-notices",
-        ] {
-            assert!(!logs.contains(needle), "logs carry {needle:?}:\n{logs}");
-        }
-    }
-
-    #[tokio::test]
-    async fn an_actor_kind_refusal_logs_no_scope_advice() {
-        let captured = Captured::install();
-        let human = token(with(sender_claims(), "registry_actor_kind", json!("human")));
-        assert_eq!(refusal(&human).await, AuthenticationError::Profile);
-        let logs = captured.finish();
-        assert!(!logs.contains("scopeClaim"), "{logs}");
+        assert_eq!(
+            refusal(&token(absent)).await,
+            AuthenticationError::Profile(FailedCheck::Scope)
+        );
     }
 
     #[tokio::test]
     async fn an_actor_kind_the_profile_does_not_admit_is_not_authorized() {
         let human = token(with(sender_claims(), "registry_actor_kind", json!("human")));
-        assert_eq!(refusal(&human).await, AuthenticationError::Profile);
+        assert_eq!(
+            refusal(&human).await,
+            AuthenticationError::Profile(FailedCheck::ActorKind)
+        );
         let mut absent = sender_claims();
         absent
             .as_object_mut()
             .unwrap()
             .remove("registry_actor_kind");
-        assert_eq!(refusal(&token(absent)).await, AuthenticationError::Profile);
+        assert_eq!(
+            refusal(&token(absent)).await,
+            AuthenticationError::Profile(FailedCheck::ActorKind)
+        );
     }
 
     #[tokio::test]
     async fn a_malformed_actor_kind_is_a_claims_refusal() {
         let malformed = token(with(sender_claims(), "registry_actor_kind", json!("robot")));
-        assert_eq!(refusal(&malformed).await, AuthenticationError::Claims);
+        assert_eq!(
+            refusal(&malformed).await,
+            AuthenticationError::Claims(FailedCheck::ActorKind)
+        );
         let operator = token(with(operator_claims(), "registry_actor_kind", json!(7)));
-        assert_eq!(refusal(&operator).await, AuthenticationError::Claims);
+        assert_eq!(
+            refusal(&operator).await,
+            AuthenticationError::Claims(FailedCheck::ActorKind)
+        );
     }
 
     #[tokio::test]
     async fn a_token_without_a_principal_is_a_claims_refusal() {
         let mut claims = sender_claims();
         claims.as_object_mut().unwrap().remove("sub");
-        assert_eq!(refusal(&token(claims)).await, AuthenticationError::Claims);
+        assert_eq!(
+            refusal(&token(claims)).await,
+            AuthenticationError::Claims(FailedCheck::TokenClaims)
+        );
     }
 
     #[tokio::test]
@@ -507,7 +522,10 @@ pub(crate) mod tests {
             registry_platform_oidc::ASSERTION_ISSUER_CLAIM,
             json!("https://assertions.example.test"),
         ));
-        assert_eq!(refusal(&exchanged).await, AuthenticationError::Profile);
+        assert_eq!(
+            refusal(&exchanged).await,
+            AuthenticationError::Profile(FailedCheck::TokenAssertionIssuer)
+        );
 
         let declaring = MessagingAuthenticator::new(
             verifier(&[(SENDER_CLIENT, "https://assertions.example.test")]),
@@ -583,32 +601,11 @@ pub(crate) mod tests {
         ] {
             assert_eq!(
                 verifier_failure(&refusal),
-                AuthenticationError::Refused,
+                AuthenticationError::Refused(refusal.failed_check()),
                 "{refusal} was excused as an outage"
             );
         }
     }
-    #[tokio::test]
-    async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
-        use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
-        use tracing::instrument::WithSubscriber;
-        let captured = CapturedDiagnosticLogs::default();
-        let subscriber = captured.subscriber();
-        let tokens = malformed_access_token_fixtures();
-        let auth = authenticator();
-        for _ in 0..3 {
-            for token in &tokens {
-                assert!(matches!(
-                    auth.authenticate(token)
-                        .with_subscriber(subscriber.clone())
-                        .await,
-                    Err(AuthenticationError::Refused)
-                ));
-            }
-        }
-        captured.assert_one_value_free_header_diagnostic(&tokens);
-    }
-
     #[tokio::test]
     async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse() {
         for algorithm in [AccessTokenAlgorithm::RS256, AccessTokenAlgorithm::ES256]
@@ -650,28 +647,28 @@ pub(crate) mod tests {
                     let auth = &auth;
                     async move { auth.authenticate(&token).await }
                 },
-                |error| matches!(error, AuthenticationError::Refused),
+                |error| matches!(error, AuthenticationError::Refused(_)),
             )
             .await;
             // A valid symmetric JWT is outside the asymmetric production baseline.
             let token = self::token(sender_claims());
             assert!(matches!(
                 auth.authenticate(&token).await,
-                Err(AuthenticationError::Refused)
+                Err(AuthenticationError::Refused(_))
             ));
             let mut wrong_actor = claims.clone();
             wrong_actor["registry_actor_kind"] = json!("canary-invalid-actor");
             let token = sign(wrong_actor, "at+jwt");
             assert!(matches!(
                 auth.authenticate(&token).await,
-                Err(AuthenticationError::Claims)
+                Err(AuthenticationError::Claims(_))
             ));
             let mut missing = claims.clone();
             missing["registry_scopes"] = json!("");
             let token = sign(missing, "at+jwt");
             assert!(matches!(
                 auth.authenticate(&token).await,
-                Err(AuthenticationError::Profile)
+                Err(AuthenticationError::Profile(_))
             ));
         }
     }

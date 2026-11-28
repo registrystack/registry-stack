@@ -1995,7 +1995,7 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
             .service_v1
             .review_accountability(&fixture.reviewer_b, accountability_event)
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
 
     let result = fixture
@@ -4325,7 +4325,7 @@ async fn accountability_receipts_pin_selected_outcomes_through_independent_reten
         service
             .review_accountability(&fixture.reviewer_b, *event)
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     let outsider = actor("outside-team", CaseworkActsAs::Supervisor, "supervisor");
     assert!(matches!(
@@ -4692,7 +4692,7 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
         source
             .own_review_decisions(&fixture.producer, None, "", None, None, 1)
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     assert!(matches!(
         source
@@ -4705,7 +4705,7 @@ async fn own_decisions_filter_authors_scope_and_continue_past_hidden_source_cand
                 1
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     let wrong_profile = actor("reviewer-a", CaseworkActsAs::Staff, "not-pinned");
     assert!(source
@@ -7187,7 +7187,7 @@ async fn prior_stage_identity_and_invalid_structured_result_emit_nothing() {
                 "claim-excluded-secondary",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     assert_eq!(
         count_for_request(
@@ -7419,7 +7419,7 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
                 "nonmember-claim",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
 
     let assigned = fixture
@@ -7484,7 +7484,7 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
                 "removed-holder-decision",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     assert_eq!(
         count_for_request(
@@ -7547,7 +7547,7 @@ async fn delegation_requires_the_selected_profile_in_pinned_deciding_profiles() 
                 "delegate-ineligible-profile",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     let unchanged = fixture
         .service_v1
@@ -7674,7 +7674,7 @@ async fn delegation_requires_membership_matching_the_selected_role_in_a_mixed_st
                 "delegate-cross-role-membership",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(_) | ReviewRuntimeError::NotFound)
     ));
     let persisted = fixture
         .database
@@ -7755,7 +7755,7 @@ async fn delegation_requires_membership_matching_the_selected_role_in_a_mixed_st
                 "delegate-exact-role-membership",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(_) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
     assert_eq!(
@@ -7816,7 +7816,7 @@ async fn assignment_requires_a_selected_supervisor_profile_despite_directory_mem
                 "assign-staff-scoped-supervisor",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     let unchanged = fixture
         .service_v1
@@ -7875,7 +7875,7 @@ async fn assignment_requires_a_selected_supervisor_profile_despite_directory_mem
                 "assign-supervisor-scoped",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(_) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.supervisor, "supervisor", true).await;
     assert_eq!(
@@ -7954,7 +7954,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
                 "claim-reviewer-replay",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(_) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
     let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
@@ -8042,7 +8042,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
                 "release-reviewer-replay",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(_) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
     let (replay_service, replay_audit) = service_with_audit(&fixture, project("1"));
@@ -8166,7 +8166,7 @@ async fn reviewer_mutation_replays_require_current_exact_role_authority() {
                 "decide-reviewer-replay",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound)
+        Err(ReviewRuntimeError::Forbidden(_) | ReviewRuntimeError::NotFound)
     ));
     set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
     let (replay_service, replay_audit) = service_with_audit(&fixture, answer_project(false));
@@ -11516,7 +11516,7 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
                 "assign-initiator",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     let assigned = fixture
         .service_v1
@@ -11557,7 +11557,7 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
                 "delegate-initiator",
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     let delegated = fixture
         .service_v1
@@ -12019,7 +12019,7 @@ async fn staffing_diagnostic_is_disclosed_and_clears_when_responsibility_resumes
                 100
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
 
     // A diagnostic adds no authority. Concealed work matches unknown work for

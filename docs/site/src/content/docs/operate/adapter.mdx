@@ -114,9 +114,13 @@ The Adapter grants nothing else: no default privileges, and nothing on
 It never revokes a grant, so a feature you remove from a deployment leaves its earlier grants in
 place until you revoke them.
 
-You still grant the payment tables yourself when you start `adapter serve` with
-`--payments-config`.
-`adapter serve` refuses to start without these privileges, and it does not grant them:
+When you start `adapter serve` with `--payments-config`, the same grant step covers the payment
+tables, in the same transaction as the facade tables.
+`adapter serve` without a project (payments only) runs the grant step on its own and also grants
+`USAGE` on the schema.
+The statements below are equivalent to what it runs for them.
+The G2P statements apply when `payments.yaml` declares disbursement connections, and only the
+grants the role still lacks are issued:
 
 ```sql
 GRANT SELECT, INSERT, UPDATE ON adapter_payment_attempts TO runtime;
@@ -128,9 +132,12 @@ GRANT SELECT, INSERT, UPDATE ON adapter_g2p_attempts TO runtime;
 GRANT SELECT, INSERT ON adapter_g2p_commands, adapter_g2p_events TO runtime;
 GRANT USAGE ON SEQUENCE adapter_g2p_events_sequence_seq TO runtime;
 
--- When you serve payments without a project, so no facade grant step runs.
+-- When you serve payments without a project.
 GRANT USAGE ON SCHEMA adapter TO runtime;
 ```
+
+When `adapter serve` makes no grant for the reasons below, grant these yourself.
+The payment host then refuses to start until the runtime role holds them.
 
 `adapter serve` makes no automatic grant in two cases:
 
@@ -150,8 +157,9 @@ When the runtime role holds every privilege in the migration schema and startup 
 missing, the runtime session's search path resolves a different schema.
 
 {/* Evidence: crates/registry-adapter/src/serve.rs runtime_requirements, grant_runtime_privileges;
-    crates/registry-adapter/src/payments/store.rs check_privileges;
-    crates/registry-adapter/src/payments/g2p_store.rs check_privileges;
+    crates/registry-adapter/src/payments/store.rs RUNTIME_GRANTS, RUNTIME_SEQUENCE;
+    crates/registry-adapter/src/payments/g2p_store.rs RUNTIME_GRANTS, RUNTIME_SEQUENCE;
+    crates/registry-adapter/src/payments/http.rs PreparedPayments;
     crates/registry-adapter/src/journal.rs RUNTIME_PRIVILEGES;
     crates/registry-adapter/src/idempotent.rs WRITE_RUNTIME_GRANTS, RECOVERY_RUNTIME_GRANTS,
     RESUME_RUNTIME_GRANTS;
@@ -163,7 +171,14 @@ missing, the runtime session's search path resolves a different schema.
     a_provisioned_runtime_role_is_granted_its_privileges,
     a_provisioned_runtime_role_with_a_plain_member_is_granted_nothing_and_refused,
     an_administrator_with_members_of_its_own_blocks_the_grant,
-    a_migration_role_that_does_not_own_the_tables_fails_startup_and_grants_nothing. */}
+    a_migration_role_that_does_not_own_the_tables_fails_startup_and_grants_nothing,
+    serve_grants_the_collection_tables_beside_a_project,
+    serve_grants_the_g2p_tables_when_disbursements_are_declared_beside_a_project,
+    the_payments_only_host_grants_the_collection_tables_and_schema_usage,
+    the_payments_only_host_grants_the_g2p_tables_when_disbursements_are_declared,
+    a_single_role_payments_host_issues_no_grant,
+    a_payments_runtime_role_with_members_is_granted_nothing_and_refused,
+    a_migration_role_that_does_not_own_a_payment_table_fails_startup_and_grants_nothing. */}
 
 ## Operate an ingestion job
 
@@ -806,6 +821,26 @@ The stop report prints the same fix as its `next` step.
 {/* TODO[evidence]: no test names adapter.job.page-bytes-bound or the maximumRowsPerPage times
     maximumRowBytes memory ceiling; only the code that raises the stop is cited. */}
 
+## Probe health and readiness
+
+The facade listener answers two probes without authentication, for load balancers and
+orchestrators:
+
+- `GET /health` answers 200 `{"status":"ok"}` and does no work.
+- `GET /ready` answers 200 `{"status":"ready"}` when the journal migrations match the binary
+  and the runtime role holds its journal privileges, and 503 `{"status":"not-ready"}` otherwise.
+  It reads the journal store and never contacts a source.
+
+The bodies are fixed and do not vary with the project. They tell a caller that an Adapter is
+listening and whether its journal is usable, and nothing more. Because `/health` and `/ready`
+belong to the listener, a project operation whose path is one of them is unserved, with the
+reason code `adapter.operation.reserved-facade-path` in the effective contract.
+
+{/* Evidence: crates/registry-adapter/src/facade.rs;
+    crates/registry-adapter/src/journal.rs ready;
+    crates/registry-adapter/tests/health_routes.rs;
+    crates/registry-adapter-engine/src/load.rs ReservedFacadePath. */}
+
 ## Scrape metrics
 
 Neither the facade listener nor the hook ingress serves metrics. Set `metricsListener.bind` in the
@@ -827,6 +862,7 @@ Facade series:
 | --- | --- | --- | --- |
 | `adapter_http_requests_total` | counter | `route` (route template, or `unmatched`), `method`, `status` (`1xx`, `2xx`, `3xx`, `4xx`, `5xx`, `other`) | Answered facade requests. |
 | `adapter_upstream_failures_total` | counter | `class` (`upstream`, `upstream.http`, `upstream.timeout`, `upstream.connection`, `upstream.malformed`, `upstream.too-large`, `upstream.redirect`, `breaker.open`, `throttle.rejected`, `credential.rejected`, `egress.refused`) | Calls to the source that failed, by error class. It counts failed exchanges, status polls, bounded-wait polls and recovery checks. |
+| `adapter_request_refusals_total` | counter | `check` (the 45 shared failed-check labels, all present at zero, for example `credential-missing`, `token-signature`, `scope`, `operation`, `ownership`, `visibility`) | Facade and payment requests refused, by the check that failed. Each refusal also writes one `request refused` log line carrying `failed_check` and no caller value, at most five lines per check per minute. |
 | `adapter_journal_write_failures_total` | counter | none | Audit journal writes that failed, so the exchange answered an internal error. Custody and rendering failures are not counted here. |
 | `adapter_retention_sweep_failures_total` | counter | `store` (`journal`, `idempotency`, `other`) | Retention sweep batches that failed and were left to the next tick. |
 
@@ -838,6 +874,7 @@ Job host series:
 | `adapter_job_last_successful_pass_age_seconds` | gauge | none | Seconds since a pass in this process settled its page. Absent until the first such pass. |
 | `adapter_job_pass_failures_total` | counter | `reason` (`page-fault`, `destination-stop`, `refusal-limit`, `store-unreachable`) | Passes that did not settle, and passes that could not reach the store. A pass that finds another process holding the lease is not a failure and is not counted. |
 | `adapter_job_hook_refusals_total` | counter | `reason` (`not-found`, `method`, `unauthenticated`, `rate-limited`, `unavailable`, `body-timeout`, `body-too-large`, `body-unreadable`) | Hook requests the ingress refused. |
+| `adapter_job_request_refusals_total` | counter | `check` (the 45 shared failed-check labels, all present at zero. The hook ingress records `credential-missing`, `credential-malformed`, `shared-secret` and `rate-limit`) | Hook requests refused for a credential or the rate limit, by the check that failed. Each refusal also writes one `request refused` log line carrying `failed_check` and no caller value, at most five lines per check per minute. Present when the host is built with `job-hook`. |
 | `adapter_job_gauge_sample_failures_total` | counter | none | Item count reads that failed or timed out. |
 
 When the store cannot be read at scrape time, `adapter_job_items` carries no samples and

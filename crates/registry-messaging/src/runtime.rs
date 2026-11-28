@@ -396,8 +396,9 @@ pub async fn assemble(
     )?);
 
     let keys = config.jwks_fetcher(&secrets).await?;
+    let admitted = config.admitted_clients(loaded.package.access_profiles())?;
     let authenticator = Arc::new(MessagingAuthenticator::new(
-        config.verifier_profile(),
+        config.verifier_profile(&admitted),
         keys,
         loaded.package.access_profiles().clone(),
         config.binds_assertion_issuers(),

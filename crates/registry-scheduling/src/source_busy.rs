@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use registry_platform_audit::AuditKeyHasher;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_scheduling_core::{valid_identifier, MAXIMUM_HORIZON_DAYS};
 pub use registry_scheduling_core::{
@@ -209,6 +210,21 @@ impl std::fmt::Debug for AuthorizedBusySource {
 pub enum BusyAuthorizationError {
     #[error("the busy import profile is invalid or not authorized")]
     Profile,
+    /// The caller is not admitted by the profile it selected, for the check
+    /// it carries.
+    #[error("the caller is not admitted by a busy import profile")]
+    NotAdmitted(FailedCheck),
+}
+
+impl BusyAuthorizationError {
+    /// The check an operator sees when this refusal answers a request.
+    #[must_use]
+    pub fn failed_check(self) -> FailedCheck {
+        match self {
+            Self::Profile => FailedCheck::AccessProfile,
+            Self::NotAdmitted(check) => check,
+        }
+    }
 }
 
 /// Validate all source profiles together. Source ids are unique. Profiles may
@@ -259,13 +275,21 @@ pub fn authorize_busy_source(
     identity: BusySourceIdentity,
 ) -> Result<AuthorizedBusySource, BusyAuthorizationError> {
     let (profile_id, profile) = match profile_selector {
-        Some(profile_id) => profiles
-            .get_key_value(profile_id)
-            .ok_or(BusyAuthorizationError::Profile)?,
-        None => return Err(BusyAuthorizationError::Profile),
+        Some(profile_id) => {
+            profiles
+                .get_key_value(profile_id)
+                .ok_or(BusyAuthorizationError::NotAdmitted(
+                    FailedCheck::AccessProfile,
+                ))?
+        }
+        None => {
+            return Err(BusyAuthorizationError::NotAdmitted(
+                FailedCheck::AccessProfile,
+            ))
+        }
     };
     if !scopes.iter().any(|scope| scope == &profile.scope) {
-        return Err(BusyAuthorizationError::Profile);
+        return Err(BusyAuthorizationError::NotAdmitted(FailedCheck::Scope));
     }
     let profile_value =
         serde_json::to_value((profile_id, profile)).map_err(|_| BusyAuthorizationError::Profile)?;
@@ -520,7 +544,9 @@ mod tests {
                 None,
                 identity(),
             ),
-            Err(BusyAuthorizationError::Profile)
+            Err(BusyAuthorizationError::NotAdmitted(
+                FailedCheck::AccessProfile
+            ))
         );
         let authorized = authorize_busy_source(
             &values,

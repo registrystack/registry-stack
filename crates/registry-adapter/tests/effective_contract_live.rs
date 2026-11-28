@@ -406,7 +406,7 @@ async fn a_valid_concrete_collision_is_unserved_before_router_construction() {
         );
         assert_eq!(
             colliding["reason"],
-            "the facade path is reserved for the Adapter effective-contract route"
+            "the facade path is reserved for the Adapter effective-contract, health and ready routes"
         );
     }
     assert_eq!(

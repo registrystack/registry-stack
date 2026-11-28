@@ -1,0 +1,265 @@
+{
+  "create-garbage-token": {
+    "body": {
+      "detail": "a valid bearer token is required",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 401
+  },
+  "create-key-source-unavailable": {
+    "body": {
+      "detail": "the token issuer is unavailable",
+      "status": 503,
+      "title": "Service Unavailable",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/issuer-unavailable"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": "5",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 503
+  },
+  "create-no-header": {
+    "body": {
+      "detail": "a valid bearer token is required",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 401
+  },
+  "create-non-bearer-scheme": {
+    "body": {
+      "detail": "a valid bearer token is required",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 401
+  },
+  "create-rate-limited": {
+    "body": {
+      "detail": "too many requests; retry later",
+      "status": 429,
+      "title": "Too Many Requests",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/rate-limited"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": "<seconds>",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 429
+  },
+  "create-wrong-scope": {
+    "body": {
+      "detail": "a valid bearer token is required",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 401
+  },
+  "read-another-principal": {
+    "body": {
+      "detail": "no such session",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/session-not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 404
+  },
+  "read-client-not-allowed": {
+    "body": {
+      "detail": "a valid bearer token is required",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 401
+  },
+  "read-garbage-token": {
+    "body": {
+      "detail": "a valid bearer token is required",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 401
+  },
+  "read-no-header": {
+    "body": {
+      "detail": "a valid bearer token is required",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 401
+  },
+  "read-rate-limited": {
+    "body": {
+      "detail": "too many requests; retry later",
+      "status": 429,
+      "title": "Too Many Requests",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/rate-limited"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": "<seconds>",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 429
+  },
+  "read-unknown-reference": {
+    "body": {
+      "detail": "no such session",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/session-not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 404
+  },
+  "read-wrong-scope": {
+    "body": {
+      "detail": "a valid bearer token is required",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 401
+  },
+  "request-rate-limited": {
+    "body": {
+      "detail": "too many requests; retry later",
+      "status": 429,
+      "title": "Too Many Requests",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/rate-limited"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": "<seconds>",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 429
+  },
+  "response-rate-limited": {
+    "body": {
+      "error": "temporarily_unavailable"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "retry-after": "<seconds>",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 429
+  },
+  "status-another-principal": {
+    "body": {
+      "detail": "no such session",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/session-not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 404
+  },
+  "status-no-header": {
+    "body": {
+      "detail": "a valid bearer token is required",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 401
+  },
+  "status-unknown-reference": {
+    "body": {
+      "detail": "no such session",
+      "status": 404,
+      "title": "Not Found",
+      "type": "https://id.registrystack.org/problems/registry-evidence-oid4vp/session-not-found"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 404
+  }
+}

@@ -24,13 +24,12 @@ use registry_platform_config::{
     PrivateListenerConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
     SecretReference, TlsTermination,
 };
-use registry_platform_httputil::{valid_resource_uri, valid_scope_token};
+use registry_platform_httputil::{loopback::loopback_host, valid_resource_uri, valid_scope_token};
 use registry_platform_yaml::{
     escape_pointer_segment, BoundedU32, BoundedU64, Diagnostic, ExternalId, Invalid, LocalId,
     Report, RetiredApiVersion, UniqueList, Url,
 };
 use serde::{de, Deserialize, Deserializer};
-use url::Host;
 
 /// apiVersion of the review page runtime configuration document.
 pub const RUNTIME_API_VERSION: &str = "id.registrystack.org/formats/breg/review-runtime/v1alpha1";
@@ -682,7 +681,7 @@ fn endpoint_findings(
     ];
     for (pointer, endpoint) in endpoints {
         let url = endpoint.to_url();
-        let secure = url.scheme() == "https" || (development && loopback_host(&url));
+        let secure = url.scheme() == "https" || (development && is_loopback(&url));
         if termination_known && !secure {
             findings.push(Finding::new(
                 "breg.review-runtime.plain-http-endpoint",
@@ -713,14 +712,11 @@ fn endpoint_findings(
     }
 }
 
-fn loopback_host(url: &url::Url) -> bool {
+fn is_loopback(url: &url::Url) -> bool {
     url.scheme() == "http"
-        && match url.host() {
-            Some(Host::Ipv4(address)) => address.is_loopback(),
-            Some(Host::Ipv6(address)) => address.is_loopback(),
-            Some(Host::Domain(domain)) => domain == "localhost",
-            None => false,
-        }
+        && url
+            .host_str()
+            .is_some_and(|host| loopback_host(host).is_some())
 }
 
 /// Whether `url`, read from the provider's discovery document, is an
@@ -729,7 +725,7 @@ fn loopback_host(url: &url::Url) -> bool {
 pub(crate) fn allowed_discovered_endpoint(url: &url::Url, development: bool) -> bool {
     let secure = match url.scheme() {
         "https" => true,
-        "http" => development && loopback_host(url),
+        "http" => development && is_loopback(url),
         _ => false,
     };
     secure
@@ -1353,6 +1349,21 @@ audit:
             "breg.review-runtime.public-bind",
             "/listener/bind",
         );
+    }
+
+    #[test]
+    fn plain_http_follows_the_shared_loopback_definition() {
+        for host in ["LOCALHOST", "127.0.0.2", "[::ffff:127.0.0.1]"] {
+            load(&development().replace("http://127.0.0.1:9000", &format!("http://{host}:9000")))
+                .unwrap_or_else(|_| panic!("{host} is loopback"));
+        }
+        for host in ["localhost.", "app.localhost", "[::ffff:10.0.0.1]"] {
+            refused(
+                &development().replace("http://127.0.0.1:9000", &format!("http://{host}:9000")),
+                "breg.review-runtime.plain-http-endpoint",
+                "/signIn/issuer",
+            );
+        }
     }
 
     #[test]

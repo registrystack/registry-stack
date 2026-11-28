@@ -2,37 +2,39 @@
 
 //! The operator runtime configuration document and the package it names.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use registry_messaging_core::{
-    typed, ProviderKind, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND, PACKAGE_FILE,
-    RETIRED_MESSAGING_RUNTIME_API_VERSION,
+    typed, AccessProfiles, ProviderKind, MESSAGING_RUNTIME_API_VERSION, MESSAGING_RUNTIME_KIND,
+    PACKAGE_FILE, RETIRED_MESSAGING_RUNTIME_API_VERSION,
 };
 use registry_platform_audit::{
     AuditDestination, AuditDestinationError, AuditDestinationKind, MAX_AUDIT_RETAIN_DAYS,
     MIN_AUDIT_ROTATE_BYTES,
 };
-use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, MetricsBindError, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
-    DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
-};
 pub use registry_platform_config::{
-    DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
-    JwksSource as OidcJwksSource, ListenerNetworkExposure, MetricsListenerConfig,
-    OidcClientsConfig, OidcIssuerConfig, PackageConfig as RuntimePackageConfig,
-    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
+    AdmittedClients, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
+    JwksSource as OidcJwksSource, ListenerNetworkExposure, MetricsListenerConfig, OidcIssuerConfig,
+    OidcPackageClientsConfig, PackageClients, PackageClientsError,
+    PackageConfig as RuntimePackageConfig, PrivateListenerConfig as ListenerConfig,
+    SecretProvidersConfig, TlsTermination,
     MAX_ASSERTION_ISSUERS_PER_CLIENT as MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
     MAX_ASSERTION_ISSUER_BYTES as MAXIMUM_ASSERTION_ISSUER_BYTES,
     MAX_ASSERTION_ISSUER_CLIENTS as MAXIMUM_ASSERTION_ISSUER_CLIENTS,
     MAX_ASSERTION_ISSUER_CLIENT_BYTES as MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
     UNAVAILABLE_CODE as RUNTIME_CONFIG_UNAVAILABLE_CODE,
 };
+use registry_platform_config::{
+    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, MetricsBindError, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
+    DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifierConfig,
 };
 use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
 use serde::{Deserialize, Deserializer};
@@ -295,12 +297,13 @@ pub struct OidcConfig {
     #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
     pub provider: OidcIssuerConfig,
-    /// The OAuth clients this runtime admits. Every access profile resolves
-    /// its caller from the matched client, so the list is never empty, and
-    /// every client a profile names must appear here.
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-clients"))]
+    /// The OAuth clients this runtime admits: `from-package` for the
+    /// requester clients of the package's access profiles, or a list that
+    /// covers every client a profile names. Every access profile resolves its
+    /// caller from the matched client, so the admitted set is never empty.
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-package-clients"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub clients: OidcClientsConfig,
+    pub clients: OidcPackageClientsConfig,
     #[serde(default = "default_scope_claim")]
     pub scope_claim: String,
 }
@@ -690,19 +693,34 @@ impl RuntimeConfig {
         // so `allowedClients: unrestricted` would admit every client the
         // issuer verifies while reaching no profile. Development keeps no
         // exception.
-        if oidc.clients.allowed_clients.is_empty()
-            || oidc.clients.allowed_clients.iter().any(String::is_empty)
-        {
-            findings.push(RuntimeConfigError::AllowedClientsRequired);
+        match &oidc.clients.allowed_clients {
+            PackageClients::Unrestricted => {
+                findings.push(RuntimeConfigError::AllowedClientsRequired)
+            }
+            PackageClients::Listed(clients) => {
+                if clients.iter().any(String::is_empty) {
+                    findings.push(RuntimeConfigError::AllowedClientsRequired);
+                }
+                self.check_assertion_issuer_clients(clients, findings);
+            }
+            PackageClients::FromPackage => {}
         }
-        for (client, issuers) in &oidc.clients.assertion_issuers {
+    }
+
+    /// Every client `assertionIssuers` names must be one the runtime admits.
+    fn check_assertion_issuer_clients(
+        &self,
+        admitted: &[String],
+        findings: &mut Vec<RuntimeConfigError>,
+    ) {
+        for (client, issuers) in &self.authentication.oidc.clients.assertion_issuers {
             let pointer = pointer_to(&["authentication", "oidc", "assertionIssuers", client]);
             if issuers.is_empty() {
                 findings.push(RuntimeConfigError::EmptyAssertionIssuers {
                     pointer: pointer.clone(),
                 });
             }
-            if !oidc.clients.allowed_clients.contains(client) {
+            if !admitted.contains(client) {
                 findings.push(RuntimeConfigError::AssertionIssuerClientNotAllowed { pointer });
             }
         }
@@ -768,25 +786,60 @@ impl RuntimeConfig {
         loaded: &LoadedPackage,
         findings: &mut Vec<RuntimeConfigError>,
     ) {
-        let allowed: BTreeSet<&str> = self
-            .authentication
-            .oidc
-            .clients
-            .allowed_clients
-            .iter()
-            .map(String::as_str)
-            .collect();
-        for profile in loaded.package.access_profiles().iter() {
-            if profile
-                .requester_clients
-                .iter()
-                .any(|client| !allowed.contains(client.as_str()))
-            {
-                findings.push(RuntimeConfigError::ProfileClientNotAllowed {
-                    profile: profile.id.clone(),
-                });
+        match self.admitted_clients(loaded.package.access_profiles()) {
+            Ok(admitted) => {
+                if self.authentication.oidc.clients.allowed_clients == PackageClients::FromPackage {
+                    self.check_assertion_issuer_clients(admitted.as_slice(), findings);
+                }
             }
+            // Each profile the list leaves out is its own finding.
+            Err(RuntimeConfigError::ProfileClientNotAllowed { .. }) => {
+                if let PackageClients::Listed(listed) =
+                    &self.authentication.oidc.clients.allowed_clients
+                {
+                    for profile in loaded.package.access_profiles().iter() {
+                        if profile
+                            .requester_clients
+                            .iter()
+                            .any(|client| !listed.contains(client))
+                        {
+                            findings.push(RuntimeConfigError::ProfileClientNotAllowed {
+                                profile: profile.id.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            Err(error) => findings.push(error),
         }
+    }
+
+    /// The clients the token verifier admits, given the access profiles of
+    /// the package this runtime serves. `from-package` is the sorted union of
+    /// the profiles' requester clients, and a list must cover every one of
+    /// them, or the profile naming the missing client could never be reached.
+    /// The verifier is never handed an empty list, which it reads as "every
+    /// client".
+    pub fn admitted_clients(
+        &self,
+        profiles: &AccessProfiles,
+    ) -> Result<AdmittedClients, RuntimeConfigError> {
+        let allowed = &self.authentication.oidc.clients.allowed_clients;
+        allowed
+            .resolve(&profiles.requester_clients())
+            .map_err(|error| match error {
+                PackageClientsError::Unrestricted | PackageClientsError::Empty => {
+                    RuntimeConfigError::AllowedClientsRequired
+                }
+                PackageClientsError::Missing(client) => {
+                    RuntimeConfigError::ProfileClientNotAllowed {
+                        profile: profiles
+                            .iter()
+                            .find(|profile| profile.requester_clients.contains(&client))
+                            .map_or_else(String::new, |profile| profile.id.clone()),
+                    }
+                }
+            })
     }
 
     /// Each connection must be for a provider the package declares, of the
@@ -887,8 +940,19 @@ impl RuntimeConfig {
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                let jwks = parse_static_jwks(document.expose_secret()).map_err(|error| {
+                    match error {
+                        // The document is the operator's own file, so its text names the
+                        // rule it breaks and never a key value.
+                        OidcError::StaticKeySet(refused) => {
+                            RuntimeConfigError::OidcJwksSecret(format!(
+                                "the document authentication.oidc.jwksSource.documentRef names \
+                                 is not a usable static key set: {refused}"
+                            ))
+                        }
+                        _ => RuntimeConfigError::Oidc,
+                    }
+                })?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -912,7 +976,7 @@ impl RuntimeConfig {
     /// [`access_token_typ_set`] admits exactly that pair, so an ID token or any
     /// other JWT minted for this audience is refused.
     #[must_use]
-    pub fn verifier_profile(&self) -> TokenVerifierConfig {
+    pub fn verifier_profile(&self, admitted: &AdmittedClients) -> TokenVerifierConfig {
         TokenVerifierConfig::access_token_profile(
             self.authentication.oidc.provider.issuer.to_string(),
             vec![self.authentication.oidc.provider.audience.clone()],
@@ -923,7 +987,7 @@ impl RuntimeConfig {
             access_token_typ_set(MESSAGING_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(self.authentication.oidc.clients.allowed_clients.clone())
+        .with_allowed_clients(admitted.as_slice().to_vec())
         .with_assertion_issuers(self.authentication.oidc.clients.assertion_issuers.clone())
     }
 
@@ -1729,6 +1793,7 @@ pub(crate) mod tests {
     use super::*;
     use registry_platform_yaml::{Severity, MAXIMUM_DIAGNOSTICS_PER_FILE};
     use serde_json::{json, Value};
+    use std::collections::BTreeSet;
 
     /// The starter package's manifest, as a value a test may change.
     pub(crate) fn package_value() -> Value {
@@ -1851,6 +1916,92 @@ pub(crate) mod tests {
 
         assert_unsafe_runtime(
             result.expect_err("a runtime below a group-writable directory is refused"),
+        );
+    }
+
+    /// Load a runtime whose static key source names `document`, and build the
+    /// key source from it.
+    #[cfg(unix)]
+    async fn static_key_source(document: &str) -> Result<(), RuntimeConfigError> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let secrets = root.path().join("secrets");
+        std::fs::create_dir(&secrets).unwrap();
+        std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let file = secrets.join("issuer-jwks");
+        std::fs::write(&file, document).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut runtime = runtime_value(root.path());
+        runtime["authentication"]["oidc"]["jwksSource"] =
+            json!({"type": "static", "documentRef": "secret:file/issuer-jwks"});
+        let path = write_project(root.path(), &runtime, &package_value());
+        let config = RuntimeConfig::load_with_environment(path, &no_environment)?;
+        let resolver = config.secret_resolver()?;
+        config.jwks_fetcher(&resolver).await.map(|_| ())
+    }
+
+    fn static_key(extra: Value) -> Value {
+        let mut key = json!({
+            "kty": "RSA",
+            "kid": "issuer-key-1",
+            "use": "sig",
+            "alg": "RS256",
+            "n": "sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4Dy1WlUzewbgBHod5pcM9H95GQRV3JDXboIRROSBigeC5yjU1hGzHHyXss8UDprecbAYxknTcQkhslANGRUZmdTOQ5qTRsLAt6BTYuyvVRdhS8exSZEy_c4gs_7svlJJQ4H9_NxsiIoLwAEk7-Q3UXERGYw_75IDrGA84-lA_-Ct4eTlXHBIY2EaV7t7LjJaynVJCpkv4LKjTTAumiGUIuQhrNhZLuF_RJLqHpM2kgWFLU7-VTdL1VbC2tejvcI2BlMkEpk1BzBZI0KQB0GaDWFLN-aEAw3vRw",
+            "e": "AQAB",
+        });
+        for (name, value) in extra.as_object().unwrap() {
+            key[name] = value.clone();
+        }
+        key
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_static_key_set_with_members_it_does_not_know_loads() {
+        let key = static_key(
+            json!({"ext": true, "x5t": "abc", "x5u": "https://identity.example.test/cert"}),
+        );
+        let document = json!({"keys": [key], "issuer": "https://identity.example.test"});
+        static_key_source(&document.to_string())
+            .await
+            .expect("a public key set with unknown members loads");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_static_key_set_that_holds_a_private_member_is_refused_with_the_rule() {
+        for member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            let key = static_key(json!({ member: "canary-private-value" }));
+            let document = json!({"keys": [key]});
+            let error = static_key_source(&document.to_string())
+                .await
+                .expect_err(member);
+            assert!(
+                matches!(error, RuntimeConfigError::OidcJwksSecret(_)),
+                "{member}: {error}"
+            );
+            assert_eq!(error.code(), "messaging.runtime.unreadable-jwks-secret");
+            let text = error.to_string();
+            assert!(
+                text.contains(&format!("private-key member \"{member}\"")),
+                "{member}: {text}"
+            );
+            assert!(!text.contains("canary-private-value"), "{text}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_static_key_set_that_repeats_a_member_name_is_refused() {
+        let document = r#"{"keys":[{"kty":"RSA","kid":"a","kid":"b","n":"AQAB","e":"AQAB"}]}"#;
+        let error = static_key_source(document)
+            .await
+            .expect_err("a repeated member");
+        assert_eq!(error.code(), "messaging.runtime.unreadable-jwks-secret");
+        assert!(
+            error.to_string().contains("repeats a member name"),
+            "{error}"
         );
     }
 
@@ -2524,6 +2675,143 @@ pub(crate) mod tests {
         );
     }
 
+    fn profile_naming(id: &str, clients: &[&str]) -> registry_messaging_core::AccessProfile {
+        registry_messaging_core::AccessProfile {
+            id: id.to_owned(),
+            label: None,
+            description: None,
+            principal_claim: "sub".to_owned(),
+            required_scopes: vec!["messaging:send".to_owned()],
+            requester_clients: clients.iter().map(|client| (*client).to_owned()).collect(),
+            actor_kind: None,
+            acts_as: registry_messaging_core::ActsAs::Operator,
+            sender_profiles: Vec::new(),
+            templates: Vec::new(),
+            allow_direct_content: false,
+            requests_per_minute: 60,
+            burst: 10,
+            maximum_messages_per_day: None,
+        }
+    }
+
+    fn from_package() -> Value {
+        let mut value = base();
+        value["authentication"]["oidc"]["allowedClients"] = json!("from-package");
+        value
+    }
+
+    #[tokio::test]
+    async fn from_package_admits_exactly_the_package_clients() {
+        use crate::auth::tests::{keys, token};
+        use registry_platform_oidc::TokenVerifier;
+
+        let config = load(from_package()).expect("from-package loads against the starter package");
+        let profiles = registry_messaging_core::AccessProfiles::new(vec![
+            profile_naming("first", &["c1", "c2"]),
+            profile_naming("second", &["c3"]),
+        ])
+        .unwrap();
+        let admitted = config.admitted_clients(&profiles).unwrap();
+        assert_eq!(admitted.as_slice(), ["c1", "c2", "c3"]);
+        let mut profile = config.verifier_profile(&admitted);
+        assert_eq!(profile.allowed_clients, ["c1", "c2", "c3"]);
+        profile.allowed_algorithms = vec![jsonwebtoken::Algorithm::HS256];
+        let verifier = TokenVerifier::new(profile, keys());
+        let signed = |client: &str| {
+            token(json!({
+                "iss": "https://identity.example.test",
+                "aud": "urn:example:messaging",
+                "sub": "principal",
+                "azp": client,
+                "scope": "messaging:send",
+            }))
+        };
+        for client in ["c1", "c2", "c3"] {
+            verifier
+                .verify(&signed(client))
+                .await
+                .unwrap_or_else(|error| panic!("{client} is admitted: {error}"));
+        }
+        let refused = verifier.verify(&signed("c4")).await;
+        assert!(
+            matches!(
+                refused,
+                Err(registry_platform_oidc::OidcError::ClientNotAllowed)
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn from_package_never_reaches_the_verifier_as_an_empty_list() {
+        let config = load(from_package()).unwrap();
+        let none = registry_messaging_core::AccessProfiles::default();
+        let error = config.admitted_clients(&none).unwrap_err();
+        assert!(
+            matches!(error, RuntimeConfigError::AllowedClientsRequired),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_list_missing_a_package_client_is_refused_with_the_profile() {
+        let mut value = base();
+        value["authentication"]["oidc"]["allowedClients"] = json!(["case-system"]);
+        let config = RuntimeConfig::parse_with_environment(
+            &serde_json::to_string(&value).unwrap(),
+            &no_environment,
+        )
+        .unwrap();
+        let profiles = registry_messaging_core::AccessProfiles::new(vec![
+            profile_naming("covered", &["case-system"]),
+            profile_naming("left-out", &["operations-console"]),
+        ])
+        .unwrap();
+        let error = config.admitted_clients(&profiles).unwrap_err();
+        assert!(
+            matches!(&error, RuntimeConfigError::ProfileClientNotAllowed { profile } if profile == "left-out"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn assertion_issuer_client_outside_the_package_is_refused_under_from_package() {
+        let mut value = from_package();
+        value["authentication"]["oidc"]["assertionIssuers"] =
+            json!({"unknown-client": ["https://assertions.example.test"]});
+        let error = load(value).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                RuntimeConfigError::AssertionIssuerClientNotAllowed { .. }
+            ),
+            "{error}"
+        );
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/assertionIssuers/unknown-client"
+        );
+        let mut value = from_package();
+        value["authentication"]["oidc"]["assertionIssuers"] =
+            json!({"case-system": ["https://assertions.example.test"]});
+        assert!(load(value).unwrap().binds_assertion_issuers());
+    }
+
+    #[test]
+    fn the_keywords_other_than_from_package_and_unrestricted_are_refused() {
+        let mut value = base();
+        value["authentication"]["oidc"]["allowedClients"] = json!("any");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.code(), "config.invalid-value", "{error}");
+        assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
+        let mut value = base();
+        value["authentication"]["oidc"]["allowedClients"] = json!("unrestricted");
+        assert!(matches!(
+            load(value).unwrap_err(),
+            RuntimeConfigError::AllowedClientsRequired
+        ));
+    }
+
     #[test]
     fn a_repeated_allowed_client_is_refused_at_the_repetition() {
         let mut value = base();
@@ -3010,7 +3298,8 @@ pub(crate) mod tests {
     #[test]
     fn the_verifier_admits_only_the_access_token_media_type() {
         let config = load(base()).unwrap();
-        let profile = config.verifier_profile();
+        let admitted = AdmittedClients::new(vec!["case-system".to_owned()]).unwrap();
+        let profile = config.verifier_profile(&admitted);
         assert!(registry_platform_oidc::is_access_token_typ_pair(
             &profile.allowed_typ
         ));

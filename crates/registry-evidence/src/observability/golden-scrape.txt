@@ -70,6 +70,53 @@ evidence_http_request_duration_seconds_count{route="unmatched",method="other",st
 # HELP evidence_rate_limiter_tracked_keys Pseudonym keys currently tracked by the rate limiter.
 # TYPE evidence_rate_limiter_tracked_keys gauge
 evidence_rate_limiter_tracked_keys 5
+# HELP evidence_request_refusals_total Requests refused, by the check that failed.
+# TYPE evidence_request_refusals_total counter
+evidence_request_refusals_total{check="credential-missing"} 0
+evidence_request_refusals_total{check="credential-malformed"} 0
+evidence_request_refusals_total{check="token-algorithm"} 0
+evidence_request_refusals_total{check="token-type"} 0
+evidence_request_refusals_total{check="token-key"} 0
+evidence_request_refusals_total{check="token-signature"} 0
+evidence_request_refusals_total{check="token-issuer"} 0
+evidence_request_refusals_total{check="token-audience"} 0
+evidence_request_refusals_total{check="token-time"} 0
+evidence_request_refusals_total{check="token-client"} 0
+evidence_request_refusals_total{check="token-assertion-issuer"} 0
+evidence_request_refusals_total{check="token-claims"} 0
+evidence_request_refusals_total{check="actor-kind"} 0
+evidence_request_refusals_total{check="delegation"} 0
+evidence_request_refusals_total{check="sender-constraint"} 0
+evidence_request_refusals_total{check="key-source-unavailable"} 0
+evidence_request_refusals_total{check="shared-secret"} 0
+evidence_request_refusals_total{check="one-time-credential"} 0
+evidence_request_refusals_total{check="delivery-signature"} 0
+evidence_request_refusals_total{check="delivery-freshness"} 0
+evidence_request_refusals_total{check="delivery-binding"} 0
+evidence_request_refusals_total{check="host-origin"} 0
+evidence_request_refusals_total{check="scope"} 0
+evidence_request_refusals_total{check="access-profile"} 0
+evidence_request_refusals_total{check="requester-client"} 0
+evidence_request_refusals_total{check="purpose"} 0
+evidence_request_refusals_total{check="operation"} 0
+evidence_request_refusals_total{check="disclosure"} 0
+evidence_request_refusals_total{check="subject-selector"} 0
+evidence_request_refusals_total{check="revision-pin"} 0
+evidence_request_refusals_total{check="acquisition-channel"} 0
+evidence_request_refusals_total{check="source-authority"} 0
+evidence_request_refusals_total{check="separation-of-duties"} 0
+evidence_request_refusals_total{check="task-grant-missing"} 0
+evidence_request_refusals_total{check="task-grant-claims"} 0
+evidence_request_refusals_total{check="task-grant-expired"} 0
+evidence_request_refusals_total{check="task-grant-binding"} 0
+evidence_request_refusals_total{check="task-grant-scope"} 0
+evidence_request_refusals_total{check="task-grant-lifetime"} 0
+evidence_request_refusals_total{check="task-grant-status"} 0
+evidence_request_refusals_total{check="row-boundary"} 0
+evidence_request_refusals_total{check="ownership"} 0
+evidence_request_refusals_total{check="visibility"} 0
+evidence_request_refusals_total{check="action-guard"} 0
+evidence_request_refusals_total{check="rate-limit"} 0
 # HELP evidence_build_info Running version and captured governed identities.
 # TYPE evidence_build_info gauge
 evidence_build_info{version="{VERSION}",bundle="bundle\"x\\y\nz",authority="package"} 1

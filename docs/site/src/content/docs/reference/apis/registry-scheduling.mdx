@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-15"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -166,7 +166,9 @@ exact identity, bounds, signed subjects, and deadline. An inactive,
 mismatched, unlisted, or incompletely bound grant answers `operation.not-authorized`; an authority or service
 credential outage, including an unusable authority response, answers `service.unavailable`. On the offline path
 (`unchecked-final-fifteen-minutes`), an unexpired grant with more than 900 seconds left answers
-`grant.lifetime-too-long` once its bounds have matched; an expired grant answers `operation.not-authorized`. Positive answers
+`grant.lifetime-too-long` once its bounds have matched when it creates a hold or an appointment, and
+`operation.not-authorized` on a request that names an existing hold or appointment, the same answer as an
+unknown one; an expired grant answers `operation.not-authorized`. Positive answers
 are not cached, and the complete attempt is limited to ten seconds. No capacity lock is held during the outbound call.
 This is a fresh observation rather than a distributed transaction: withdrawal after a positive answer can race
 the in-flight local commit.
@@ -296,12 +298,16 @@ checked per route.
 | Holds | `/v1/holds`, `/v1/holds/{holdId}` | Commitment |
 | Appointments | `/v1/appointments`, `/v1/appointments/{appointmentId}`, its `reschedule`, `cancel`, and `history` | Commitment for the mutations; Catalogue read for the reads |
 | Appointment receipt observation | `/v1/appointments/receipt` | Catalogue read, matching the exact original owner, key, and creation request |
-| Liveness and readiness | `/healthz`, `/readyz` | Any caller, without a token |
+| Liveness and readiness | `/health`, `/ready`, and the older `/healthz`, `/readyz` | Any caller, without a token |
 
-`/readyz` answers `service.unavailable` while PostgreSQL is unreachable, while the schema is not
-the one this release expects, and while the audit writer is not ready.
+`/health` answers `{"status":"ok"}` and `/ready` answers `{"status":"ready"}`, both as
+`application/json`. `/healthz` and `/readyz` keep answering an empty 200 for deployments that already
+probe them.
 
-{/* Evidence: crates/registry-scheduling/src/http.rs, router() and readyz();
+`/ready` and `/readyz` answer `service.unavailable` while PostgreSQL is unreachable, while the schema
+is not the one this release expects, and while the audit writer is not ready.
+
+{/* Evidence: crates/registry-scheduling/src/http.rs, router(), health(), ready() and readyz();
     crates/registry-scheduling-core/src/naming.rs, SCHEDULING_PATH, SERVICES_PATH, OFFERINGS_PATH,
     RESOURCES_PATH, LOCATIONS_PATH, AVAILABILITY_PATH, AVAILABILITY_EXPLAIN_PATH, HOLDS_PATH, and
     APPOINTMENTS_PATH and APPOINTMENT_RECEIPT_PATH; crates/registry-scheduling/src/store.rs,

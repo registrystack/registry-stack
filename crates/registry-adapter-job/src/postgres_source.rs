@@ -9,7 +9,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
 #[cfg(feature = "postgres-test")]
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -228,10 +227,8 @@ impl PooledPostgresSource {
             }
             #[cfg(feature = "postgres-test")]
             PostgresSourceTls::Plaintext => {
-                let loopback = binding
-                    .host
-                    .parse::<IpAddr>()
-                    .is_ok_and(|address| address.is_loopback());
+                let loopback =
+                    registry_platform_loopback::loopback_literal(&binding.host).is_some();
                 if !loopback {
                     return Err(format!(
                         "the plaintext PostgreSQL test source {endpoint} is not numeric loopback; correct {}",

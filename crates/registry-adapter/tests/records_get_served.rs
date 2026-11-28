@@ -420,10 +420,14 @@ async fn every_401_path_leaves_a_value_free_log_line() {
     assert_eq!(status, 401);
 
     let stderr = served.stop_and_read_stderr();
-    for stage in ["header", "client", "profile"] {
+    for check in [
+        "credential-missing",
+        "token-assertion-issuer",
+        "token-claims",
+    ] {
         assert!(
-            stderr.contains(&format!("\"stage\":\"{stage}\"")),
-            "no {stage}-stage refusal was logged: {stderr}"
+            stderr.contains(&format!("\"failed_check\":\"{check}\"")),
+            "no {check} refusal was logged: {stderr}"
         );
     }
     assert!(

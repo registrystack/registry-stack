@@ -7,7 +7,7 @@ use std::{
 
 #[cfg(test)]
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_authcommon::validate_compact_access_token;
+use registry_platform_authcommon::{validate_compact_access_token, FailedCheck};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     actor_kind, grant_claims, ActorKind, Audience, ClaimError, ClaimNames, GrantClaims,
@@ -118,6 +118,8 @@ pub struct AuthenticatedContext {
 pub enum TaskGrantError {
     #[error("task-grant claims are invalid")]
     Claims,
+    #[error("task grant has expired")]
+    Expired,
     #[error("task-grant principal does not match the authenticated principal")]
     PrincipalMismatch,
     #[error("task-grant client context is invalid")]
@@ -234,16 +236,36 @@ impl std::fmt::Debug for AuthenticatedContext {
     }
 }
 
+/// Why a bearer token was refused. Every variant names the check that failed,
+/// so the operator-side count and log line can say which of the checks it was.
+/// The caller sees one closed `401` whichever variant this is.
 #[derive(Debug, Error)]
 pub enum AuthenticationError {
     #[error("access token is malformed")]
     Malformed,
     #[error("access token verification failed")]
-    Verification,
+    Verification(FailedCheck),
     #[error("required authenticated context is missing or invalid")]
-    Context,
+    Context(FailedCheck),
     #[error("access token is bound to a sender proof this profile cannot validate")]
     SenderConstrained,
+}
+
+impl AuthenticationError {
+    /// The check this refusal failed. Written to no response.
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub fn failed_check(&self) -> FailedCheck {
+        match self {
+            Self::Malformed => FailedCheck::CredentialMalformed,
+            Self::Verification(check) | Self::Context(check) => *check,
+            Self::SenderConstrained => FailedCheck::SenderConstraint,
+        }
+    }
+
+    /// A required claim is absent or not in its configured shape.
+    fn claims() -> Self {
+        Self::Context(FailedCheck::TokenClaims)
+    }
 }
 
 /// RFC 7800 confirmation claim. Its presence means the authorization server
@@ -353,7 +375,7 @@ impl Authenticator {
                 if is_key_source_failure(&error) {
                     self.report_key_source_failure(&error);
                 }
-                return Err(AuthenticationError::Verification);
+                return Err(AuthenticationError::Verification(error.failed_check()));
             }
         };
         // The scope gate reads only the verified token's scope set. It runs
@@ -371,7 +393,7 @@ impl Authenticator {
                 .iter()
                 .all(|scope| present.contains(scope.as_str()))
             {
-                return Err(AuthenticationError::Verification);
+                return Err(AuthenticationError::Verification(FailedCheck::Scope));
             }
         }
         self.extract_context(verified)
@@ -521,17 +543,21 @@ impl Authenticator {
         verified: VerifiedToken,
     ) -> Result<AuthenticatedContext, AuthenticationError> {
         let actor_kind = actor_kind(&verified.claims, &self.claims.contextual_claims)
-            .map_err(|_| AuthenticationError::Context)?;
+            .map_err(|_| AuthenticationError::Context(FailedCheck::ActorKind))?;
         let now_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|_| AuthenticationError::Context)?
+            .map_err(|_| AuthenticationError::Context(FailedCheck::TokenTime))?
             .as_secs();
         let mut task_grant =
-            grant_claims(&verified.claims, &self.claims.contextual_claims, now_unix)
-                .map_err(|_: ClaimError| TaskGrantError::Claims);
+            grant_claims(&verified.claims, &self.claims.contextual_claims, now_unix).map_err(
+                |error| match error {
+                    ClaimError::Expired => TaskGrantError::Expired,
+                    _ => TaskGrantError::Claims,
+                },
+            );
         let claims =
-            serde_json::to_value(&verified.claims).map_err(|_| AuthenticationError::Context)?;
-        let claims_object = claims.as_object().ok_or(AuthenticationError::Context)?;
+            serde_json::to_value(&verified.claims).map_err(|_| AuthenticationError::claims())?;
+        let claims_object = claims.as_object().ok_or_else(AuthenticationError::claims)?;
         // Retain a bounded identifier from the verified token for denial audit
         // even when expiry or another grant member fails validation. This is
         // never an authorization input and is emitted only as a keyed pseudonym.
@@ -563,7 +589,7 @@ impl Authenticator {
             &self.claims.evidence_audience_claim,
             MAX_PRINCIPAL_BYTES,
         )?;
-        url::Url::parse(&evidence_audience).map_err(|_| AuthenticationError::Context)?;
+        url::Url::parse(&evidence_audience).map_err(|_| AuthenticationError::claims())?;
         let requester_tags =
             required_string_array(claims_object, &self.claims.requester_tags_claim, MAX_TAGS)?;
         let actor = self
@@ -646,41 +672,10 @@ fn jwks_fetch_policy(config: &OidcAuthenticationConfig) -> FetchUrlPolicy {
 }
 
 /// Whether a verification failure was this deployment's key source rather than
-/// the caller's token.
-///
-/// Every known failure is listed rather than folded into the wildcard, which
-/// covers only variants added to the shared verifier after this was written.
-/// Those default to the caller's side: a failure this code has never seen is
-/// one it cannot honestly describe as an unreachable key set, and an operator
-/// misdirected by a confident wrong message is worse off than one who reads
-/// the same `auth.invalid-credential` twice.
+/// the caller's token. The shared verifier owns the classification, so the
+/// operator log line and the `key-source-unavailable` count agree.
 fn is_key_source_failure(error: &OidcError) -> bool {
-    match error {
-        OidcError::Transport(_)
-        | OidcError::BoundedRead(_)
-        | OidcError::FetchUrl(_)
-        | OidcError::HttpStatus(_)
-        | OidcError::InvalidUrl
-        | OidcError::Parse
-        | OidcError::InvalidJwk
-        | OidcError::EmptyKeySet
-        | OidcError::MissingIssuer => true,
-        OidcError::IssuerMismatch { .. }
-        | OidcError::MalformedToken
-        | OidcError::AlgorithmNotAllowed
-        | OidcError::TokenTypeNotAllowed
-        | OidcError::MissingKid
-        | OidcError::KidTooLong
-        | OidcError::UnknownKid
-        | OidcError::TokenExpired
-        | OidcError::TokenNotYetValid
-        | OidcError::AudienceMismatch
-        | OidcError::SignatureInvalid
-        | OidcError::InvalidToken
-        | OidcError::ClientNotAllowed
-        | OidcError::AssertionIssuerNotAllowed => false,
-        _ => false,
-    }
+    error.is_key_source_unavailable()
 }
 
 /// Render an error together with the causes beneath it, bounded.
@@ -719,7 +714,7 @@ fn required_direct_string(
     name: &str,
     maximum_bytes: usize,
 ) -> Result<String, AuthenticationError> {
-    optional_direct_string(claims, name, maximum_bytes)?.ok_or(AuthenticationError::Context)
+    optional_direct_string(claims, name, maximum_bytes)?.ok_or_else(AuthenticationError::claims)
 }
 
 fn optional_direct_string(
@@ -730,9 +725,9 @@ fn optional_direct_string(
     let Some(value) = claims.get(name) else {
         return Ok(None);
     };
-    let value = value.as_str().ok_or(AuthenticationError::Context)?;
+    let value = value.as_str().ok_or_else(AuthenticationError::claims)?;
     if value.is_empty() || value.len() > maximum_bytes {
-        return Err(AuthenticationError::Context);
+        return Err(AuthenticationError::claims());
     }
     Ok(Some(value.to_owned()))
 }
@@ -745,15 +740,15 @@ fn required_string_array(
     let values = claims
         .get(name)
         .and_then(Value::as_array)
-        .ok_or(AuthenticationError::Context)?;
+        .ok_or_else(AuthenticationError::claims)?;
     if values.is_empty() || values.len() > maximum_items {
-        return Err(AuthenticationError::Context);
+        return Err(AuthenticationError::claims());
     }
     let mut output = Vec::with_capacity(values.len());
     for value in values {
-        let value = value.as_str().ok_or(AuthenticationError::Context)?;
+        let value = value.as_str().ok_or_else(AuthenticationError::claims)?;
         if value.is_empty() || value.len() > MAX_PRINCIPAL_BYTES {
-            return Err(AuthenticationError::Context);
+            return Err(AuthenticationError::claims());
         }
         output.push(value.to_owned());
     }
@@ -1196,6 +1191,44 @@ mod tests {
     }
 
     #[test]
+    fn an_expired_task_grant_is_kept_apart_from_a_malformed_one() {
+        let now = chrono::Utc::now().timestamp();
+        let claims = |grant_exp: i64| {
+            serde_json::from_value(serde_json::json!({
+                "iss": "https://issuer.invalid",
+                "aud": "evidence-resource",
+                "sub": "institutional-agent",
+                "exp": now + 300,
+                "registry_actor_kind": "agent",
+                "registry_purpose": "eligibility-check",
+                "registry_grant_id": "grant-1",
+                "registry_grant_source_issuer": "https://casework.invalid",
+                "registry_grant_client": "evidence-agent",
+                "registry_grant_resource": "evidence-resource",
+                "registry_grant_exp": grant_exp,
+                "registry_grant_bounds": {"type":"evidence", "requirement":"urn:example:requirement"},
+                "registry_approver": "h:synthetic-approver",
+                "evidence_tags": ["caseworker"],
+                "evidence_audience": "https://relying-party.invalid"
+            }))
+            .expect("claims parse")
+        };
+        let grant_of = |claims| {
+            context_extraction_authenticator("sub")
+                .extract_context(VerifiedToken {
+                    claims,
+                    matched_client: Some("client_id:evidence-agent".to_owned()),
+                    scopes: Vec::new(),
+                })
+                .expect("verified product context extracts")
+                .grant()
+                .map(|grant| grant.is_some())
+        };
+        assert_eq!(grant_of(claims(now - 1)), Err(TaskGrantError::Expired));
+        assert_eq!(grant_of(claims(now + 300)), Ok(true));
+    }
+
+    #[test]
     fn token_without_actor_kind_is_refused_during_context_extraction() {
         let now = chrono::Utc::now().timestamp();
         let claims = serde_json::from_value(serde_json::json!({
@@ -1217,7 +1250,10 @@ mod tests {
             })
             .expect_err("a token without registry_actor_kind is refused");
 
-        assert!(matches!(error, AuthenticationError::Context));
+        assert!(matches!(
+            error,
+            AuthenticationError::Context(FailedCheck::ActorKind)
+        ));
     }
 
     #[test]

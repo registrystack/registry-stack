@@ -1,0 +1,171 @@
+{
+  "basic-scheme": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  },
+  "bearer-without-token": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  },
+  "cursor-of-another-client": {
+    "body": {
+      "status": 400,
+      "title": "the cursor is not valid",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/invalid-cursor"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 400,
+    "www-authenticate": null
+  },
+  "exchanged": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  },
+  "expired": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  },
+  "no-authorization": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  },
+  "not-a-compact-token": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  },
+  "operation-not-named": {
+    "body": {
+      "status": 403,
+      "title": "the caller may not make this request",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/forbidden"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 403,
+    "www-authenticate": null
+  },
+  "scope-not-held": {
+    "body": {
+      "status": 403,
+      "title": "the caller may not make this request",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/forbidden"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 403,
+    "www-authenticate": null
+  },
+  "subject-too-long": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  },
+  "unknown-signer": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  },
+  "unlisted-client": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  },
+  "wrong-audience": {
+    "body": {
+      "status": 401,
+      "title": "the request carries no valid credential",
+      "traceId": "<per-request>",
+      "type": "https://govstack.global/problems/digital-registries/unauthorized"
+    },
+    "cache-control": "no-store",
+    "content-type": "application/problem+json",
+    "retry-after": null,
+    "status": 401,
+    "www-authenticate": "Bearer"
+  }
+}

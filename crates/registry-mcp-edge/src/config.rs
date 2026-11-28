@@ -11,10 +11,9 @@ use registry_platform_audit::{
 use registry_platform_config::{
     AuditKeyConfig, ConfigBlockError, JwksSource, SecretProvidersConfig, SecretReference,
 };
-use registry_platform_httputil::{valid_resource_uri, valid_scope_token};
+use registry_platform_httputil::{loopback::loopback_host, valid_resource_uri, valid_scope_token};
 use registry_platform_yaml::{BoundedU32, BoundedU64, ExternalId, Invalid, UniqueList, Url};
 use serde::{de, Deserialize, Deserializer};
-use url::Host;
 
 pub use crate::AccessTokenAlgorithm;
 use crate::{ResourceServerOptions, MCP_PATH};
@@ -206,23 +205,19 @@ pub enum ResourceServerConfigError {
 fn protected_endpoint(url: &url::Url, development_loopback: bool) -> bool {
     url.host().is_some()
         && (url.scheme() == "https"
-            || development_loopback && url.scheme() == "http" && loopback_host(url))
+            || development_loopback && url.scheme() == "http" && is_loopback(url))
 }
 
 fn issuer_endpoint(url: &url::Url, development_loopback: bool, allow_insecure_http: bool) -> bool {
     url.host().is_some()
         && (url.scheme() == "https"
             || url.scheme() == "http"
-                && (allow_insecure_http || development_loopback && loopback_host(url)))
+                && (allow_insecure_http || development_loopback && is_loopback(url)))
 }
 
-fn loopback_host(url: &url::Url) -> bool {
-    match url.host() {
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
-        None => false,
-    }
+fn is_loopback(url: &url::Url) -> bool {
+    url.host_str()
+        .is_some_and(|host| loopback_host(host).is_some())
 }
 
 fn default_scope_claim() -> ExternalId {
@@ -539,6 +534,37 @@ mod tests {
             .iter()
             .any(|error| { matches!(error, ResourceServerConfigError::InsecureIssuer) }));
         assert!(config.validate(true, &secret_providers()).is_empty());
+    }
+
+    #[test]
+    fn development_loopback_admits_only_the_loopback_forms() {
+        for host in ["127.0.0.2", "[::1]", "LOCALHOST", "[::ffff:127.0.0.1]"] {
+            let mut config = resource_server();
+            config.resource = Url::new(format!("http://{host}:8110/mcp")).expect("resource");
+            config.issuer = Url::new(format!("http://{host}:8111")).expect("issuer");
+            assert!(
+                config.validate(true, &secret_providers()).is_empty(),
+                "{host}"
+            );
+        }
+        for host in ["localhost.", "app.localhost", "10.0.0.1"] {
+            let mut config = resource_server();
+            config.resource = Url::new(format!("http://{host}:8110/mcp")).expect("resource");
+            config.issuer = Url::new(format!("http://{host}:8111")).expect("issuer");
+            let errors = config.validate(true, &secret_providers());
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, ResourceServerConfigError::InsecureResource)),
+                "{host}"
+            );
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, ResourceServerConfigError::InsecureIssuer)),
+                "{host}"
+            );
+        }
     }
 
     #[test]

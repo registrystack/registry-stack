@@ -2049,7 +2049,7 @@ impl PostgresRecordMutationService {
                     | MutationError::Conflict
                     | MutationError::ProposalUniqueConflict
                     | MutationError::ProposalRejected
-                    | MutationError::AuthorizationRefused
+                    | MutationError::AuthorizationRefused(_)
                     // Ingestion consumes the batch mutation outcome through
                     // its run protocol. Its item refusal remains the generic
                     // 412 instead of the direct write route's 403.

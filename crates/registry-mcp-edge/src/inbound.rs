@@ -10,7 +10,10 @@ use axum::{
     response::Response,
 };
 use registry_platform_audit::AuditKeyHasher;
-use registry_platform_authcommon::{parse_bearer_token, BearerParseError};
+use registry_platform_authcommon::{
+    parse_bearer_token, record_refusal, BearerParseError, FailedCheck, RefusalNote, RefusalRecorder,
+};
+use registry_platform_httputil::loopback::loopback_host;
 pub use registry_platform_oidc::AccessTokenAlgorithm;
 use registry_platform_oidc::{
     access_token_typ_set, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
@@ -19,7 +22,7 @@ use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
 };
 use serde_json::{json, Value};
-use url::{Host, Url};
+use url::Url;
 use zeroize::Zeroizing;
 
 use crate::server::{problem, METADATA_PREFIX};
@@ -223,10 +226,12 @@ impl CallerContext<'_> {
     }
 }
 
+/// What the edge answers, and for the answers that carry a check, the check
+/// that failed. The check is operator-side only and never reaches a response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Refusal {
-    Missing,
-    InvalidToken,
+    Missing(FailedCheck),
+    InvalidToken(FailedCheck),
     InsufficientScope,
     KeySource,
     RateLimited { retry_after_seconds: u64 },
@@ -245,6 +250,7 @@ pub struct ResourceServer {
     challenge: String,
     scope_challenge: String,
     metadata: Value,
+    refusals: Arc<RefusalRecorder>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -257,6 +263,8 @@ pub enum ResourceServerError {
     Options,
     #[error("the {0} rate limit is not usable")]
     RateLimit(&'static str),
+    #[error("the refusal recorder is not usable")]
+    Recorder,
 }
 
 impl ResourceServer {
@@ -278,6 +286,8 @@ impl ResourceServer {
             .map_err(|_| ResourceServerError::RateLimit("perPrincipal"))?;
         let per_client =
             limiter(limits.per_client).map_err(|_| ResourceServerError::RateLimit("perClient"))?;
+        let refusals =
+            Arc::new(RefusalRecorder::new("mcp_edge").map_err(|_| ResourceServerError::Recorder)?);
         let metadata = json!({
             "resource": options.resource.as_str(),
             "authorization_servers": [options.issuer.as_str()],
@@ -297,7 +307,15 @@ impl ResourceServer {
             challenge,
             scope_challenge,
             metadata,
+            refusals,
         })
+    }
+
+    /// Counts every refusal by the check that failed. The edge has no metrics
+    /// listener, so the counter is read in tests and the log line is the
+    /// operator's signal.
+    pub(crate) const fn refusal_recorder(&self) -> &Arc<RefusalRecorder> {
+        &self.refusals
     }
 
     #[must_use]
@@ -310,8 +328,8 @@ impl ResourceServer {
         &self,
         verified: &VerifiedToken,
         token: &str,
-    ) -> Result<VerifiedCaller, ()> {
-        self.caller(verified, token).map_err(|_| ())
+    ) -> Result<VerifiedCaller, Refusal> {
+        self.caller(verified, token)
     }
 
     async fn authenticate(&self, headers: &HeaderMap) -> Result<VerifiedCaller, Refusal> {
@@ -322,7 +340,7 @@ impl ResourceServer {
                 tracing::warn!("the access-token key set is unavailable");
                 return Err(Refusal::KeySource);
             }
-            Err(_) => return Err(Refusal::InvalidToken),
+            Err(error) => return Err(Refusal::InvalidToken(error.failed_check())),
         };
         let caller = self.caller(&verified, token)?;
         admit(&self.per_principal, caller.principal_pseudonym()).await?;
@@ -333,19 +351,21 @@ impl ResourceServer {
     fn caller(&self, verified: &VerifiedToken, token: &str) -> Result<VerifiedCaller, Refusal> {
         let claims = &verified.claims;
         if claims.extra.contains_key("act") || claims.extra.contains_key("may_act") {
-            return Err(Refusal::InvalidToken);
+            return Err(Refusal::InvalidToken(FailedCheck::Delegation));
         }
         let subject = claims
             .sub
             .as_deref()
             .filter(|subject| !subject.is_empty())
-            .ok_or(Refusal::InvalidToken)?;
+            .ok_or(Refusal::InvalidToken(FailedCheck::TokenClaims))?;
         let client = verified
             .matched_client_id()
             .ok()
             .flatten()
-            .ok_or(Refusal::InvalidToken)?;
-        let expires_at = claims.exp.ok_or(Refusal::InvalidToken)?;
+            .ok_or(Refusal::InvalidToken(FailedCheck::TokenClient))?;
+        let expires_at = claims
+            .exp
+            .ok_or(Refusal::InvalidToken(FailedCheck::TokenClaims))?;
         let present: HashSet<&str> = verified.scopes.iter().map(String::as_str).collect();
         if !self
             .required_scopes
@@ -370,10 +390,21 @@ impl ResourceServer {
             .map_err(|_| Refusal::Unavailable)
     }
 
+    /// Counts and logs the refusal, then builds its answer.
+    fn refuse(&self, refusal: Refusal) -> Response {
+        match refusal.failed_check() {
+            Some(check) => record_refusal!(self.refusals, RefusalNote::new(check)),
+            // The gateway could not derive a pseudonym or run its limiter.
+            // That is a fault of this service, not a check a caller failed.
+            None => tracing::error!("the gateway could not admit a request"),
+        }
+        self.refusal_response(refusal)
+    }
+
     pub(crate) fn refusal_response(&self, refusal: Refusal) -> Response {
         let (status, challenge) = match refusal {
-            Refusal::Missing => (StatusCode::UNAUTHORIZED, Some(self.challenge.clone())),
-            Refusal::InvalidToken => (
+            Refusal::Missing(_) => (StatusCode::UNAUTHORIZED, Some(self.challenge.clone())),
+            Refusal::InvalidToken(_) => (
                 StatusCode::UNAUTHORIZED,
                 Some(
                     self.challenge
@@ -445,9 +476,8 @@ fn valid_issuer_url(url: &Url, allow_insecure_http: bool) -> bool {
 }
 
 fn loopback(url: &Url) -> bool {
-    matches!(url.host(), Some(Host::Ipv4(ip)) if ip.is_loopback())
-        || matches!(url.host(), Some(Host::Ipv6(ip)) if ip.is_loopback())
-        || matches!(url.host(), Some(Host::Domain(domain)) if domain.eq_ignore_ascii_case("localhost"))
+    url.host_str()
+        .is_some_and(|host| loopback_host(host).is_some())
 }
 
 fn limiter(options: TokenBucketOptions) -> Result<TokenBucketLimiter, TokenBucketError> {
@@ -458,10 +488,21 @@ fn limiter(options: TokenBucketOptions) -> Result<TokenBucketLimiter, TokenBucke
 }
 
 impl Refusal {
+    /// The check a caller failed, or `None` for a fault of this service.
+    const fn failed_check(self) -> Option<FailedCheck> {
+        match self {
+            Self::Missing(check) | Self::InvalidToken(check) => Some(check),
+            Self::InsufficientScope => Some(FailedCheck::Scope),
+            Self::KeySource => Some(FailedCheck::KeySourceUnavailable),
+            Self::RateLimited { .. } => Some(FailedCheck::RateLimit),
+            Self::Unavailable => None,
+        }
+    }
+
     const fn code(self) -> &'static str {
         match self {
-            Self::Missing => "unauthorized",
-            Self::InvalidToken => "invalid-token",
+            Self::Missing(_) => "unauthorized",
+            Self::InvalidToken(_) => "invalid-token",
             Self::InsufficientScope => "insufficient-scope",
             Self::KeySource | Self::Unavailable => "temporarily-unavailable",
             Self::RateLimited { .. } => "rate-limited",
@@ -470,8 +511,8 @@ impl Refusal {
 
     const fn detail(self) -> &'static str {
         match self {
-            Self::Missing => "A bearer access token is required.",
-            Self::InvalidToken => "The access token is not valid for this resource.",
+            Self::Missing(_) => "A bearer access token is required.",
+            Self::InvalidToken(_) => "The access token is not valid for this resource.",
             Self::InsufficientScope => "The access token lacks a required scope.",
             Self::KeySource | Self::Unavailable => {
                 "The gateway cannot verify the request right now."
@@ -492,7 +533,7 @@ pub(crate) async fn require_caller(
             request.extensions_mut().insert(Arc::new(caller));
             next.run(request).await
         }
-        Err(refusal) => server.refusal_response(refusal),
+        Err(refusal) => server.refuse(refusal),
     }
 }
 
@@ -516,14 +557,19 @@ pub(crate) fn retry_after_seconds(retry_after: Duration) -> u64 {
 
 fn bearer_token(headers: &HeaderMap) -> Result<&str, Refusal> {
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
-    let value = values.next().ok_or(Refusal::Missing)?;
+    let value = values
+        .next()
+        .ok_or(Refusal::Missing(FailedCheck::CredentialMissing))?;
     if values.next().is_some() {
-        return Err(Refusal::InvalidToken);
+        return Err(Refusal::InvalidToken(FailedCheck::CredentialMalformed));
     }
-    let value = value.to_str().map_err(|_| Refusal::InvalidToken)?;
+    let value = value
+        .to_str()
+        .map_err(|_| Refusal::InvalidToken(FailedCheck::CredentialMalformed))?;
     parse_bearer_token(value).map_err(|error| match error {
-        BearerParseError::Malformed | BearerParseError::InvalidScheme => Refusal::Missing,
-        _ => Refusal::InvalidToken,
+        BearerParseError::InvalidScheme => Refusal::Missing(FailedCheck::CredentialMissing),
+        BearerParseError::Malformed => Refusal::Missing(FailedCheck::CredentialMalformed),
+        _ => Refusal::InvalidToken(FailedCheck::CredentialMalformed),
     })
 }
 
@@ -572,3 +618,6 @@ fn is_key_source_failure(error: &OidcError) -> bool {
             | OidcError::MissingIssuer
     )
 }
+
+#[cfg(test)]
+mod refusal_tests;

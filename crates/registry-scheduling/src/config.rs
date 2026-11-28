@@ -28,10 +28,12 @@ pub use registry_platform_config::{
     SecretProvidersConfig, TaskGrantStatusConfig, TlsTermination, UrlHookDestinationConfig,
 };
 use registry_platform_httputil::destination::validate_fixed_destination_path;
+use registry_platform_loopback::loopback_host;
 use registry_platform_oidc::task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifierConfig,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, Diagnostic, Invalid, LocalId, Report, RetiredApiVersion,
@@ -1166,8 +1168,18 @@ impl RuntimeConfig {
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                let jwks = parse_static_jwks(document.expose_secret()).map_err(|error| {
+                    match error {
+                        // The operator's document broke a key set rule: say
+                        // which, so the fix does not start at the issuer.
+                        OidcError::StaticKeySet(refusal) => {
+                            RuntimeConfigError::OidcJwksSecret(format!(
+                                "the document at authentication.oidc.jwksSource.documentRef was refused: {refusal}"
+                            ))
+                        }
+                        _ => RuntimeConfigError::Oidc,
+                    }
+                })?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -1280,10 +1292,9 @@ fn valid_destination_url(value: &str) -> bool {
     {
         match parsed.scheme() {
             "https" => true,
-            "http" => matches!(
-                parsed.host_str(),
-                Some("127.0.0.1") | Some("localhost") | Some("[::1]")
-            ),
+            "http" => parsed
+                .host_str()
+                .is_some_and(|host| loopback_host(host).is_some()),
             _ => false,
         }
     } else {
@@ -4420,7 +4431,9 @@ holdPolicy:
     /// The runtime's static JWKS arm hands the resolved document to the
     /// shared parser and refuses a key set it cannot trust before any
     /// verifier exists: a symmetric key, an unnamed key, two keys sharing a
-    /// name, or no key at all.
+    /// name, a private key member, or no key at all. The operator is told
+    /// which rule the file broke, under the code for an unusable key file
+    /// and never the issuer-unreachable one.
     #[cfg(unix)]
     #[tokio::test]
     async fn static_jwks_requires_unique_named_asymmetric_keys() {
@@ -4447,14 +4460,42 @@ holdPolicy:
             .await
             .expect("one named asymmetric key is accepted");
 
-        for (case, invalid) in [
-            ("symmetric", br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#.as_slice()),
-            ("unnamed", br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB"}]}"#),
+        // Members the key set rule does not name are not inspected.
+        write_jwks(
+            br#"{"issuer":"https://issuer.test","keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB","ext":true,"x5c":["AA=="],"x5t":"AA","x5u":"https://issuer.test/chain"}]}"#,
+        );
+        config
+            .oidc_verifier(&secrets)
+            .await
+            .expect("unknown public members are ignored");
+
+        for (case, invalid, text) in [
+            (
+                "symmetric",
+                br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#.as_slice(),
+                "symmetric key",
+            ),
+            (
+                "unnamed",
+                br#"{"keys":[{"kty":"RSA","n":"AQAB","e":"AQAB"}]}"#,
+                "has no \"kid\"",
+            ),
             (
                 "duplicate name",
                 br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
+                "repeats the \"kid\"",
             ),
-            ("empty", br#"{"keys":[]}"#),
+            ("empty", br#"{"keys":[]}"#, "holds no keys"),
+            (
+                "private member",
+                br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB","d":"AQAB"}]}"#,
+                "private-key member \"d\"",
+            ),
+            (
+                "repeated member name",
+                br#"{"keys":[{"kty":"RSA","kid":"one","kid":"two","n":"AQAB","e":"AQAB"}]}"#,
+                "repeats a member name",
+            ),
         ] {
             write_jwks(invalid);
             let error = config
@@ -4465,12 +4506,44 @@ holdPolicy:
             assert_eq!(
                 refusal(&error),
                 (
-                    "scheduling.runtime-dependency.unavailable".to_owned(),
-                    "/authentication/oidc".to_owned()
+                    "scheduling.runtime.unreadable-jwks-secret".to_owned(),
+                    "/authentication/oidc/jwksSource/documentRef".to_owned()
                 ),
                 "{case}"
             );
+            assert!(error.to_string().contains(text), "{case}: {error}");
             assert!(!error.in_file(), "{case}");
+        }
+    }
+
+    /// A reminder or hook destination takes plain http only on a loopback
+    /// host: any address of 127.0.0.0/8, `::1`, a mapped loopback address, or
+    /// the exact name `localhost`. Another host, or another spelling of the
+    /// name, is refused.
+    #[test]
+    fn plain_http_destinations_take_only_loopback_hosts() {
+        for accepted in [
+            "http://127.0.0.1:8080/hook",
+            "http://127.0.0.2:8080/hook",
+            "http://[::1]:8080/hook",
+            "http://[::ffff:127.0.0.1]:8080/hook",
+            "http://localhost:8080/hook",
+            "http://LOCALHOST:8080/hook",
+            "https://example.test/hook",
+        ] {
+            assert!(valid_destination_url(accepted), "{accepted}");
+        }
+        for refused in [
+            "http://10.0.0.1:8080/hook",
+            "http://[::ffff:10.0.0.1]:8080/hook",
+            "http://0.0.0.0:8080/hook",
+            "http://[::]:8080/hook",
+            "http://169.254.169.254/hook",
+            "http://a.localhost:8080/hook",
+            "http://localhost.:8080/hook",
+            "http://example.test/hook",
+        ] {
+            assert!(!valid_destination_url(refused), "{refused}");
         }
     }
 

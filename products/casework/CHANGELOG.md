@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Casework counts every refused request by the check that refused it, in
+  `casework_request_refusals_total{check}` on the metrics listener, published
+  at zero for every check. Each refusal writes one `request refused` line with
+  `failed_check` and the request's trace id, at most five lines per check per
+  minute. That line replaces the authentication refusal line that carried a
+  `stage` field. The count covers review, directory, clock and task-grant
+  refusals, each under the check its producer names. Refusal statuses, headers
+  and bodies are unchanged.
+- A static key set with a private key member or a repeated member name is
+  refused at startup under `casework.runtime.unreadable-jwks-secret`, with the
+  rule it broke and the key's position, in place of
+  `casework.runtime-dependency.unavailable`.
+- A review completion destination may use any loopback literal in plain
+  `http`: `127.0.0.0/8`, `::1`, or an IPv4-mapped form of `127.0.0.0/8`. The
+  name `localhost` stays refused.
+
+- `GET /health` answers `{"status":"ok"}` and `GET /ready` answers
+  `{"status":"ready"}` as `application/json`, in place of an empty 200. Both
+  still need no token, and a service that is not ready still answers 503.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: `caseworkctl provider add` prints the BReg project fragments it

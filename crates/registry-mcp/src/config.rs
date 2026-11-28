@@ -10,13 +10,13 @@ use registry_platform_config::{
     PrivateListenerConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig,
     SecretReference, TlsTermination, MAX_OIDC_AUDIENCE_CHARACTERS,
 };
+use registry_platform_httputil::loopback::loopback_host;
 use registry_platform_yaml::{Diagnostic, Digest, LocalId, Report, UniqueList, Url};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
-use url::Host;
 
 pub const API_VERSION: &str = "id.registrystack.org/formats/platform/mcp-runtime/v1alpha1";
 pub const KIND: &str = "PlatformMcpRuntimeConfig";
@@ -273,9 +273,7 @@ impl RuntimeConfig {
         let protected_endpoint = |url: url::Url| {
             registry_platform_httputil::client::ServiceBaseUrl::new(url.clone()).is_ok()
                 && (url.scheme() == "https"
-                    || (url.scheme() == "http"
-                        && self.development_loopback()
-                        && loopback_host(&url)))
+                    || (url.scheme() == "http" && self.development_loopback() && is_loopback(&url)))
         };
         if self
             .bindings
@@ -602,13 +600,9 @@ impl RuntimeConfig {
     }
 }
 
-fn loopback_host(url: &url::Url) -> bool {
-    match url.host() {
-        Some(Host::Ipv4(address)) => address.is_loopback(),
-        Some(Host::Ipv6(address)) => address.is_loopback(),
-        Some(Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
-        None => false,
-    }
+fn is_loopback(url: &url::Url) -> bool {
+    url.host_str()
+        .is_some_and(|host| loopback_host(host).is_some())
 }
 
 fn valid_digest(value: &str) -> bool {

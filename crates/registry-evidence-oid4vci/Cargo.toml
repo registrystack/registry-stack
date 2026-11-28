@@ -49,6 +49,7 @@ jsonwebtoken.workspace = true
 registry-evidence-client.workspace = true
 registry-evidence-verifier.workspace = true
 registry-platform-audit.workspace = true
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto = { workspace = true, features = ["xchacha-seal"] }

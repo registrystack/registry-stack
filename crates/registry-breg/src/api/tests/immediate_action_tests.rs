@@ -2068,7 +2068,7 @@ async fn task_statistics_reads_bind_the_grant_to_the_request_principal_and_purpo
     };
     for (case, claims) in [("principal", &other_principal), ("purpose", &other_purpose)] {
         assert_eq!(
-            read(claims).err(),
+            read(claims).err().map(|refusal| refusal.reason),
             Some(ReadRefusalReason::ProfileAdmission),
             "a grant for another {case} cannot read released statistics"
         );

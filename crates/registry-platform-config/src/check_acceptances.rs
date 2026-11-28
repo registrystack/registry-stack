@@ -87,8 +87,30 @@ pub fn apply_check_acceptances(project_root: &Path, report: &mut Report) {
         Ok(bytes) => {
             match read_project_check_acceptances(&acceptance_path.display().to_string(), &bytes) {
                 Ok(decoded) => {
-                    report.extend(decoded.document.report_with(Vec::new()));
-                    Some(decoded.value)
+                    // A posture diagnostic says what production would refuse,
+                    // so no acceptance may hide it.
+                    let refused: Vec<Diagnostic> = decoded
+                        .value
+                        .acceptances
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, acceptance)| crate::posture::is_posture_code(&acceptance.code))
+                        .map(|(index, _)| {
+                            decoded.document.diagnostic_at_value(
+                                Severity::Error,
+                                "config.check-acceptance-not-acceptable",
+                                &format!("/acceptances/{index}/code"),
+                                "a posture diagnostic cannot be accepted",
+                                "Remove this acceptance. Declare production and fix the setting, or leave the development warning in place.",
+                            )
+                        })
+                        .collect();
+                    report.extend(decoded.document.report_with(refused));
+                    let mut value = decoded.value;
+                    value
+                        .acceptances
+                        .retain(|acceptance| !crate::posture::is_posture_code(&acceptance.code));
+                    Some(value)
                 }
                 Err(errors) => {
                     report.extend(errors);

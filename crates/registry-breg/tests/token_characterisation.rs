@@ -6,7 +6,9 @@
 //! a runtime file parsed by `parse_runtime_config`, as at startup. The key set
 //! is the signer's static public key set. A token that authenticates is sent
 //! through the authenticated router to a compiled access profile, so a profile
-//! refusal is observed where a request meets it.
+//! refusal is observed where a request meets it. A token the verifier refuses
+//! is sent through the router too, and the check it failed is read from
+//! `breg_request_refusals_total`, the counter an operator reads.
 
 #![cfg(feature = "runtime")]
 
@@ -22,16 +24,16 @@ use registry_breg::api::{
 };
 use registry_breg::auth::{AuthenticationConfigError, AuthenticationError, RegistryAuthenticator};
 use registry_breg::cursor::CursorCodec;
+use registry_breg::metrics::{metrics_app, Metrics};
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{
-    Against, CapturedDiagnosticLogs, ClaimValue, Configuration, FixtureCase, Outcome, Stage,
-    TokenCorpus, TokenFixture, TokenSigner,
+    Against, ClaimValue, Configuration, FixtureCase, Outcome, Stage, TokenCorpus, TokenFixture,
+    TokenSigner,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
-use tracing::instrument::WithSubscriber;
 use zeroize::Zeroizing;
 
 const ISSUER: &str = "https://issuer.example.test";
@@ -260,18 +262,16 @@ async fn observe(case: FixtureCase) -> Outcome {
         Err(error) => panic!("the authentication block is invalid for the project: {error}"),
     };
 
-    let logs = CapturedDiagnosticLogs::default();
     let token = case.token.expose();
-    let claims = authenticator
-        .authenticate(token)
-        .with_subscriber(logs.subscriber())
-        .await;
+    let claims = authenticator.authenticate(token).await;
     let claims = match claims {
         Ok(claims) => claims,
         Err(
             AuthenticationError::VerificationRefused | AuthenticationError::MalformedCredential,
         ) => {
-            return logged_stage(&logs).map_or(Outcome::Unknown, Outcome::Refused);
+            return refused_stage(&registry, &authenticator, token)
+                .await
+                .map_or(Outcome::Unknown, Outcome::Refused);
         }
         Err(AuthenticationError::MissingActorKind | AuthenticationError::InvalidClaims) => {
             return Outcome::Refused(Stage::Claims);
@@ -291,28 +291,60 @@ async fn observe(case: FixtureCase) -> Outcome {
     }
 }
 
-/// The stage of the one value-free diagnostic a refusal logged, when there is
-/// exactly one.
-fn logged_stage(logs: &CapturedDiagnosticLogs) -> Option<Stage> {
-    let text = logs.text();
-    let stages: Vec<String> = text
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter_map(|line| line["fields"]["stage"].as_str().map(str::to_owned))
+/// The stage a refused token failed at: the check the request boundary counted
+/// when the token was sent through the router, mapped onto the corpus's
+/// stages. `None` when the boundary counted nothing or something else.
+async fn refused_stage(
+    registry: &Arc<registry_breg::CompiledRegistry>,
+    authenticator: &Arc<RegistryAuthenticator>,
+    token: &str,
+) -> Option<Stage> {
+    let before = refusal_counts().await;
+    request_record(registry, authenticator, token, "reader").await;
+    let after = refusal_counts().await;
+    let counted: Vec<&str> = after
+        .iter()
+        .filter(|(check, count)| **count > before.get(*check).copied().unwrap_or(0))
+        .map(|(check, _)| check.as_str())
         .collect();
-    match stages.as_slice() {
-        [stage] => Some(
-            format!("refused/{stage}")
-                .parse::<Outcome>()
-                .ok()
-                .and_then(|outcome| match outcome {
-                    Outcome::Refused(stage) => Some(stage),
-                    _ => None,
-                })
-                .expect("the logged stage is a known stage"),
-        ),
+    match counted.as_slice() {
+        ["credential-malformed"] => Some(Stage::Header),
+        ["token-algorithm"] => Some(Stage::Algorithm),
+        ["token-type"] => Some(Stage::TokenType),
+        ["token-key"] => Some(Stage::Key),
+        ["token-signature"] => Some(Stage::Signature),
+        ["token-issuer"] => Some(Stage::Issuer),
+        ["token-audience"] => Some(Stage::Audience),
+        ["token-time"] => Some(Stage::Time),
+        ["token-client" | "token-assertion-issuer"] => Some(Stage::Client),
+        ["key-source-unavailable"] => Some(Stage::Unavailable),
         _ => None,
     }
+}
+
+/// The refusal counter as the metrics listener serves it.
+async fn refusal_counts() -> std::collections::BTreeMap<String, u64> {
+    let response = metrics_app(Arc::new(Metrics::without_pool_for_test()))
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .expect("scrape request"),
+        )
+        .await
+        .expect("the metrics listener responds");
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .expect("metrics body");
+    String::from_utf8(bytes.to_vec())
+        .expect("metrics are UTF-8")
+        .lines()
+        .filter_map(|line| line.strip_prefix("breg_request_refusals_total{check=\""))
+        .map(|rest| {
+            let (check, count) = rest.split_once("\"} ").expect("sample line");
+            (check.to_owned(), count.parse().expect("counter value"))
+        })
+        .collect()
 }
 
 /// The actor kind in a `VerifiedRequestClaims` debug rendering, which prints

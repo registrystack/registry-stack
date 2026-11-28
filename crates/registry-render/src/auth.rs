@@ -1,6 +1,7 @@
 //! Bearer verification belongs only to the HTTP adapter.
 use crate::problem::{ProblemKind, RenderProblem};
 use crate::runtime::RenderRuntime;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, AccessTokenAlgorithm, IssuerNetworkPolicy,
     JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError, TokenVerifier,
@@ -77,12 +78,28 @@ pub(crate) async fn verifier(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AuthenticationError {
-    Refused,
-    Forbidden { caller_fingerprint: String },
+    /// The credential was refused, by the check that refused it.
+    Refused(FailedCheck),
+    Forbidden {
+        caller_fingerprint: String,
+        check: FailedCheck,
+    },
     Unavailable,
 }
 
+impl AuthenticationError {
+    /// The check that refused the caller. A key source that cannot answer is
+    /// the verifier's own outage.
+    pub(crate) fn failed_check(&self) -> FailedCheck {
+        match self {
+            Self::Refused(check) | Self::Forbidden { check, .. } => *check,
+            Self::Unavailable => FailedCheck::KeySourceUnavailable,
+        }
+    }
+}
+
 fn verifier_failure(error: OidcError) -> AuthenticationError {
+    let check = error.failed_check();
     match error {
         OidcError::Transport(_)
         | OidcError::BoundedRead(_)
@@ -96,7 +113,7 @@ fn verifier_failure(error: OidcError) -> AuthenticationError {
         | OidcError::ConflictingEndpointConfiguration
         | OidcError::InsecureHttpRequiresOptIn
         | OidcError::EndpointRefused { .. } => AuthenticationError::Unavailable,
-        _ => AuthenticationError::Refused,
+        _ => AuthenticationError::Refused(check),
     }
 }
 
@@ -124,13 +141,16 @@ pub(crate) async fn authenticate(
     required_scope: &str,
 ) -> Result<Authenticated, AuthenticationError> {
     registry_platform_authcommon::validate_compact_access_token(token)
-        .map_err(|_| AuthenticationError::Refused)?;
+        .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
     let verified = verifier.verify(token).await.map_err(verifier_failure)?;
     // The verifier owns resource membership and the configured client binding.
     // Unrelated task-grant claims confer no Render authority.
     let caller_fingerprint = registry_platform_authcommon::fingerprint_api_key(token);
     if !verified.scopes.iter().any(|scope| scope == required_scope) {
-        return Err(AuthenticationError::Forbidden { caller_fingerprint });
+        return Err(AuthenticationError::Forbidden {
+            caller_fingerprint,
+            check: FailedCheck::Scope,
+        });
     }
     // With an allowlist the verifier has bound the client and records which
     // claim matched. Without one, the signed claims name it, in the same
@@ -143,7 +163,7 @@ pub(crate) async fn authenticate(
             .clone()
             .or_else(|| verified.claims.client_id.clone())
             .filter(|client| !client.is_empty()),
-        Err(_) => return Err(AuthenticationError::Refused),
+        Err(_) => return Err(AuthenticationError::Refused(FailedCheck::TokenClient)),
     };
     // Correlate the exact verified credential, as in legacy API-key mode.
     // Issuer, subject, and client claims are never written into the audit event.

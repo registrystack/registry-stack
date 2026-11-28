@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -688,6 +688,28 @@ The facade serves trusted machine clients only.
 Any admitted client with a matching scope sees every record that the deployment's configured source access reaches, because scopes gate operations and record types, not individual records.
 Record-level authorisation is not built.
 Admitting a client means trusting it with the full reach of the deployment credential.
+
+A refused facade or payment request is counted and logged under the check that refused it, never under a caller value.
+`adapter_request_refusals_total{check}` rises by one and the log carries one `request refused` line with the fixed `failed_check` label, for example `credential-missing`, `token-signature`, `token-client`, `scope`, `operation` or `ownership`.
+The answer to the caller is unchanged.
+The line is rate limited per check, so a flood of one kind of refusal cannot fill the log.
+See [Scrape metrics](../../operate/adapter/#scrape-metrics).
+
+### Plain HTTP, private ranges and loopback
+
+An origin is plain HTTP only inside the loopback exception or inside the private ranges the runtime config declares in `allowedPrivateCidrs`.
+Loopback means a `127.0.0.0/8` address, `::1`, an IPv4-mapped form of a `127.0.0.0/8` address, or the exact name `localhost`.
+A payment provider connection takes only the address literals, never the name.
+The name is pinned: the connection goes only to loopback addresses.
+`a.localhost` and `localhost.` are named hosts.
+An omitted or empty `allowedPrivateCidrs` admits no private address.
+An origin plain HTTP names by host name, with no range declared, fails the runtime check with `adapter.runtime.insecure-origin`.
+The text names the fix: serve the origin over TLS, declare the range the host resolves to, or use a loopback origin.
+
+**Breaking, for ingestion job hosts.** Before this change a job host whose runtime document named a plain `http://` endpoint by host name, with `allowedPrivateCidrs` omitted or empty, reached every private address the name resolved to.
+Now that job fails the runtime check with `adapter.runtime.insecure-origin`.
+To migrate, add the smallest range that contains the endpoint to `allowedPrivateCidrs`, serve the endpoint over HTTPS, or bind it on loopback.
+The served facade is not affected: it already refused an empty list at load.
 
 ### Upstream authentication
 

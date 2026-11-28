@@ -521,14 +521,22 @@
           "type": "boolean"
         },
         "allowedClients": {
-          "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, an empty or repeated client, and\n`unrestricted` are refused.",
-          "items": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array",
-          "uniqueItems": true
+          "description": "The clients whose access tokens are admitted. Required in every\nfile: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client must cover them. An\nomitted or empty list, an empty or repeated client, and `unrestricted` are\nrefused.",
+          "oneOf": [
+            {
+              "const": "from-package",
+              "type": "string"
+            },
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          ]
         },
         "assertionIssuers": {
           "additionalProperties": {

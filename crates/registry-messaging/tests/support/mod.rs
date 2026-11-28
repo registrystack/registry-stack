@@ -23,7 +23,7 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_messaging::activation::ApplyRequest;
 use registry_messaging::audit::MessagingAudit;
 use registry_messaging::auth::MessagingAuthenticator;
-use registry_messaging::config::RuntimeConfig;
+use registry_messaging::config::{AdmittedClients, RuntimeConfig};
 use registry_messaging::dispatch::{dispatcher, Transports};
 use registry_messaging::http::{metrics_router, router, HttpState, Readiness};
 use registry_messaging::limits::{
@@ -329,8 +329,11 @@ impl Harness {
             loaded.receipt_providers(),
         ));
         let metrics = Arc::new(Metrics::default());
+        let admitted = config
+            .admitted_clients(package.access_profiles())
+            .expect("the clients the runtime file admits");
         let authenticator = Arc::new(MessagingAuthenticator::new(
-            verifier(),
+            verifier(&admitted),
             keys(),
             package.access_profiles().clone(),
             false,
@@ -368,6 +371,13 @@ impl Harness {
 
     pub fn runtime_path(&self) -> PathBuf {
         self.root.path().join("runtime.yaml")
+    }
+
+    /// The clients the runtime file admits, derived from the package.
+    fn admitted(&self) -> AdmittedClients {
+        self.config
+            .admitted_clients(self.package.access_profiles())
+            .expect("the clients the runtime file admits")
     }
 
     pub async fn publish(&self) {}
@@ -497,7 +507,7 @@ impl Harness {
         ));
         router(HttpState {
             authenticator: Arc::new(MessagingAuthenticator::new(
-                verifier(),
+                verifier(&self.admitted()),
                 keys(),
                 profiles,
                 false,
@@ -539,7 +549,7 @@ impl Harness {
         ));
         router(HttpState {
             authenticator: Arc::new(MessagingAuthenticator::new(
-                verifier(),
+                verifier(&self.admitted()),
                 keys(),
                 self.package.access_profiles().clone(),
                 false,
@@ -693,7 +703,7 @@ fn write_runtime(root: &Path, package: &Path, database: &str, providers: Value) 
             "issuer": ISSUER,
             "audience": AUDIENCE,
             "jwksSource": {"type": "static", "documentRef": format!("secret:env/{jwks_name}")},
-            "allowedClients": ["case-system", "operations-console"]
+            "allowedClients": "from-package"
         }},
         "audit": {
             "path": root.join("audit").join("messaging.jsonl"),
@@ -711,7 +721,7 @@ fn write_runtime(root: &Path, package: &Path, database: &str, providers: Value) 
 
 /// The runtime's verifier profile, with the symmetric test algorithm in
 /// place of the production asymmetric pair.
-fn verifier() -> TokenVerifierConfig {
+fn verifier(admitted: &AdmittedClients) -> TokenVerifierConfig {
     TokenVerifierConfig::access_token_profile(
         ISSUER,
         vec![AUDIENCE.to_owned()],
@@ -719,10 +729,7 @@ fn verifier() -> TokenVerifierConfig {
         registry_platform_oidc::access_token_typ_set("at+jwt"),
     )
     .with_scope_claim("registry_scopes")
-    .with_allowed_clients(vec![
-        "case-system".to_owned(),
-        "operations-console".to_owned(),
-    ])
+    .with_allowed_clients(admitted.as_slice().to_vec())
 }
 
 fn keys() -> Arc<JwksFetcher> {

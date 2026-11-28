@@ -370,6 +370,19 @@ impl AccessProfiles {
         self.profiles.values()
     }
 
+    /// The clients the profiles name, sorted and distinct. The runtime and
+    /// adopter tooling both derive the admitted clients from this one set.
+    #[must_use]
+    pub fn requester_clients(&self) -> Vec<String> {
+        let mut clients: Vec<String> = self
+            .iter()
+            .flat_map(|profile| profile.requester_clients.iter().cloned())
+            .collect();
+        clients.sort();
+        clients.dedup();
+        clients
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.profiles.is_empty()

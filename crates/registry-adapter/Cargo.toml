@@ -81,7 +81,7 @@ registry-platform-yaml.workspace = true
 axum.workspace = true
 clap.workspace = true
 jsonwebtoken.workspace = true
-registry-platform-authcommon.workspace = true
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 rustls.workspace = true
 rhai.workspace = true
 serde.workspace = true

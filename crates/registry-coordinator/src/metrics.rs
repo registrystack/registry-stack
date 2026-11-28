@@ -64,6 +64,7 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use registry_platform_authcommon::RefusalRecorder;
 use registry_platform_metrics::{
     CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline,
     CONTENT_TYPE as METRICS_CONTENT_TYPE,
@@ -84,6 +85,7 @@ pub struct Metrics {
     attempts: CounterVec,
     refusals: CounterVec,
     sample_failures: CounterVec,
+    refusals_by_check: Arc<RefusalRecorder>,
 }
 
 impl fmt::Debug for Metrics {
@@ -125,6 +127,7 @@ impl Default for Metrics {
                 "sample",
                 SampleKind::ALL.map(SampleKind::as_str),
             ),
+            refusals_by_check: Arc::new(RefusalRecorder::new("coordinator").expect(DECLARATION)),
         }
     }
 }
@@ -318,6 +321,13 @@ impl Metrics {
         count(&self.refusals, &[refusal.as_str()]);
     }
 
+    /// Counts every refused request by the check that failed, and admits a
+    /// bounded number of log lines per check.
+    #[must_use]
+    pub fn refusal_recorder(&self) -> &Arc<RefusalRecorder> {
+        &self.refusals_by_check
+    }
+
     /// Count one scrape-time read that failed.
     pub fn record_sample_failure(&self, sample: SampleKind) {
         count(&self.sample_failures, &[sample.as_str()]);
@@ -337,6 +347,10 @@ impl Metrics {
         ] {
             counter.write(&mut out).expect(DECLARATION);
         }
+        self.refusals_by_check
+            .counter()
+            .write(&mut out)
+            .expect(DECLARATION);
         out.header(
             "coordinator_dispatch_jobs",
             Some("Steps waiting to run, running, or held unknown, sampled at scrape."),
@@ -525,6 +539,7 @@ pub fn metrics_router(store: Arc<Store>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_authcommon::FailedCheck;
 
     /// Every sample line the exposition carries, without its value.
     fn series(text: &str) -> Vec<&str> {
@@ -561,6 +576,12 @@ mod tests {
             format!(
                 "coordinator_metrics_sample_failures_total{{sample=\"{}\"}}",
                 sample.as_str()
+            )
+        }));
+        expected.extend(FailedCheck::ALL.map(|check| {
+            format!(
+                "coordinator_request_refusals_total{{check=\"{}\"}}",
+                check.as_str()
             )
         }));
         expected.extend(
@@ -621,6 +642,10 @@ mod tests {
         metrics.record_run_finished(RunOutcome::CancelledAfterEffect);
         metrics.record_step_attempt(StepAttempt::Accepted);
         metrics.record_authentication_refusal(AuthenticationRefusal::Policy);
+        assert!(metrics
+            .refusal_recorder()
+            .record(FailedCheck::Operation)
+            .is_some());
         let text = metrics.render(
             Some(DispatchDepth {
                 pending: 5,
@@ -636,9 +661,18 @@ mod tests {
                 oldest_due_age_seconds: 90,
             }),
         );
-        assert_eq!(
-            text,
-            "\
+        let refusals_by_check: String = std::iter::once(
+            "# HELP coordinator_request_refusals_total Requests refused, by the check that failed.\n# TYPE coordinator_request_refusals_total counter\n".to_owned(),
+        )
+        .chain(FailedCheck::ALL.map(|check| {
+            format!(
+                "coordinator_request_refusals_total{{check=\"{}\"}} {}\n",
+                check.as_str(),
+                u8::from(check == FailedCheck::Operation)
+            )
+        }))
+        .collect();
+        let head = "\
 # HELP coordinator_runs_admitted_total Runs whose admission committed.
 # TYPE coordinator_runs_admitted_total counter
 coordinator_runs_admitted_total 2
@@ -665,6 +699,8 @@ coordinator_authentication_refusals_total{reason=\"unavailable\"} 0
 # TYPE coordinator_metrics_sample_failures_total counter
 coordinator_metrics_sample_failures_total{sample=\"dispatch-queue\"} 0
 coordinator_metrics_sample_failures_total{sample=\"run-holds\"} 0
+";
+        let tail = "\
 # HELP coordinator_dispatch_jobs Steps waiting to run, running, or held unknown, sampled at scrape.
 # TYPE coordinator_dispatch_jobs gauge
 coordinator_dispatch_jobs{state=\"pending\"} 5
@@ -684,8 +720,8 @@ coordinator_hold_active{hold=\"admissions\"} 0
 # HELP coordinator_oldest_due_age_seconds Seconds since the oldest pending job was due, or 0 when none is overdue, sampled at scrape.
 # TYPE coordinator_oldest_due_age_seconds gauge
 coordinator_oldest_due_age_seconds 90
-"
-        );
+";
+        assert_eq!(text, format!("{head}{refusals_by_check}{tail}"));
     }
 
     #[test]

@@ -21,9 +21,11 @@ pub use registry_platform_config::{
     OidcIssuerConfig, PrivateListenerConfig as ListenerConfig, SecretProvidersConfig,
     TlsTermination,
 };
+use registry_platform_httputil::loopback;
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifierConfig,
 };
 use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
 use serde::{Deserialize, Deserializer};
@@ -1738,8 +1740,13 @@ impl RuntimeConfig {
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                let jwks =
+                    parse_static_jwks(document.expose_secret()).map_err(|error| match error {
+                        OidcError::StaticKeySet(refusal) => {
+                            RuntimeConfigError::OidcJwksSecret(refusal.to_string())
+                        }
+                        _ => RuntimeConfigError::Oidc,
+                    })?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -1906,7 +1913,9 @@ fn valid_review_completion_url(raw: &str) -> bool {
     }
     match url.scheme() {
         "https" => url.host_str().is_some(),
-        "http" => matches!(url.host_str(), Some("127.0.0.1" | "::1" | "[::1]")),
+        "http" => url
+            .host_str()
+            .is_some_and(|host| loopback::loopback_literal(host).is_some()),
         _ => false,
     }
 }
@@ -2112,6 +2121,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
 mod tests {
     use super::*;
     use jsonwebtoken::Algorithm;
+    use registry_platform_authcommon::FailedCheck;
     use registry_platform_config::write_package;
     use serde_json::json;
 
@@ -2212,6 +2222,87 @@ mod tests {
             "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
             "audit":{"path":directory.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
         })
+    }
+
+    /// Resolve the verifier of a runtime file whose static key set is `document`.
+    async fn verifier_for_static_key_set(
+        document: &serde_json::Value,
+    ) -> Result<(), RuntimeConfigError> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let secrets = root.path().join("secrets");
+        std::fs::create_dir(&secrets).unwrap();
+        std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let file = secrets.join("jwks");
+        std::fs::write(&file, document.to_string()).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut value = operator_value(root.path(), root.path());
+        value["authentication"]["oidc"]["jwksSource"] =
+            json!({"type":"static", "documentRef":"secret:file/jwks"});
+        let config = read_operator(&value, root.path());
+        let resolver =
+            SecretResolver::new([registry_platform_config::SecretProvider::File], &secrets)
+                .unwrap();
+        config.oidc_verifier(&resolver).await.map(|_| ())
+    }
+
+    fn public_rsa_key(kid: &str) -> serde_json::Value {
+        json!({"kty":"RSA","kid":kid,"alg":"RS256","n":"sXchDaQebHnPiGvyDOAT4saGEUetSyo9MKLOoWFsueri23bOdgWp4Dy1WlUzewbgBHod5pcM9H95GQRV3JDXboIRROSBigeC5yjU1hGzHHyXss8UDprecbAYxknTcQkhslANGRUZmdTOQ5qTRsLAt6BTYuyvVRdhS8exSZEy_c4gs_7svlJJQ4H9_NxsiIoLwAEk7-Q3UXERGYw_75IDrGA84-lA_-Ct4eTlXHBIY2EaV7t7LjJaynVJCpkv4LKjTTAumiGUIuQhrNhZLuF_RJLqHpM2kgWFLU7-VTdL1VbC2tejvcI2BlMkEpk1BzBZI0KQB0GaDWFLN-aEAw3vRw","e":"AQAB"})
+    }
+
+    #[tokio::test]
+    async fn a_static_key_set_with_unknown_public_members_loads() {
+        let mut key = public_rsa_key("signing-1");
+        key["ext"] = json!(true);
+        key["x5c"] = json!(["MIIB"]);
+        key["x5t"] = json!("thumbprint");
+        key["use"] = json!("sig");
+        key["key_ops"] = json!(["verify"]);
+        let mut encryption = public_rsa_key("encryption-1");
+        encryption["use"] = json!("enc");
+        let document = json!({"keys": [key, encryption], "issuer": "an unknown top-level member"});
+        verifier_for_static_key_set(&document)
+            .await
+            .expect("members the validator does not name are ignored");
+    }
+
+    #[tokio::test]
+    async fn a_static_key_set_with_a_private_member_is_refused_with_its_text() {
+        let mut key = public_rsa_key("signing-1");
+        key["d"] = json!("canary-private-exponent");
+        let error = verifier_for_static_key_set(&json!({"keys": [key]}))
+            .await
+            .expect_err("a private member is refused");
+        assert_eq!(error.code(), "casework.runtime.unreadable-jwks-secret");
+        let rendered = error.to_string();
+        assert!(rendered.contains("private-key member \"d\""), "{rendered}");
+        assert!(!rendered.contains("canary"), "{rendered}");
+        assert!(!rendered.contains("signing-1"), "{rendered}");
+    }
+
+    #[test]
+    fn a_review_completion_destination_may_use_http_only_on_a_loopback_address() {
+        for admitted in [
+            "https://completion.example.test/reviews",
+            "http://127.0.0.1:9000/reviews",
+            "http://127.0.0.2/reviews",
+            "http://[::1]:9000/reviews",
+            "http://[::ffff:127.0.0.1]/reviews",
+        ] {
+            assert!(valid_review_completion_url(admitted), "{admitted}");
+        }
+        for refused in [
+            "http://localhost/reviews",
+            "http://LOCALHOST:9000/reviews",
+            "http://localhost./reviews",
+            "http://app.localhost/reviews",
+            "http://10.0.0.1/reviews",
+            "http://0.0.0.0/reviews",
+            "http://completion.example.test/reviews",
+            "http://127.0.0.1@example.test/reviews",
+        ] {
+            assert!(!valid_review_completion_url(refused), "{refused}");
+        }
     }
 
     #[test]
@@ -2574,10 +2665,10 @@ mod tests {
         let mut value = operator_value(directory.path(), directory.path());
         value["authentication"]["oidc"]["revokedKeyIds"] = json!(["signing-1"]);
         let refused = verify_under_operator_profile(&value, "signing-1", 300).await;
-        assert!(matches!(
-            refused,
-            Err(crate::auth::AuthenticationError::Refused)
-        ));
+        assert_eq!(
+            refused.unwrap_err(),
+            crate::auth::AuthenticationError::Refused(FailedCheck::TokenKey)
+        );
         verify_under_operator_profile(&value, "signing-2", 300)
             .await
             .expect("a key not on the list still verifies");
@@ -2592,10 +2683,10 @@ mod tests {
             .await
             .expect("a token within the bound verifies");
         let refused = verify_under_operator_profile(&value, "signing-1", 301).await;
-        assert!(matches!(
-            refused,
-            Err(crate::auth::AuthenticationError::Refused)
-        ));
+        assert_eq!(
+            refused.unwrap_err(),
+            crate::auth::AuthenticationError::Refused(FailedCheck::TokenTime)
+        );
     }
 
     #[test]

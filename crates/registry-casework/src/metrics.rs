@@ -1,12 +1,26 @@
 //! Optional operator-private telemetry. Labels contain no caller or subject values.
 use crate::{CompletionBacklog, PostgresStore};
 use axum::{extract::State, http::header::CONTENT_TYPE, routing::get, Json, Router};
+use registry_platform_authcommon::RefusalRecorder;
 use registry_platform_metrics::{
     sample_error_class, Exposition, MetricKind, ScrapeDeadline, CLASS_NO_TIME_LEFT,
     CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// The process's refusal recorder, shared by the HTTP boundary that counts
+/// refusals and the scrape that exposes the counter.
+pub(crate) fn refusal_recorder() -> Arc<RefusalRecorder> {
+    static RECORDER: OnceLock<Arc<RefusalRecorder>> = OnceLock::new();
+    Arc::clone(RECORDER.get_or_init(|| {
+        Arc::new(
+            RefusalRecorder::new("casework")
+                .expect("the refusal counter declares one closed label"),
+        )
+    }))
+}
+
 /// One sample of the database. Each part is sampled on its own, so a failing
 /// part leaves out only its own series.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -193,7 +207,7 @@ pub(crate) async fn begin_sample<'a>(
 pub async fn scrape_for_test(store: PostgresStore, deadline: ScrapeDeadline) -> String {
     let state = MetricsState::new(store, Vec::new(), "sha256:test".to_owned());
     let readings = state.sample(deadline).await;
-    render(readings, &state.inner.failures)
+    render(readings, &state.inner.failures, &refusal_recorder())
 }
 pub(crate) fn metrics_router(state: MetricsState) -> Router {
     Router::new()
@@ -210,13 +224,13 @@ async fn metrics(
     let readings = state.readings().await;
     (
         [(CONTENT_TYPE, METRICS_CONTENT_TYPE)],
-        render(readings, &state.inner.failures),
+        render(readings, &state.inner.failures, &refusal_recorder()),
     )
 }
 /// The exposition for one scrape. A part of `readings` that could not be
 /// read has no series. The database counts as up when the review counts were
-/// read.
-fn render(readings: Readings, failures: &SampleFailures) -> String {
+/// read. The refusal counter follows, one series per check.
+fn render(readings: Readings, failures: &SampleFailures, refusals: &RefusalRecorder) -> String {
     const DECLARATION: &str = "the metric declarations are valid";
     let mut out = Exposition::new();
     out.header("casework_database_up", None, MetricKind::Gauge)
@@ -286,13 +300,35 @@ fn render(readings: Readings, failures: &SampleFailures) -> String {
         )
         .expect(DECLARATION);
     }
+    refusals.counter().write(&mut out).expect(DECLARATION);
     out.finish()
 }
 #[cfg(test)]
 mod tests {
     use super::{render, Readings, SampleFailures, SampleKind};
     use crate::CompletionBacklog;
+    use registry_platform_authcommon::{FailedCheck, RefusalRecorder};
     use registry_platform_metrics::ScrapeDeadline;
+
+    /// The refusal counter of a recorder that has counted `counted` once.
+    fn refusal_series(counted: Option<FailedCheck>) -> String {
+        let mut text = String::from(
+            "# HELP casework_request_refusals_total Requests refused, by the check that failed.\n\
+             # TYPE casework_request_refusals_total counter\n",
+        );
+        for check in FailedCheck::ALL {
+            let value = u8::from(counted == Some(check));
+            text.push_str(&format!(
+                "casework_request_refusals_total{{check=\"{}\"}} {value}\n",
+                check.as_str()
+            ));
+        }
+        text
+    }
+
+    fn recorder() -> RefusalRecorder {
+        RefusalRecorder::new("casework").expect("the casework recorder")
+    }
 
     fn backlog() -> CompletionBacklog {
         CompletionBacklog {
@@ -330,21 +366,36 @@ mod tests {
             review: Some([4, 9, 2]),
             completions: Some(backlog()),
         };
+        let refusals = refusal_series(None);
         assert_eq!(
-            render(readings, &SampleFailures::default()),
+            render(readings, &SampleFailures::default(), &recorder()),
             format!(
                 "{REVIEW}{COMPLETIONS}{FAILURES}\
                  casework_metrics_sample_failures_total{{sample=\"review\"}} 0\n\
-                 casework_metrics_sample_failures_total{{sample=\"completion-backlog\"}} 0\n"
+                 casework_metrics_sample_failures_total{{sample=\"completion-backlog\"}} 0\n\
+                 {refusals}"
             )
         );
         assert_eq!(
-            render(Readings::default(), &SampleFailures::default()),
+            render(Readings::default(), &SampleFailures::default(), &recorder()),
             format!(
                 "# TYPE casework_database_up gauge\ncasework_database_up 0\n{FAILURES}\
                  casework_metrics_sample_failures_total{{sample=\"review\"}} 0\n\
-                 casework_metrics_sample_failures_total{{sample=\"completion-backlog\"}} 0\n"
+                 casework_metrics_sample_failures_total{{sample=\"completion-backlog\"}} 0\n\
+                 {refusals}"
             )
+        );
+    }
+
+    #[test]
+    fn the_scrape_lists_every_check_and_counts_a_refusal_once() {
+        let recorder = recorder();
+        let _ = recorder.record(FailedCheck::TokenSignature);
+        assert_eq!(
+            render(Readings::default(), &SampleFailures::default(), &recorder)
+                .split_once("# HELP casework_request_refusals_total")
+                .map(|(_, series)| format!("# HELP casework_request_refusals_total{series}")),
+            Some(refusal_series(Some(FailedCheck::TokenSignature)))
         );
     }
 
@@ -358,11 +409,13 @@ mod tests {
         failures.0[SampleKind::CompletionBacklog as usize]
             .store(2, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(
-            render(readings, &failures),
+            render(readings, &failures, &recorder()),
             format!(
                 "{REVIEW}{FAILURES}\
                  casework_metrics_sample_failures_total{{sample=\"review\"}} 0\n\
-                 casework_metrics_sample_failures_total{{sample=\"completion-backlog\"}} 2\n"
+                 casework_metrics_sample_failures_total{{sample=\"completion-backlog\"}} 2\n\
+                 {}",
+                refusal_series(None)
             )
         );
     }

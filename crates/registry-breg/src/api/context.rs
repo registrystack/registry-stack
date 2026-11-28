@@ -106,7 +106,11 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Authenticated {
             .get::<VerifiedRequestClaims>()
             .cloned()
             .map(Self)
-            .ok_or_else(crate::auth::authentication_refused)
+            .ok_or_else(|| {
+                crate::auth::authentication_refused(
+                    registry_platform_authcommon::FailedCheck::CredentialMissing,
+                )
+            })
     }
 }
 

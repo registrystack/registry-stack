@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - operator
@@ -264,6 +264,7 @@ Set `metricsListener.bind` to serve Prometheus text at `/metrics` on a private a
 | `evidence_oid4vci_store_entries` | Entries in the fullest bounded offer, ledger, or token keyspace |
 | `evidence_oid4vci_store_capacity` | Refusal threshold for each bounded keyspace |
 | `evidence_oid4vci_cleanup_expired_total` | Expired in-memory entries released by cleanup |
+| `evidence_oid4vci_request_refusals_total` | Requests refused, by the check that failed, with every check published at zero. Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute. Neither carries a token, claim or client |
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/observability.rs, Outcome, ALL, render_metrics. */}
 

@@ -2,8 +2,9 @@ use registry_platform_httpsec::TraceId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// The probe answer. Members other than `status` are ignored so the client
+/// keeps working against servers that report more.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct BRegProbeStatus {
     pub status: String,
 }

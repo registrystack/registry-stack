@@ -74,6 +74,18 @@ pub enum DispatchAuthorization {
     Hold(G2pAttempt),
 }
 
+/// The table privileges a runtime role needs for the G2P tables when
+/// `payments.yaml` declares a disbursement connection. Startup checks them,
+/// and `adapter serve` grants those a split runtime role lacks.
+pub const RUNTIME_GRANTS: [(&str, &[&str]); 3] = [
+    ("adapter_g2p_attempts", &["SELECT", "INSERT", "UPDATE"]),
+    ("adapter_g2p_commands", &["SELECT", "INSERT"]),
+    ("adapter_g2p_events", &["SELECT", "INSERT"]),
+];
+/// The sequence the events table draws its identifiers from. A runtime role
+/// needs USAGE on it.
+pub const RUNTIME_SEQUENCE: &str = "adapter_g2p_events_sequence_seq";
+
 impl G2pStore {
     pub fn new(pool: Pool, deployment: String) -> Self {
         Self { pool, deployment }
@@ -105,11 +117,7 @@ impl G2pStore {
 
     pub async fn check_privileges(&self) -> Result<(), G2pError> {
         let client = self.pool.get().await.map_err(|_| G2pError::Unavailable)?;
-        for (table, privileges) in [
-            ("adapter_g2p_attempts", &["SELECT", "INSERT", "UPDATE"][..]),
-            ("adapter_g2p_commands", &["SELECT", "INSERT"][..]),
-            ("adapter_g2p_events", &["SELECT", "INSERT"][..]),
-        ] {
+        for (table, privileges) in RUNTIME_GRANTS {
             if !crate::journal::missing_table_privileges(&client, table, privileges)
                 .await
                 .map_err(|_| G2pError::Unavailable)?
@@ -121,7 +129,7 @@ impl G2pStore {
         let row = client
             .query_one(
                 "SELECT has_sequence_privilege(current_user, $1, 'USAGE')",
-                &[&"adapter_g2p_events_sequence_seq"],
+                &[&RUNTIME_SEQUENCE],
             )
             .await
             .map_err(|_| G2pError::Unavailable)?;

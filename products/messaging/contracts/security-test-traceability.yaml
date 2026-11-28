@@ -172,7 +172,7 @@ entries:
       - {path: crates/registry-messaging/tests/postgres_dispatch.rs, name: no_contact_content_data_or_credential_reaches_the_dispatch_journal_or_log}
       - {path: crates/registry-messaging/tests/postgres_retention.rs, name: a_retention_run_is_journaled_with_its_counts_only}
       - {path: crates/registry-messaging/src/http.rs, name: a_preview_answers_the_bytes_the_cli_prints_and_journals_metadata_only}
-      - {path: crates/registry-messaging/src/auth.rs, name: compact_token_admission_logs_one_value_free_header_diagnostic}
+      - {path: crates/registry-messaging/src/http.rs, name: malformed_credentials_log_a_bounded_value_free_line}
       - {path: crates/registry-messaging/src/auth.rs, name: only_a_verifier_that_reached_no_verdict_is_unavailable}
       - {path: crates/registry-platform-oidc/src/lib.rs, name: oidc_max_token_lifetime_rejects_missing_or_invalid_time_bounds}
   - id: MESSAGING-SEC-09

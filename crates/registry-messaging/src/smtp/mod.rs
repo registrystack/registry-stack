@@ -446,7 +446,9 @@ impl SmtpProvider {
         }
         for address in &answers {
             let allowed = match self.transport {
-                Transport::DevelopmentLoopback => address.to_canonical().is_loopback(),
+                Transport::DevelopmentLoopback => {
+                    registry_platform_httputil::loopback::loopback_address(*address)
+                }
                 Transport::Starttls(_) | Transport::Implicit(_) => {
                     self.policy.classify(*address).is_ok()
                 }

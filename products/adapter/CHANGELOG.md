@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- BREAKING: an Adapter job whose runtime document names a plain `http://`
+  endpoint by host name must now list the address range that host resolves to
+  in `allowedPrivateCidrs`. An omitted or empty list admits no private
+  address, where before it admitted every one for such a host. To migrate, add
+  the smallest range that contains the endpoint, serve the endpoint over
+  https, or bind it on loopback. An affected job now fails `check` with
+  `adapter.runtime.insecure-origin`. The job host's hook ingress also counts
+  and logs every refused credential and rate limit under
+  `adapter_job_request_refusals_total{check}`, with no answer change, and the
+  fixture destination and the plaintext test RabbitMQ and PostgreSQL sources
+  use the Adapter's one loopback definition (the RabbitMQ and PostgreSQL test
+  sources still take address literals only).
+- The payment routes count and log every refused caller under the check that
+  refused it, in the same `adapter_request_refusals_total{check}` counter and
+  `request refused` line as the facade. No answer changes. The simulator
+  provider connection and a payment provider base URL accept the same
+  loopback address literals as the rest of the Adapter (the rest of
+  `127.0.0.0/8`, `::1` and the IPv4-mapped forms) and still refuse the name
+  `localhost`.
+- The facade counts and logs every refused caller under the check that
+  refused it. `adapter_request_refusals_total{check}` rises by one and the log
+  carries one `request refused` line with the fixed `failed_check` label, at
+  most five lines per check per minute, replacing the per-stage
+  authentication log line. No answer changes. Loopback is one definition
+  everywhere the Adapter decides it: the rest of `127.0.0.0/8`, `::1` and the
+  IPv4-mapped forms count beside `127.0.0.1`, the name `localhost` is pinned to
+  loopback addresses, and `a.localhost` and `localhost.` stay named hosts. A
+  plain `http://` origin named by host name now fails the runtime check with
+  `adapter.runtime.insecure-origin` when `allowedPrivateCidrs` is empty.
+- The facade listener answers `GET /health` and `GET /ready` without
+  authentication. `/health` answers `{"status":"ok"}`. `/ready` answers
+  `{"status":"ready"}` when the journal migrations match the binary and the
+  runtime role holds its journal privileges, and a constant 503
+  `{"status":"not-ready"}` otherwise. The bodies never vary with the
+  project. A project operation whose facade path is `/health` or `/ready` is
+  unserved under `adapter.operation.reserved-facade-path`.
 - `adapter serve` grants the runtime database role the table privileges its
   deployment needs, after it migrates and before it listens, when the runtime
   and migration sessions run as different roles. The grantee is the role the
@@ -16,8 +52,12 @@
   role and has no members of its own does not count. A grant the migration
   role has no right to make (it does not own the object) stops startup with
   the missing privilege named and rolls everything back. With one role in both
-  sessions, no grant is issued. Payment and G2P tables under
-  `--payments-config` still need your own grants. The runtime role must exist,
+  sessions, no grant is issued. The payment tables under
+  `--payments-config` follow the same rules: the collection tables always, the
+  G2P tables when `payments.yaml` declares disbursement connections, with
+  `USAGE` on their events sequences, in the facade's grant transaction or, when
+  serving payments without a project, in a grant step of their own that also
+  grants `USAGE` on the schema. The runtime role must exist,
   and the migration role must own the tables.
 - `adapter serve --payments-config` hosts typed synthetic payment collection
   operations on the shared listener and PostgreSQL store, including without

@@ -92,7 +92,9 @@ pub fn preview_access(
             if !operation_granted {
                 Some("operation-not-granted")
             } else {
-                authorize_profile_claims(profile, &claims).err()
+                authorize_profile_claims(profile, &claims)
+                    .err()
+                    .map(|refusal| refusal.reason)
             }
         }
     };

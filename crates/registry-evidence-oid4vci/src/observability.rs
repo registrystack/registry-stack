@@ -23,6 +23,7 @@ use axum::{
     Router,
 };
 
+use registry_platform_authcommon::{RefusalNote, RefusalRecorder};
 use registry_platform_metrics::{
     Exposition, HistogramSnapshot, MetricKind, SumCountOrder, CONTENT_TYPE as METRICS_MEDIA_TYPE,
 };
@@ -139,6 +140,7 @@ pub(crate) struct Metrics {
     store_entries: AtomicUsize,
     store_capacity: usize,
     cleanup_expired: AtomicU64,
+    refusals: RefusalRecorder,
 }
 
 impl Metrics {
@@ -149,7 +151,20 @@ impl Metrics {
             store_entries: AtomicUsize::new(0),
             store_capacity,
             cleanup_expired: AtomicU64::new(0),
+            refusals: RefusalRecorder::new("evidence_oid4vci").expect(DECLARATION),
         }
+    }
+
+    /// Count a refused request under its check and write the admitted log
+    /// line.
+    fn record_refusal(&self, note: RefusalNote) {
+        registry_platform_authcommon::record_refusal!(self.refusals, note);
+    }
+
+    /// The recorder that counts each refused request under its check.
+    #[cfg(test)]
+    pub(crate) fn refusal_recorder(&self) -> &RefusalRecorder {
+        &self.refusals
     }
 
     pub(crate) fn record_outcome(&self, outcome: Outcome) {
@@ -295,6 +310,7 @@ impl Metrics {
             self.cleanup_expired.load(Ordering::Relaxed),
         )
         .expect(DECLARATION);
+        self.refusals.counter().write(&mut out).expect(DECLARATION);
         out.finish()
     }
 }
@@ -324,6 +340,9 @@ pub(crate) async fn observe(
         .map_or(NO_ERROR, |problem| normalized_problem(problem.0));
     metrics.record_request(route, method, status, error, started.elapsed());
     log_request(route, method, status, error);
+    if let Some(note) = response.extensions().get::<RefusalNote>() {
+        metrics.record_refusal(*note);
+    }
     response
 }
 

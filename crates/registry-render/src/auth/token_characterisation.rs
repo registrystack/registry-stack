@@ -69,11 +69,18 @@ async fn observe(verifier: &TokenVerifier, token: &str) -> Outcome {
     match (admission, verdict) {
         (Ok(_), Ok(_)) => Outcome::Admitted(None),
         (Ok(_), Err(_)) => panic!("authenticate admitted a token its own verifier refused"),
-        (Err(_), Err(error)) => stage_of(&error),
+        (Err(refused), Err(error)) => {
+            assert_eq!(
+                refused.failed_check(),
+                error.failed_check(),
+                "the recorded check is the verifier's"
+            );
+            stage_of(&error)
+        }
         (Err(AuthenticationError::Forbidden { .. }), Ok(_)) => {
             "refused/scope".parse().expect("result value")
         }
-        (Err(AuthenticationError::Refused), Ok(_)) => {
+        (Err(AuthenticationError::Refused(_)), Ok(_)) => {
             "refused/claims".parse().expect("result value")
         }
         (Err(AuthenticationError::Unavailable), Ok(_)) => {

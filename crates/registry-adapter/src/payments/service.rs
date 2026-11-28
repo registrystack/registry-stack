@@ -25,6 +25,7 @@ use registry_payment_protocol::{
     RegistryReceipt, RequestCollection,
 };
 use registry_payment_simulator_connector::{ConnectorError, Observation, SimulatorClient};
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::client::BearerToken;
 use registry_platform_httputil::{read_bounded, validate_response_headers, ServiceBaseUrl};
@@ -623,17 +624,27 @@ impl PaymentService {
             .await
     }
 
-    fn connection(&self, id: &str, caller: &Caller) -> Result<&PaymentConnection, Error> {
-        let connection = self
-            .config
-            .connections
-            .iter()
-            .find(|c| c.id == id)
-            .ok_or(Error::NotFound)?;
-        if !connection.allowed_clients.contains(&caller.client_id)
-            || !caller.scopes.contains(&connection.required_scope)
-        {
-            return Err(Error::Forbidden);
+    fn connection(&self, id: &str, caller: &Caller) -> Result<&PaymentConnection, PaymentFailure> {
+        let connection =
+            self.config
+                .connections
+                .iter()
+                .find(|c| c.id == id)
+                .ok_or(PaymentFailure::refused(
+                    Error::NotFound,
+                    FailedCheck::Visibility,
+                ))?;
+        if !connection.allowed_clients.contains(&caller.client_id) {
+            return Err(PaymentFailure::refused(
+                Error::Forbidden,
+                FailedCheck::RequesterClient,
+            ));
+        }
+        if !caller.scopes.contains(&connection.required_scope) {
+            return Err(PaymentFailure::refused(
+                Error::Forbidden,
+                FailedCheck::Scope,
+            ));
         }
         Ok(connection)
     }
@@ -642,13 +653,16 @@ impl PaymentService {
         attempt: &Attempt,
         connection: &PaymentConnection,
         principal: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<(), PaymentFailure> {
         if attempt.connection != connection.id
             || attempt.principal != principal
             || attempt.bill.institution_id != connection.institution_id
             || attempt.bill.service_id != connection.service_id
         {
-            return Err(Error::NotFound);
+            return Err(PaymentFailure::refused(
+                Error::NotFound,
+                FailedCheck::Ownership,
+            ));
         }
         Ok(())
     }
@@ -659,7 +673,7 @@ impl PaymentService {
         caller: &Caller,
         key: &str,
         request: &RequestCollection,
-    ) -> Result<CollectionAccepted, Error> {
+    ) -> Result<CollectionAccepted, PaymentFailure> {
         let connection = self.connection(id, caller)?;
         validate_key(key)?;
         request.validate().map_err(|_| Error::InvalidRequest)?;
@@ -701,7 +715,7 @@ impl PaymentService {
                 || view.state != BillState::DueUnbound
                 || view.attempt_id.is_some()
             {
-                return Err(Error::Conflict);
+                return Err(Error::Conflict.into());
             }
             let provider_command = self
                 .provider
@@ -761,7 +775,7 @@ impl PaymentService {
             .read_bill(&attempt.binding, attempt.bill.bill_id)
             .await?;
         if !bill.matches_binding(&attempt) || bill.state != BillState::AttemptBound {
-            return Err(Error::Conflict);
+            return Err(Error::Conflict.into());
         }
         let preflight = self
             .provider
@@ -789,7 +803,7 @@ impl PaymentService {
                     .save(&attempt, "provider.unknown")
                     .await
                     .map_err(|_| Error::OutcomeUnknown)?;
-                return Err(Error::OutcomeUnknown);
+                return Err(Error::OutcomeUnknown.into());
             }
         };
         attempt.transfer_id = Some(submission.transfer_id);
@@ -863,7 +877,7 @@ impl PaymentService {
         caller: &Caller,
         key: &str,
         request: &RequestCollection,
-    ) -> Result<CollectionAccepted, Error> {
+    ) -> Result<CollectionAccepted, PaymentFailure> {
         let connection = self.connection(id, caller)?;
         validate_key(key)?;
         request.validate().map_err(|_| Error::InvalidRequest)?;
@@ -873,10 +887,14 @@ impl PaymentService {
             .lookup_command(id, &principal, "request", key, &digest(request)?)
             .await?
             .ok_or(Error::ReceiptUnresolved)?;
-        let attempt = self.store.get(saved).await?;
+        let attempt = self
+            .store
+            .get(saved)
+            .await
+            .map_err(PaymentFailure::concealing)?;
         Self::authorize(&attempt, connection, &principal)?;
         if attempt.transfer_id.is_none() {
-            return Err(Error::ReceiptUnresolved);
+            return Err(Error::ReceiptUnresolved.into());
         }
         Ok(attempt.acceptance())
     }
@@ -886,7 +904,7 @@ impl PaymentService {
         id: &str,
         caller: &Caller,
         collection: Uuid,
-    ) -> Result<CollectionStatus, Error> {
+    ) -> Result<CollectionStatus, PaymentFailure> {
         let connection = self.connection(id, caller)?;
         let principal = principal(caller)?;
         let _permit = self
@@ -894,7 +912,11 @@ impl PaymentService {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Unavailable)?;
-        let initial = self.store.get(collection).await?;
+        let initial = self
+            .store
+            .get(collection)
+            .await
+            .map_err(PaymentFailure::concealing)?;
         Self::authorize(&initial, connection, &principal)?;
         let mut lock_client = self
             .store
@@ -938,7 +960,7 @@ impl PaymentService {
             .as_ref()
             .is_some_and(|old| observation.observed_at < old.observed_at)
         {
-            return Err(Error::ProviderProtocol);
+            return Err(Error::ProviderProtocol.into());
         }
         attempt.observation = Some(observation);
         self.store.save(&attempt, "provider.observed").await?;
@@ -951,7 +973,7 @@ impl PaymentService {
         caller: &Caller,
         key: &str,
         collection: Uuid,
-    ) -> Result<RegistryReceipt, Error> {
+    ) -> Result<RegistryReceipt, PaymentFailure> {
         let connection = self.connection(id, caller)?;
         validate_key(key)?;
         let principal = principal(caller)?;
@@ -960,7 +982,11 @@ impl PaymentService {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Unavailable)?;
-        let initial = self.store.get(collection).await?;
+        let initial = self
+            .store
+            .get(collection)
+            .await
+            .map_err(PaymentFailure::concealing)?;
         Self::authorize(&initial, connection, &principal)?;
         self.store
             .claim_command(
@@ -991,7 +1017,7 @@ impl PaymentService {
         }
         let status = attempt.status();
         if status.state != CollectionState::Confirmed {
-            return Err(Error::Conflict);
+            return Err(Error::Conflict.into());
         }
         let reference = status.provider_reference.ok_or(Error::Conflict)?;
         match &attempt.binding.provider {
@@ -1001,15 +1027,15 @@ impl PaymentService {
                 // Released PH-EE Operations `SUCCESS` is only a provider
                 // observation. It cannot satisfy the BReg Action that advances
                 // this bill to `paid` and authorizes service issuance.
-                return Err(Error::RecoveryHeld);
+                return Err(Error::RecoveryHeld.into());
             }
             CollectionProvider::Http { .. } if !status.simulation => {
-                return Err(Error::RecoveryHeld);
+                return Err(Error::RecoveryHeld.into());
             }
             CollectionProvider::Simulator { .. }
             | CollectionProvider::Mifos { .. }
             | CollectionProvider::Http { .. } => {
-                return Err(Error::Conflict);
+                return Err(Error::Conflict.into());
             }
         }
         let receipt = RegistryReceipt {
@@ -1038,7 +1064,7 @@ impl PaymentService {
             return Ok(receipt);
         }
         if !view.matches_binding(&attempt) || view.state != BillState::AttemptBound {
-            return Err(Error::Conflict);
+            return Err(Error::Conflict.into());
         }
         if attempt.report_action.is_none() {
             let mut inputs = binding_inputs(&attempt)?;
@@ -1065,7 +1091,7 @@ impl PaymentService {
             self.store.save(&attempt, "receipt.prepared").await?;
         }
         if attempt.receipt_digest.as_ref() != Some(&receipt_digest) {
-            return Err(Error::RecoveryHeld);
+            return Err(Error::RecoveryHeld.into());
         }
         let result = self
             .registry
@@ -1081,7 +1107,7 @@ impl PaymentService {
             .await
             .map_err(|_| Error::OutcomeUnknown)?;
         if !observed.matches_receipt(&attempt, &receipt, &receipt_digest) {
-            return Err(result.err().unwrap_or(Error::OutcomeUnknown));
+            return Err(result.err().unwrap_or(Error::OutcomeUnknown).into());
         }
         attempt.receipt = Some(receipt.clone());
         self.store
@@ -1120,6 +1146,44 @@ fn validate_key(key: &str) -> Result<(), Error> {
         Ok(())
     } else {
         Err(Error::InvalidRequest)
+    }
+}
+
+/// A payment error and, when the caller was refused, the check it failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaymentFailure {
+    pub code: Error,
+    pub check: Option<FailedCheck>,
+}
+
+impl PaymentFailure {
+    pub(crate) fn refused(code: Error, check: FailedCheck) -> Self {
+        Self {
+            code,
+            check: Some(check),
+        }
+    }
+
+    /// A lookup that found nothing is a refusal for the check that conceals
+    /// existence; any other error carries no check.
+    pub(crate) fn concealing(code: Error) -> Self {
+        if code == Error::NotFound {
+            Self::refused(code, FailedCheck::Visibility)
+        } else {
+            code.into()
+        }
+    }
+}
+
+impl From<Error> for PaymentFailure {
+    fn from(code: Error) -> Self {
+        Self { code, check: None }
+    }
+}
+
+impl PartialEq<Error> for PaymentFailure {
+    fn eq(&self, other: &Error) -> bool {
+        self.code == *other
     }
 }
 

@@ -26,7 +26,10 @@ use registry_casework_client::{
 use registry_casework_core::*;
 
 use registry_platform_config::{SecretProvider, SecretResolver};
-use registry_platform_httputil::FetchUrlPolicy;
+use registry_platform_httputil::{
+    probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH},
+    FetchUrlPolicy,
+};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use serde_json::{json, Value};
@@ -898,6 +901,28 @@ fn create_http_request(body: &ReviewCreateRequest, token: Option<&str>) -> Reque
             serde_json::to_vec(body).expect("serialize review request"),
         ))
         .expect("review HTTP request")
+}
+
+#[tokio::test]
+async fn health_and_ready_answer_the_shared_probe_bodies_without_a_token() {
+    let idp = MockIdp::start().await;
+    let (app, _service, _revoked, _changed, _failure, _source_state) = app(&idp).await;
+    for (path, expected) in [(HEALTH_PATH, HEALTH_BODY), (READY_PATH, READY_BODY)] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/json",
+            "{path}"
+        );
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(body.as_ref(), expected.as_bytes(), "{path}");
+    }
+    idp.stop().await;
 }
 
 #[tokio::test]

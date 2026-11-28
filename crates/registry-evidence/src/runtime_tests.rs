@@ -82,6 +82,8 @@ use registry_evidence_verifier::model::{
 mod discovery_channel_tests;
 #[path = "evidence_source_tests.rs"]
 mod evidence_source_tests;
+#[path = "refusal_recording_tests.rs"]
+mod refusal_recording_tests;
 #[path = "wallet_channel_tests.rs"]
 mod wallet_channel_tests;
 
@@ -3562,7 +3564,7 @@ async fn admission_gates_refuse_unadmitted_clients_and_missing_scopes() {
             .await
             .expect_err(&format!("{label} was accepted"));
         assert!(
-            matches!(error, AuthenticationError::Verification),
+            matches!(error, AuthenticationError::Verification(_)),
             "{label}: {error:?}"
         );
     }
@@ -3584,7 +3586,7 @@ async fn admission_gates_refuse_unadmitted_clients_and_missing_scopes() {
             .await
             .expect_err(&format!("{label} was accepted"));
         assert!(
-            matches!(error, AuthenticationError::Verification),
+            matches!(error, AuthenticationError::Verification(_)),
             "{label}: {error:?}"
         );
     }
@@ -3818,10 +3820,19 @@ async fn release_admission_needs_both_the_acquisition_deadline_and_the_grant_ahe
         release_admission(ahead, Some(deadline(wall_seconds - 1))).expect_err("grant expired");
     assert_eq!(expired_grant.problem(), ProblemCode::NotAuthorized);
     assert_eq!(expired_grant.category(), "grant-expired");
+    assert_eq!(
+        expired_grant.check(),
+        Some(registry_platform_authcommon::FailedCheck::TaskGrantExpired)
+    );
     let expired_budget =
         release_admission(behind, Some(deadline(expiry_ahead))).expect_err("budget spent");
     assert_eq!(expired_budget.problem(), ProblemCode::DependencyUnavailable);
     assert_eq!(expired_budget.category(), "acquisition-budget");
+    assert_eq!(
+        expired_budget.check(),
+        None,
+        "a spent budget is not a refusal"
+    );
 }
 
 #[test]
@@ -8651,6 +8662,10 @@ async fn failed_selector_budget_is_enforced_by_the_runtime_and_scoped_to_authori
         .await
         .expect_err("the next request is rejected before selector resolution");
     assert_eq!(exhausted.problem(), ProblemCode::RateLimited);
+    assert_eq!(
+        exhausted.check(),
+        Some(registry_platform_authcommon::FailedCheck::RateLimit)
+    );
     retained_failures.push_str(&format!("{exhausted:?} {exhausted}\n"));
 
     let now = Utc::now().timestamp();

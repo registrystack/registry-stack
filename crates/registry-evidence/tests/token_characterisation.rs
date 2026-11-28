@@ -22,6 +22,7 @@ use registry_evidence::{
         OidcAuthenticationConfig,
     },
 };
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::JwksSource;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
 use registry_platform_testing::{
@@ -181,19 +182,26 @@ async fn authenticate(case: FixtureCase, key_set_uri: String) -> Outcome {
     match authenticator.authenticate(case.token.expose()).await {
         Ok(context) => Outcome::Admitted(Some(context.actor_kind().as_str().to_owned())),
         Err(AuthenticationError::Malformed) => Outcome::Refused(Stage::Header),
-        Err(AuthenticationError::Context | AuthenticationError::SenderConstrained) => {
+        Err(AuthenticationError::Context(_) | AuthenticationError::SenderConstrained) => {
             Outcome::Refused(Stage::Claims)
         }
-        Err(AuthenticationError::Verification) => match verifier_refusal(&config, &case).await {
-            Some(stage) => Outcome::Refused(stage),
-            None => {
-                assert!(
+        Err(AuthenticationError::Verification(check)) => {
+            match verifier_refusal(&config, &case).await {
+                Some(stage) => Outcome::Refused(stage),
+                None => {
+                    assert!(
                     !config.required_scopes.admitted().is_empty(),
                     "the authenticator refused a token the verifier admits and no scope gate is set"
                 );
-                Outcome::Refused(Stage::Scope)
+                    assert_eq!(
+                        check,
+                        FailedCheck::Scope,
+                        "a token the verifier admits is refused by the scope gate"
+                    );
+                    Outcome::Refused(Stage::Scope)
+                }
             }
-        },
+        }
     }
 }
 

@@ -17,7 +17,10 @@
 //!
 //! Authentication refusals are counted here rather than written to the audit
 //! journal: a refused credential names no principal to hold accountable, and
-//! journaling it would let an unauthenticated caller grow the journal.
+//! journaling it would let an unauthenticated caller grow the journal. Every
+//! request the service refuses is also counted by the check that failed, in
+//! `messaging_request_refusals_total`, whose label is the closed
+//! [`FailedCheck`] set and nothing a caller sent.
 //!
 //! Provider callbacks are counted by [`CallbackOutcome`] alone. The provider
 //! id in a callback path is caller text until it names an activated
@@ -49,6 +52,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use registry_platform_authcommon::RefusalRecorder;
 use registry_platform_metrics::{
     CounterVec, Exposition, LabelSpace, MetricKind, ScrapeDeadline,
     CONTENT_TYPE as METRICS_CONTENT_TYPE,
@@ -79,6 +83,9 @@ pub struct Metrics {
     limits: CounterVec,
     retention: CounterVec,
     sample_failures: CounterVec,
+    /// Refused requests by the check that failed, and the bounded log line
+    /// that goes with each.
+    request_refusals: RefusalRecorder,
 }
 
 impl fmt::Debug for Metrics {
@@ -133,6 +140,7 @@ impl Default for Metrics {
                 "sample",
                 ["dispatch-queue"],
             ),
+            request_refusals: RefusalRecorder::new("messaging").expect(DECLARATION),
         }
     }
 }
@@ -298,12 +306,19 @@ impl Metrics {
         );
     }
 
+    /// The recorder that counts a refused request by the check that failed
+    /// and decides which refusals reach the log.
+    #[must_use]
+    pub fn refusal_recorder(&self) -> &RefusalRecorder {
+        &self.request_refusals
+    }
+
     /// Count one authentication refusal by its outcome.
     pub fn record_authentication_refusal(&self, error: AuthenticationError) {
         let reason = match error {
-            AuthenticationError::Refused => "refused",
-            AuthenticationError::Claims => "claims",
-            AuthenticationError::Profile => "profile",
+            AuthenticationError::Refused(_) => "refused",
+            AuthenticationError::Claims(_) => "claims",
+            AuthenticationError::Profile(_) => "profile",
             AuthenticationError::Unavailable => "unavailable",
         };
         count(&self.refusals, &[reason]);
@@ -345,6 +360,10 @@ impl Metrics {
         ] {
             counter.write(&mut out).expect(DECLARATION);
         }
+        self.request_refusals
+            .counter()
+            .write(&mut out)
+            .expect(DECLARATION);
         out.header(
             "messaging_dispatch_jobs",
             Some("Messages waiting to be sent, being sent, or held unknown, sampled at scrape."),
@@ -478,6 +497,7 @@ pub async fn scrape(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_authcommon::FailedCheck;
 
     #[test]
     fn labels_are_closed() {
@@ -516,7 +536,8 @@ mod tests {
             StatusCode::OK,
         );
         metrics.record_authentication_refusal(AuthenticationError::Unavailable);
-        metrics.record_authentication_refusal(AuthenticationError::Claims);
+        metrics
+            .record_authentication_refusal(AuthenticationError::Claims(FailedCheck::TokenClaims));
         metrics.record_callback(CallbackOutcome::Unmatched);
         metrics.record_callback(CallbackOutcome::Unmatched);
         metrics.record_attempt(AttemptOutcome::MaybeSent);
@@ -561,9 +582,11 @@ messaging_retention_runs_total{outcome=\"failed\"} 1
 # HELP messaging_metrics_sample_failures_total Scrape-time database reads that failed, by which read. A failed read leaves its gauges without samples.
 # TYPE messaging_metrics_sample_failures_total counter
 messaging_metrics_sample_failures_total{sample=\"dispatch-queue\"} 0
-# HELP messaging_dispatch_jobs Messages waiting to be sent, being sent, or held unknown, sampled at scrape.
-# TYPE messaging_dispatch_jobs gauge
 ";
+        let head = format!(
+            "{head}{}# HELP messaging_dispatch_jobs Messages waiting to be sent, being sent, or held unknown, sampled at scrape.\n# TYPE messaging_dispatch_jobs gauge\n",
+            refusal_series()
+        );
         assert_eq!(metrics.render(None), head);
         assert_eq!(
             metrics.render(Some(DispatchDepth {
@@ -575,6 +598,21 @@ messaging_metrics_sample_failures_total{sample=\"dispatch-queue\"} 0
                 "{head}messaging_dispatch_jobs{{state=\"pending\"}} 3\nmessaging_dispatch_jobs{{state=\"leased\"}} 1\nmessaging_dispatch_jobs{{state=\"unknown\"}} 2\n"
             )
         );
+    }
+
+    /// The `messaging_request_refusals_total` exposition of a recorder that
+    /// counted nothing: one zero series for each member of the closed set.
+    fn refusal_series() -> String {
+        let mut text = String::from(
+            "# HELP messaging_request_refusals_total Requests refused, by the check that failed.\n# TYPE messaging_request_refusals_total counter\n",
+        );
+        for check in FailedCheck::ALL {
+            text.push_str(&format!(
+                "messaging_request_refusals_total{{check=\"{}\"}} 0\n",
+                check.as_str()
+            ));
+        }
+        text
     }
 
     #[test]

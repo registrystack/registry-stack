@@ -50,11 +50,11 @@ registry-evidence-client.workspace = true
 registry-discovery-profile.workspace = true
 p256.workspace = true
 registry-platform-audit.workspace = true
-registry-platform-authcommon.workspace = true
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-crypto = { workspace = true, features = ["transit"] }
 registry-platform-config.workspace = true
-registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httpsec = { workspace = true, features = ["server", "refusal-trace-id"] }
 registry-platform-metrics.workspace = true
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true

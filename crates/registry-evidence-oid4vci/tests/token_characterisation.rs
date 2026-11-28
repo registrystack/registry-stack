@@ -160,7 +160,9 @@ async fn authorize(case: FixtureCase, key_set_uri: String) -> Outcome {
         Ok(_) => Outcome::Admitted(None),
         Err(AuthorizationError::Missing) => Outcome::Refused(Stage::Header),
         Err(AuthorizationError::KeySource) => Outcome::Refused(Stage::Unavailable),
-        Err(AuthorizationError::Refused) => Outcome::Refused(refusal_stage(&config, &case).await),
+        Err(AuthorizationError::Refused(_)) => {
+            Outcome::Refused(refusal_stage(&config, &case).await)
+        }
     }
 }
 

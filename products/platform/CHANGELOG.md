@@ -14,6 +14,25 @@
   position while the reader decodes it: exact for a node, and the holding
   mapping with `exact: false` under `#[serde(flatten)]`.
 
+- `registry-platform-config` adds the development-only gate. A configuration
+  type with values only a development process may use implements
+  `DevelopmentClass`, and the member that holds it is a `Gated`, readable only
+  with the `DevelopmentWitness` the loader issues to a process that declared
+  development. `collect_development_settings` records each such value while it
+  decodes, and `PostureReport` is the one decision: production refuses every
+  recorded setting under its `<owner>.posture.<setting>` code, and development
+  accepts and lists it. `ready_member` gives the `posture` and
+  `developmentSettings` members a runtime adds to `/ready`, and `log_startup`
+  logs the declared posture, the development settings in use and the explicit
+  production settings in use. A check acceptance cannot hide a posture
+  diagnostic: one that names a posture code is refused with
+  `config.check-acceptance-not-acceptable`. No runtime uses the gate yet.
+
+- `registry-cli-report` adds `Report::with_posture`, which writes
+  `posture.value` and `posture.source` (`flag`, `environment` or `default`)
+  into a CLI report body after the command members. A report built without it
+  is unchanged.
+
 - `registry-platform-httpsec` implements authcommon's `RefusalTraceId` for
   `TraceId` behind the opt-in `refusal-trace-id` feature, not `server`. A
   service that only serves HTTP no longer links `registry-platform-authcommon`
@@ -94,6 +113,17 @@
   was. A UserInfo response about another subject than the access token is
   the new `OidcError::SubjectMismatch` (`token-claims`). Each of these was
   `InvalidToken` (`credential-malformed`) before.
+
+- The MCP edge counts every refusal by the check that refused it and writes
+  one `request refused` line with `failed_check`, at most five lines per check
+  per minute. The edge has no metrics listener, so the line is the operator's
+  signal there. Refusal statuses, headers and bodies are unchanged. Gateways
+  built on the edge (`registry-mcp`, `registry-breg-mcp`) and the BReg review
+  page accept the loopback spellings of the shared definition under
+  `development-loopback` (for example `127.0.0.2` and `[::ffff:127.0.0.1]`),
+  and still refuse `localhost.` and `*.localhost`. A refused static key set
+  now says why: `registry-mcp` names the refusal in its startup message, and
+  `registry-breg-mcp` logs it, with its startup code unchanged.
 
 ## 0.48.0 - 2026-11-23
 

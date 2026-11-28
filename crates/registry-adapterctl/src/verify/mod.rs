@@ -878,13 +878,10 @@ fn destination_profile(base: &Url) -> DestinationProfile {
 }
 
 fn denotes_loopback(origin: &Url) -> bool {
-    let parsed = origin.to_url();
-    parsed.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
-    })
+    origin
+        .to_url()
+        .host_str()
+        .is_some_and(|host| registry_platform_httputil::loopback::loopback_host(host).is_some())
 }
 
 /// Read one declared CA bundle under the platform ceiling. Every failure is

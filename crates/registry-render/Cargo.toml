@@ -10,14 +10,14 @@ publish = false
 
 [dependencies]
 registry-platform-audit = { workspace = true }
-registry-platform-authcommon = { workspace = true }
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo = { workspace = true }
 registry-platform-canonical-json = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-oidc = { workspace = true }
 jsonwebtoken = { workspace = true }
 registry-platform-crypto = { workspace = true, features = ["cms-signing", "transit"] }
-registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httpsec = { workspace = true, features = ["refusal-trace-id", "server"] }
 registry-platform-httputil = { workspace = true }
 registry-platform-metrics = { workspace = true }
 registry-platform-yaml = { workspace = true }

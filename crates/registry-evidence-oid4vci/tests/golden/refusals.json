@@ -1,0 +1,217 @@
+{
+  "credential-evidence-refused": {
+    "body": {
+      "error": "credential_request_denied",
+      "error_description": "this credential request cannot be completed"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache"
+    },
+    "status": 400
+  },
+  "credential-no-header": {
+    "body": {
+      "error": "invalid_token",
+      "error_description": "a bearer access token is required"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "credential-rate-limited": {
+    "body": {
+      "error": "temporarily_unavailable",
+      "error_description": "too many requests; retry after the interval in Retry-After"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "retry-after": "<seconds>"
+    },
+    "status": 429
+  },
+  "credential-unknown-token": {
+    "body": {
+      "error": "invalid_token",
+      "error_description": "the access token cannot be used"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "draft13-credential-no-header": {
+    "body": {
+      "error": "invalid_token",
+      "error_description": "a bearer access token is required"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "draft13-credential-unknown-token": {
+    "body": {
+      "error": "invalid_token",
+      "error_description": "the access token cannot be used"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "draft13-token-unknown-code": {
+    "body": {
+      "error": "invalid_grant",
+      "error_description": "the pre-authorized code cannot be redeemed"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache"
+    },
+    "status": 400
+  },
+  "nonce-rate-limited": {
+    "body": {
+      "error": "temporarily_unavailable",
+      "error_description": "too many requests; retry after the interval in Retry-After"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "retry-after": "<seconds>"
+    },
+    "status": 429
+  },
+  "offer-evidence-refused": {
+    "body": {
+      "error": "invalid_credential_request",
+      "error_description": "the credential source refused this request"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache"
+    },
+    "status": 403
+  },
+  "offer-key-source-unavailable": {
+    "body": {
+      "error": "temporarily_unavailable",
+      "error_description": "offers cannot be authorized at the moment"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache"
+    },
+    "status": 503
+  },
+  "offer-no-header": {
+    "body": {
+      "error": "invalid_token",
+      "error_description": "a bearer access token is required"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "offer-non-bearer-scheme": {
+    "body": {
+      "error": "invalid_token",
+      "error_description": "a bearer access token is required"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "offer-rate-limited": {
+    "body": {
+      "error": "temporarily_unavailable",
+      "error_description": "too many requests; retry after the interval in Retry-After"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "retry-after": "<seconds>"
+    },
+    "status": 429
+  },
+  "offer-wrong-token": {
+    "body": {
+      "error": "invalid_token",
+      "error_description": "the presented credential was refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "token-rate-limited": {
+    "body": {
+      "error": "temporarily_unavailable",
+      "error_description": "too many requests; retry after the interval in Retry-After"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache",
+      "retry-after": "<seconds>"
+    },
+    "status": 429
+  },
+  "token-redeemed-code": {
+    "body": {
+      "error": "invalid_grant",
+      "error_description": "the pre-authorized code cannot be redeemed"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache"
+    },
+    "status": 400
+  },
+  "token-unknown-code": {
+    "body": {
+      "error": "invalid_grant",
+      "error_description": "the pre-authorized code cannot be redeemed"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+      "pragma": "no-cache"
+    },
+    "status": 400
+  }
+}

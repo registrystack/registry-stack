@@ -7,8 +7,8 @@
 //! `AccessConfig::authenticator`, over a static key set holding the corpus
 //! signer's public keys, and presents the fixture to `Authenticator::authenticate`.
 //! The module sits under `access` so it can also ask the authenticator's own
-//! verifier for the check that refused a token: the service answers every
-//! refusal with `access.unauthenticated`, which names no check.
+//! verifier for the check that refused a token and compare it with the check
+//! the refusal carries.
 use super::*;
 use registry_platform_oidc::OidcError;
 use registry_platform_testing::{
@@ -86,13 +86,45 @@ async fn observe(authenticator: &Authenticator, token: &str) -> Outcome {
     match (admission, verdict) {
         (Ok(_), Ok(_)) => Outcome::Admitted(None),
         (Ok(_), Err(_)) => panic!("authenticate admitted a token its own verifier refused"),
-        (Err(_), Err(error)) => stage_of(&error),
-        (Err(error), Ok(_)) => match error.code.as_str() {
-            "access.denied" => "refused/scope".parse().expect("result value"),
-            "access.unauthenticated" => "refused/claims".parse().expect("result value"),
-            "access.unavailable" => "refused/unavailable".parse().expect("result value"),
-            other => panic!("authenticate refused with the unexpected code {other}"),
-        },
+        (Err(refusal), Err(error)) => {
+            assert_eq!(
+                refusal.check,
+                Some(error.failed_check()),
+                "the refusal names the verifier's check"
+            );
+            stage_of(&error)
+        }
+        (Err(error), Ok(_)) => {
+            let (outcome, checks): (_, &[FailedCheck]) = match error.code.as_str() {
+                "access.denied" => (
+                    "refused/scope",
+                    &[
+                        FailedCheck::Delegation,
+                        FailedCheck::AccessProfile,
+                        FailedCheck::Scope,
+                    ],
+                ),
+                "access.unauthenticated" => (
+                    "refused/claims",
+                    &[
+                        FailedCheck::TokenAssertionIssuer,
+                        FailedCheck::TokenClient,
+                        FailedCheck::TokenClaims,
+                    ],
+                ),
+                "access.unavailable" => {
+                    ("refused/unavailable", &[FailedCheck::KeySourceUnavailable])
+                }
+                other => panic!("authenticate refused with the unexpected code {other}"),
+            };
+            assert!(
+                error.check.is_some_and(|check| checks.contains(&check)),
+                "{} carries a check from {checks:?}, not {:?}",
+                error.code,
+                error.check
+            );
+            outcome.parse().expect("result value")
+        }
     }
 }
 

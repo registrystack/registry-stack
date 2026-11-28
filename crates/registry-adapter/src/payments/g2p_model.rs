@@ -14,6 +14,7 @@ use super::{
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use registry_platform_httputil::loopback::loopback_address;
 use registry_platform_yaml::SecretReference;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1070,9 +1071,11 @@ fn provider_base_url(value: &str) -> bool {
     if url.scheme() != "http" {
         return false;
     }
+    // An address literal only: the name `localhost` is refused here, where
+    // no resolved address is available to pin it.
     match url.host() {
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        Some(url::Host::Ipv4(address)) => loopback_address(address.into()),
+        Some(url::Host::Ipv6(address)) => loopback_address(address.into()),
         Some(url::Host::Domain(_)) | None => false,
     }
 }
@@ -1155,4 +1158,27 @@ fn canonical_registry_origin(value: &str) -> Result<String, G2pError> {
 fn currency_scale<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
     registry_platform_yaml::BoundedU32::<0, 6>::deserialize(deserializer)
         .map(|value| u8::try_from(value.get()).expect("the bounded scale fits in u8"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::provider_base_url;
+
+    #[test]
+    fn a_plain_http_provider_must_be_a_loopback_address_literal() {
+        for accepted in [
+            "http://127.0.0.1/",
+            "http://[::1]/",
+            "https://provider.example/",
+        ] {
+            assert!(provider_base_url(accepted), "{accepted}");
+        }
+        for refused in [
+            "http://localhost/",
+            "http://10.0.0.1/",
+            "http://provider.example/",
+        ] {
+            assert!(!provider_base_url(refused), "{refused}");
+        }
+    }
 }

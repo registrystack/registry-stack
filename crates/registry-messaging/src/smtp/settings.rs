@@ -377,8 +377,10 @@ impl SmtpProviderSettings {
                     return Err(SmtpSettingsError::DevelopmentNotPermitted);
                 }
                 let loopback = match host_literal {
-                    Some(ip) => ip.to_canonical().is_loopback(),
-                    None => self.host.eq_ignore_ascii_case("localhost"),
+                    Some(ip) => registry_platform_httputil::loopback::loopback_address(ip),
+                    None => {
+                        registry_platform_httputil::loopback::loopback_host(&self.host).is_some()
+                    }
                 };
                 if !loopback {
                     return Err(SmtpSettingsError::DevelopmentRequiresLoopbackHost);
@@ -571,6 +573,7 @@ pub(super) mod tests {
             "0.0.0.0",
             "::",
             "localhost.example.org",
+            "relay.localhost",
         ] {
             let settings = SmtpProviderSettings {
                 host: host.to_owned(),
@@ -583,6 +586,10 @@ pub(super) mod tests {
                 "{host}"
             );
         }
+        assert_eq!(
+            development("localhost.").check(false),
+            Err(SmtpSettingsError::InvalidHost)
+        );
         for host in [
             "127.0.0.1",
             "127.3.2.1",
@@ -590,6 +597,7 @@ pub(super) mod tests {
             "localhost",
             "LOCALHOST",
             "::ffff:127.0.0.1",
+            "::ffff:127.9.8.7",
         ] {
             assert!(development(host).check(false).is_ok(), "{host}");
         }
