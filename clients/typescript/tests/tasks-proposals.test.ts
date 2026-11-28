@@ -1070,9 +1070,7 @@ test('a list that learns a newer revision does not change the condition a comman
 test('submit follows the register: unavailable with attachment-required refuses before sending', async () => {
   const doc = fixture('proposal-draft')
   doc.links['submit']!.availability = { available: false, observedRevision: 3, reason: 'attachment-required', recovery: 'refresh' }
-  // A stub client: the generated response schema does not list this reason until the register declares it.
-  const seen: string[] = []
-  const commands = proposalCommands({ call: async (operation: string) => { seen.push(operation); return { data: doc } } }, { accessProfile })
+  const { seen, commands } = register({ [`GET ${P}`]: () => ok(doc) })
   const p = await commands.get('prop-1')
   assert.deepEqual([p.can.submit.available, p.can.submit.reason], [false, 'attachment-required'])
   assert.equal(p.can.submit.message, 'A required document is missing. Add it before sending.')
