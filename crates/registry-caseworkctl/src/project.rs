@@ -1652,6 +1652,28 @@ mod display_integrity_tests {
 }
 
 #[cfg(test)]
+#[path = "../../registry-casework/tests/support/marked_provider.rs"]
+mod marked_provider;
+
+#[cfg(test)]
+#[test]
+fn operator_provider_applies_peer_policy_to_marked_breg_response() {
+    let fixture = marked_provider::Fixture::new();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for posture in marked_provider::POSTURES {
+        let inputs = ActivationInputs::load(&fixture.runtime, posture).unwrap();
+        let [provider] = inputs.providers.as_slice() else {
+            panic!("expected the one declared provider");
+        };
+        runtime.block_on(fixture.assert_policy(provider.as_ref(), posture.posture));
+    }
+    fixture.finish();
+}
+
+#[cfg(test)]
 mod doctor_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt as _;

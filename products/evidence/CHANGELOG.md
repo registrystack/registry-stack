@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- BREAKING: Rust client configurations take a peer policy in `EvidenceClientConfig::new` and `EvidenceClientConfig::without_verification`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+- `evidencectl client contracts fetch` accepts `--posture`.
+- `evidencectl request prepare` accepts `--posture` with `--profile`.
+
 - `evidencectl init --starter` copies the development plan and the scenario file it names.
 
 - BREAKING: An undeclared posture is production. Migration: Set `REGISTRY_STACK_POSTURE=development` for laptop and test runs; `rstack dev` sets it for you.

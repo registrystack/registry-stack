@@ -175,7 +175,7 @@ The runtime requires TLS on both.
 
 `authentication.oidc` requires `issuer`, `audience`, and `allowedClients`.
 `allowedClients` is required. Write `from-package` to admit exactly the requester clients of the package's access profiles, so the clients are written once, in the package. A list is also accepted. It lists at least one distinct client and must include every requester client that an access profile names, or the runtime refuses to start with `messaging.runtime.profile-client-not-allowed`. A profile that no admitted client could reach is refused at load.
-An omitted member, an empty list, and a repeated client are refused when the file is read, and so is the `unrestricted` keyword that the sibling runtimes accept on development loopback, with `messaging.runtime.allowed-clients-required`.
+Messaging refuses an omitted member, an empty list, a repeated client and the `unrestricted` keyword with `messaging.runtime.allowed-clients-required`.
 `scopeClaim` defaults to `scope`.
 `jwksSource` defaults to issuer discovery and can instead select `{type: static, documentRef: secret:...}` or `{type: uri, uri: HTTPS_URL}`.
 The former `jwksUri` member is refused.

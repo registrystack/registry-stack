@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: Rust client configurations take a peer policy in `DiscoveryClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
 - Offline check and startup report a package root lookup failure as `discovery.runtime.package-refused` at `/package/root`.
 
 - BREAKING: The Node.js Discovery client refuses development-marked catalog responses by default. Migration: Pass `allowDevelopmentPeer: true` in the options object when connecting to a development catalog.

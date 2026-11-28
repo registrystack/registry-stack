@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: Rust client configurations take a peer policy in `DocumentsClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
 - Start a local development run from the starter with `rstack dev start`.
 
 - A reservation may omit `custodian` when the caller is a person: the document is

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: Rust client configurations take a peer policy in `RenderClient::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
 - The library checks verify a configured package. Use `check_runtime_only` to check a runtime file without inspecting its package.
 
 - Start a local development run from the starter with `rstack dev start`.

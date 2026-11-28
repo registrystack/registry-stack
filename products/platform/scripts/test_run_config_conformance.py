@@ -1610,6 +1610,27 @@ class EndToEndTest(unittest.TestCase):
             os.environ.update(saved)
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def test_development_check_rows_allow_only_posture_listing_warnings(self) -> None:
+        registry = self.root / "products/platform/config-formats.yaml"
+        fake = self.bin / "fakectl"
+        for posture, severity, code, status in [
+            ("development", "warning", "adapter.posture.payment-simulator", "pass"),
+            ("development", "warning", "platform.posture.insecure-issuer-http", "pass"),
+            (None, "warning", "adapter.posture.payment-simulator", "fail"),
+            ("production", "warning", "adapter.posture.payment-simulator", "fail"),
+            ("development", "warning", "adapter.config.other-warning", "fail"),
+            ("development", "error", "adapter.posture.payment-simulator", "fail"),
+        ]:
+            with self.subTest(posture=posture, severity=severity, code=code):
+                argv = "fakectl check {project}"
+                if posture:
+                    argv += " --posture " + posture
+                registry.write_text(REGISTRY_TEXT.replace("fakectl check {project}", argv), encoding="utf-8")
+                report = {"diagnostics": [diagnostic(severity=severity, code=code)]}
+                fake.write_text(f"#!{sys.executable}\nprint({json.dumps(json.dumps(report))})\n", encoding="utf-8")
+                _, stdout, _ = self.run_runner("--matrix", "--only-format", "demo/project", "--only-case", "baseline")
+                self.assertIn(f"demo/project\tbaseline\t{status}", stdout)
+
     def test_the_default_bin_dir_follows_cargo_target_dir(self) -> None:
         root = Path("/work/tree")
         with unittest.mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/elsewhere/target"}):

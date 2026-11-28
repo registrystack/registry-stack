@@ -57,11 +57,12 @@ pub use destination::{
     MAX_PRIVATE_RANGES,
 };
 pub use loader::{
-    contains_environment_expression, reject_environment_expressions_in_authored_yaml,
-    require_trusted_runtime_path, substituted_variable_names, AuthoredExpressions,
-    LoadedRuntimeConfig, RemovedKey, RuntimeConfigError, RuntimeConfigLoader, RuntimeEnvelope,
-    DEFAULT_MAX_RUNTIME_CONFIG_BYTES, MAX_RUNTIME_CONFIG_PATH_BYTES, REMOVED_OIDC_JWKS_SOURCE_KIND,
-    REMOVED_OIDC_JWKS_URI, UNAVAILABLE_CODE,
+    contains_environment_expression, deciding_diagnostic,
+    reject_environment_expressions_in_authored_yaml, require_trusted_runtime_path,
+    substituted_variable_names, AuthoredExpressions, LoadedRuntimeConfig, RemovedKey,
+    RuntimeConfigError, RuntimeConfigLoader, RuntimeEnvelope, DEFAULT_MAX_RUNTIME_CONFIG_BYTES,
+    MAX_RUNTIME_CONFIG_PATH_BYTES, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    UNAVAILABLE_CODE,
 };
 pub use metrics_bind::{
     check_metrics_bind, check_metrics_bind_address, check_metrics_bind_apart, MetricsBindError,

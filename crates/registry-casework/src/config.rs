@@ -29,9 +29,7 @@ use registry_platform_oidc::{
     IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
     TokenVerifierConfig,
 };
-use registry_platform_yaml::{
-    escape_pointer_segment, Diagnostic, Report, RetiredApiVersion, Severity,
-};
+use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
@@ -578,40 +576,76 @@ pub struct OidcConfig {
 
 /// `casework.posture.unrestricted-clients` for each issuer entry that admits
 /// every client, positioned at that entry's `allowedClients`. Decoding records
-/// no posture setting for the value, so the runtime records it here.
+/// no posture setting for the value, so the runtime records it here. An entry
+/// that writes `unrestricted` is found from the authored file as well, so the
+/// setting is still reported when typed decoding failed.
 fn unrestricted_clients_settings(check: &RuntimeFileCheck<RuntimeConfig>) -> Vec<FoundSetting> {
-    let Some(loaded) = check.loaded.as_ref() else {
-        return Vec::new();
+    let ids: Vec<String> = match check.loaded.as_ref() {
+        Some(loaded) => loaded
+            .config
+            .authentication
+            .oidc
+            .issuers
+            .iter()
+            .map(|(id, _)| id.as_str().to_owned())
+            .collect(),
+        None => check
+            .authored_keys(ISSUERS_POINTER)
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
     };
-    loaded
-        .config
-        .authentication
-        .oidc
-        .issuers
-        .iter()
-        .filter(|(_, entry)| entry.listed_clients().is_none())
-        .map(|(id, _)| {
+    ids.iter()
+        .filter_map(|id| {
             let pointer = format!(
                 "{ISSUERS_POINTER}/{}/allowedClients",
-                escape_pointer_segment(id.as_str())
+                escape_pointer_segment(id)
             );
-            let source = check
-                .error_at(RUNTIME_CONFIG_KIND, "", &pointer, "", "")
-                .source;
-            let position = source.and_then(|source| {
+            let authored = check.authored_scalar(&pointer);
+            let unrestricted = authored.is_some_and(|(value, _)| value == "unrestricted")
+                || check.loaded.as_ref().is_some_and(|loaded| {
+                    loaded
+                        .config
+                        .authentication
+                        .oidc
+                        .issuers
+                        .iter()
+                        .any(|(entry_id, entry)| {
+                            entry_id.as_str() == id && entry.listed_clients().is_none()
+                        })
+                });
+            if !unrestricted {
+                return None;
+            }
+            let position = authored.map(|(_, position)| position).or_else(|| {
+                let source = check
+                    .error_at(RUNTIME_CONFIG_KIND, "", &pointer, "", "")
+                    .source?;
                 Some(registry_platform_yaml::Position {
                     line: source.line?,
                     column: source.column?,
                 })
             });
-            FoundSetting {
+            Some(FoundSetting {
                 setting: &UNRESTRICTED_CLIENTS,
                 pointer: Some(pointer),
                 position,
                 origin: SettingOrigin::RuntimeFile,
-            }
+            })
         })
         .collect()
+}
+
+fn unrestricted_clients_diagnostics(
+    path: &Path,
+    declared: DeclaredPosture,
+    settings: Vec<FoundSetting>,
+) -> Vec<Diagnostic> {
+    let mut posture = PostureReport::new(declared);
+    for setting in settings {
+        posture.record(setting);
+    }
+    posture.diagnostics(path)
 }
 
 fn optional_delegated_staff_readers<'de, D>(
@@ -826,6 +860,9 @@ impl RuntimeConfig {
         let mut check = Self::loader(declared).check_offline::<Self>(path, true, stand_in_for);
         let settings = unrestricted_clients_settings(&check);
         let Some(mut loaded) = check.loaded.take() else {
+            check
+                .diagnostics
+                .extend(unrestricted_clients_diagnostics(path, declared, settings));
             return Err(RuntimeConfigError::ReadReport(Report::new(
                 check.diagnostics,
             )));
@@ -1231,6 +1268,18 @@ impl RuntimeConfig {
             };
             if let Err(error) = assertion_issuers.check(&field) {
                 findings.push(error.into());
+            }
+            // `allowedClients: unrestricted` admits every client the issuer
+            // verifies, so the deployment would accept a token minted for an
+            // unrelated application in the same realm. A deployment behind an
+            // operator-controlled terminator must name the clients each
+            // issuer entry admits, whatever posture it declares.
+            if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
+                && entry.listed_clients().is_none()
+            {
+                findings.push(RuntimeConfigError::AllowedClientsRequired {
+                    issuer: id.as_str().to_owned(),
+                });
             }
         }
         if let Some(readers) = &oidc.delegated_staff_readers {
@@ -2038,21 +2087,17 @@ pub fn check_runtime(
     substitute: bool,
     declared: DeclaredPosture,
 ) -> RuntimeCheck {
-    let check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+    let mut check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
         path,
         substitute,
         stand_in_for,
     );
-    let mut diagnostics = Vec::new();
+    let settings = unrestricted_clients_settings(&check);
+    let mut diagnostics = unrestricted_clients_diagnostics(path, declared, settings);
+    if check.loaded.is_none() {
+        check.diagnostics.append(&mut diagnostics);
+    }
     if let Some(loaded) = &check.loaded {
-        let settings = unrestricted_clients_settings(&check);
-        if !settings.is_empty() {
-            let mut posture = PostureReport::new(declared);
-            for setting in settings {
-                posture.record(setting);
-            }
-            diagnostics.extend(posture.diagnostics(path));
-        }
         diagnostics.extend(
             loaded
                 .config
@@ -2170,6 +2215,7 @@ fn reads_deferred_value(
         RuntimeConfigError::InvalidListener => &["/listener"],
         RuntimeConfigError::InvalidMetricsListener(_) => &["/metricsListener/networkExposure"],
         RuntimeConfigError::MetricsListenerSharesSocket(_) => &["/listener/bind"],
+        RuntimeConfigError::AllowedClientsRequired { .. } => &["/listener/tlsTermination"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
         }
@@ -2231,6 +2277,17 @@ mod tests {
         assert_eq!(report.code(), "example.error");
         assert_eq!(report.pointer(), "/error");
         assert_eq!(report.suggested_action(), "error action");
+    }
+
+    #[test]
+    fn empty_read_report_keeps_generic_accessors() {
+        let report = RuntimeConfigError::ReadReport(Report::new(Vec::new()));
+        assert_eq!(report.code(), "casework.runtime.invalid");
+        assert_eq!(report.pointer(), "");
+        assert_eq!(
+            report.suggested_action(),
+            "Correct the runtime configuration as the message describes."
+        );
     }
 
     #[test]
@@ -2396,11 +2453,27 @@ mod tests {
             source: PostureSource::Flag,
         };
         let mut value = operator_value(root.path(), root.path());
-        for listener in [
-            "loopback-plaintext",
-            "development-loopback",
-            "operator-controlled-upstream",
-        ] {
+        value["listener"]["tlsTermination"] = json!("operator-controlled-upstream");
+        let path = write_operator(&value, root.path());
+        // Behind an operator-controlled terminator, production refuses the
+        // setting and development still refuses the file.
+        let error = RuntimeConfig::load_file(&path, production).unwrap_err();
+        assert_eq!(error.code(), "casework.posture.unrestricted-clients");
+        let loaded = RuntimeConfig::load_file(&path, TEST_POSTURE).unwrap();
+        let refused: Vec<_> = loaded
+            .config
+            .findings(None)
+            .iter()
+            .map(|finding| (finding.code().to_owned(), finding.pointer()))
+            .collect();
+        assert_eq!(
+            refused,
+            [(
+                "casework.runtime.allowed-clients-required".to_owned(),
+                "/authentication/oidc/issuers/main/allowedClients".to_owned()
+            )]
+        );
+        for listener in ["loopback-plaintext", "development-loopback"] {
             value["listener"]["tlsTermination"] = json!(listener);
             let path = write_operator(&value, root.path());
             let error = RuntimeConfig::load_file(&path, production).unwrap_err();
@@ -2454,6 +2527,45 @@ mod tests {
             let loaded = RuntimeConfig::load_file(&path, production).unwrap();
             assert!(loaded.config.findings(None).is_empty());
         }
+    }
+
+    #[test]
+    fn an_insecure_http_issuer_is_refused_in_production_and_accepted_on_loopback_in_development() {
+        use registry_platform_config::{Posture, PostureSource};
+        let root = tempfile::tempdir().unwrap();
+        let production = DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Flag,
+        };
+        let mut value = operator_value(root.path(), root.path());
+        value["listener"]["tlsTermination"] = json!("loopback-plaintext");
+        value["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            json!("http://10.0.0.5:8091");
+        value["authentication"]["oidc"]["issuers"]["main"]["allowInsecureHttp"] = json!(true);
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["test-client"]);
+        let path = write_operator(&value, root.path());
+
+        let error = RuntimeConfig::load_file(&path, production).unwrap_err();
+        assert_eq!(error.code(), "platform.posture.insecure-issuer-http");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/allowInsecureHttp"
+        );
+
+        let loaded = RuntimeConfig::load_file(&path, TEST_POSTURE).unwrap();
+        assert_eq!(
+            loaded.posture.ready_member()["developmentSettings"],
+            json!([{
+                "code": "platform.posture.insecure-issuer-http",
+                "pointer": "/authentication/oidc/issuers/main/allowInsecureHttp",
+            }])
+        );
+        assert!(
+            loaded.config.findings(None).is_empty(),
+            "{:?}",
+            loaded.config.findings(None)
+        );
     }
 
     #[cfg(not(feature = "postgres-test"))]
@@ -3589,7 +3701,7 @@ mod tests {
         value["authentication"]["oidc"]["issuers"]["main"]["jwksSource"] =
             json!({"kind": "static", "documentRef": "secret:file/jwks"});
         let path = write_operator(&value, directory.path());
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(TEST_POSTURE)
             .load::<RuntimeConfig>(&path)
             .expect_err("jwksSource.kind is removed");
         let diagnostic = error
@@ -3671,7 +3783,7 @@ mod tests {
             .unwrap()
             .remove("representedHuman");
         let path = write_operator(&value, directory.path());
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(TEST_POSTURE)
             .load::<RuntimeConfig>(&path)
             .expect_err("a delegated reader names the represented person's claim");
         assert!(
@@ -3691,7 +3803,7 @@ mod tests {
             value["authentication"]["oidc"]["delegatedStaffReaders"]["assistant-reader"]
                 ["representedHuman"] = partial.clone();
             let path = write_operator(&value, directory.path());
-            RuntimeConfig::loader()
+            RuntimeConfig::loader(TEST_POSTURE)
                 .load::<RuntimeConfig>(&path)
                 .expect_err(&format!("{partial} names no claim or no value"));
         }
@@ -4043,6 +4155,10 @@ pub enum RuntimeConfigError {
         "every accessProfiles.PROFILE_ID.principalClaim in casework.yaml must differ from registry_actor_kind, the claim that carries the caller's actor kind"
     )]
     PrincipalClaimConflict,
+    #[error(
+        "authentication.oidc.issuers.{issuer}.allowedClients must name every client the deployment admits under operator-controlled-upstream; unrestricted admits every client the issuer verifies"
+    )]
+    AllowedClientsRequired { issuer: String },
     #[error("{path} {reason}")]
     InvalidTaskAuthority {
         path: String,
@@ -4095,14 +4211,6 @@ pub enum RuntimeConfigError {
 const REBUILD_PACKAGE: &str =
     "Rebuild the package with `caseworkctl package`, then point package.root at it.";
 
-fn first_read_error(report: &Report) -> &Diagnostic {
-    report
-        .diagnostics()
-        .iter()
-        .find(|diagnostic| diagnostic.severity == Severity::Error)
-        .unwrap_or(&report.diagnostics()[0])
-}
-
 impl RuntimeConfigError {
     fn is_identifier_collision(&self) -> bool {
         matches!(self, Self::ContextProviderIdCollision)
@@ -4138,6 +4246,7 @@ impl RuntimeConfigError {
             | Self::ReadReport(_)
             | Self::IssuerSet(_)
             | Self::PrincipalClaimConflict
+            | Self::AllowedClientsRequired { .. }
             | Self::OidcJwksSecret { .. }
             | Self::BindingSecret { .. }
             | Self::InvalidReviewCompletionDestination { .. }
@@ -4162,7 +4271,11 @@ impl RuntimeConfigError {
     pub fn pointer(&self) -> String {
         match self {
             Self::Load(error) => error.deciding_diagnostic().path.clone(),
-            Self::ReadReport(report) => first_read_error(report).path.clone(),
+            Self::ReadReport(report) => {
+                registry_platform_config::deciding_diagnostic(report.diagnostics())
+                    .map(|diagnostic| diagnostic.path.clone())
+                    .unwrap_or_default()
+            }
             Self::BindingSecret { pointer, .. }
             | Self::InvalidReviewCompletionDestination { pointer, .. }
             | Self::InvalidContextProvider { pointer, .. }
@@ -4170,6 +4283,13 @@ impl RuntimeConfigError {
             | Self::InvalidDelegatedStaffReader { pointer, .. } => pointer.clone(),
             Self::MissingIdentity => "/identity".to_owned(),
             Self::IssuerSet(diagnostic) => diagnostic.path.clone(),
+            Self::AllowedClientsRequired { issuer } => pointer_to(&[
+                "authentication",
+                "oidc",
+                "issuers",
+                issuer,
+                "allowedClients",
+            ]),
             Self::OidcJwksSecret { issuer, .. } => pointer_to(&[
                 "authentication",
                 "oidc",
@@ -4195,7 +4315,12 @@ impl RuntimeConfigError {
     pub fn code(&self) -> &str {
         match self {
             Self::Load(error) => &error.deciding_diagnostic().code,
-            Self::ReadReport(report) => &first_read_error(report).code,
+            Self::ReadReport(report) => {
+                registry_platform_config::deciding_diagnostic(report.diagnostics())
+                    .map_or("casework.runtime.invalid", |diagnostic| {
+                        diagnostic.code.as_str()
+                    })
+            }
             Self::IssuerSet(diagnostic) => &diagnostic.code,
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).0,
             Self::InvalidApiVersion => "casework.runtime.unsupported-api-version",
@@ -4217,6 +4342,7 @@ impl RuntimeConfigError {
                 "casework.runtime.invalid-metrics-listener"
             }
             Self::PrincipalClaimConflict => "casework.runtime.principal-claim-conflict",
+            Self::AllowedClientsRequired { .. } => "casework.runtime.allowed-clients-required",
             Self::InvalidTaskAuthority { .. } => "casework.runtime.invalid-task-authority",
             Self::InvalidDelegatedStaffReader { .. } => {
                 "casework.runtime.invalid-delegated-staff-reader"
@@ -4243,7 +4369,10 @@ impl RuntimeConfigError {
     pub fn suggested_action(&self) -> String {
         let action = match self {
             Self::Load(error) => return error.deciding_diagnostic().suggested_action.clone(),
-            Self::ReadReport(report) => return first_read_error(report).suggested_action.clone(),
+            Self::ReadReport(report) => {
+                return registry_platform_config::deciding_diagnostic(report.diagnostics())
+                    .map_or_else(|| Self::Invalid.suggested_action(), |diagnostic| diagnostic.suggested_action.clone())
+            }
             Self::IssuerSet(diagnostic) => return diagnostic.suggested_action.clone(),
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).1,
             Self::InvalidApiVersion => {
@@ -4284,6 +4413,9 @@ impl RuntimeConfigError {
             }
             Self::PrincipalClaimConflict => {
                 "Name a principalClaim other than registry_actor_kind in casework.yaml, then rebuild the package with `caseworkctl package`."
+            }
+            Self::AllowedClientsRequired { .. } => {
+                "List every client identifier this issuer entry admits in its allowedClients, then retry."
             }
             Self::InvalidTaskAuthority { action, .. }
             | Self::InvalidDelegatedStaffReader { action, .. } => action,

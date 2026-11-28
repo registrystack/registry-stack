@@ -47,6 +47,72 @@ contextProviders: {{}}
 }
 
 #[test]
+fn runtime_read_refusal_ranks_the_misspelled_database_above_the_missing_member() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let runtime = write_runtime(&root, &root.join("package"));
+    let contents = std::fs::read_to_string(&runtime)
+        .unwrap()
+        .replace("database:", "databse:");
+    std::fs::write(&runtime, contents).unwrap();
+    let declared = registry_platform_config::declared_from(None, None).unwrap();
+    let refusal = registry_casework::RuntimeConfig::load_file(&runtime, declared).unwrap_err();
+    assert_eq!(refusal.code(), "config.unknown-key");
+    assert_eq!(refusal.pointer(), "/databse");
+    assert_eq!(
+        refusal.suggested_action(),
+        "Rename `databse` to `database`, or remove it."
+    );
+}
+
+#[test]
+fn runtime_decode_refusal_keeps_literal_unrestricted_clients() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let runtime = write_runtime(&root, &root.join("package"));
+    let contents = std::fs::read_to_string(&runtime)
+        .unwrap()
+        .replace(
+            "database: {runtimeUrlRef: secret:env/RUNTIME, migrationUrlRef: secret:env/MIGRATION}",
+            "database: false",
+        )
+        .replace(
+            "allowedClients: [casework-test]",
+            "allowedClients: unrestricted",
+        );
+    std::fs::write(&runtime, contents).unwrap();
+    let (exit, stderr) = serve(&runtime);
+    assert_eq!(exit, Some(1));
+    assert!(
+        stderr.contains("config.invalid-type") && stderr.contains("/database"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("casework.posture.unrestricted-clients")
+            && stderr.contains("/authentication/oidc/issuers/main/allowedClients"),
+        "{stderr}"
+    );
+    let declared = registry_platform_config::declared_from(None, None).unwrap();
+    let check = registry_casework::check_runtime(&runtime, None, false, declared);
+    for (code, path) in [
+        ("config.invalid-type", "/database"),
+        (
+            "casework.posture.unrestricted-clients",
+            "/authentication/oidc/issuers/main/allowedClients",
+        ),
+    ] {
+        assert!(
+            check
+                .diagnostics
+                .iter()
+                .any(|entry| entry.code == code && entry.path == path),
+            "{:?}",
+            check.diagnostics
+        );
+    }
+}
+
+#[test]
 fn a_refused_project_prints_every_reader_line_to_stderr() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let root = std::fs::canonicalize(directory.path()).expect("canonical root");
@@ -103,6 +169,7 @@ fn serve(runtime: &Path) -> (Option<i32>, String) {
         .arg(runtime)
         .arg("serve")
         .env_remove("CASEWORK_LOG")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .expect("run casework");
     assert!(output.stdout.is_empty());
@@ -393,7 +460,7 @@ fn production_collects_development_settings_before_opening_the_package() {
         for needle in [
             "platform.posture.insecure-issuer-http",
             "casework.posture.unrestricted-clients",
-            "/authentication/oidc/allowedClients",
+            "/authentication/oidc/issuers/main/allowedClients",
             "rstack dev",
             "REGISTRY_STACK_POSTURE=development",
             "--posture development",
@@ -471,152 +538,31 @@ fn invalid_posture_is_a_usage_error_before_runtime_loading() {
     );
 }
 
+#[path = "support/marked_provider.rs"]
+mod marked_provider;
+
 #[tokio::test]
 async fn serving_provider_applies_peer_policy_to_marked_breg_response() {
-    use registry_casework_core::{
-        EphemeralCredential, HumanDisplayRequest, ReviewContextCapability, ReviewContextError,
-        ReviewContextIdentity, ReviewContextProvider, ReviewContextProviderPolicy, SubjectBinding,
-    };
-    use registry_platform_config::{Posture, SecretProvider, SecretResolver};
-    use serde_json::json;
-    use std::os::unix::fs::PermissionsExt as _;
-    use wiremock::{
-        matchers::{method, path},
-        Mock, MockServer, ResponseTemplate,
-    };
-
-    let upstream = MockServer::start().await;
-    let schema: serde_json::Value = serde_json::from_str(CANONICAL_SCHEMA).unwrap();
-    let context = &schema["x-registry-review-context"];
-    let action = context["actionId"].as_str().unwrap();
-    let contract = json!({
-        "id": schema["$id"],
-        "revision": schema["x-registry-definition-revision"],
-        "schemaDigest": registry_platform_config::sha256_uri(CANONICAL_SCHEMA.as_bytes()),
-    });
-    let description = serde_json::to_vec(&json!({
-        "apiVersion": registry_casework_breg::DESCRIPTION_API_VERSION,
-        "kind": registry_casework_breg::DESCRIPTION_KIND,
-        "sourceNamespace": "facility-registry",
-        "actionId": action,
-        "contextId": context["contextId"],
-        "contract": contract,
-        "schema": schema,
-        "schemaBytes": CANONICAL_SCHEMA,
-    }))
-    .unwrap();
-    let provider = ReviewContextProviderPolicy {
-        id: "source".into(),
-        source_namespace: "facility-registry".into(),
-        description: None,
-        deployment_ref: "source".into(),
-        capabilities: vec![
-            ReviewContextCapability::HumanDisplay,
-            ReviewContextCapability::ServiceStatus,
-        ],
-        service_profiles: [(ReviewContextCapability::ServiceStatus, "status".into())].into(),
-    };
-    let binding = serde_json::from_value(json!({
-        "baseUrl": upstream.uri(),
-        "statusProfile": "status",
-        "tokenEndpoint": format!("{}/token", upstream.uri()),
-        "clientAssertionAudience": upstream.uri(),
-        "clientIdRef": "secret:file/client-id",
-        "clientAssertionKeyRef": "secret:file/client-key",
-    }))
-    .unwrap();
-    let secrets = tempfile::Builder::new()
-        .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir()
-        .unwrap();
-    let secrets_path = secrets.path().canonicalize().unwrap();
-    let key = registry_platform_crypto::generate_private_jwk(
-        registry_platform_crypto::GeneratedKeyAlgorithm::Es256,
-    )
-    .unwrap();
-    let key = json!({"kty": key.kty, "alg": key.alg, "kid": key.kid,
-        "crv": key.crv, "x": key.x, "y": key.y, "d": key.d});
-    for (file, data) in [
-        ("client-id", "synthetic-client".into()),
-        ("client-key", key.to_string()),
-    ] {
-        let file = secrets_path.join(file);
-        std::fs::write(&file, data).unwrap();
-        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
-    let resolver = SecretResolver::new([SecretProvider::File], secrets_path).unwrap();
-    let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let id = "00000000-0000-4000-8000-000000000001";
-    let subject = json!({"source":"facility-registry","subjectType":"proposal","id":id,
-        "version":"1","digest":digest});
-    let identity = ReviewContextIdentity {
-        subject: SubjectBinding {
-            source: "facility-registry".into(),
-            subject_type: "proposal".into(),
-            id: id.into(),
-            version: "1".into(),
-            digest: registry_casework_core::ContentDigest::parse(digest).unwrap(),
-        },
-        contract: serde_json::from_value(contract.clone()).unwrap(),
-    };
-    let response = |body| {
-        ResponseTemplate::new(200)
-            .insert_header("registry-posture", "development")
-            .insert_header(
-                "registry-engine-version",
-                registry_platform_buildinfo::DISPLAY_VERSION,
-            )
-            .insert_header(
-                "traceparent",
-                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-            )
-            .insert_header("cache-control", "no-store")
-            .insert_header("vary", "authorization, accept")
-            .set_body_json(body)
-    };
-    Mock::given(method("GET"))
-        .and(path("/v1/registry"))
-        .respond_with(response(
-            json!({"metadataVersion":"2","id":"facility-registry","version":"1",
-            "revision":digest,"recordTypes":[],"operations":[],"proposals":{"method":"GET",
-            "path":"/v1/proposals","accessProfiles":[],"get":{"method":"GET",
-            "path":"/v1/proposals/{proposal_id}","accessProfiles":[]},"actions":[{"actionId":action,
-            "accessProfile":"reviewer","operations":["get-review-context"],"readableInputs":[]}]}}),
-        ))
-        .expect(2)
-        .mount(&upstream)
-        .await;
-    Mock::given(method("GET")).and(path(format!("/v1/proposals/{id}/review-context")))
-        .respond_with(response(json!({"id":id,"actionId":action,"actionRevision":digest,
-            "submissionVersion":1,"revision":1,"effectDigest":digest,"subject":subject,
-            "context":{"reference":"native-proposal","contract":contract,"fields":{
-                "changes":[],"currentAddressLine":"Synthetic address","facilityId":id,"supportingDocument":null}},
-            "reviewable":true})))
-        .expect(1).mount(&upstream).await;
-    for posture in [Posture::Production, Posture::Development] {
-        let source = registry_casework_breg::build_provider(
-            &binding,
-            &provider,
-            &description,
+    let fixture = marked_provider::Fixture::new();
+    for posture in marked_provider::POSTURES {
+        let config = registry_casework::RuntimeConfig::load(&fixture.runtime, posture)
+            .unwrap()
+            .config;
+        let package = config.load_package().unwrap();
+        let resolver = registry_casework::secret_resolver(&config).unwrap();
+        let providers = registry_casework::build_context_providers(
+            &config,
+            &package,
             &resolver,
-            posture,
+            posture.posture,
         )
         .unwrap();
-        let outcome = source
-            .human_display(HumanDisplayRequest {
-                identity: &identity,
-                source_profile_id: "reviewer",
-                credential: EphemeralCredential::new("synthetic-human"),
-            })
+        let [provider] = providers.as_slice() else {
+            panic!("expected the one declared provider");
+        };
+        fixture
+            .assert_policy(provider.as_ref(), posture.posture)
             .await;
-        match posture {
-            Posture::Production => {
-                assert_eq!(outcome.unwrap_err(), ReviewContextError::VersionUnavailable)
-            }
-            Posture::Development => assert_eq!(
-                outcome.unwrap().display_reference.as_deref(),
-                Some("native-proposal")
-            ),
-        }
     }
+    fixture.finish();
 }

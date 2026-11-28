@@ -249,6 +249,7 @@ Each is matched against the token's `azp` claim or, when it has none, its `clien
 Every file writes the member: a list of at least one distinct client, or `unrestricted`, which admits every client the issuer verifies.
 An omitted member, an empty list and a repeated client are refused when the file is read.
 Only development accepts `unrestricted`. Production requires a list on every listener.
+Under `operator-controlled-upstream`, development requires a list too (`casework.runtime.allowed-clients-required`).
 A configured `taskAuthority` requires a list in either mode, and its `issuer` is an absolute `http` or `https` URL with a host and no user information.
 
 `scopeClaim` defaults to `registry_scopes` for compatibility with existing deployments.

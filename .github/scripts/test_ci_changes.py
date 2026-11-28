@@ -449,6 +449,7 @@ class CiChangesTest(unittest.TestCase):
             "platform-hygiene",
             "rust-policy",
             "evidence-contracts",
+            "evidence-doctor",
             "discovery-contracts",
             "breg-contracts",
             "breg-postgres-18",
@@ -472,9 +473,9 @@ class CiChangesTest(unittest.TestCase):
         # contracts-journeys lane: they replace the longest serial integration
         # jobs, so the pool trades extra directly-eligible slots for the
         # shorter critical path.
-        # The deployment job is one short runner.
-        self.assertLessEqual(slots, 20)
-        self.assertEqual(20, slots)
+        # The deployment and Evidence doctor jobs each use one runner.
+        self.assertLessEqual(slots, 21)
+        self.assertEqual(21, slots)
 
     def test_deferred_ci_work_keeps_its_selector_and_explicit_status_guard(
         self,
@@ -633,6 +634,7 @@ class CiChangesTest(unittest.TestCase):
             "rust-quality",
             "rust-tests",
             "evidence-contracts",
+            "evidence-doctor",
             "evidence-postgres",
             "discovery-contracts",
             "breg-contracts",
@@ -685,6 +687,7 @@ class CiChangesTest(unittest.TestCase):
                 "rust-tests",
                 "discovery-contracts",
                 "evidence-contracts",
+                "evidence-doctor",
                 "evidence-postgres",
                 "breg-contracts",
                 "breg-postgres-18",
@@ -717,6 +720,7 @@ class CiChangesTest(unittest.TestCase):
                 "rust-tests",
                 "discovery-contracts",
                 "evidence-contracts",
+                "evidence-doctor",
                 "evidence-postgres",
                 "evidence-fuzz",
                 "breg-contracts",
@@ -801,7 +805,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(45, len(final_needs))
+        self.assertEqual(46, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -1408,6 +1412,19 @@ class CiChangesTest(unittest.TestCase):
             {row["name"] for row in unrelated["rust_matrix"]["include"]},
         )
         self.assertFalse(unrelated["adapter_contracts"])
+
+    def test_evidence_runtime_and_ctl_changes_select_real_child_doctor(self) -> None:
+        for package in ("registry-evidence", "registry-evidencectl"):
+            with self.subTest(package=package):
+                outputs = classify(
+                    self.workspace, (f"crates/{package}/src/lib.rs",), pull_request=True
+                )
+                self.assertTrue(outputs["evidence_doctor"])
+        self.assertFalse(
+            classify(self.workspace, ("docs/site/README.md",), pull_request=True)[
+                "evidence_doctor"
+            ]
+        )
 
     def test_shared_adapter_engine_selects_evidence_consumers(self) -> None:
         outputs = classify(
@@ -4368,7 +4385,10 @@ on:
         manifest = Path("crates/registry-platform-httpsec/Cargo.toml").read_text(
             encoding="utf-8"
         )
-        self.assertIn('refusal-trace-id = ["server", "dep:registry-platform-authcommon"]', manifest)
+        self.assertIn(
+            'refusal-trace-id = [\n    "server",\n    "dep:registry-platform-authcommon",\n',
+            manifest,
+        )
         steps = [
             step
             for step in self.workflow_jobs["rust-tests"]["steps"]

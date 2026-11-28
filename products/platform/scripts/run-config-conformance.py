@@ -7,11 +7,13 @@ a format's registered minimal valid example (the `example` of its entry in
 products/platform/config-formats.yaml), so one case applies to every format
 without a per-format copy. For every registered format with a `check` command
 and an example, the runner first checks the unmutated example (the `baseline`
-case: exit 0, no diagnostics), then applies each case that applies to the
+case: exit 0, no diagnostics other than allowed posture listings), then applies each case that applies to the
 format, runs the check command with `--format json` against a temporary copy
 of the example's project, and asserts the exit status, every diagnostic's
 code, path, line, and column, the diagnostic shape, and that the planted
-marker value appears nowhere in the output.
+marker value appears nowhere in the output. A check row with `--posture development`
+allows warning diagnostics whose codes start with `<product>.posture.` or
+`platform.posture.`. Those listings still undergo the diagnostic shape check.
 
 A case file (`cases/<id>.yaml`) has these members:
 
@@ -1460,7 +1462,9 @@ def plural(count: int, word: str) -> str:
     return f"{count} {word}{'' if count == 1 else 's'}"
 
 
-def human_problems(expected: list[dict[str, Any]], output: str) -> list[str]:
+def human_problems(
+    expected: list[dict[str, Any]], output: str, posture_warnings: int = 0
+) -> list[str]:
     """Expected diagnostics the human output does not show position first."""
     lines = output.splitlines()
     problems = []
@@ -1484,7 +1488,7 @@ def human_problems(expected: list[dict[str, Any]], output: str) -> list[str]:
             if not any(note_matches(line, related) for line in lines):
                 problems.append(f"human output has no note for {related['path']} {related['line']}:{related['column']}")
     errors = sum(1 for item in expected if item["severity"] == "error")
-    warnings = sum(1 for item in expected if item["severity"] == "warning")
+    warnings = posture_warnings + sum(1 for item in expected if item["severity"] == "warning")
     summary = f"{plural(errors, 'error')}, {plural(warnings, 'warning')}"
     if not any(line.startswith(summary) for line in lines):
         problems.append(f"human output has no summary line starting `{summary}`")
@@ -1986,6 +1990,13 @@ def absolute(diag: Any, work: Path) -> Any:
     return diag
 
 
+def posture_listing(diagnostic: Any) -> bool:
+    if not isinstance(diagnostic, dict) or diagnostic.get("severity") != "warning":
+        return False
+    code = diagnostic.get("code")
+    return isinstance(code, str) and code.partition(".")[2].startswith("posture.")
+
+
 def check_variant(
     fmt: Format, case: Case, argv: list[str], staged: Staged, env: dict[str, str], expected: list[dict[str, Any]]
 ) -> list[str]:
@@ -1993,11 +2004,16 @@ def check_variant(
     code, stdout, stderr = run_command([*argv, "--format", "json", *case.args], staged.work, env)
     problems = exit_problem(code, wanted, stderr)
     problems += marker_problems(stdout, stderr)
+    posture_warnings = 0
     if case.expect.get("report", True):
         diagnostics, report = parse_report(stdout.decode("utf-8", "replace"))
         problems += report
         if diagnostics is not None:
-            problems += match_problems(expected, [absolute(d, staged.work) for d in diagnostics])
+            compared = diagnostics
+            if any(argv[index:index + 2] == ["--posture", "development"] for index in range(len(argv))):
+                compared = [diag for diag in diagnostics if not posture_listing(diag)]
+                posture_warnings = len(diagnostics) - len(compared)
+            problems += match_problems(expected, [absolute(d, staged.work) for d in compared])
             for index, diag in enumerate(diagnostics):
                 problems += [f"diagnostic {index}: {p}" for p in shape_problems(diag, fmt.kind)]
     if case.human:
@@ -2005,7 +2021,7 @@ def check_variant(
         problems += exit_problem(code, wanted, stderr, "human run: ")
         problems += marker_problems(stdout, stderr)
         output = stdout.decode("utf-8", "replace") + "\n" + stderr.decode("utf-8", "replace")
-        problems += human_problems(expected, output)
+        problems += human_problems(expected, output, posture_warnings)
     return problems
 
 

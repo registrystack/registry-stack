@@ -281,6 +281,8 @@ Before handoff, confirm each of the following with synthetic data and record the
 5. Test source timeout and size-limit behaviour, backup, restore, and rollback. Record the rollback
    trigger and the responsible operator.
 
+Check that each serving product reports `posture: production` in its readiness response.
+
 Confirm that Registry Evidence readiness rechecks the subject-binding key, signer, pinned audit sink,
 and every source credential. It does not send an evidence-data request, so readiness does not prove
 that a source returns data. Verify a stored assertion offline with independently retained

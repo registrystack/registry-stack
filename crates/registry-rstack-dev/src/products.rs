@@ -1121,7 +1121,7 @@ impl<'a> ProductRunner<'a> {
                     "DocumentsRuntimeConfig"
                 });
                 config["identity"] = json!({"databaseId": identity});
-                config["authentication"] = json!({"oidc": oidc});
+                config["authentication"] = json!({"oidc": issuer_set(oidc)});
                 if product == Product::Scheduling {
                     config["taskGrantStatus"] = json!("unchecked-final-fifteen-minutes");
                     config["retention"] = json!({});
@@ -1153,10 +1153,9 @@ impl<'a> ProductRunner<'a> {
                         }
                     }
                 }
-                oidc.as_object_mut()
-                    .expect("OIDC object")
-                    .remove("allowedClients");
-                oidc["policies"] = json!(policies);
+                oidc["allowedClients"] = json!("from-policies");
+                let mut authentication = issuer_set(oidc);
+                authentication["policies"] = json!(policies);
                 let key = |file| self.secret(file, random_key_bytes()?.as_slice());
                 let mut connections = runtime["connections"].clone();
                 if let Some(connections) = connections.as_object_mut() {
@@ -1202,7 +1201,7 @@ impl<'a> ProductRunner<'a> {
                         "runtimeRole": url::Url::parse(&urls.context(NEEDS_DATABASE)?.runtime)?.username(),
                         "packages": [{"root": package, "expectedDigest": checksum}],
                         "listener": config["listener"],
-                        "authentication": oidc,
+                        "authentication": authentication,
                         "auditFile": config["audit"]["path"],
                         "auditKeyRef": key("coordinator-audit-key")?,
                         "activeStateKey": 1,
@@ -1238,11 +1237,9 @@ impl<'a> ProductRunner<'a> {
                         });
                     }
                 }
-                let oidc_fields = oidc.as_object_mut().expect("OIDC object");
-                let clients = oidc_fields
-                    .remove("allowedClients")
-                    .expect("allowed clients");
-                oidc_fields.remove("scopeClaim");
+                oidc.as_object_mut()
+                    .expect("OIDC object")
+                    .remove("scopeClaim");
                 return Ok(json!({
                     "apiVersion": config["apiVersion"],
                     "kind": "AdapterRuntimeConfig",
@@ -1254,8 +1251,7 @@ impl<'a> ProductRunner<'a> {
                     "listener": {"bind": bind},
                     "database": config["database"],
                     "secretProviders": config["secretProviders"],
-                    "oidc": oidc,
-                    "allowedClients": clients,
+                    "oidc": issuer_set(oidc),
                     "audit": {"retentionDays": 1},
                     "idempotency": {"responseRetentionSeconds": 3600},
                     "cursorKeyRef": self.secret("adapter-cursor-key", random_key_bytes()?.as_slice())?,
@@ -1271,7 +1267,7 @@ impl<'a> ProductRunner<'a> {
                     "listener": {"bind": bind},
                     "package": config["package"],
                     "secretProviders": config["secretProviders"],
-                    "authentication": {"oidc": oidc},
+                    "authentication": {"oidc": issuer_set(oidc)},
                     "audit": {"path": config["audit"]["path"]},
                 }));
             }
@@ -1357,7 +1353,7 @@ impl<'a> ProductRunner<'a> {
                     authority_claims["purpose"] = json!("registry_purpose");
                 }
                 config["authentication"] = json!({
-                    "oidc": oidc,
+                    "oidc": issuer_set(oidc),
                     "authorityClaims": authority_claims
                 });
                 config["cursor"] = json!({
@@ -1814,6 +1810,11 @@ fn shared_config(
     (config, oidc)
 }
 
+/// The issuer set a product reads: the run issuer as its one entry, `main`.
+pub(super) fn issuer_set(entry: Value) -> Value {
+    json!({"issuers": {"main": entry}})
+}
+
 /// The Casework runtime configuration the run writes, before its bindings.
 /// `check` renders it with stand-in paths, so the configuration Casework
 /// checks is the one `start` writes.
@@ -1839,7 +1840,7 @@ fn casework_config(
     config["listener"] = json!({"bind": bind, "tlsTermination": "loopback-plaintext"});
     config["identity"] = json!({"databaseId": identity});
     // Casework reads its issuers as a set, and the run has one.
-    config["authentication"] = json!({"oidc": {"issuers": {"main": oidc}}});
+    config["authentication"] = json!({"oidc": issuer_set(oidc)});
     config
 }
 
@@ -3770,10 +3771,19 @@ mod tests {
                 )
                 .unwrap();
             let casework: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            assert_eq!(breg["authentication"]["oidc"]["issuer"], expected);
+            let breg_issuer = &breg["authentication"]["oidc"]["issuers"]["main"];
+            assert_eq!(breg_issuer["issuer"], expected);
+            assert_eq!(
+                breg["authentication"]["oidc"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .collect::<Vec<_>>(),
+                ["issuers"]
+            );
             let casework_issuer = &casework["authentication"]["oidc"]["issuers"]["main"];
             assert_eq!(casework_issuer["issuer"], expected);
-            for oidc in [&breg["authentication"]["oidc"], casework_issuer] {
+            for oidc in [breg_issuer, casework_issuer] {
                 assert_eq!(oidc["jwksSource"]["type"], "test-issuer");
             }
             for config in [&breg, &casework] {
@@ -3782,7 +3792,7 @@ mod tests {
             assert_eq!(casework["listener"]["tlsTermination"], "loopback-plaintext");
             if !application {
                 for clients in [
-                    &breg["authentication"]["oidc"]["allowedClients"],
+                    &breg_issuer["allowedClients"],
                     &casework_issuer["allowedClients"],
                 ] {
                     assert!(!clients
@@ -3791,10 +3801,7 @@ mod tests {
                         .iter()
                         .any(|client| client == "browser-client"));
                 }
-                assert_eq!(
-                    breg["authentication"]["oidc"]["maximumTokenLifetimeSeconds"],
-                    3600
-                );
+                assert_eq!(breg_issuer["maximumTokenLifetimeSeconds"], 3600);
             }
 
             assert_eq!(
@@ -4664,22 +4671,27 @@ mod tests {
                     Some(&database),
                 )
                 .unwrap();
-            let (listener, auth, clients) = match product {
+            // Every product that verifies tokens reads one issuer set: the
+            // run issuer is its only entry, and nothing sits at the flat place.
+            let (listener, issuer_set) = match product {
                 Product::Coordinator => (
                     &config["deployment"]["listener"],
                     &config["deployment"]["authentication"],
-                    json!(["console"]),
                 ),
-                Product::Adapter => (
-                    &config["listener"],
-                    &config["oidc"],
-                    config["allowedClients"].clone(),
-                ),
-                _ => (
-                    &config["listener"],
-                    &config["authentication"]["oidc"],
-                    config["authentication"]["oidc"]["allowedClients"].clone(),
-                ),
+                Product::Adapter => (&config["listener"], &config["oidc"]),
+                _ => (&config["listener"], &config["authentication"]["oidc"]),
+            };
+            let auth = &issuer_set["issuers"]["main"];
+            let clients = match product {
+                Product::Coordinator => {
+                    assert_eq!(auth["allowedClients"], "from-policies");
+                    json!(issuer_set["policies"]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .collect::<Vec<_>>())
+                }
+                _ => auth["allowedClients"].clone(),
             };
             match product {
                 Product::Scheduling => assert_eq!(config["retention"], json!({})),
@@ -4692,6 +4704,8 @@ mod tests {
             }
             assert_eq!(listener["bind"], "127.0.0.1:34567");
             if product.verifies_tokens() {
+                assert!(issuer_set.get("issuer").is_none(), "{issuer_set}");
+                assert!(config.get("allowedClients").is_none(), "{config}");
                 assert_eq!(auth["issuer"], runner.input.plan.issuer);
                 assert_eq!(auth["audience"], "urn:example:local");
                 assert_eq!(auth["jwksSource"]["documentRef"], secret_ref("jwks"));

@@ -197,7 +197,7 @@ fn write_ctl_report_with_settings<T: Serialize + ?Sized>(
             )));
         }
     }
-    let mut report =
+    let report =
         registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
             .map_err(|error| serde_json::Error::io(io::Error::other(error)))?;
     let mut report = match format {

@@ -34,19 +34,23 @@ database:
   # caBundleRef: secret:file/postgres-ca.pem
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:documents
-    scopeClaim: scope
-    # Required; `unrestricted` is a startup refusal.
-    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
-    # Signing keys come from the issuer's discovery document by default. A
-    # static key set suits a host that cannot reach the issuer, or a local
-    # test issuer: it is read once at startup and never rotates, so replace
-    # the secret and restart to change keys. It holds RSA or EC public keys,
-    # each with a distinct non-empty `kid`.
-    # jwksSource:
-    #   type: static
-    #   documentRef: secret:file/jwks.json
+    # The issuers whose access tokens this runtime accepts, each under an id
+    # of your choice. A client belongs to one issuer.
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:documents
+        scopeClaim: scope
+        # Required; `unrestricted` is a startup refusal.
+        allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+        # Signing keys come from the issuer's discovery document by default. A
+        # static key set suits a host that cannot reach the issuer, or a local
+        # test issuer: it is read once at startup and never rotates, so replace
+        # the secret and restart to change keys. It holds RSA or EC public keys,
+        # each with a distinct non-empty `kid`.
+        # jwksSource:
+        #   type: static
+        #   documentRef: secret:file/jwks.json
 audit:
   destination: file
   path: /var/lib/registry-documents/audit.ndjson

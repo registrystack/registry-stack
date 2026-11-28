@@ -83,7 +83,11 @@ enum Command {
         command: ProviderCommand,
     },
     /// Report the one review lifecycle.
-    Lifecycle,
+    Lifecycle {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
+    },
     /// Package the policy and its exact local schema and provider dependency closure.
     #[command(group(ArgGroup::new("package_output").required(true).multiple(false).args(["output", "dry_run"])))]
     Package {
@@ -127,9 +131,18 @@ enum Command {
     /// Create the migration and runtime roles and the database named by the runtime file.
     Provision(registry_platform_provision::ProvisionArgs),
     /// Call the Casework HTTP API with a saved connection or an explicit URL.
-    Api(Box<registry_cli_api::ApiArgs>),
+    Api {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
+        #[command(flatten)]
+        args: Box<registry_cli_api::ApiArgs>,
+    },
     /// Manage saved Casework API connections.
     Connection {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, global = true, value_name = "POSTURE")]
+        posture: Option<String>,
         #[command(subcommand)]
         command: registry_cli_api::ConnectionCommand,
     },
@@ -401,8 +414,8 @@ fn main_entry_with_posture_resolver(
                 command_posture.expect("provision declares posture"),
             );
         }
-        Command::Api(args) => return api(*args, format_supplied, stderr),
-        Command::Connection { command } => {
+        Command::Api { args, .. } => return api(*args, format_supplied, stderr),
+        Command::Connection { command, .. } => {
             return connection(command, format, format_supplied, stderr);
         }
         Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
@@ -488,8 +501,10 @@ fn main_entry_with_posture_resolver(
     } else {
         stdout as &mut dyn Write
     };
+    // The lifecycle describes the review contract and has a closed report shape.
+    let report_posture = command_posture.filter(|_| report_command != "lifecycle");
     let written = match format {
-        OutputFormat::Json => report::write_with_posture(&value, output, command_posture),
+        OutputFormat::Json => report::write_with_posture(&value, output, report_posture),
         OutputFormat::Human => render_human(&value, output),
     };
     ExitCode::from(if written.is_ok() {
@@ -557,7 +572,7 @@ fn command_kind(command: &Command) -> CommandKind {
             | Command::Plan(_)
             | Command::Apply { .. }
             | Command::Status(_)
-            | Command::Api(_)
+            | Command::Api { .. }
             | Command::Connection { .. }
     ) {
         CommandKind::Operational
@@ -681,6 +696,8 @@ fn activation_failure(
 }
 #[cfg(test)]
 mod operator_tests;
+#[cfg(test)]
+mod posture_dispatch_tests;
 
 impl Command {
     fn posture_flag(&self) -> Option<Result<Option<&str>, registry_platform_yaml::Diagnostic>> {
@@ -691,6 +708,9 @@ impl Command {
             | Self::Init { posture, .. }
             | Self::Types { posture, .. }
             | Self::Package { posture, .. }
+            | Self::Lifecycle { posture }
+            | Self::Api { posture, .. }
+            | Self::Connection { posture, .. }
             | Self::Provider {
                 command:
                     ProviderCommand::Add { posture, .. } | ProviderCommand::Pair { posture, .. },
@@ -733,14 +753,14 @@ impl Command {
                 ProviderCommand::Add { .. } => "provider-add",
                 ProviderCommand::Pair { .. } => "provider-pair",
             },
-            Self::Lifecycle => "lifecycle",
+            Self::Lifecycle { .. } => "lifecycle",
             Self::Package { .. } => "package",
             Self::Doctor(_) => "doctor",
             Self::Plan(_) => "plan",
             Self::Status(_) => "status",
             Self::Apply { .. } => "apply",
             Self::Provision(_) => "provision",
-            Self::Api(_) => "api",
+            Self::Api { .. } => "api",
             Self::Connection { .. } => "connection",
             Self::RstackDev(_) => "rstack-dev",
         }
@@ -843,7 +863,7 @@ fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
                 apply,
             )
         }
-        Command::Lifecycle => Ok(
+        Command::Lifecycle { .. } => Ok(
             json!({"ok":true,"command":"lifecycle","lifecycles":[registry_casework_core::review_lifecycle()]}),
         ),
         Command::Package {
@@ -878,7 +898,7 @@ fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
             posture(),
         ),
         Command::Provision(_) => unreachable!("provision writes its own report"),
-        Command::Api(_) | Command::Connection { .. } => {
+        Command::Api { .. } | Command::Connection { .. } => {
             unreachable!("raw API commands bypass report dispatch")
         }
         Command::RstackDev(_) => unreachable!("the rstack dev runner bypasses report dispatch"),

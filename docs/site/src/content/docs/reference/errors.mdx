@@ -110,7 +110,7 @@ These products differ:
 
 - BReg answers 503 with a problem body (`runtime.not_ready`).
 - OID4VCI answers 503 with `{"status":"not_ready"}`.
-- Casework and Scheduling answer 200 with the shared body `{"status":"ready"}`, and `/health` with `{"status":"ok"}`.
+- Casework and Scheduling answer readiness with HTTP 200 and JSON containing `status: ready`, `posture` and `developmentSettings`. Their `/health` answers `{"status":"ok"}`.
 - Coordinator answers 200 with `{"ready":true,"status":"ready"}` and 503 with `{"ready":false}`.
 - Scheduling also serves `/readyz`, a bodyless probe on the same readiness test, under its deployment health contract.
 - Messaging and Documents answer 200 without a body, and 503 with a `service.unavailable` problem body and a `Retry-After` header.

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The published runtime schema types each `authentication.oidc.issuers` key as a local identifier (`propertyNames: {$ref: LocalId}`), as the other products' issuer maps do.
 - `bregctl status` reports an error with code `breg.activation.posture-mismatch` from the database state row and exits 1 on mismatch.
 - The JSON status report for a posture mismatch carries `ok: false` and `status: domain-refusal`. It includes available activation ledger details.
 - `bregctl doctor` includes the recorded posture mismatch alongside startup refusals for maintenance or a different active digest.
@@ -9,6 +10,7 @@
 - A package verification refusal reported alongside a posture refusal points to `arguments` when `--package` supplied the candidate.
 
 - `bregctl provision` reports all runtime posture refusals and includes the resolved `posture` in JSON.
+- BREAKING: Rust client configurations take a peer policy in `BaseRegistryClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
 
 - `bregctl init` writes a plan and scenario for `rstack dev`, including projects derived from PublicSchema.
 - BREAKING: an `attachmentStorage` or `attachmentVerification` URL over https

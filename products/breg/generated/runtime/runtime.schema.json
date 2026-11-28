@@ -27,7 +27,7 @@
     },
     "AdapterEndpointBindings": {
       "additionalProperties": false,
-      "description": "The endpoint bindings of one deployment: the runtime members every\nmode shares.\nThe ingestion job's runtime document (`AdapterJobRuntimeConfig`)\nstates these members beside its own `sources`, `store`,\n`destinations`, `secretProviders`, and `hookIngress` members; the\nfacade's document states them beside the facade-only members\n(`secretProviders`, `listener`, `database`, `oidc`, `allowedClients`,\n`audit`, `idempotency`, and the cursor custody), which\n[`AdapterRuntimeConfig::endpoint_bindings`] sets aside.",
+      "description": "The endpoint bindings of one deployment: the runtime members every\nmode shares.\nThe ingestion job's runtime document (`AdapterJobRuntimeConfig`)\nstates these members beside its own `sources`, `store`,\n`destinations`, `secretProviders`, and `hookIngress` members; the\nfacade's document states them beside the facade-only members\n(`secretProviders`, `listener`, `database`, `oidc`,\n`audit`, `idempotency`, and the cursor custody), which\n[`AdapterRuntimeConfig::endpoint_bindings`] sets aside.",
       "properties": {
         "allowedPrivateCidrs": {
           "default": [],
@@ -1557,13 +1557,13 @@
       "description": "The issuers this registry accepts access tokens from.",
       "properties": {
         "issuers": {
-          "additionalProperties": false,
+          "additionalProperties": {
+            "$ref": "#/$defs/RawOidcVerifierConfig"
+          },
           "description": "The issuers a token may come from, by issuer id.",
           "minProperties": 1,
-          "patternProperties": {
-            "^[a-z][a-z0-9_-]{0,63}$": {
-              "$ref": "#/$defs/RawOidcVerifierConfig"
-            }
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
           },
           "type": "object"
         }

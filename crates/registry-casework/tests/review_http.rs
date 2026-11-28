@@ -1054,7 +1054,7 @@ async fn development_ready_lists_the_settings_and_marks_each_http_response() {
                     "posture": "development",
                     "developmentSettings": [{
                         "code": "casework.posture.unrestricted-clients",
-                        "pointer": "/authentication/oidc/allowedClients",
+                        "pointer": "/authentication/oidc/issuers/main/allowedClients",
                     }],
                 })
             );

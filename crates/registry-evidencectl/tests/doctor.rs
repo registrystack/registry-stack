@@ -1290,6 +1290,7 @@ fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
             .arg(&runtime)
             .arg("--evidence-bin")
             .arg(&binary)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .output()
             .expect("runtime doctor");
         assert_eq!(output.status.code(), Some(1), "{format}");
@@ -1319,6 +1320,52 @@ fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
             assert!(output.stdout.is_empty());
         }
     }
+}
+
+#[test]
+fn doctor_refuses_malformed_successful_dependency_output() {
+    let workspace = tempfile::tempdir().unwrap();
+    let runtime = workspace.path().join("runtime.yaml");
+    fs::write(&runtime, "version: 1\n").unwrap();
+    let binary = workspace.path().join("evidence");
+    fs::write(
+        &binary,
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'evidence {}\n'; exit 0; fi
+case " $* " in
+  *" --require-runtime-dependencies "*) printf '%s\n' '{{malformed';;
+  *) printf '%s\n' '{{"diagnostics":[]}}';;
+esac
+exit 0
+"#,
+            registry_platform_buildinfo::DISPLAY_VERSION,
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::wait_until_executable(&binary);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["--format", "json", "doctor", "--runtime-config"])
+        .arg(&runtime)
+        .arg("--evidence-bin")
+        .arg(&binary)
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "operational-failure");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "evidence.runtime.report-unreadable"),
+        "{report}"
+    );
 }
 
 /// An all-green report that never mentions the signer reads as a ready target

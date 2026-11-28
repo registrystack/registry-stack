@@ -7,10 +7,13 @@
 //! `CASEWORKCTL_WRITE_REPORT_EXAMPLE=1 cargo test -p registry-caseworkctl --test report_examples`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use jsonschema::{Draft, JSONSchema};
 use serde_json::Value;
+
+#[path = "support/cli.rs"]
+#[allow(dead_code)]
+mod cli;
 
 const STANDALONE: &str = "products/casework/examples/standalone-decision";
 const ADVANCED: &str = "products/casework/examples/multi-stage-routing-clocks";
@@ -48,10 +51,9 @@ fn output(root: &Path, arguments: &[&str], expected_exit: i32) -> (Value, Vec<u8
     for project in [STANDALONE, ADVANCED, STAGE_OUTCOMES] {
         stage_project(root, scratch.path(), project);
     }
-    let output = Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
-        .arg("--format")
-        .arg("json")
-        .args(arguments)
+    let mut args = vec!["--format", "json"];
+    args.extend_from_slice(arguments);
+    let output = cli::caseworkctl_command(&args)
         .current_dir(scratch.path())
         .output()
         .expect("caseworkctl starts");
@@ -144,8 +146,7 @@ fn check_with_a_runtime_file_lists_each_explicit_production_setting_it_states() 
         ),
     )
     .expect("runtime file is written");
-    let output = Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
-        .args(["--format", "json", "check"])
+    let output = cli::caseworkctl_command(&["--format", "json", "check"])
         .arg(&project)
         .arg("--runtime-config")
         .arg(&runtime)

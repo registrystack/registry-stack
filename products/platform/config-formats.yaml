@@ -1608,9 +1608,15 @@ formats:
         whenOmitted: open
       - pointer: /authentication/oidc/issuers/*/assertionIssuers
         whenOmitted: open
+      - pointer: /authentication/oidc/issuers/*/actorKind
+        whenOmitted: closed
+      - pointer: /authentication/oidc/issuers/*/clientActorKinds
+        whenOmitted: closed
+      - pointer: /authentication/oidc/delegatedStaffReaders/*/representedHuman
+        whenOmitted: refused
       - pointer: /package/expectedDigest
         whenOmitted: open
-    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers]
+    restrictingMembers: [/authentication/oidc/issuers/*/allowedClients, /authentication/oidc/issuers/*/assertionIssuers, /authentication/oidc/delegatedStaffReaders/*/representedHuman]
   - id: casework/fixture
     product: casework
     title: Casework fixture
@@ -4628,7 +4634,7 @@ formats:
       file: crates/registry-adapter/src/payments/pack.rs
       function: from_yaml
       type: PaymentProviderPack
-    check: adapterctl payments check {payments} --provider-pack {file}
+    check: adapterctl payments check {payments} --provider-pack {file} --posture development
     example: products/adapter/packs/payment-simulator/pack.yaml
     conformance:
       requiredText: /id
@@ -4671,7 +4677,7 @@ formats:
       file: crates/registry-adapter/src/payments/http.rs
       function: load_config
       type: PaymentsConfig
-    check: adapterctl payments check {file}
+    check: adapterctl payments check {file} --posture development
     example: products/adapter/examples/payment-collections/payments.example.yaml
     conformance:
       requiredText: /connections/0/id

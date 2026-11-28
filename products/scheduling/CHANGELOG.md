@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: Rust client configurations take a peer policy in `SchedulingClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
 - Start a local development run from the starter with `rstack dev start`.
 
 - BREAKING: `schedulingctl records apply` reports a swap the store refuses (`package-not-active`, `deployment-identity`, `not-activated`, `database-id-mismatch`, `combined-invariant`) as a domain refusal with exit 1 and its own code, as the other activation commands do. It was exit 3 `store-unavailable`. Migration: Scripts that retry on exit 3 no longer retry these refusals. Run the command the message names.

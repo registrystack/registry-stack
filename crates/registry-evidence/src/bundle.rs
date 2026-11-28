@@ -257,6 +257,31 @@ fn with_runtime_posture_findings(
     BundleError::Refused(Box::new(Report::new(diagnostics)))
 }
 
+fn assurance_profile_conflict(
+    assurance: Option<AssuranceProfile>,
+    posture: Posture,
+    file: &Path,
+) -> Option<registry_platform_yaml::Diagnostic> {
+    if !assurance.is_some_and(|profile| profile != AssuranceProfile::Local)
+        || posture != Posture::Development
+    {
+        return None;
+    }
+    let mut diagnostic = registry_platform_yaml::Diagnostic::error(
+        "evidence.posture.assurance-profile-conflict",
+        "/assuranceProfile",
+        "a development process requires a package built with assuranceProfile: local",
+        "Build the package with assuranceProfile: local for development, or run the current package in production.",
+    );
+    diagnostic.artifact = Some(crate::config::EVIDENCE_BUNDLE_KIND.to_owned());
+    diagnostic.source = Some(registry_platform_yaml::Source {
+        file: file.display().to_string(),
+        line: None,
+        column: None,
+    });
+    Some(diagnostic)
+}
+
 /// An artifact fault whose artifact the caller binds later.
 fn invalid_artifact(cause: &'static str) -> BundleError {
     BundleError::InvalidArtifact(ArtifactFault::unbound(cause))
@@ -737,6 +762,8 @@ impl Bundle {
         loaded: &mut registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
         require_authority: bool,
     ) -> Result<Self, BundleError> {
+        use registry_platform_yaml::Diagnostic;
+
         let runtime = &loaded.config;
         let mut findings = runtime.findings().into_iter();
         let first = findings.next();
@@ -744,6 +771,21 @@ impl Bundle {
             .iter()
             .chain(findings.as_slice())
             .any(|finding| finding.pointer.starts_with("/package/"));
+        let runtime_diagnostic = first.as_ref().map(|finding| {
+            let mut diagnostic = Diagnostic::error(
+                finding.code,
+                &finding.pointer,
+                finding.error.to_string(),
+                &finding.action,
+            );
+            diagnostic.artifact = Some(crate::config::EVIDENCE_RUNTIME_KIND.to_owned());
+            diagnostic.source = Some(registry_platform_yaml::Source {
+                file: path.display().to_string(),
+                line: None,
+                column: None,
+            });
+            diagnostic
+        });
         let semantic = first
             .map_or(Ok(()), |finding| Err(finding.error))
             .and_then(|()| {
@@ -767,9 +809,33 @@ impl Bundle {
         let bundle = match package {
             Ok(bundle) => bundle,
             Err(error) => {
-                let error = semantic.err().map_or(error, |error| {
-                    configuration_error(RUNTIME_FILE, path, error)
-                });
+                let error = if let Some(runtime_error) = semantic.err() {
+                    let diagnostic = runtime_diagnostic.unwrap_or_else(|| {
+                        Diagnostic::error(
+                            "evidence.deployment.invalid-input",
+                            "/authority",
+                            runtime_error.to_string(),
+                            "Configure an authority binding for activation.",
+                        )
+                    });
+                    match error {
+                        BundleError::Refused(mut report) => {
+                            report.extend(Report::new(vec![diagnostic]));
+                            BundleError::Refused(report)
+                        }
+                        error => match crate::check::package_fault_diagnostic(
+                            &error,
+                            &runtime.package.root,
+                        ) {
+                            Some(package) => BundleError::Refused(Box::new(Report::new(vec![
+                                package, diagnostic,
+                            ]))),
+                            None => configuration_error(RUNTIME_FILE, path, runtime_error),
+                        },
+                    }
+                } else {
+                    error
+                };
                 return Err(with_runtime_posture_findings(
                     error,
                     path,
@@ -833,7 +899,7 @@ impl Bundle {
         runtime: Option<&RuntimeConfig>,
     ) -> Option<registry_platform_yaml::Diagnostic> {
         use registry_adapter_core::EndpointAuthentication;
-        use registry_platform_yaml::{escape_pointer_segment, Diagnostic};
+        use registry_platform_yaml::escape_pointer_segment;
 
         for found in &self.development_settings {
             report.record(found.clone());
@@ -880,22 +946,12 @@ impl Bundle {
                     }
                 }
             }
-        } else if report.posture() == Posture::Development {
-            let mut diagnostic = Diagnostic::error(
-                "evidence.posture.assurance-profile-conflict",
-                "/assuranceProfile",
-                "a development process requires a package built with assuranceProfile: local",
-                "Build the package with assuranceProfile: local for development, or run the current package in production.",
-            );
-            diagnostic.artifact = Some(crate::config::EVIDENCE_BUNDLE_KIND.to_owned());
-            diagnostic.source = Some(registry_platform_yaml::Source {
-                file: self.root.join(CONFIG_FILE).display().to_string(),
-                line: None,
-                column: None,
-            });
-            return Some(diagnostic);
         }
-        None
+        assurance_profile_conflict(
+            Some(self.config.assurance_profile),
+            report.posture(),
+            &self.root.join(CONFIG_FILE),
+        )
     }
 
     /// Load the same verified package pin used by startup, without requiring an
@@ -985,11 +1041,12 @@ impl Bundle {
                 report.record(setting.clone());
             }
             let mut diagnostics = report.diagnostics(&path);
-            if diagnostics.is_empty() {
-                return error;
-            }
             for diagnostic in &mut diagnostics {
                 diagnostic.artifact = Some(crate::config::EVIDENCE_BUNDLE_KIND.to_owned());
+            }
+            diagnostics.extend(assurance_profile_conflict(assurance, posture, &path));
+            if diagnostics.is_empty() {
+                return error;
             }
             let mut refusal = match error {
                 BundleError::Refused(report) => *report,

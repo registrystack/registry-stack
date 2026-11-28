@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: 2026-11-27
 doc_type: reference
 locale: en
 standards_referenced:
@@ -102,7 +102,14 @@ or No kind does not carry that member.
 ## How a runtime reads its file
 
 A runtime reads its configuration file only from an absolute path with no `.` or `..` segment and
-no symbolic link anywhere along it, and only when that path names a regular file. Every file the reader reads, authored or runtime, is at most 1 MiB
+no symbolic link anywhere along it, and only when that path names a regular file.
+
+The runtime user or root must own the file and each of its ancestors. Deny group and other write
+access on each of them. A root-owned sticky ancestor such as `/tmp` is permitted.
+
+{/* Evidence: crates/registry-platform-config/src/loader.rs, require_trusted_runtime_path. */}
+
+Every file the reader reads, authored or runtime, is at most 1 MiB
 and is one YAML document in a strict subset of YAML 1.2, in UTF-8, nested at most 128 levels
 deep. Write block mappings and lists, indent with spaces, and add comments wherever they help. The
 reader refuses these constructs, each with its own code:

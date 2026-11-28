@@ -3482,7 +3482,10 @@ exit 1
                 .iter()
                 .find(|diagnostic| diagnostic["code"] == "casework.posture.unrestricted-clients")
                 .expect("production reports unrestricted clients");
-            assert_eq!(refusal["path"], "/authentication/oidc/allowedClients");
+            assert_eq!(
+                refusal["path"],
+                "/authentication/oidc/issuers/main/allowedClients"
+            );
             assert_eq!(
                 refusal["source"]["file"],
                 json!(project.join("runtime.example.yaml"))
@@ -3549,7 +3552,8 @@ exit 1
                 .join(".casework/package"))
         );
         let mut incomplete_runtime = runtime.clone();
-        incomplete_runtime["authentication"]["oidc"]["allowedClients"] = json!("${CLIENTS}");
+        incomplete_runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!("${CLIENTS}");
         write_yaml(&runtime_path, &incomplete_runtime).unwrap();
         let (exit, report) = run_with_posture("production");
         assert_eq!(
@@ -3562,10 +3566,10 @@ exit 1
             .iter()
             .any(|diagnostic| {
                 diagnostic["code"] == "platform.runtime-config.check-incomplete"
-                    && diagnostic["path"] == "/authentication/oidc/allowedClients"
+                    && diagnostic["path"] == "/authentication/oidc/issuers/main/allowedClients"
             }));
         let mut production_runtime = runtime.clone();
-        let clients = &mut production_runtime["authentication"]["oidc"];
+        let clients = &mut production_runtime["authentication"]["oidc"]["issuers"]["main"];
         clients["allowedClients"] = json!(["casework-client"]);
         clients["assertionIssuers"] = json!({"casework-client": ["https://issuer.example.test", "https://issuer.example.test"]});
         write_yaml(&runtime_path, &production_runtime).unwrap();
@@ -3580,10 +3584,10 @@ exit 1
             .iter()
             .any(|diagnostic| {
                 diagnostic["code"] == "casework.runtime.invalid-assertion-issuers"
-                    && diagnostic["path"] == "/authentication/oidc/assertionIssuers"
+                    && diagnostic["path"] == "/authentication/oidc/issuers/main/assertionIssuers"
             }));
 
-        production_runtime["authentication"]["oidc"]
+        production_runtime["authentication"]["oidc"]["issuers"]["main"]
             .as_object_mut()
             .unwrap()
             .remove("assertionIssuers");

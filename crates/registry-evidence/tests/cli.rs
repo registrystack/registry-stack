@@ -5879,6 +5879,44 @@ fn startup_keeps_posture_findings_after_runtime_validation_refuses() {
 }
 
 #[test]
+fn startup_keeps_package_faults_with_a_listener_refusal() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.replace(
+        "runtime.yaml",
+        "trustProxyIdentityHeaders: false",
+        "trustProxyIdentityHeaders: true",
+    );
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "    issuer: https://identity.invalid",
+        "    issuer: https://identity.invalid\n    allowInsecureHttp: true",
+    );
+    deployment.append("bundle/derivations/adult-status.rhai", "\nlet = ;\n");
+    deployment.seal_and_pin();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["serve", "--posture", "production", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    let refusal = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{refusal}");
+    for expected in [
+        "evidence.bundle.invalid-script",
+        "derivations/adult-status.rhai",
+        "platform.posture.insecure-issuer-http",
+        "/authentication/oidc/allowInsecureHttp",
+        "evidence.posture.local-assurance",
+        "/assuranceProfile",
+        "--posture development",
+        "REGISTRY_STACK_POSTURE=development",
+        "proxy identity headers must not be trusted",
+    ] {
+        assert!(refusal.contains(expected), "missing {expected}: {refusal}");
+    }
+}
+
+#[test]
 fn activation_keeps_posture_findings_when_authority_binding_is_missing() {
     let deployment = Deployment::stage("adult-status");
     deployment.replace(
@@ -6024,11 +6062,13 @@ fn doctor_preserves_real_posture_and_audit_diagnostics_without_opening_a_writer(
         ("local", None, "evidence.posture.local-assurance"),
     ] {
         let deployment = if profile == "production" {
-            Deployment::stage_production("adult-status")
+            let deployment = Deployment::stage_production("adult-status");
+            deployment.append("bundle/derivations/adult-status.rhai", "\nlet = ;\n");
+            deployment
         } else {
             Deployment::stage("adult-status")
         };
-        deployment.seal();
+        deployment.seal_and_pin();
         let mut command = Command::new(&evidencectl);
         command
             .args(["--format", "json", "doctor", "--runtime-config"])
@@ -6062,7 +6102,19 @@ fn doctor_preserves_real_posture_and_audit_diagnostics_without_opening_a_writer(
                 "{profile}: {report}"
             );
         }
-        assert_eq!(diagnostics.len(), 2, "{profile}: {report}");
+        if profile == "production" {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|entry| entry["code"] == "evidence.bundle.invalid-script"),
+                "{profile}: {report}"
+            );
+        }
+        assert_eq!(
+            diagnostics.len(),
+            if profile == "production" { 3 } else { 2 },
+            "{profile}: {report}"
+        );
         assert!(!deployment.path("audit.jsonl").exists());
         assert!(!deployment.path("audit.jsonl.lock").exists());
     }
@@ -6568,6 +6620,24 @@ outboundTls:
         set_tree_mode(&self.path("bundle"), 0o555, 0o444);
         fs::set_permissions(self.path("runtime.yaml"), fs::Permissions::from_mode(0o444))
             .expect("seal runtime");
+    }
+
+    fn seal_and_pin(&self) {
+        let bundle = self.path("bundle");
+        refresh_package_envelope(&bundle);
+        let verified = registry_platform_config::verify_package(
+            &bundle,
+            &registry_evidence::bundle::evidence_package_limits(),
+            "evidencectl package",
+        )
+        .unwrap();
+        let pin = format!("  root: {}", bundle.display());
+        self.replace(
+            "runtime.yaml",
+            &pin,
+            &format!("{pin}\n  expectedDigest: {}", verified.digest()),
+        );
+        self.seal();
     }
 
     fn unseal(&self) {

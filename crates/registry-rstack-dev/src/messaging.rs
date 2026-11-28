@@ -273,7 +273,7 @@ pub(super) fn messaging_config(
     config["kind"] = json!("MessagingRuntimeConfig");
     config["listener"] = json!({"bind": bind, "tlsTermination": "loopback-plaintext"});
     config["identity"] = json!({"databaseId": identity});
-    config["authentication"] = json!({"oidc": oidc});
+    config["authentication"] = json!({"oidc": super::issuer_set(oidc)});
     config["audit"]["destination"] = json!("file");
     config["retention"] = json!({
         "payloadRetentionDays": 7,
@@ -374,14 +374,10 @@ mod tests {
         assert_eq!(config["kind"], "MessagingRuntimeConfig");
         assert_eq!(config["listener"]["bind"], "127.0.0.1:9");
         assert_eq!(config["audit"]["destination"], "file");
-        assert_eq!(
-            config["authentication"]["oidc"]["allowedClients"],
-            json!(["operations-console"])
-        );
-        assert_eq!(
-            config["authentication"]["oidc"]["jwksSource"]["type"],
-            "test-issuer"
-        );
+        let entry = &config["authentication"]["oidc"]["issuers"]["main"];
+        assert_eq!(entry["allowedClients"], json!(["operations-console"]));
+        assert_eq!(entry["jwksSource"]["type"], "test-issuer");
+        assert!(config["authentication"]["oidc"].get("issuer").is_none());
         assert_eq!(config["audit"]["hashKeyCustody"], "development-generated");
         assert_eq!(config["listener"]["tlsTermination"], "loopback-plaintext");
         assert_eq!(config["providers"], providers);
