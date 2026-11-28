@@ -3569,8 +3569,11 @@ impl MutationTransaction {
                     )
                     .await?,
                 );
+                // Answers are served to human reviewers of the current
+                // binding only; see `receives_review_answers`.
                 if authority.operation
                     == ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext)
+                    && authority.receives_review_answers
                     && matches!(
                         frozen.review_requirement(),
                         CompiledProposalReview::Required { .. }

@@ -830,7 +830,10 @@ Page authors must tell applicants before they answer:
 Answering discloses the answer and its cited files to reviewers of this review even when the Action declares no additions context field.
 BReg serves them live in the reserved `context.asks` sibling beside authored `context.fields`.
 Casework joins validated answers onto its own asks by ask ID and does not store their text or file descriptors.
-Reviewers use their own review-context authority and token. Delegated institutional context reads receive neither asks nor answers.
+Only human reviewers receive answers. A reviewer uses their own review-context authority and token.
+Agents, standing or task-granted, delegated reads and services receive neither asks nor answers, even with a `get-review-context` grant, and cannot download cited files.
+The batch review-context read used for inboxes carries no asks. Read a single Proposal's review context to see them.
+A cited file is not limited by the reviewer's readable context fields, because it is admitted in place of an authored additions field.
 A cited file's download remains bound to the current review request, submission version, frozen effect and context schema, and its bytes must pass verification.
 A file not cited by an answer still needs an authored additions context field.
 
@@ -931,6 +934,7 @@ Expired or erased receipts cannot execute again.
 ### Bounded review-context reads
 
 A caller with the existing `get-review-context` grant can request up to 100 distinct canonical Proposal UUIDs in one exchange: `GET /v1/proposals/review-context?accessProfile=<profile>&ids=<uuid>,<uuid>`.
+Batch items never carry `context.asks`.
 The ordered `items` contain the requested `id` and either `status: visible` with the ordinary `context` document, or `status: concealed` with no document.
 Unknown and currently unauthorised Proposals have the same concealed result.
 Every item retains its own current Proposal and Record disclosure checks, transaction, and paired audit entries.

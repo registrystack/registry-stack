@@ -215,6 +215,17 @@ async fn ask_feed_turn_uses_the_shared_awaiting_party_rule_and_lists_only_live_u
 }
 
 async fn answer_fixture(authority: &Authority) -> client_http::ClientFixture {
+    let source = answer_source();
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let bindings = authority.registry.clone();
+    client_http::ClientFixture::start_with_mutations(registry, claims(), move |service| {
+        service.with_review_result_source(bindings)
+    })
+    .await
+}
+
+fn answer_source() -> Value {
     let mut source = registry_source(json!(policy()));
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"]
         .as_array_mut()
@@ -252,13 +263,7 @@ async fn answer_fixture(authority: &Authority) -> client_http::ClientFixture {
     source["accessProfiles"]["writer"] = writer;
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
         json!(["target", "value"]);
-    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
-    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
-    let bindings = authority.registry.clone();
-    client_http::ClientFixture::start_with_mutations(registry, claims(), move |service| {
-        service.with_review_result_source(bindings)
-    })
-    .await
+    source
 }
 
 async fn request(
@@ -683,7 +688,7 @@ async fn applicant_asks_require_get_even_on_a_command_response_and_report_the_an
 }
 
 fn reviewer_claims(jurisdiction: &str) -> VerifiedRequestClaims {
-    VerifiedRequestClaims::authenticated(
+    VerifiedRequestClaims::authenticated_with_actor_kind(
         "sub",
         "reviewer-own-subject",
         BTreeSet::from(["proposal:review".into()]),
@@ -692,6 +697,7 @@ fn reviewer_claims(jurisdiction: &str) -> VerifiedRequestClaims {
             "jurisdiction".into(),
             VerifiedClaimValue::direct_string(jurisdiction).unwrap(),
         )]),
+        registry_platform_oidc::ActorKind::Human,
     )
     .unwrap()
 }
@@ -1295,4 +1301,380 @@ async fn revise_and_rebase_supersede_answers_and_hide_the_previous_round() {
         assert!(authority.state.asks.lock().unwrap().deliveries.is_empty());
         fixture.finish().await;
     }
+}
+
+struct ActiveTaskGrant;
+impl registry_breg::task_grant::TaskGrantStatusChecker for ActiveTaskGrant {
+    fn check<'a>(
+        &'a self,
+        _: &'a registry_breg::task_grant::TaskGrantBinding,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), registry_breg::task_grant::TaskGrantError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// The answer fixture plus a standing agent and a task-granted agent, each
+/// holding the same get-review-context grant as the human reviewer.
+async fn agent_answer_fixture(
+    authority: &Authority,
+) -> (
+    client_http::ClientFixture,
+    registry_platform_testing::MockIdp,
+    registry_breg::auth::RegistryAuthenticator,
+) {
+    let mut source = answer_source();
+    let mut standing = source["accessProfiles"]["reviewer"].clone();
+    standing["actorKind"] = json!("agent");
+    standing["requesterClients"] = json!(["agent-client"]);
+    standing["permissions"] = json!({"proposals":standing["permissions"]["proposals"].clone()});
+    let mut task = standing.clone();
+    task["taskGrant"] = json!({"sourceIssuer":"https://casework.example"});
+    source["accessProfiles"]["agent-reader"] = standing;
+    source["accessProfiles"]["task-reader"] = task;
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let bindings = authority.registry.clone();
+    let fixture =
+        client_http::ClientFixture::start_with_mutations(registry, claims(), move |service| {
+            service
+                .with_review_result_source(bindings)
+                .with_task_status(Arc::new(ActiveTaskGrant))
+        })
+        .await;
+    let idp = registry_platform_testing::MockIdp::start().await;
+    let mut verifier = registry_platform_testing::oidc_verifier_config(
+        idp.issuer(),
+        vec!["urn:example:breg".into()],
+    );
+    verifier.allowed_clients = vec!["agent-client".into()];
+    let auth = registry_breg::auth::RegistryAuthenticator::new(
+        &fixture.registry,
+        verifier,
+        Arc::new(
+            registry_platform_oidc::JwksFetcher::new_with_fetch_url_policy(
+                idp.jwks_uri(),
+                registry_platform_oidc::JwksFetcherConfig::defaults(),
+                registry_platform_httputil::FetchUrlPolicy::https_or_loopback(),
+            ),
+        ),
+        registry_breg::auth::AuthorityClaimConfig::new("sub", Some("registry_purpose".into()))
+            .with_contextual_claims(
+                registry_platform_oidc::ClaimNames::default(),
+                BTreeMap::from([("agent-client".to_owned(), TRUSTED_ACTOR.to_owned())]),
+            ),
+    )
+    .unwrap();
+    (fixture, idp, auth)
+}
+
+const TRUSTED_ACTOR: &str = "00000000-0000-4000-8000-0000000000c7";
+
+/// An agent token. Without a Proposal it is a standing agent acting for a
+/// person through the trusted actor; with one it carries a task grant bounded
+/// to that Proposal's review context.
+fn agent_token(issuer: &str, grant: u64, proposal: Option<Uuid>) -> Value {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut token = json!({"aud":"urn:example:breg","sub":"review-agent","azp":"agent-client",
+        "registry_actor_kind":"agent",
+        "registry_purpose":"registry-administration","scope":"proposal:review",
+        "jurisdiction":"zone-a","exp":now+900});
+    let Some(id) = proposal else {
+        token["act"] = json!({"sub":TRUSTED_ACTOR,"iss":issuer});
+        return token;
+    };
+    {
+        let claims = token.as_object_mut().unwrap();
+        for (name, value) in [
+            (
+                "registry_grant_id",
+                json!(format!("00000000-0000-4000-8000-{grant:012x}")),
+            ),
+            ("registry_approver", json!("h:approver")),
+            (
+                "registry_grant_source_issuer",
+                json!("https://casework.example"),
+            ),
+            ("registry_grant_client", json!("agent-client")),
+            ("registry_grant_resource", json!("urn:example:breg")),
+            ("registry_grant_exp", json!(now + 600)),
+            (
+                "registry_grant_bounds",
+                json!({"type":"breg","permissions":[
+                    {"collection":format!("proposal:{id}"),"operations":["get-review-context"]}]}),
+            ),
+            ("identity", json!({"jurisdiction":"zone-a"})),
+        ] {
+            claims.insert(name.into(), value);
+        }
+    }
+    token
+}
+
+async fn agent_get(http: &client_http::ClientHttp, path: &str) -> (StatusCode, Vec<u8>) {
+    let response = reqwest::Client::new()
+        .get(format!("{}{path}", http.base_url))
+        .send()
+        .await
+        .unwrap();
+    let status = StatusCode::from_u16(response.status().as_u16()).unwrap();
+    (status, response.bytes().await.unwrap().to_vec())
+}
+
+fn discloses_asks(entries: &[Value]) -> bool {
+    entries.iter().any(|entry| {
+        entry["record"]["fieldSetReference"] == "proposal-review-ask"
+            || entry["record"]["askFieldSetReference"] == "proposal-review-ask"
+    })
+}
+
+/// Commit an answer that cites one verified file and return the reviewer's
+/// download path for it, without an access profile.
+async fn cited_answer(
+    fixture: &client_http::ClientFixture,
+    authority: &Authority,
+    id: Uuid,
+) -> (Uuid, Uuid, String) {
+    let binding = retained_binding(fixture, id).await;
+    accept(fixture, id, &binding).await;
+    let (ask, _) = announce(authority, &binding);
+    authority
+        .state
+        .asks
+        .lock()
+        .unwrap()
+        .replies
+        .get_mut(&ask)
+        .unwrap()
+        .1["wants"] = json!([{"kind":"answer"},{"kind":"document"}]);
+    worker(fixture, authority).await.unwrap();
+    let cited = add_file(fixture, id, &format!("cited-{id}"), b"cited bytes").await;
+    let (_, headers, _) = request(
+        fixture,
+        "GET",
+        &format!("/v1/proposals/{id}"),
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    let answered = request(
+        fixture,
+        "POST",
+        &format!("/v1/proposals/{id}/asks/{ask}/answer"),
+        Some(headers["etag"].to_str().unwrap()),
+        Some(&format!("cite-{id}")),
+        json!({"text":"The requested statement","additions":[cited]}),
+    )
+    .await;
+    assert_eq!(answered.0, StatusCode::OK, "{}", answered.2);
+    let (status, _, bytes) = reviewer_get(
+        fixture,
+        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+        "zone-a",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["context"]["asks"][0]["id"], ask.to_string());
+    let path = value["context"]["asks"][0]["answer"]["documents"][0]["download"]["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    (ask, cited, path)
+}
+
+#[tokio::test]
+async fn agents_holding_review_context_authority_get_no_answers_and_no_cited_files() {
+    let authority = Authority::start(false, true).await;
+    let (fixture, idp, auth) = agent_answer_fixture(&authority).await;
+    let id = submitted(&fixture, "agent-answers").await;
+    let (_, _, path) = cited_answer(&fixture, &authority, id).await;
+    let human = reviewer_get(
+        &fixture,
+        &format!("{path}&accessProfile=reviewer"),
+        "zone-a",
+    )
+    .await;
+    assert_eq!(human.0, StatusCode::OK);
+    assert_eq!(human.2, b"cited bytes");
+    for (profile, token) in [
+        ("agent-reader", agent_token(&idp.issuer(), 1, None)),
+        ("task-reader", agent_token(&idp.issuer(), 2, Some(id))),
+    ] {
+        let agent = fixture
+            .client_for(auth.authenticate(&idp.mint_token(token)).await.unwrap())
+            .await;
+        let before = fixture.audit_capture.entries().len();
+        let (status, bytes) = agent_get(
+            &agent,
+            &format!("/v1/proposals/{id}/review-context?accessProfile={profile}"),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{profile}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["context"]["fields"], json!({"value":"After"}));
+        assert!(
+            value["context"].get("asks").is_none(),
+            "{profile} received applicant answers"
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("The requested statement"));
+        assert!(
+            !discloses_asks(&fixture.audit_capture.entries()[before..]),
+            "{profile} was audited as disclosed answers"
+        );
+        let (status, bytes) = agent_get(&agent, &format!("{path}&accessProfile={profile}")).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{profile} downloaded a cited file"
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("cited bytes"));
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn batch_review_context_carries_no_answers_and_records_no_ask_disclosure() {
+    let authority = Authority::start(false, true).await;
+    let (fixture, id, ask) = committed_answer(&authority, "batch-answers").await;
+    let before = fixture.audit_capture.entries().len();
+    let (status, _, bytes) = reviewer_get(
+        &fixture,
+        &format!("/v1/proposals/review-context?accessProfile=reviewer&ids={id}"),
+        "zone-a",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["items"][0]["status"], "visible");
+    let context = &value["items"][0]["context"]["context"];
+    assert_eq!(context["fields"], json!({"value":"After"}));
+    assert!(
+        context.get("asks").is_none(),
+        "the inbox batch carried answers"
+    );
+    assert!(!String::from_utf8_lossy(&bytes).contains("private-answer-not-in-outbound-request"));
+    assert!(!discloses_asks(&fixture.audit_capture.entries()[before..]));
+    let before = fixture.audit_capture.entries().len();
+    let (status, _, bytes) = reviewer_get(
+        &fixture,
+        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+        "zone-a",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["context"]["asks"][0]["id"], ask.to_string());
+    assert!(discloses_asks(&fixture.audit_capture.entries()[before..]));
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_human_reviewer_under_a_stale_binding_is_refused_the_previous_rounds_cited_file() {
+    let authority = Authority::start(false, true).await;
+    let fixture = answer_fixture(&authority).await;
+    let id = submitted(&fixture, "stale-binding").await;
+    let (_, _, path) = cited_answer(&fixture, &authority, id).await;
+    let current = format!("{path}&accessProfile=reviewer");
+    assert!(current.contains("submissionVersion=1"));
+    assert_eq!(
+        reviewer_get(&fixture, &current, "zone-a").await.0,
+        StatusCode::OK
+    );
+    let (_, headers, prior) = request(
+        &fixture,
+        "GET",
+        &format!("/v1/proposals/{id}"),
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    let draft = request(
+        &fixture,
+        "POST",
+        &format!("/v1/proposals/{id}/revise"),
+        Some(headers["etag"].to_str().unwrap()),
+        Some("stale-revise"),
+        json!({"input":prior["input"]}),
+    )
+    .await;
+    assert_eq!(draft.0, StatusCode::OK, "{}", draft.2);
+    let resubmitted = request(
+        &fixture,
+        "POST",
+        &format!("/v1/proposals/{id}/submit"),
+        Some(draft.1["etag"].to_str().unwrap()),
+        Some("stale-resubmit"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(resubmitted.0, StatusCode::OK, "{}", resubmitted.2);
+    assert_eq!(resubmitted.2["submissionVersion"], 2);
+    // Accept the second round so the current binding is a live one.
+    let row = fixture.database.admin.query_one("SELECT create_request,expected_policy,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1 AND submission_version=2", &[&id]).await.unwrap();
+    let request: ReviewCreateRequest = serde_json::from_value(row.get(0)).unwrap();
+    let binding = ReviewRequestAccepted {
+        request_id: Uuid::new_v4(),
+        subject: request.subject,
+        policy: serde_json::from_value(row.get(1)).unwrap(),
+        submission_digest: registry_review_client::SubmissionDigest::parse(
+            &row.get::<_, String>(2),
+        )
+        .unwrap(),
+    };
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$2,next_result_poll_at=transaction_timestamp()+interval '1 hour' WHERE proposal_id=$1 AND submission_version=2", &[&id, &json!(binding)]).await.unwrap();
+    let (status, _, bytes) = reviewer_get(
+        &fixture,
+        &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+        "zone-a",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["submissionVersion"], 2);
+    assert!(
+        value["context"]
+            .get("asks")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "the previous round's answers reached the current binding"
+    );
+    let (status, _, bytes) = reviewer_get(&fixture, &current, "zone-a").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "old-version cited file was served"
+    );
+    assert!(!String::from_utf8_lossy(&bytes).contains("cited bytes"));
+    fixture.finish().await;
 }

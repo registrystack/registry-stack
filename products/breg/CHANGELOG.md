@@ -57,7 +57,9 @@
   sends only subject and stored time under the producer credential, with its own
   recovery deadline. Human reviewers read answers and cited verified files live
   from `context.asks`, even without an authored additions context field.
-  Applicant pages must explain that disclosure before answering.
+  Agents, standing or task-granted, delegated reads and services receive no
+  answers and cannot download cited files, and the batch review-context read
+  carries no asks. Applicant pages must explain that disclosure before answering.
 - BREAKING: strict Proposal clients must accept `asks` and the availability reasons
   `ask-answered`, `ask-closed` and `ask-due-passed` (all `receipt-only`). Hooks without
   a transition filter also receive `proposal.asked` and `proposal.answered`.

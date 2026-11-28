@@ -313,7 +313,7 @@ pub(crate) fn authorize_checked(
     {
         return Err(FailedCheck::TaskGrantMissing);
     }
-    let (profile, targets, task_source) = match operation {
+    let (profile, targets, task_source, profile_kind) = match operation {
         ProposalAuthorityOperation::Start => {
             let grant = action
                 .permissions
@@ -347,6 +347,7 @@ pub(crate) fn authorize_checked(
                 grant.profile_id.as_str(),
                 targets,
                 grant.task_grant.as_ref(),
+                grant.actor_kind,
             )
         }
         ProposalAuthorityOperation::Lifecycle(operation) => {
@@ -397,6 +398,7 @@ pub(crate) fn authorize_checked(
                 grant.profile_id.as_str(),
                 targets,
                 grant.task_grant.as_ref(),
+                grant.actor_kind,
             )
         }
     };
@@ -413,6 +415,20 @@ pub(crate) fn authorize_checked(
     authority.common = authority
         .common
         .with_audit_context(crate::audit::RequestAuditContext::from_claims(claims));
+    // An applicant's answers and the files they cite reach human reviewers
+    // only: a verified human caller, on a profile written for humans or for
+    // any kind, acting for no one else and under no task grant. A delegated
+    // actor, a standing or task-granted agent and a service never receive
+    // them, whatever their grant says.
+    authority.receives_review_answers = claims.actor_kind()
+        == Some(registry_platform_oidc::ActorKind::Human)
+        && claims.actor_subject().is_none()
+        && claims.grant().is_none()
+        && task_source.is_none()
+        && matches!(
+            profile_kind,
+            None | Some(crate::contract::ActorKindSource::Human)
+        );
     match (task_source, claims.grant()) {
         (None, None) => {}
         (Some(source), Some(grant)) => {
@@ -1331,6 +1347,7 @@ pub(super) async fn review_context_batch(
             claims.clone(),
             profile.clone(),
             ProposalOperation::GetReviewContext,
+            ReviewAnswers::Omitted,
             correlation.clone(),
         )
         .await;
@@ -1374,6 +1391,7 @@ pub(super) async fn review_context(
         claims,
         raw,
         ProposalOperation::GetReviewContext,
+        ReviewAnswers::Served,
         correlation,
     )
     .await
@@ -1392,6 +1410,7 @@ pub(super) async fn review_status(
         claims,
         raw,
         ProposalOperation::GetReviewStatus,
+        ReviewAnswers::Omitted,
         correlation,
     )
     .await
@@ -1569,12 +1588,23 @@ pub(super) async fn task_grant_context(
     }
 }
 
+/// Whether a review read may carry applicant answers. The batch inbox read
+/// shows none, so it neither serves nor audits them; only the single-Proposal
+/// review-context read does, and then only to a human reviewer.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ReviewAnswers {
+    Served,
+    Omitted,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn review_read(
     service: Arc<HttpService>,
     id: String,
     claims: VerifiedRequestClaims,
     raw: Option<String>,
     operation: ProposalOperation,
+    answers: ReviewAnswers,
     correlation: RequestCorrelation,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
@@ -1604,7 +1634,7 @@ async fn review_read(
     else {
         return concealed(FailedCheck::Visibility);
     };
-    let authority = match authorize_checked(
+    let mut authority = match authorize_checked(
         &service.registry,
         action,
         &claims,
@@ -1627,6 +1657,9 @@ async fn review_read(
             .await;
         }
     };
+    if answers == ReviewAnswers::Omitted {
+        authority.receives_review_answers = false;
+    }
     let records = review_record_authorities(
         &service.registry,
         action,

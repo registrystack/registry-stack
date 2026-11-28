@@ -163,7 +163,11 @@ async fn authorize(
     let allowed = grant.is_some_and(|grant| match operation {
         ProposalOperation::Get => grant.readable_attachments.contains(slot),
         ProposalOperation::GetReviewContext => match context_source {
-            Some(ReviewDocumentSource::Ask(_)) => addition,
+            // A file an answer cites is admitted in place of the authored
+            // additions field, so the caller's readable context fields do not
+            // apply to it. Only a human reviewer receives answers, so only a
+            // human reviewer is admitted here.
+            Some(ReviewDocumentSource::Ask(_)) => addition && authority.receives_review_answers,
             Some(ReviewDocumentSource::Field(field)) => {
                 grant.readable_context_fields.contains(field)
                     && match proposal

@@ -284,3 +284,6 @@ traceability:
   - {"id":"BREG-SEC-226","state":"enforced","negativeId":"BREG-NEG-226","negativeTest":{"path":"crates/registry-breg/tests/support/proposal_additions.rs","name":"additions_reviewer_reads_live_files_under_the_exact_context_binding"}}
   - {"id":"BREG-SEC-227","state":"enforced","negativeId":"BREG-NEG-227","negativeTest":{"path":"crates/registry-breg/tests/support/proposal_additions.rs","name":"additions_leave_the_frozen_manifest_unchanged_and_apply_still_succeeds"}}
   - {"id":"BREG-SEC-228","state":"enforced","negativeId":"BREG-NEG-228","negativeTest":{"path":"crates/registry-breg/tests/support/proposal_additions.rs","name":"additions_keep_shared_blobs_live_until_their_retention_erases_them"}}
+  # Stale review binding: crates/registry-breg/tests/support/proposal_review_asks.rs::a_human_reviewer_under_a_stale_binding_is_refused_the_previous_rounds_cited_file
+  - {"id":"BREG-SEC-229","state":"enforced","negativeId":"BREG-NEG-229","negativeTest":{"path":"crates/registry-breg/tests/support/proposal_review_asks.rs","name":"agents_holding_review_context_authority_get_no_answers_and_no_cited_files"}}
+  - {"id":"BREG-SEC-230","state":"enforced","negativeId":"BREG-NEG-230","negativeTest":{"path":"crates/registry-breg/tests/support/proposal_review_asks.rs","name":"batch_review_context_carries_no_answers_and_records_no_ask_disclosure"}}

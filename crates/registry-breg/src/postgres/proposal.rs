@@ -431,7 +431,9 @@ impl PostgresRecordMutationService {
                     return Err(MutationError::PreconditionFailed);
                 };
                 let mapped = match review.source {
-                    ReviewDocumentSource::Ask(_) => addition.is_some(),
+                    ReviewDocumentSource::Ask(_) => {
+                        addition.is_some() && authority.receives_review_answers
+                    }
                     ReviewDocumentSource::Field(field) => match proposal
                         .review_context
                         .as_ref()
