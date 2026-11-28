@@ -41,6 +41,7 @@ pub enum ProblemCode {
     IngestionRunNotOpen,
     LookupUnresolved,
     MutationConflict,
+    DevelopmentTaskAssertion,
     PreconditionFailed,
     PreconditionRequired,
     ProposalRejected,
@@ -87,6 +88,7 @@ impl ProblemCode {
         Self::IngestionRunNotOpen,
         Self::LookupUnresolved,
         Self::MutationConflict,
+        Self::DevelopmentTaskAssertion,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
         Self::ProposalRejected,
@@ -115,7 +117,9 @@ impl ProblemCode {
     /// probe is an operational route with no documented operation, so its code
     /// is registered and published but never listed in a generated document.
     /// External view routes are not package operations either, so their
-    /// incomplete-coverage code is published in the catalogue only.
+    /// incomplete-coverage code is published in the catalogue only. The
+    /// shared task-grant refusal belongs to authentication, outside the
+    /// generated package operation catalogue.
     pub const DOCUMENTED: &'static [Self] = &[
         Self::ActionEvidenceFailed,
         Self::ActionGuardFailed,
@@ -180,6 +184,7 @@ impl ProblemCode {
             Self::IngestionRunNotOpen => "ingestion.run_not_open",
             Self::LookupUnresolved => "lookup.unresolved",
             Self::MutationConflict => "mutation.conflict",
+            Self::DevelopmentTaskAssertion => "platform.task-grant.development-assertion",
             Self::PreconditionFailed => "precondition.failed",
             Self::PreconditionRequired => "precondition.required",
             Self::ProposalRejected => "proposal.rejected",
@@ -214,7 +219,7 @@ impl ProblemCode {
             | Self::QueryInvalid
             | Self::RequestAccessReasonRequired
             | Self::RequestInvalid => 400,
-            Self::AuthenticationRefused => 401,
+            Self::AuthenticationRefused | Self::DevelopmentTaskAssertion => 401,
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::AttachmentSlotWriteOnce
@@ -249,9 +254,12 @@ impl ProblemCode {
         }
     }
 
-    /// The problem title, which is the reason phrase of the code's status.
+    /// The registered problem title, normally the reason phrase of its status.
     #[must_use]
     pub const fn title(self) -> &'static str {
+        if matches!(self, Self::DevelopmentTaskAssertion) {
+            return "Development task assertion";
+        }
         match self.status() {
             400 => "Bad Request",
             401 => "Unauthorized",
@@ -309,6 +317,9 @@ impl ProblemCode {
             Self::IngestionRunNotOpen => "The ingestion run is not open for this transition.",
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",
             Self::MutationConflict => "The mutation conflicts with current state.",
+            Self::DevelopmentTaskAssertion => {
+                "A production registry refuses task assertions issued in development."
+            }
             Self::PreconditionFailed => "The mutation precondition failed.",
             Self::ProposalReviewResultMismatch => "The current review result does not match the retained approval.",
             Self::PreconditionRequired => "The mutation precondition is required.",
@@ -461,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn only_routes_outside_package_operations_have_undocumented_codes() {
+    fn only_problems_outside_package_operations_are_excluded() {
         let undocumented: Vec<_> = ProblemCode::ALL
             .iter()
             .filter(|code| !ProblemCode::DOCUMENTED.contains(code))
@@ -471,6 +482,7 @@ mod tests {
             undocumented,
             vec![
                 ProblemCode::ExternalViewIncomplete,
+                ProblemCode::DevelopmentTaskAssertion,
                 ProblemCode::RuntimeNotReady
             ]
         );

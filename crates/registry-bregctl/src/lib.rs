@@ -3076,6 +3076,32 @@ where
         }
     };
 
+    let run_posture_flag = match &cli.command {
+        Command::Examples(args) => args.run_posture_flag(),
+        Command::PrepareSource(args) => Some(args.posture.as_deref()),
+        _ => None,
+    };
+    if let Some(flag) = run_posture_flag {
+        let declaration = declared(flag);
+        let refusal = match &declaration {
+            Err(error) => Some((error.code(), error.message(), error.suggested_action())),
+            Ok(posture)
+                if posture.posture == Posture::Production
+                    && posture.source != PostureSource::Default =>
+            {
+                Some((
+                    "platform.posture.conflict",
+                    "This command uses an rstack development run",
+                    "Remove the production declaration or declare development.",
+                ))
+            }
+            Ok(_) => None,
+        };
+        if let Some((code, message, action)) = refusal {
+            return write_posture_usage(code, message, action, cli.format, stdout, stderr);
+        }
+    }
+
     let posture_flag = match &cli.command {
         Command::Serve(args) => Some(args.posture.flag.as_deref()),
         Command::Check(args) => Some(args.posture.flag.as_deref()),

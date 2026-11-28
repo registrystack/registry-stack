@@ -2,12 +2,8 @@
 
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
-use registry_breg::problem::{type_uri, ProblemCode};
+use registry_breg::problem::ProblemCode;
 use serde::Serialize;
-
-// The authentication refusal in auth.rs uses the shared OIDC code. The
-// catalog exporter runs without BReg's runtime or its OIDC dependency.
-const DEVELOPMENT_ASSERTION_CODE: &str = "platform.task-grant.development-assertion";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,13 +47,6 @@ fn main() -> ExitCode {
                 description: problem.description(),
                 http_statuses: [problem.status()],
             })
-            .chain([ProblemEntry {
-                uri: type_uri(DEVELOPMENT_ASSERTION_CODE),
-                code: DEVELOPMENT_ASSERTION_CODE,
-                title: "Development task assertion",
-                description: "A production registry refuses task assertions issued in development.",
-                http_statuses: [401],
-            }])
             .collect(),
     };
     let mut bytes = match serde_json::to_vec_pretty(&catalog) {

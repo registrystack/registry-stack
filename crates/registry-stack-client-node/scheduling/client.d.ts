@@ -327,6 +327,7 @@ export type SchedulingProblemCode =
   | 'location.closed'
   | 'operation.not-authorized'
   | 'party.capacity-inadequate'
+  | 'platform.task-grant.development-assertion'
   | 'policy.changed'
   | 'precondition.failed'
   | 'precondition.required'

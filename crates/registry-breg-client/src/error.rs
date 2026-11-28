@@ -157,6 +157,7 @@ pub enum BRegProblemCode {
     IngestionRunNotOpen,
     LookupUnresolved,
     MutationConflict,
+    DevelopmentTaskAssertion,
     PreconditionFailed,
     PreconditionRequired,
     ProposalRejected,
@@ -182,7 +183,7 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::ActionEvidenceFailed,
         Self::ActionGuardFailed,
         Self::ActionHandlerFailed,
@@ -202,6 +203,7 @@ impl BRegProblemCode {
         Self::IngestionRunNotOpen,
         Self::LookupUnresolved,
         Self::MutationConflict,
+        Self::DevelopmentTaskAssertion,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
         Self::ProposalRejected,
@@ -248,6 +250,7 @@ impl BRegProblemCode {
             Self::IngestionRunNotOpen => "ingestion.run_not_open",
             Self::LookupUnresolved => "lookup.unresolved",
             Self::MutationConflict => "mutation.conflict",
+            Self::DevelopmentTaskAssertion => "platform.task-grant.development-assertion",
             Self::PreconditionFailed => "precondition.failed",
             Self::PreconditionRequired => "precondition.required",
             Self::ProposalRejected => "proposal.rejected",
@@ -283,7 +286,7 @@ impl BRegProblemCode {
             | Self::RequestInvalid => 400,
             Self::ActionEvidenceFailed => 503,
             Self::ActionHandlerFailed => 500,
-            Self::AuthenticationRefused => 401,
+            Self::AuthenticationRefused | Self::DevelopmentTaskAssertion => 401,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::AttachmentSlotWriteOnce
@@ -330,6 +333,9 @@ impl BRegProblemCode {
 
     #[cfg(test)]
     pub(crate) const fn title(self) -> &'static str {
+        if matches!(self, Self::DevelopmentTaskAssertion) {
+            return "Development task assertion";
+        }
         match self.status() {
             400 => "Bad Request",
             401 => "Unauthorized",
@@ -387,6 +393,9 @@ impl BRegProblemCode {
             Self::IngestionRunNotOpen => "The ingestion run is not open for this transition.",
             Self::LookupUnresolved => "The lookup did not resolve exactly one record.",
             Self::MutationConflict => "The mutation conflicts with current state.",
+            Self::DevelopmentTaskAssertion => {
+                "A production registry refuses task assertions issued in development."
+            }
             Self::PreconditionFailed => "The mutation precondition failed.",
             Self::ProposalReviewResultMismatch => "The current review result does not match the retained approval.",
             Self::PreconditionRequired => "The mutation precondition is required.",

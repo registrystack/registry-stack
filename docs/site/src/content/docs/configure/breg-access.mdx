@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-21"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -74,7 +74,53 @@ journal. A caller cannot tell a forbidden Record from a missing one.
 
 BReg has no built-in notion of jurisdiction, region, or office. In the template, `jurisdiction`
 is an ordinary token claim, and the row boundary compares it with the Record's `jurisdiction`
-field. The local test clients show two readers that differ only in that claim:
+field. The `reader` and `foreign-reader` people in the development plan use the same profile and
+scope, with a different `jurisdiction` claim for each.
+
+```yaml title="dev.yaml" test-excerpt="facility/dev.yaml"
+  reader:
+    subject: synthetic-reader
+    client: reader
+    grants:
+      breg:
+        profile: facility-reader
+        scopes: ["registry:facility:read"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: facility-administration
+          jurisdiction: zone-a
+  foreign-reader:
+    subject: synthetic-foreign-reader
+    client: foreign-reader
+    grants:
+      breg:
+        profile: facility-reader
+        scopes: ["registry:facility:read"]
+        claims:
+          registry_actor_kind: service
+          registry_purpose: facility-administration
+          jurisdiction: zone-b
+```
+
+The people in `dev.yaml` describe the callers that `rstack dev` can mint local tokens for. BReg
+still decides what each token can read or change. In production, configure an issuer you trust to
+assert the claim.
+
+{/* Evidence: crates/registry-breg/src/api/mod.rs, authorize_direct_route(), authorize_profile_claims(),
+    concealed() and audited_read_concealment(); crates/registry-breg/src/compiler.rs, route_default_profile();
+    crates/registry-breg/src/runtime_config.rs, OIDC issuer, allowed_clients and RawAuthorityClaimsConfig;
+    products/breg/examples/facility/registry.yaml; products/breg/examples/facility/dev.yaml. */}
+
+## Grant fields and rows
+
+A record permission names a Record type and its operations. `readableFields` limits what a
+response discloses and `writableFields` what a create or patch may set; `filterableFields`,
+`sortableFields`, and `allowCount` each enable one query feature. Field lists use the field `id`,
+not its `apiName`. A write never reveals a field the profile cannot read.
+
+A [row boundary](../../reference/glossary/#row-boundary) compares a Record field with a token claim.
+`equals` compares with one scalar claim value. `in` requires a claim whose value is a JSON array;
+in a development plan, write the array as a YAML sequence under `grants.breg.claims`.
 
 ```yaml title="dev.yaml"
 people:
@@ -88,32 +134,6 @@ people:
         claims:
           registry_purpose: permit-administration
           allowed_jurisdictions: [north-district, south-district]
-```
-
-`dev-clients.yaml` only mints local tokens that ask for these profiles; it adds no authority. In
-production the claim comes from your issuer, so the issuer must be one you trust to assert it.
-
-{/* Evidence: crates/registry-breg/src/api/mod.rs, authorize_direct_route(), authorize_profile_claims(),
-    concealed() and audited_read_concealment(); crates/registry-breg/src/compiler.rs, route_default_profile();
-    crates/registry-breg/src/runtime_config.rs, OIDC issuer, allowed_clients and RawAuthorityClaimsConfig;
-    products/breg/examples/facility/registry.yaml; products/breg/examples/facility/dev-clients.yaml. */}
-
-## Grant fields and rows
-
-A record permission names a Record type and its operations. `readableFields` limits what a
-response discloses and `writableFields` what a create or patch may set; `filterableFields`,
-`sortableFields`, and `allowCount` each enable one query feature. Field lists use the field `id`,
-not its `apiName`. A write never reveals a field the profile cannot read.
-
-A [row boundary](../../reference/glossary/#row-boundary) compares a Record field with a token claim.
-`equals` compares with one scalar claim value. `in` requires a claim whose value is a JSON array;
-in a development plan, write the array as a YAML sequence under the BReg grant:
-
-```yaml title="dev-clients.yaml"
-claims:
-  registry_principal: synthetic-transfer-clerk
-  registry_purpose: permit-administration
-  allowed_jurisdictions: [north-district, south-district]
 ```
 
 A missing `in` claim or a scalar in its place fails closed. When journeys need another claim

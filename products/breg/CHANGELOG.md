@@ -1,13 +1,19 @@
 # Base Registry Engine changelog
 
 ## Unreleased
+- BReg examples recover exact pending requests after a kept development run restarts on a new loopback port.
+- Run-backed `bregctl examples` and `bregctl prepare-source` refuse an explicit production posture before reading run state.
 - `breg-review` refuses repeated `--posture` flags, including flags on both sides of `serve`.
 - Production refuses verified bearer tokens marked as development even when they carry no task grant.
 - BReg Review reports its loopback HTTP sign-in issuer as an explicit production setting.
 
 - The Node and Python clients accept development peers by default and offer a configuration option to reject them.
 
-- BREAKING: Use `rstack dev` for local BReg runs. `bregctl examples run` and `bregctl prepare-source` take the ready run ID.
+- BREAKING: `bregctl dev start|stop|token|grant|export-client|events|prepare-source` and
+  `bregctl __dev-supervisor` were removed. Use `rstack dev` for local BReg runs and pass
+  the ready run ID to `bregctl examples run --run-id` or `bregctl prepare-source --run-id`.
+  `bregctl check --file` no longer accepts `BRegDevState`, `BRegDevPreparedSource`, or
+  `BRegDevSourceTransition` documents.
 
 - The published runtime schema types each `authentication.oidc.issuers` key as a local identifier (`propertyNames: {$ref: LocalId}`), as the other products' issuer maps do.
 
@@ -15,7 +21,7 @@
 - BReg accepts development attachment storage and verifier responses when the runtime declares development.
 
 - Production BReg returns HTTP 401 with `platform.task-grant.development-assertion`
-  for a signed development task assertion.
+  for a signed development task assertion. The BReg client recognizes this refusal as a typed problem.
 
 - `bregctl status` reports an error with code `platform.activation.posture-mismatch` from the database state row and exits 1 on mismatch.
 - The JSON status report for a posture mismatch carries `ok: false` and `status: domain-refusal`. It includes available activation ledger details.

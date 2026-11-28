@@ -3023,27 +3023,31 @@ jobs:
             -p registry-breg --features registry-breg/runtime \
             -p registry-bregctl -p registry-rstack --bins
 
-      - name: Verify native retained development lifecycle
+      - name: Verify retained BReg development lifecycle
         if: matrix.shard == '2/2'
         shell: bash
         run: |
           set -euo pipefail
-          # Each retained lifecycle owns PostgreSQL, ThunderID and BREG.
-          # Run complete sessions serially on the bounded CI runner.
-          cargo test --locked -p registry-bregctl \
-            --test dev_lifecycle -- --ignored --test-threads=1
+          python3 products/platform/scripts/test-rstack-dev.py \
+            --bin-dir "${GITHUB_WORKSPACE}/target/debug" \
+            --scratch-parent "${RUNNER_TEMP}" \
+            --restart breg
 
       - name: Verify retained example recovery after process exit
         if: matrix.shard == '2/2'
+        env:
+          BREG_EXAMPLE_BIN_DIR: ${{ github.workspace }}/target/debug
         # An inexact name filter that selects nothing still exits 0, so the
         # step names each test exactly and fails unless it reports one pass.
         shell: bash
         run: |
           set -euo pipefail
           for test in \
-            dev::examples::tests::native_create_recovers_after_process_exit_without_duplicate_records \
-            dev::examples::tests::native_invoke_recovers_original_conditions_after_restart; do
-            cargo test --locked -p registry-bregctl --lib \
+            examples::recovery_tests::native_create_recovers_after_process_exit_without_duplicate_records \
+            examples::recovery_tests::native_invoke_recovers_original_conditions_after_restart \
+            examples::recovery_tests::native_proposal_recovers_start_submit_and_apply_after_restart \
+            examples::recovery_tests::live_run_examples_replay_the_same_attempt; do
+            cargo test --locked --manifest-path "${GITHUB_WORKSPACE}/Cargo.toml" -p registry-bregctl --lib \
               "$test" -- --ignored --exact \
               | tee "${RUNNER_TEMP}/breg-example-recovery-${test}.log"
             grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/breg-example-recovery-${test}.log" || { echo "::error::expected exactly one passing test for ${test}"; exit 1; }

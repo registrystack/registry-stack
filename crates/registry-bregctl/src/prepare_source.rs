@@ -27,6 +27,10 @@ pub(super) struct PrepareSourceArgs {
     /// Ready development run serving this exact project.
     #[arg(long)]
     run_id: String,
+    /// Declare development posture for the ready run.
+    #[arg(long, value_name = "POSTURE")]
+    #[serde(skip)]
+    pub(super) posture: Option<String>,
     /// Record type authored directly in registry.yaml; omit to inspect available fields.
     #[arg(long = "record-type", value_name = "ID")]
     entity: Option<String>,
@@ -247,11 +251,11 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             files.insert(format!("modules/{}/{}", module.id, asset.path), asset.bytes);
         }
     }
-    let mut docs = documents(&files)?;
-    let mut report = json!({"ok":true, "command":"prepare-source", "project":run.project,
+    let docs = documents(&files)?;
+    let report = json!({"ok":true, "command":"prepare-source", "project":run.project,
         "status":"inspect", "entities":inventory(&docs, &compiled)?, "bregUrl":run.origin,
         "issuer":run.issuer, "audience":run.audience});
-    let Some(entity_id) = &args.entity else {
+    if args.entity.is_none() {
         ensure!(
             !args.apply
                 && args.selector_field.is_none()
@@ -261,7 +265,58 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             "Select a record type, selector field, readable fields and explicit row authority."
         );
         return Ok(report);
-    };
+    }
+    let authored_plan = read_authoring(&run.dev_yaml)?;
+    let plan = Reader::new("dev.yaml")
+        .scan(&authored_plan)
+        .map_err(|_| anyhow::anyhow!("The development plan is not valid YAML."))?
+        .context("The development plan is empty.")?
+        .to_json_value();
+    ensure!(
+        run.plan_matches(&plan)?,
+        "The development plan changed after the run started."
+    );
+    let pending = prepare_successor(
+        &args,
+        &files,
+        docs,
+        SuccessorBaseline {
+            registry: package.registry(),
+            package_digest: package.package_digest(),
+            principal_claim: &run.principal_claim,
+            scratch: &run.state,
+        },
+        &authored_plan,
+        plan,
+        report,
+    )?;
+    if args.apply {
+        private::replace(&journal, &serde_json::to_vec(&pending)?)?;
+        pending.finish(&run, &journal)?;
+    }
+    Ok(pending.report)
+}
+
+struct SuccessorBaseline<'a> {
+    registry: &'a registry_breg::CompiledRegistry,
+    package_digest: &'a str,
+    principal_claim: &'a str,
+    scratch: &'a Path,
+}
+
+/// Check the exact proposed authoring and build its replacement bytes without
+/// modifying the project. Applying those bytes remains the journal's job.
+fn prepare_successor(
+    args: &PrepareSourceArgs,
+    files: &BTreeMap<String, Vec<u8>>,
+    mut docs: BTreeMap<String, Value>,
+    baseline: SuccessorBaseline<'_>,
+    authored_plan: &[u8],
+    mut plan: Value,
+    mut report: Value,
+) -> Result<Pending> {
+    let compiled = baseline.registry;
+    let entity_id = args.entity.as_ref().context("select --record-type")?;
     for value in [&args.client, &args.access_profile, &args.selector_profile] {
         if registry_platform_yaml::LocalId::new(value.as_str()).is_err() {
             bail!(
@@ -392,20 +447,10 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         Value::Array(row_boundaries)
     };
     registry["accessProfiles"].as_object_mut().context("access profiles missing")?.insert(args.access_profile.clone(), json!({
-        "principalClaim":run.principal_claim,"requiredScopes":[scope],"requesterClients":[args.client],"requiredPurposes":["evidence-source-read"],
+        "principalClaim":baseline.principal_claim,"requiredScopes":[scope],"requesterClients":[args.client],"requiredPurposes":["evidence-source-read"],
         "permissions":{"records":[{"recordType":entity_id,"operations":["lookup"],"readableFields":grant_fields,
             "lookups":[{"selector":args.selector_profile,"valueOrigin":"request"}],"rowBoundaries":row_boundaries}]}}));
 
-    let authored_plan = read_authoring(&run.dev_yaml)?;
-    let mut plan = Reader::new("dev.yaml")
-        .scan(&authored_plan)
-        .map_err(|_| anyhow::anyhow!("The development plan is not valid YAML."))?
-        .context("The development plan is empty.")?
-        .to_json_value();
-    ensure!(
-        run.plan_matches(&plan)?,
-        "The development plan changed after the run started."
-    );
     let people = plan["people"]
         .as_object_mut()
         .context("The development plan has no people.")?;
@@ -424,9 +469,9 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         }),
     );
     let registry_after = yaml_with_comments(registry, &files["registry.yaml"])?;
-    let plan_after = yaml_with_comments(&plan, &authored_plan)?;
-    let candidate = tempfile::tempdir_in(&run.state)?;
-    for (relative, bytes) in &files {
+    let plan_after = yaml_with_comments(&plan, authored_plan)?;
+    let candidate = tempfile::tempdir_in(baseline.scratch)?;
+    for (relative, bytes) in files {
         let path = candidate.path().join(relative);
         fs::create_dir_all(
             path.parent()
@@ -450,13 +495,13 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     registry_breg::authority::authority_inventory(&successor)?;
     registry_breg::evidence_source::export_evidence_source(
         &successor,
-        &evidence_source_options(&args, entity_id.clone()),
+        &evidence_source_options(args, entity_id.clone()),
     )
     .map_err(|diagnostic| anyhow::anyhow!("{}", diagnostic.message))?;
     let changes = registry_breg::package::compiled_registry_change_set(
-        package.registry(),
+        baseline.registry,
         &successor,
-        package.package_digest(),
+        baseline.package_digest,
     );
     let migration = registry_breg::package::change_set_to_applicable_migration_plan(&changes)?;
     check_policy_only(&migration)?;
@@ -467,17 +512,11 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     report["scopes"] = json!([scope]);
     report["status"] = json!(if args.apply { "prepared" } else { "preview" });
     report["requiresRestart"] = json!(args.apply);
-    if args.apply {
-        let pending = Pending {
-            registry: Edit::new(&files["registry.yaml"], registry_after),
-            plan: Edit::new(&authored_plan, plan_after),
-            report,
-        };
-        private::replace(&journal, &serde_json::to_vec(&pending)?)?;
-        pending.finish(&run, &journal)?;
-        return Ok(pending.report);
-    }
-    Ok(report)
+    Ok(Pending {
+        registry: Edit::new(&files["registry.yaml"], registry_after),
+        plan: Edit::new(authored_plan, plan_after),
+        report,
+    })
 }
 
 #[derive(Deserialize, Serialize)]
@@ -619,22 +658,5 @@ pub(super) fn yaml_with_comments(value: &Value, original: &[u8]) -> Result<Vec<u
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_pending_edit_only_accepts_the_reviewed_before_or_after() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("registry.yaml");
-        let before = b"project: original\n";
-        let after = b"project: prepared\n";
-        let edit = Edit::new(before, after.to_vec());
-
-        fs::write(&path, before).unwrap();
-        assert!(edit.pending(&path).unwrap());
-        replace_authoring(&path, after).unwrap();
-        assert!(!edit.pending(&path).unwrap());
-        fs::write(&path, b"project: concurrent-edit\n").unwrap();
-        assert!(edit.pending(&path).is_err());
-    }
-}
+#[path = "prepare_source/tests.rs"]
+mod tests;

@@ -486,9 +486,9 @@ fn an_oversize_file_is_refused_by_the_shared_reader() {
     }
 }
 
-/// CFG-SEC-2: a file BReg reads as written refuses a substitution expression.
+/// CFG-SEC-2: authoring refuses substitution, while command output keeps literal expressions.
 #[test]
-fn an_expression_is_refused_in_a_file_read_as_written() {
+fn an_expression_is_refused_in_a_file_read_as_written_and_kept_in_a_written_one() {
     let scratch = scratch();
     let credentials = scratch.path().join("credentials.yaml");
     let example = fs::read_to_string(repository(
@@ -512,6 +512,20 @@ fn an_expression_is_refused_in_a_file_read_as_written() {
     assert!(report["diagnostics"][0]["suggestedAction"]
         .as_str()
         .is_some_and(|action| action.contains("secret reference")));
+
+    let checkpoint = scratch.path().join("export.checkpoint.json");
+    let example = fs::read_to_string(repository(
+        "products/breg/examples/formats/export.checkpoint.json",
+    ))
+    .unwrap();
+    let literal = example.replace("eyJhZnRlciI6IjUwIn0", "${CURSOR}");
+    assert_ne!(literal, example);
+    fs::write(&checkpoint, &literal).unwrap();
+    let output = check_file(&checkpoint, &["--format", "json"]);
+    let report = json_report(&output);
+    assert!(output.status.success(), "{report}");
+    assert!(codes(&report).is_empty(), "{report}");
+    assert_eq!(fs::read_to_string(&checkpoint).unwrap(), literal);
 }
 
 /// An explicit native project with journeys and local clients for reader checks.

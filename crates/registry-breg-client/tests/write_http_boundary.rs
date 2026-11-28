@@ -2084,7 +2084,11 @@ fn problem_response(code: BRegProblemCode) -> MockResponse {
             "https://id.registrystack.org/problems/registry-breg/{}",
             code.code().replace('.', "/")
         ),
-        "title": problem_title(code.status()),
+        "title": if code == BRegProblemCode::DevelopmentTaskAssertion {
+            "Development task assertion"
+        } else {
+            problem_title(code.status())
+        },
         "status": code.status(),
         "detail": problem_detail(code),
         "code": code.code(),
@@ -2161,6 +2165,9 @@ fn problem_detail(code: BRegProblemCode) -> &'static str {
         Code::IngestionRunNotOpen => "The ingestion run is not open for this transition.",
         Code::LookupUnresolved => "The lookup did not resolve exactly one record.",
         Code::MutationConflict => "The mutation conflicts with current state.",
+        Code::DevelopmentTaskAssertion => {
+            "A production registry refuses task assertions issued in development."
+        }
         Code::PreconditionFailed => "The mutation precondition failed.",
         Code::PreconditionRequired => "The mutation precondition is required.",
         Code::ProposalRejected => {

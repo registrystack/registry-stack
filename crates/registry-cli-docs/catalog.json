@@ -4864,6 +4864,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declare development posture for a ready run",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -4887,7 +4896,15 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--posture <POSTURE>",
+                  "arguments": [
+                    "--run-id <RUN_ID>"
+                  ]
+                }
+              ],
               "subcommands": []
             },
             {
@@ -4923,6 +4940,15 @@
                   "display": "--run-id <RUN_ID>",
                   "description": "Ready run serving the exact project",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declare development posture for a ready run",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -5026,6 +5052,15 @@
               "display": "--run-id <RUN_ID>",
               "description": "Ready development run serving this exact project",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declare development posture for the ready run",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],

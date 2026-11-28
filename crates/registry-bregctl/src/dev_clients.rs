@@ -1159,3 +1159,6 @@ fn validate(clients: Clients) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

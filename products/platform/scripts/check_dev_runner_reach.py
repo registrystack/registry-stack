@@ -61,7 +61,10 @@ RUNTIME_REFERENCES = {
 }
 
 
-def dependency_violations(metadata: dict) -> list[str]:
+def dependency_violations(metadata: dict, *, default_features: bool = False) -> list[str]:
+    resolve = metadata.get("resolve")
+    if not resolve or not resolve.get("nodes"):
+        return ["Cargo metadata has no dependency resolution graph."]
     failures = []
     packages = {package["id"]: package for package in metadata["packages"]}
     normal_dependencies = {
@@ -69,7 +72,7 @@ def dependency_violations(metadata: dict) -> list[str]:
             dependency["pkg"] for dependency in node["deps"]
             if any(kind["kind"] is None for kind in dependency["dep_kinds"])
         ]
-        for node in (metadata.get("resolve") or {}).get("nodes", [])
+        for node in resolve["nodes"]
     }
     for member in metadata["workspace_members"]:
         package = packages[member]
@@ -88,6 +91,8 @@ def dependency_violations(metadata: dict) -> list[str]:
                 if target in ALLOWLIST and name not in ALLOWLIST[target] and target not in reported:
                     failures.append(f"Unapproved normal dependency: {' -> '.join(next_chain)}")
                     reported.add(target)
+                if default_features and target == "registry-platform-testing" and name in ALLOWLIST[target]:
+                    failures.append(f"Test-support dependency enabled by default: {' -> '.join(next_chain)}")
                 pending.append((dependency_id, next_chain))
 
         # Keep checking direct declarations even if a supplied graph omits optional features.
@@ -115,19 +120,32 @@ def source_violations(root: Path) -> list[str]:
     return failures
 
 
+def cargo_metadata(*features: str) -> dict:
+    return json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--locked", "--format-version", "1",
+         "--manifest-path", str(ROOT / "Cargo.toml"), *features],
+        cwd=ROOT,
+    ))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--metadata", type=Path, help="Read a saved Cargo metadata JSON response")
+    parser.add_argument("--metadata", type=Path, help="Read saved all-feature Cargo metadata")
+    parser.add_argument("--default-metadata", type=Path, help="Read saved default-feature Cargo metadata")
     args = parser.parse_args()
-    if args.metadata:
-        metadata = json.loads(args.metadata.read_text(encoding="utf-8"))
-    else:
-        metadata = json.loads(subprocess.check_output(
-            ["cargo", "metadata", "--locked", "--all-features", "--format-version", "1",
-             "--manifest-path", str(ROOT / "Cargo.toml")],
-            cwd=ROOT,
-        ))
-    failures = dependency_violations(metadata) + source_violations(ROOT)
+    metadata = (
+        json.loads(args.metadata.read_text(encoding="utf-8"))
+        if args.metadata else cargo_metadata("--all-features")
+    )
+    default_metadata = (
+        json.loads(args.default_metadata.read_text(encoding="utf-8"))
+        if args.default_metadata else cargo_metadata()
+    )
+    failures = sorted(set(
+        dependency_violations(metadata)
+        + dependency_violations(default_metadata, default_features=True)
+        + source_violations(ROOT)
+    ))
     if failures:
         print("\n".join(failures), file=sys.stderr)
         return 1

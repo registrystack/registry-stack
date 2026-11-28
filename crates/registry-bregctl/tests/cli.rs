@@ -3551,6 +3551,33 @@ fn check_reports_posture_usage_errors() {
 }
 
 #[test]
+fn run_backed_commands_refuse_explicit_production_before_opening_state() {
+    for arguments in [
+        &["examples", "run", "unused", "--run-id", "invalid"][..],
+        &["examples", "list", "--run-id", "invalid"][..],
+        &["prepare-source", "--run-id", "invalid"][..],
+    ] {
+        for environment in [true, false] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bregctl"));
+            command.args(["--format", "json"]).args(arguments);
+            if environment {
+                command.env("REGISTRY_STACK_POSTURE", "production");
+            } else {
+                command.env_remove("REGISTRY_STACK_POSTURE");
+                command.args(["--posture", "production"]);
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+            assert_eq!(
+                json_stdout(&output)["diagnostics"][0]["code"],
+                "platform.posture.conflict",
+                "{arguments:?}, environment={environment}"
+            );
+        }
+    }
+}
+
+#[test]
 fn check_production_names_the_flag_in_an_environment_conflict() {
     let output = Command::new(env!("CARGO_BIN_EXE_bregctl"))
         .args([
