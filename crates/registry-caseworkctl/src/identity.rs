@@ -522,6 +522,11 @@ mod tests {
             source.replace(listed, "    allowedClients: unrestricted"),
         )
         .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&runtime, fs::Permissions::from_mode(0o600)).unwrap();
+        }
         let output = directory.path().join("facts.yaml");
         let error = generate(
             &manifest(EXAMPLE),

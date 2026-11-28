@@ -2540,6 +2540,29 @@
         "ok": {
           "type": "boolean"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "status": {
           "$ref": "#/$defs/ReportStatus"
         },
@@ -2852,6 +2875,29 @@
         "ok": {
           "type": "boolean"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "project": {
           "$ref": "#/$defs/ProjectIdentity"
         },
@@ -2976,6 +3022,29 @@
         "ok": {
           "type": "boolean"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "productionClosure": {
           "type": "boolean"
         },
@@ -3066,6 +3135,29 @@
         },
         "output": {
           "type": "string"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "status": {
           "$ref": "#/$defs/ReportStatus"
@@ -3610,6 +3702,29 @@
         "ok": {
           "type": "boolean"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "providerId": {
           "type": "string"
         },
@@ -3823,6 +3938,29 @@
         },
         "packageDigest": {
           "$ref": "#/$defs/Digest"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "revision": {
           "type": [

@@ -12,6 +12,8 @@
 
 - A secret file Render refuses names the failed check and its fix.
 
+- `check --runtime-config` verifies the configured package when present and reports its seal settings. An unreadable package returns exit 3.
+- Production startup reports runtime development settings and a sealed package without `signing` in one refusal.
 - `test-seal` refuses an undeclared or production posture with the diagnostic `render.posture.test-signing`.
 - `serve` logs the posture block and refuses a sealed bundle served without `signing` before authentication starts. `healthcheck` refuses a listener bound to a scoped IPv6 address, which a URL cannot name.
 

@@ -22,12 +22,19 @@ and task assertions. Development Evidence responses carry `Registry-Posture: dev
 Audit entries record the process posture. Successful `/ready` responses include `posture`
 and `developmentSettings`.
 
-In a production or evidence-grade package, the OIDC issuer and its configured JWKS endpoint
-can use loopback HTTP without `allowInsecureHttp`. Use HTTPS beyond loopback.
+The OIDC issuer and its configured JWKS endpoint can use loopback HTTP without
+`allowInsecureHttp` in every assurance profile. Use HTTPS beyond loopback.
+Loopback HTTP trusts every process and container sharing that interface, so use HTTPS with a TLS trust profile on shared hosts and multi-container Pods.
 
-{/* Evidence: crates/registry-evidence/src/config.rs, production_oidc_accepts_loopback_http_without_opt_in,
-    deployable_profiles_refuse_non_loopback_http_and_the_insecure_http_opt_in;
+{/* Evidence: crates/registry-evidence/src/config.rs, deployable_oidc_requires_each_http_endpoint_to_be_loopback,
+    local_oidc_accepts_localhost_without_opt_in;
     crates/registry-evidence/src/auth.rs, jwks_fetch_policy_uses_the_shared_declared_endpoint_rule. */}
+
+In production, Evidence refuses responses marked `Registry-Posture: development` from
+signed Evidence sources and wallet presentation verifiers.
+
+{/* Evidence: crates/registry-evidence/src/evidence_source_tests.rs, signed_evidence_source_applies_runtime_posture_to_marked_responses;
+    crates/registry-evidence/src/wallet_channel_tests.rs, wallet_source_applies_runtime_posture_to_marked_responses. */}
 
 ## What the runtime guarantees
 

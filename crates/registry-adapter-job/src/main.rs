@@ -261,16 +261,9 @@ fn check(
     report["posture"] = registry_adapter_engine::load::posture_member(declared);
     report["developmentSettings"] = runtime_config
         .posture
-        .settings()
-        .iter()
-        .map(|finding| {
-            let mut member = serde_json::json!({"code": finding.setting.code});
-            if let Some(pointer) = &finding.pointer {
-                member["pointer"] = serde_json::json!(pointer);
-            }
-            member
-        })
-        .collect();
+        .ready_member()
+        .remove("developmentSettings")
+        .expect("the shared ready report includes development settings");
     report["explicitProductionSettings"] = runtime_config
         .posture
         .explicit_settings()
@@ -664,6 +657,7 @@ async fn rebind_identity(
         &mut client,
         job_id,
         program.item_identity_digest().as_ref(),
+        declared.posture,
     )
     .await
     .map_err(|error| match error {
@@ -839,7 +833,9 @@ fn stop_next_step(reason: &StopReason) -> Option<&'static str> {
 /// The next step for a recorded stop text (`page-fault:<code>`,
 /// `destination-stop:<code>`), so `status` can repeat what the pass printed.
 fn next_step_for_stop_text(text: &str) -> Option<&'static str> {
-    if text.contains(registry_adapter_job::pass::ITEM_IDENTITY_MIGRATION_REQUIRED) {
+    if text.contains(store::POSTURE_MISMATCH) {
+        Some(store::POSTURE_RECOVERY)
+    } else if text.contains(registry_adapter_job::pass::ITEM_IDENTITY_MIGRATION_REQUIRED) {
         Some("If the keyPointer or CSV change is intended, run adapter-job rebind-identity <job.yaml> --pack <pack> --runtime <runtime>; stored items are kept and the new identity reads them as new. Otherwise restore the previous job definition.")
     } else if text.contains(registry_adapter_job::pass::COORDINATOR_IDENTITY_UNRECORDED) {
         Some("A pending signed delivery was staged before store schema 103 recorded its receiver and body identity, so this binary cannot prove a retry is the same event. Restore the pre-upgrade database backup, run passes with the previous binary until adapter-job status lists no pending items, then upgrade and run init-store again.")
@@ -951,8 +947,8 @@ async fn status(
                 "code": store::POSTURE_MISMATCH,
                 "recordedPosture": recorded.as_str(),
                 "declaredPosture": declared.posture.as_str(),
-                "message": "The last pass ran under a different posture.",
-                "suggestedAction": "Use a fresh store when changing the deployment posture.",
+                "message": "The job store records a different posture.",
+                "suggestedAction": store::POSTURE_RECOVERY,
             })
         })
         .into_iter()

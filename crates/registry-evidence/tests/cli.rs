@@ -5703,6 +5703,66 @@ fn production_reports_package_development_settings_together() {
 }
 
 #[test]
+fn cli_reports_deployable_http_opt_in_as_both_semantic_and_posture_errors() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "assuranceProfile: local",
+        "assuranceProfile: production",
+    );
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "    issuer: https://identity.invalid",
+        "    issuer: https://identity.invalid\n    allowInsecureHttp: true",
+    );
+    deployment.seal();
+    for name in ["serve", "check", "bundle-check"] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_evidence"));
+        command.arg(name).env_remove("REGISTRY_STACK_POSTURE");
+        if name == "bundle-check" {
+            command.arg("--bundle").arg(deployment.path("bundle"));
+        } else {
+            command
+                .arg("--runtime-config")
+                .arg(deployment.path("runtime.yaml"));
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for expected in [
+            "only the local assurance profile accepts",
+            "platform.posture.insecure-issuer-http",
+            "/authentication/oidc/allowInsecureHttp",
+            "rstack dev",
+            "REGISTRY_STACK_POSTURE=development",
+        ] {
+            assert!(stderr.contains(expected), "{name}, {expected}: {stderr}");
+        }
+    }
+    deployment.unseal();
+}
+
+#[test]
+fn check_refuses_offline_dependency_proof_without_a_posture_refusal() {
+    let deployment = Deployment::stage_production("adult-status");
+    deployment.seal();
+    let output = Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .args(["check", "--runtime-config"])
+        .arg(deployment.path("runtime.yaml"))
+        .args([
+            "--require-runtime-dependencies",
+            "--offline-dependencies-only",
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    deployment.unseal();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("only after a posture refusal"));
+    assert!(!deployment.path("audit.jsonl").exists());
+}
+
+#[test]
 fn startup_keeps_posture_findings_after_runtime_validation_refuses() {
     let deployment = Deployment::stage("adult-status");
     deployment.replace(
@@ -5804,6 +5864,12 @@ fn offline_fixture_commands_enforce_posture_before_evaluation() {
                     "{refusal}"
                 );
                 assert!(output.stdout.is_empty());
+            } else {
+                assert!(!output.stdout.is_empty(), "{name}: missing fixture payload");
+                assert!(
+                    refusal.contains("evidence.posture.local-assurance"),
+                    "{name}: {refusal}"
+                );
             }
         }
     }
@@ -5867,6 +5933,63 @@ fn local_helpers_keep_value_free_posture_refusals() {
 }
 
 #[test]
+#[ignore = "requires a matching evidencectl binary in EVIDENCECTL_BIN"]
+fn doctor_preserves_real_posture_and_audit_diagnostics_without_opening_a_writer() {
+    let evidencectl = std::env::var_os("EVIDENCECTL_BIN").expect("matching evidencectl binary");
+    for (profile, posture, code) in [
+        (
+            "production",
+            Some("development"),
+            "evidence.posture.assurance-profile-conflict",
+        ),
+        ("local", None, "evidence.posture.local-assurance"),
+    ] {
+        let deployment = if profile == "production" {
+            Deployment::stage_production("adult-status")
+        } else {
+            Deployment::stage("adult-status")
+        };
+        deployment.seal();
+        let mut command = Command::new(&evidencectl);
+        command
+            .args(["--format", "json", "doctor", "--runtime-config"])
+            .arg(deployment.path("runtime.yaml"))
+            .arg("--evidence-bin")
+            .arg(env!("CARGO_BIN_EXE_evidence"))
+            .arg("--require-audit-under")
+            .arg(deployment.path("secrets"))
+            .env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(posture) = posture {
+            command.args(["--posture", posture]);
+        }
+        let output = command.output().unwrap();
+        deployment.unseal();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let diagnostics = report["diagnostics"].as_array().unwrap();
+        for (code, path, artifact) in [
+            (code, "/assuranceProfile", "EvidenceBundle"),
+            (
+                "evidence.deployment.audit-outside-root",
+                "",
+                "EvidenceRuntimeConfig",
+            ),
+        ] {
+            assert!(
+                diagnostics.iter().any(|entry| {
+                    entry["code"] == code && entry["path"] == path && entry["artifact"] == artifact
+                }),
+                "{profile}: {report}"
+            );
+        }
+        assert_eq!(diagnostics.len(), 2, "{profile}: {report}");
+        assert!(!deployment.path("audit.jsonl").exists());
+        assert!(!deployment.path("audit.jsonl.lock").exists());
+    }
+}
+
+#[test]
 fn posture_development_refuses_an_evidence_grade_package() {
     let deployment = Deployment::stage("all-definitions");
     deployment.replace(
@@ -5921,6 +6044,21 @@ struct Deployment {
 impl Deployment {
     fn stage(case: &str) -> Self {
         Self::stage_on_port(case, 8080)
+    }
+
+    fn stage_production(case: &str) -> Self {
+        let deployment = Self::stage(case);
+        deployment.replace(
+            "bundle/evidence.yaml",
+            "assuranceProfile: local",
+            "assuranceProfile: production",
+        );
+        deployment.replace(
+            "runtime.yaml",
+            "signer:\n  type: local-jwk\n  privateKeyRef: secret:file/signing-key",
+            "signer:\n  type: transit\n  unixSocketPath: /run/evidence-test/transit.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  attemptTimeoutMilliseconds: 2000",
+        );
+        deployment
     }
 
     fn stage_on_port(case: &str, port: u16) -> Self {

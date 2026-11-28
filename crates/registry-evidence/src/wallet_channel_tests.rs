@@ -628,6 +628,49 @@ fn valid_until(evidence: &Evidence) -> DateTime<Utc> {
 }
 
 #[tokio::test]
+async fn wallet_source_applies_runtime_posture_to_marked_responses() {
+    use crate::config::{DeclaredPosture, Posture, PostureSource};
+    let issuer = TrustedIssuer::generate();
+    for (posture, status) in [
+        (Posture::Development, StatusCode::OK),
+        (Posture::Production, StatusCode::SERVICE_UNAVAILABLE),
+    ] {
+        let (_source, wallet, prepared) =
+            prepare_wallet_deployment(&issuer, &Deployment::standard()).await;
+        let deployment = crate::bundle::DeploymentInputs::load(
+            &prepared.runtime_path,
+            DeclaredPosture {
+                posture: Posture::Development,
+                source: PostureSource::Flag,
+            },
+        )
+        .unwrap()
+        .with_test_posture(posture);
+        let runtime =
+            EvidenceRuntime::initialize_from_with_authenticator(deployment, authenticator())
+                .await
+                .unwrap();
+        let times = Times::expiring_in(120);
+        mount_read(
+            &wallet,
+            wallet_response(&read_response(
+                &presentation(&issuer.key, times),
+                &applicant(),
+                times.now,
+            ))
+            .insert_header("registry-posture", "development"),
+            1,
+        )
+        .await;
+        let http = TestServer::new(build_app(Arc::new(runtime)));
+        let response = authorized(http.post("/v1/evidence"))
+            .json(&session_request())
+            .await;
+        response.assert_status(status);
+    }
+}
+
+#[tokio::test]
 async fn a_holder_presented_request_returns_a_signed_assertion_that_states_its_channel() {
     let issuer = TrustedIssuer::generate();
     let fixture = WalletRuntime::start(&issuer, &Deployment::standard()).await;

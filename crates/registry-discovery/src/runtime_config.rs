@@ -193,7 +193,7 @@ pub struct RuntimeCheck {
 /// holds one are skipped, because they need the substituted text.
 #[must_use]
 pub fn check_runtime(path: &Path, substitute: bool, declared: DeclaredPosture) -> RuntimeCheck {
-    read_runtime(path, substitute, declared, None).1
+    read_runtime(path, substitute, declared, false).1
 }
 
 /// Check a runtime file and verify its package when the configured root is available.
@@ -202,9 +202,8 @@ pub fn check_runtime_with_package(
     path: &Path,
     substitute: bool,
     declared: DeclaredPosture,
-    is_loopback_host: impl Fn(&str) -> bool,
 ) -> RuntimeCheck {
-    read_runtime(path, substitute, declared, Some(&is_loopback_host)).1
+    read_runtime(path, substitute, declared, true).1
 }
 
 /// Read the runtime file at `path` with the process environment, as the
@@ -214,7 +213,7 @@ pub fn load_runtime_config(
     path: &Path,
     declared: DeclaredPosture,
 ) -> Result<LoadedRuntimeConfig<RuntimeConfig>, Vec<Diagnostic>> {
-    match read_runtime(path, true, declared, None) {
+    match read_runtime(path, true, declared, false) {
         (Some(config), _) => Ok(config),
         (None, check) => Err(check.diagnostics),
     }
@@ -226,7 +225,7 @@ fn read_runtime(
     path: &Path,
     substitute: bool,
     declared: DeclaredPosture,
-    package_loopback_host: Option<&dyn Fn(&str) -> bool>,
+    inspect_package: bool,
 ) -> (Option<LoadedRuntimeConfig<RuntimeConfig>>, RuntimeCheck) {
     let mut check =
         runtime_loader(declared).check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
@@ -255,12 +254,14 @@ fn read_runtime(
     };
     let mut config = check.loaded.take().filter(|_| !has_errors(&diagnostics));
     let mut unavailable = check.unavailable;
-    if let (Some(loaded), Some(is_loopback_host)) = (config.as_mut(), package_loopback_host) {
+    if let (Some(loaded), true) = (config.as_mut(), inspect_package) {
         if package_fields_resolved && loaded.config.package.root.exists() {
             let index_path = loaded.config.package.root.join(crate::INDEX_FILE);
             match crate::package::load_runtime_package(&loaded.config.package) {
                 Ok((index, _)) => {
-                    crate::record_index_posture(&index, &mut loaded.posture, is_loopback_host);
+                    crate::record_index_posture(&index, &mut loaded.posture, |host| {
+                        registry_platform_loopback::loopback_host(host).is_some()
+                    });
                     diagnostics.extend(loaded.posture.diagnostics(&index_path));
                 }
                 Err(error) => {

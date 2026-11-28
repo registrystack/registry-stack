@@ -117,31 +117,31 @@ pub(crate) async fn load_service(
     runtime_path: &Path,
     declared: DeclaredPosture,
 ) -> Result<(runtime::RenderRuntime, String, Arc<Service>), RenderProblem> {
-    let (mut loaded, positions) = runtime::load_with_positions(runtime_path, declared)?;
+    let (mut loaded, positions) = runtime::load_before_posture_decision(runtime_path, declared)?;
     let runtime = loaded.config;
     let config_id = loaded.effective_digest;
     let bundle = runtime::load_package(&runtime)?;
     crate::check::check_labels(&bundle)?;
-    let diagnostics = runtime::record_seal_binding_posture(
+    let binding_findings = runtime::record_seal_binding_posture(
         &runtime,
         &bundle.manifest,
         runtime_path,
         &mut loaded.posture,
     );
-    // The one posture block, before authentication reaches any network or
-    // secret. A development warning is carried by this block, so only the
-    // refusal returns here.
     loaded.posture.log_startup();
-    if let Some(refusal) = diagnostics
-        .into_iter()
-        .find(|diagnostic| diagnostic.severity == registry_platform_yaml::Severity::Error)
-    {
-        return Err(RenderProblem::new(
+    loaded.posture.decide(runtime_path).map_err(|error| {
+        let mut diagnostics = error.diagnostics().to_vec();
+        for finding in binding_findings {
+            if let Some(diagnostic) = diagnostics.iter_mut().find(|d| d.code == finding.code) {
+                *diagnostic = finding;
+            }
+        }
+        RenderProblem::new(
             ProblemKind::RuntimeInvalid,
             "the bundle and runtime combination was refused",
         )
-        .with_diagnostics(vec![refusal]));
-    }
+        .with_diagnostics(diagnostics)
+    })?;
     let oidc = crate::auth::verifier(&runtime).await?;
     let api_key = if oidc.is_none() {
         normalize_api_key(runtime::resolve_secret(

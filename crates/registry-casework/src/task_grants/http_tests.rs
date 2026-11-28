@@ -502,7 +502,10 @@ async fn development_runtime_marks_probes_audit_and_task_assertions() {
     .await
     .unwrap();
 
-    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let root = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+        .unwrap();
     let package = root.path().join("package");
     let manifest = BTreeMap::from([(
         crate::POLICY_FILE.into(),
@@ -573,6 +576,7 @@ async fn development_runtime_marks_probes_audit_and_task_assertions() {
         .unwrap(),
     )
     .unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o600)).unwrap();
     let declared = DeclaredPosture {
         posture: Posture::Development,
         source: PostureSource::Flag,

@@ -108,6 +108,8 @@ fn job_store_reuses_the_shared_transport_rule() {
 #[cfg(all(feature = "job-file", feature = "signed-coordinator-event"))]
 #[test]
 fn job_check_enforces_and_lists_the_posture() {
+    use std::os::unix::fs::PermissionsExt as _;
+
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../products/adapter/fixtures/corpus/base-job");
     let directory = tempfile::tempdir().unwrap();
@@ -133,6 +135,7 @@ fn job_check_enforces_and_lists_the_posture() {
         command.output().unwrap()
     };
     std::fs::write(&runtime, format!("{yaml}{destination}store:\n  runtimeUrlRef: secret:env/JOB_DB\n  transport: private-network-plaintext\n")).unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o600)).unwrap();
     for flag in [None, Some("production")] {
         let output = run(flag, None);
         let stderr = String::from_utf8(output.stderr).unwrap();

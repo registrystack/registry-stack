@@ -220,6 +220,10 @@ fn configuration_error(artifact: &str, file: &Path, error: ConfigError) -> Bundl
     }
 }
 
+// Validation refusals can carry a diagnostic report. Other bundle errors
+// retain their exit class and recovery action. A package read or pin failure
+// can only have runtime findings, and the runtime currently has no gated
+// settings. If one is added, report those findings separately at that call site.
 fn with_posture_findings(
     error: BundleError,
     path: &Path,
@@ -231,7 +235,7 @@ fn with_posture_findings(
     }
     match error {
         BundleError::Refused(report) => diagnostics.extend(report.into_diagnostics()),
-        error => {
+        error @ BundleError::Config(_) => {
             let pointer = error
                 .artifact_fault()
                 .and_then(|fault| fault.fault().path());
@@ -248,6 +252,7 @@ fn with_posture_findings(
             });
             diagnostics.push(diagnostic);
         }
+        other => return other,
     }
     BundleError::Refused(Box::new(Report::new(diagnostics)))
 }
@@ -679,6 +684,19 @@ impl DeploymentInputs {
         Ok(Self { bundle, runtime })
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_test_posture(mut self, posture: crate::config::Posture) -> Self {
+        // The synthetic source deployments use local assurance and loopback
+        // HTTP. Override the captured posture to exercise peer policy alone.
+        if self.runtime.posture.posture() != posture {
+            self.runtime.posture = PostureReport::new(DeclaredPosture {
+                posture,
+                source: crate::config::PostureSource::Flag,
+            });
+        }
+        self
+    }
+
     pub fn bundle(&self) -> &Bundle {
         &self.bundle
     }
@@ -745,7 +763,7 @@ impl Bundle {
                 loaded.posture.diagnostics(path),
             ));
         }
-        let package = Self::load_pinned(&runtime.package);
+        let package = Self::load_pinned_under(&runtime.package, Some(loaded.posture.posture()));
         let bundle = match package {
             Ok(bundle) => bundle,
             Err(error) => {
@@ -798,6 +816,7 @@ impl Bundle {
         let package = self.root().join(CONFIG_FILE);
         for (setting, diagnostic) in report.settings().iter().zip(&mut diagnostics) {
             if setting.origin == SettingOrigin::Package {
+                diagnostic.artifact = Some(crate::config::EVIDENCE_BUNDLE_KIND.to_owned());
                 if let Some(source) = &mut diagnostic.source {
                     source.file = package.display().to_string();
                 }
@@ -874,6 +893,7 @@ impl Bundle {
                 "a development process requires a package built with assuranceProfile: local",
                 "Build the package with assuranceProfile: local for development, or run the current package in production.",
             );
+            diagnostic.artifact = Some(crate::config::EVIDENCE_BUNDLE_KIND.to_owned());
             diagnostic.source = Some(registry_platform_yaml::Source {
                 file: self.root.join(CONFIG_FILE).display().to_string(),
                 line: None,
@@ -890,17 +910,33 @@ impl Bundle {
     pub fn load_pinned(
         package: &registry_platform_config::PackageConfig,
     ) -> Result<Self, BundleError> {
+        Self::load_pinned_under(package, None)
+    }
+
+    fn load_pinned_under(
+        package: &registry_platform_config::PackageConfig,
+        posture: Option<Posture>,
+    ) -> Result<Self, BundleError> {
         let verified = package
             .verify_package(&evidence_package_limits(), "evidencectl package")
             .map_err(package_error)?;
-        Self::load_verified(&package.root, &verified)
+        Self::load_captured(&package.root, &verified, Capture::Frozen, posture)
     }
 
     pub fn load(root: impl AsRef<Path>) -> Result<Self, BundleError> {
-        let root = root.as_ref();
+        Self::load_frozen(root.as_ref(), None)
+    }
+
+    /// Load a frozen bundle and include discovered development settings when
+    /// its configuration is refused.
+    pub fn load_under(root: &Path, posture: Posture) -> Result<Self, BundleError> {
+        Self::load_frozen(root, Some(posture))
+    }
+
+    fn load_frozen(root: &Path, posture: Option<Posture>) -> Result<Self, BundleError> {
         let verified = verify_package(root, &evidence_package_limits(), "evidencectl package")
             .map_err(package_error)?;
-        Self::load_verified(root, &verified)
+        Self::load_captured(root, &verified, Capture::Frozen, posture)
     }
 
     /// Load a verified package as it is found, without requiring it to be
@@ -908,17 +944,22 @@ impl Bundle {
     ///
     /// Everything else deployment applies to the package applies here.
     pub fn load_as_found(root: &Path, verified: &VerifiedPackage) -> Result<Self, BundleError> {
-        Self::load_captured(root, verified, Capture::AsFound)
+        Self::load_captured(root, verified, Capture::AsFound, None)
     }
 
-    fn load_verified(root: &Path, verified: &VerifiedPackage) -> Result<Self, BundleError> {
-        Self::load_captured(root, verified, Capture::Frozen)
+    pub(crate) fn load_as_found_under(
+        root: &Path,
+        verified: &VerifiedPackage,
+        posture: Posture,
+    ) -> Result<Self, BundleError> {
+        Self::load_captured(root, verified, Capture::AsFound, Some(posture))
     }
 
     fn load_captured(
         root: &Path,
         verified: &VerifiedPackage,
         capture: Capture,
+        posture: Option<Posture>,
     ) -> Result<Self, BundleError> {
         let files = capture_bundle_files(root, verified, capture)?;
         let config_bytes = files.get(CONFIG_FILE).ok_or(BundleError::Unavailable)?;
@@ -927,8 +968,25 @@ impl Bundle {
         for found in &mut development_settings {
             found.origin = SettingOrigin::Package;
         }
-        let config = config
-            .map_err(|error| configuration_error(CONFIG_FILE, &root.join(CONFIG_FILE), error))?;
+        let config = config.map_err(|error| {
+            let path = root.join(CONFIG_FILE);
+            let error = configuration_error(CONFIG_FILE, &path, error);
+            let Some(posture) = posture else {
+                return error;
+            };
+            let mut report = PostureReport::new(DeclaredPosture {
+                posture,
+                source: crate::config::PostureSource::Flag,
+            });
+            for setting in &development_settings {
+                report.record(setting.clone());
+            }
+            let mut diagnostics = report.diagnostics(&path);
+            for diagnostic in &mut diagnostics {
+                diagnostic.artifact = Some(crate::config::EVIDENCE_BUNDLE_KIND.to_owned());
+            }
+            with_posture_findings(error, &path, diagnostics)
+        })?;
         let source_packs = load_source_packs(&config, &files)?;
         validate_source_authority_paths(&config, &source_packs)?;
         validate_file_closure(&config, &source_packs, &files)?;
@@ -4317,6 +4375,25 @@ mod tests {
 
     fn mapped_inputs<'a>(names: &'a [&'a str]) -> BTreeSet<&'a str> {
         names.iter().copied().collect()
+    }
+
+    #[test]
+    fn posture_findings_do_not_reclassify_unavailable_packages() {
+        let mut posture = PostureReport::new(DeclaredPosture {
+            posture: Posture::Production,
+            source: crate::config::PostureSource::Default,
+        });
+        posture.record(FoundSetting {
+            setting: &LOCAL_ASSURANCE,
+            pointer: Some("/assuranceProfile".to_owned()),
+            position: None,
+            origin: SettingOrigin::RuntimeFile,
+        });
+        let path = Path::new("runtime.yaml");
+        assert!(matches!(
+            with_posture_findings(BundleError::Unavailable, path, posture.diagnostics(path)),
+            BundleError::Unavailable
+        ));
     }
 
     #[test]

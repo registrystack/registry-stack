@@ -1070,6 +1070,10 @@ mod tests {
         )
         .unwrap();
 
+        let production = registry_platform_config::declared(Some("production")).unwrap();
+        let result = registry_discovery::check_runtime_with_package(&runtime, false, production);
+        assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
+
         for (posture, code) in [("production", 1), ("development", 0)] {
             let (exit, stdout, stderr) = run_cli(&[
                 "check",
@@ -1124,22 +1128,27 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn runtime_config_check_reports_an_unreadable_package_as_unavailable() {
-        use std::os::unix::fs::PermissionsExt;
-
         let root = fixture_copy(copy_runtime);
         let runtime = root.path().join("runtime.yaml");
-        let package = root.path().join("package");
-        fs::create_dir(&package).unwrap();
-        let sums = package.join("SHA256SUMS");
-        fs::write(&sums, b"").unwrap();
-        fs::set_permissions(&sums, fs::Permissions::from_mode(0o000)).unwrap();
-        if fs::read(&sums).is_ok() {
-            // A superuser reads any file, so nothing here is unreadable.
-            return;
+        let mut package = root.path().join("package");
+        // Linux accepts this directory path but returns ENAMETOOLONG when
+        // the verifier appends SHA256SUMS, even for a privileged process.
+        const ROOT_LENGTH: usize = 4090;
+        while package.as_os_str().len() < ROOT_LENGTH {
+            let remaining = ROOT_LENGTH - package.as_os_str().len() - 1;
+            package.push("x".repeat(remaining.min(200)));
         }
+        fs::create_dir_all(&package).unwrap();
+        assert!(package.is_dir());
+        assert_ne!(
+            fs::symlink_metadata(package.join("SHA256SUMS"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
         let text = fs::read_to_string(&runtime)
             .unwrap()
             .replace("/srv/registry-discovery/package", package.to_str().unwrap());
@@ -1152,7 +1161,6 @@ mod tests {
             "--format",
             "json",
         ]);
-        fs::set_permissions(&sums, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(
             exit,
             ExitCode::from(report::OPERATIONAL_FAILURE_EXIT),

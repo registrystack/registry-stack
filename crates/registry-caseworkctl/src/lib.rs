@@ -44,6 +44,9 @@ enum Command {
     Serve(ServeArgs),
     /// Create a standalone or source-backed ReviewPolicy project.
     Init {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// New project directory; existing destinations are never overwritten.
         #[arg(value_name = "DIRECTORY")]
         project: PathBuf,
@@ -59,6 +62,9 @@ enum Command {
     Test(TestArgs),
     /// Generate policy bindings and context/request/task/result TypeScript and Python types.
     Types {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// Existing authored Casework project directory.
         #[arg(value_name = "PROJECT")]
         project: PathBuf,
@@ -81,6 +87,9 @@ enum Command {
     /// Package the policy and its exact local schema and provider dependency closure.
     #[command(group(ArgGroup::new("package_output").required(true).multiple(false).args(["output", "dry_run"])))]
     Package {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// Existing authored Casework project directory.
         #[arg(value_name = "PROJECT")]
         project: PathBuf,
@@ -163,7 +172,7 @@ enum GenerateCommand {
 enum ProviderCommand {
     /// Create an approval project from a Base Registry Engine (BReg) Action and print missing configuration.
     Add {
-        /// Deployment posture used to check the runtime example. Generation requires development.
+        /// Declared posture: development or production. Unset means production. Generation requires development.
         #[arg(long, value_name = "POSTURE")]
         posture: Option<String>,
         /// New Casework directory, or a previously generated project to check without rewriting.
@@ -190,6 +199,9 @@ enum ProviderCommand {
     },
     /// Verify native context and reader authority, then optionally retain its provider export.
     Pair {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// Existing Casework project with the exact vendored schema and context pin.
         #[arg(value_name = "PROJECT")]
         project: PathBuf,
@@ -212,12 +224,18 @@ enum ProviderCommand {
 }
 #[derive(Debug, Args)]
 struct ProjectArgs {
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long, value_name = "POSTURE")]
+    posture: Option<String>,
     /// Existing authored Casework project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
 }
 #[derive(Debug, Args)]
 struct TestArgs {
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long, value_name = "POSTURE")]
+    posture: Option<String>,
     /// Existing authored Casework project and its offline fixtures.
     project: PathBuf,
     /// Refuse authored warnings as well as errors.
@@ -283,6 +301,17 @@ pub fn main_entry_from(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> ExitCode {
+    main_entry_with_posture_resolver(args, stdout, stderr, declared)
+}
+
+fn main_entry_with_posture_resolver(
+    args: impl IntoIterator<Item = OsString>,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+    resolve: impl FnOnce(
+        Option<&str>,
+    ) -> Result<DeclaredPosture, registry_platform_config::PostureError>,
+) -> ExitCode {
     let args: Vec<_> = args.into_iter().collect();
     let format_supplied = args
         .iter()
@@ -336,7 +365,7 @@ pub fn main_entry_from(
     let Cli { format, command } = cli;
     let command_posture = match command.posture_flag() {
         Some(Err(diagnostic)) => return posture_usage(diagnostic, format, stdout, stderr),
-        Some(Ok(flag)) => match declared(flag) {
+        Some(Ok(flag)) => match resolve(flag) {
             Ok(value) => Some(value),
             Err(error) => {
                 return posture_usage(
@@ -659,13 +688,19 @@ impl Command {
             Self::Serve(args) => args.posture.as_deref(),
             Self::Provision(args) => args.posture.as_deref(),
             Self::Apply { posture, .. }
+            | Self::Init { posture, .. }
+            | Self::Types { posture, .. }
+            | Self::Package { posture, .. }
             | Self::Provider {
-                command: ProviderCommand::Add { posture, .. },
+                command:
+                    ProviderCommand::Add { posture, .. } | ProviderCommand::Pair { posture, .. },
             }
             | Self::Generate {
                 command: GenerateCommand::IdentityFacts { posture, .. },
             } => posture.as_deref(),
             Self::Doctor(args) | Self::Plan(args) | Self::Status(args) => args.posture.as_deref(),
+            Self::Explain(args) => args.posture.as_deref(),
+            Self::Test(args) => args.posture.as_deref(),
             Self::Check(args) if args.production => {
                 if args.posture.as_deref() == Some("development") {
                     return Some(Err(registry_platform_yaml::Diagnostic::error(
@@ -716,7 +751,9 @@ fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
     let posture = || posture.expect("runtime commands declare posture");
     match command {
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
-        Command::Init { project, template } => project::init(&project, &template),
+        Command::Init {
+            project, template, ..
+        } => project::init(&project, &template),
         Command::Check(args) => {
             let mut result = if args.runtime_config.is_some() {
                 project::check(&args.project, args.production, false)
@@ -747,7 +784,9 @@ fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
         }
         Command::Explain(args) => project::explain(&args.project),
         Command::Test(args) => project::test(&args.project, args.deny_warnings),
-        Command::Types { project, output } => project_types::generate(&project, &output),
+        Command::Types {
+            project, output, ..
+        } => project_types::generate(&project, &output),
         Command::Generate {
             command:
                 GenerateCommand::IdentityFacts {
@@ -791,6 +830,7 @@ fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
                     action_id,
                     bregctl_bin,
                     apply,
+                    ..
                 },
         } => {
             let bregctl = bregctl_binary(bregctl_bin.as_deref())?;
@@ -811,6 +851,7 @@ fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
             output,
             revision,
             dry_run,
+            ..
         } => {
             if dry_run {
                 project::package_dry_run(&project, revision.as_deref())
@@ -1095,9 +1136,16 @@ pub(crate) fn configuration_report(
             )
     })
 }
+fn trusted_tempdir_in(parent: &std::path::Path) -> io::Result<tempfile::TempDir> {
+    use std::os::unix::fs::PermissionsExt as _;
+    tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o755))
+        .tempdir_in(parent)
+}
+
 #[cfg(test)]
 pub(crate) fn canonical_tempdir() -> tempfile::TempDir {
-    tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
+    trusted_tempdir_in(&std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()
 }
 /// Write an executable shell stub and return only once it can be exec'd.
 /// On Linux a concurrent test's fork can inherit the writer descriptor of a

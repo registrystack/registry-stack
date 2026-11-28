@@ -29,6 +29,7 @@
 - BREAKING: Audit lines carry `posture`.
   Migration: Audit readers with a closed line parser accept the posture member.
 
+- Mutating typed `coordinatorctl` commands probe `/health` without credentials before sending the mutation. A production command refuses a development Coordinator at the probe.
 - Development responses carry `Registry-Posture: development`. The Coordinator Rust client refuses that mark, and every typed `coordinatorctl` command refuses it when it runs as production. The refusal code is `coordinator.command.development-peer`. `coordinatorctl api` passes the response through unchecked.
 
 - `/v1/doctor` carries a required `findings` member. It holds the `platform.activation.posture-mismatch` entry when the activation ledger records the other posture.

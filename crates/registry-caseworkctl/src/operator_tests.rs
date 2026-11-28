@@ -310,9 +310,15 @@ fn production_check_refuses_unrestricted_clients() {
     let root = canonical_tempdir();
     let project = root.path().join("project");
     project::init(&project, "standalone-decision").unwrap();
+    let runtime = project.join("runtime.example.yaml");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
     let result = project::check_runtime_config(
         &project,
-        &project.join("runtime.example.yaml"),
+        &runtime,
         false,
         false,
         project::check(&project, false, false),

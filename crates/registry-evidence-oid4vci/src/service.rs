@@ -2544,6 +2544,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_loaded_development_service_accepts_a_marked_ordinary_offer_token() {
+        let directory = canonical_tempdir();
+        let issuer = registry_platform_testing::MockHttpUpstream::start().await;
+        let key = private_jwk("offer-test");
+        issuer
+            .expect("GET", "/jwks.json")
+            .respond_json(200, json!({"keys": [public_jwk(&key)]}))
+            .await;
+        let mut config = load_deployment(directory.path());
+        config.offers.issuer = issuer.url();
+        config.offers.jwks_uri = format!("{}/jwks.json", issuer.url());
+        config.offers.algorithms = vec![crate::config::AccessTokenAlgorithm::ES256];
+        let token = proof_jwt_with_header(
+            &key,
+            json!({"alg": "ES256", "typ": "at+jwt", "kid": "offer-test"}),
+            json!({
+                "iss": issuer.url(),
+                "sub": "offer-caller",
+                "aud": "https://wallet.example.org",
+                "client_id": "adopter-front-end",
+                "scope": "oid4vci:offer",
+                "iat": now(),
+                "exp": now() + 300,
+                "registry_posture": "development",
+            }),
+        );
+        let service = DeliveryService::load(config).await.unwrap();
+        service.authorizer.authorize(&token).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn loading_a_deployment_binds_nothing() {
         let directory = canonical_tempdir();
         // Hold the configured port while the service loads. A load that bound

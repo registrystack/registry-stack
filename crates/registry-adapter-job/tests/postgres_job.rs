@@ -160,6 +160,7 @@ impl ManagedChild {
     fn spawn(url: &str, args: Vec<std::ffi::OsString>) -> Self {
         let child = Command::new(env!("CARGO_BIN_EXE_adapter-job"))
             .env("JOB_TEST_DB", url)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -4924,6 +4925,38 @@ async fn migration_preserves_completed_passes_and_allows_new_jobs_without_a_pass
 }
 
 #[tokio::test]
+async fn expired_development_lease_retains_the_store_posture() {
+    use registry_platform_config::Posture::{Development, Production};
+
+    let isolated = isolated().await;
+    let client = isolated.pool.get().await.unwrap();
+    store::ensure_state(&client, "case-daily").await.unwrap();
+    let ttl = Duration::from_secs(60);
+    assert!(store::take_lease(&client, "case-daily", ttl, Development)
+        .await
+        .unwrap()
+        .is_some());
+    client
+        .batch_execute(
+            "UPDATE adapter_job_state SET lease_expires = now() - interval '1 second' \
+             WHERE job_id = 'case-daily'",
+        )
+        .await
+        .unwrap();
+    let refusal = store::take_lease(&client, "case-daily", ttl, Production)
+        .await
+        .err()
+        .expect("the expired development lease still fences production");
+    assert!(matches!(
+        refusal,
+        store::StoreError::PostureMismatch {
+            recorded: Development
+        }
+    ));
+    assert!(refusal.to_string().contains("adapter.job.posture-mismatch"));
+}
+
+#[tokio::test]
 async fn status_reports_a_pass_recorded_in_a_different_posture() {
     for (recorded, other) in [("development", "production"), ("production", "development")] {
         let mut page = reply_page_end();
@@ -4985,8 +5018,8 @@ async fn status_reports_a_pass_recorded_in_a_different_posture() {
                     "code": "adapter.job.posture-mismatch",
                     "recordedPosture": recorded,
                     "declaredPosture": declared,
-                    "message": "The last pass ran under a different posture.",
-                    "suggestedAction": "Use a fresh store when changing the deployment posture."
+                    "message": "The job store records a different posture.",
+                    "suggestedAction": "Use the recorded posture, or use a fresh store when changing the deployment posture. Run adapter-job status to see both postures."
                 }])
             };
             assert_eq!(report["findings"], expected, "{report}");
@@ -5012,6 +5045,26 @@ async fn status_reports_a_pass_recorded_in_a_different_posture() {
                 "{stdout} {stderr}"
             );
         }
+        set_acceptance_interval(&fixture);
+        let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut runtime: Value =
+            serde_json::from_slice(&std::fs::read(&fixture.runtime).unwrap()).unwrap();
+        runtime["metricsListener"] = json!({"bind": socket.local_addr().unwrap().to_string()});
+        std::fs::write(&fixture.runtime, serde_json::to_vec(&runtime).unwrap()).unwrap();
+        let mut args = fixture_pass_args(&fixture, &receiver);
+        args.extend(["--loop".into(), "--posture".into(), other.into()]);
+        let mut loop_child = ManagedChild::spawn(&isolated.url, args);
+        wait_for_clean_exit(&mut loop_child).await;
+        let refused = loop_child.output();
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(!refused.status.success(), "{stderr}");
+        assert!(stderr.contains("adapter.job.posture-mismatch"), "{stderr}");
+        assert!(!stderr.contains("adapter.job.hook-listening"), "{stderr}");
+        assert!(
+            !stderr.contains("adapter.job.metrics-listening"),
+            "{stderr}"
+        );
+
         let after = state(&isolated.pool, "case-daily").await;
         assert_eq!(after.position, before.position);
         assert_eq!(after.last_pass_at, before.last_pass_at);
@@ -5020,6 +5073,51 @@ async fn status_reports_a_pass_recorded_in_a_different_posture() {
         assert_eq!(after.last_rescan_at, before.last_rescan_at);
         assert_eq!(after.rescan_active, before.rescan_active);
     }
+}
+
+async fn assert_job_posture_recovery(dry_run: bool) {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page_end())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let receiver = FixtureReceiver::start(vec![]).await;
+    let isolated = isolated().await;
+    let client = isolated.pool.get().await.unwrap();
+    client
+        .batch_execute(
+            "INSERT INTO adapter_job_state (job_id, last_pass_posture) \
+             VALUES ('case-daily', 'development')",
+        )
+        .await
+        .unwrap();
+    let mut args = if dry_run {
+        job_args("pass", &fixture, &["--dry-run"])
+    } else {
+        fixture_pass_args(&fixture, &receiver)
+    };
+    args.extend(["--posture".into(), "production".into()]);
+    let refused = run_job_without_env(&isolated.url, args, &["REGISTRY_STACK_POSTURE"]).await;
+    assert!(!refused.status.success());
+    let report: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(
+        report["stopped"]["code"],
+        "page-fault:adapter.job.posture-mismatch"
+    );
+    let next = report["stopped"]["next"].as_str().unwrap_or_default();
+    assert!(next.contains("Use the recorded posture"), "{report}");
+    assert!(next.contains("use a fresh store"), "{report}");
+}
+
+#[tokio::test]
+async fn once_pass_posture_refusal_reports_recovery() {
+    assert_job_posture_recovery(false).await;
+}
+
+#[tokio::test]
+async fn preview_pass_posture_refusal_reports_recovery() {
+    assert_job_posture_recovery(true).await;
 }
 
 #[test]

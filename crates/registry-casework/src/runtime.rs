@@ -463,6 +463,7 @@ pub fn build_context_providers(
     config: &RuntimeConfig,
     package: &crate::LoadedCaseworkPackage,
     secrets: &SecretResolver,
+    posture: Posture,
 ) -> Result<Vec<Arc<dyn ReviewContextProvider>>, RuntimeError> {
     let project = package.project();
     let mut providers: Vec<Arc<dyn ReviewContextProvider>> = Vec::new();
@@ -489,8 +490,14 @@ pub fn build_context_providers(
             .as_deref()
             .and_then(|path| package.context_export(path))
             .ok_or_else(|| RuntimeError::ContextProviderConfiguration(provider.id.clone()))?;
-        let built = registry_casework_breg::build_provider(binding, provider, description, secrets)
-            .map_err(|_| RuntimeError::ContextProviderConfiguration(provider.id.clone()))?;
+        let built = registry_casework_breg::build_provider(
+            binding,
+            provider,
+            description,
+            secrets,
+            posture,
+        )
+        .map_err(|_| RuntimeError::ContextProviderConfiguration(provider.id.clone()))?;
         providers.push(Arc::new(built));
     }
     if config.context_providers.keys().any(|deployment| {
@@ -597,7 +604,7 @@ pub async fn serve_from_path(
     validate_retained_completion_destinations(&store, &config.review_completion_destinations)
         .await?;
 
-    let providers = build_context_providers(&config, &package, &secrets)?;
+    let providers = build_context_providers(&config, &package, &secrets, declared.posture)?;
     let provider_refs = providers
         .iter()
         .map(|provider| provider.as_ref())

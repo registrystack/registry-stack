@@ -220,6 +220,34 @@ fn the_shipped_example_passes_a_production_check() {
 }
 
 #[test]
+fn the_shipped_example_separates_the_public_resource_from_the_listener() {
+    use registry_mcp::config::{ProviderConfig, RuntimeConfig};
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("runtime.yaml");
+    std::fs::copy(example(), &path).unwrap();
+    let config = RuntimeConfig::load(&path).expect("the shipped runtime loads offline");
+    let issuer = config.resource_server.issuer_url(None).unwrap();
+    let resource = config.resource_server.resource_url(None).unwrap().to_url();
+    let ProviderConfig::Breg { exchange, .. } = &config.bindings[0].provider else {
+        panic!("the shipped example binds BReg");
+    };
+    assert_eq!(exchange.assertion_audience.as_str(), issuer.as_str());
+    assert_eq!(
+        exchange.token_endpoint.to_url().origin(),
+        issuer.to_url().origin()
+    );
+    assert_ne!(
+        resource.host_str().unwrap(),
+        config.listener.bind.ip().to_string()
+    );
+}
+
+#[test]
 fn check_requires_development_for_the_http_resource_and_reports_flag_conflicts() {
     // The shipped example publishes https URLs, so the check runs on a copy
     // that publishes a plain http resource.

@@ -17,7 +17,8 @@ use std::{
 
 use anyhow::{bail, Context as _, Result};
 use clap::{ArgGroup, Args};
-use serde::Serialize;
+use registry_platform_yaml::{Diagnostic, Report, Severity};
+use serde::{Deserialize, Serialize};
 
 use crate::{evidence_binary, OutputFormat};
 
@@ -77,18 +78,15 @@ pub(crate) struct DoctorArgs {
 struct DoctorReport<'a> {
     runtime_config: &'a std::path::Path,
     proof_boundary: &'static str,
-    diagnostics: Vec<Diagnostic>,
+    diagnostics: Vec<serde_json::Value>,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Diagnostic {
-    severity: &'static str,
-    code: &'static str,
-    artifact: String,
-    path: &'static str,
-    message: String,
-    suggested_action: &'static str,
+struct RuntimeCheckReport {
+    diagnostics: Vec<Diagnostic>,
+    package_digest: Option<String>,
+    requirements: Option<usize>,
 }
 
 impl DoctorArgs {
@@ -147,12 +145,13 @@ pub(crate) fn run(
         false,
         declared,
     )?;
-    let posture_conflict = has_assurance_profile_conflict(&base.stderr);
+    let posture_conflict = base.diagnostics().iter().any(is_posture_refusal);
     if !base.status.success() && !posture_conflict {
         // `evidence check` exits 3 when an input it depends on could not be
         // read, such as an unreadable runtime file or package.
+        let detail = base.render_diagnostics();
         let dependency_failure =
-            base.status.code() == Some(3) || runtime_diagnostic_is_dependency_failure(&base.stderr);
+            base.status.code() == Some(3) || runtime_diagnostic_is_dependency_failure(&detail);
         return render_refusal(
             &runtime_config,
             format,
@@ -166,7 +165,9 @@ pub(crate) fn run(
             } else {
                 "domain-refusal"
             },
-            &base.stderr,
+            &detail,
+            base.diagnostics(),
+            LOCKED_PROOF_BOUNDARY,
             if dependency_failure { 3 } else { 1 },
             declared,
         );
@@ -182,21 +183,30 @@ pub(crate) fn run(
     );
 
     if posture_conflict {
-        let diagnostic = match dependency {
-            Ok(result) if has_assurance_profile_conflict(&result.stderr) => result.stderr,
-            Ok(result) => [base.stderr, result.stderr].concat(),
-            Err(_) => [
-                base.stderr,
-                b"Evidence offline dependency checks could not be completed.\n".to_vec(),
-            ]
-            .concat(),
-        };
+        let mut diagnostics = base.diagnostics().to_vec();
+        if let Ok(result) = dependency {
+            for diagnostic in result.diagnostics() {
+                if !diagnostics.contains(diagnostic) {
+                    diagnostics.push(diagnostic.clone());
+                }
+            }
+        } else {
+            diagnostics.push(Diagnostic::error(
+                "evidence.runtime.dependencies-unavailable",
+                "",
+                "Evidence offline dependency checks could not be completed.",
+                DEFAULT_ACTION,
+            ));
+        }
+        let detail = Report::new(diagnostics.clone()).render_human();
         return render_refusal(
             &runtime_config,
             format,
-            "evidence.posture.assurance-profile-conflict",
+            "evidence.runtime.configuration-refused",
             "domain-refusal",
-            &diagnostic,
+            detail.as_bytes(),
+            &diagnostics,
+            "offline configuration and requested audit path checks; posture refusal prevented live startup dependency checks",
             1,
             declared,
         );
@@ -207,7 +217,7 @@ pub(crate) fn run(
         let report = DoctorReport {
             runtime_config: &runtime_config,
             proof_boundary: proof_boundary(args.without_audit_lock),
-            diagnostics: Vec::new(),
+            diagnostics: render_diagnostics(dependency.diagnostics()),
         };
         match format {
             OutputFormat::Json => crate::report::print_with_posture(
@@ -215,7 +225,18 @@ pub(crate) fn run(
                 Some(declared),
             )?,
             OutputFormat::Human => {
-                print!("{}", String::from_utf8_lossy(&dependency.stdout));
+                if let Some(report) = &dependency.report {
+                    if let (Some(digest), Some(count)) =
+                        (&report.package_digest, report.requirements)
+                    {
+                        println!("Evidence package {digest} passed check ({count} requirements)");
+                    }
+                    if !report.diagnostics.is_empty() {
+                        eprint!("{}", Report::new(report.diagnostics.clone()).render_human());
+                    }
+                } else {
+                    print!("{}", String::from_utf8_lossy(&dependency.stdout));
+                }
                 println!(
                     "Dependency preflight passed for {}",
                     runtime_config.display()
@@ -235,16 +256,27 @@ pub(crate) fn run(
         format,
         "evidence.runtime.dependencies-unavailable",
         "operational-failure",
-        &dependency.stderr,
+        &dependency.render_diagnostics(),
+        dependency.diagnostics(),
+        proof_boundary(args.without_audit_lock),
         3,
         declared,
     )
 }
 
-fn has_assurance_profile_conflict(diagnostic: &[u8]) -> bool {
-    String::from_utf8_lossy(diagnostic)
-        .lines()
-        .any(|line| line.starts_with("error[evidence.posture.assurance-profile-conflict]"))
+fn is_posture_refusal(diagnostic: &Diagnostic) -> bool {
+    diagnostic.severity == Severity::Error
+        && (diagnostic.code.starts_with("evidence.posture.")
+            || diagnostic.code.starts_with("platform.posture."))
+}
+
+fn render_diagnostics(diagnostics: &[Diagnostic]) -> Vec<serde_json::Value> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            serde_json::to_value(diagnostic).expect("a diagnostic has only serializable members")
+        })
+        .collect()
 }
 
 const LOCKED_PROOF_BOUNDARY: &str = "live startup dependency preflight; no public listener, evidence-data request, or application audit event was produced";
@@ -296,6 +328,26 @@ struct CheckOutcome {
     status: ExitStatus,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
+    report: Option<RuntimeCheckReport>,
+}
+
+impl CheckOutcome {
+    fn diagnostics(&self) -> &[Diagnostic] {
+        self.report
+            .as_ref()
+            .map_or(&[], |report| &report.diagnostics)
+    }
+
+    fn render_diagnostics(&self) -> Vec<u8> {
+        self.report.as_ref().map_or_else(
+            || self.stderr.clone(),
+            |report| {
+                Report::new(report.diagnostics.clone())
+                    .render_human()
+                    .into_bytes()
+            },
+        )
+    }
 }
 
 fn invoke_check(
@@ -332,6 +384,7 @@ fn invoke_check(
     if without_audit_lock {
         command.arg("--without-audit-lock");
     }
+    command.args(["--format", "json"]);
     let mut child = command.spawn().with_context(|| {
         format!(
             "starting Evidence dependency preflight at {}",
@@ -362,8 +415,10 @@ fn invoke_check(
     )
     .map_err(|_| operational_diagnostic(runtime_config))?;
 
+    let report = serde_json::from_slice(&runtime_output).ok();
     Ok(CheckOutcome {
         status,
+        report,
         stdout: runtime_output,
         stderr: runtime_diagnostic,
     })
@@ -396,12 +451,18 @@ fn version_handshake_deadline() -> Duration {
     evidence_binary::VERSION_HANDSHAKE_DEADLINE
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the report carries the child findings and the doctor proof boundary"
+)]
 fn render_refusal(
     runtime_config: &std::path::Path,
     format: OutputFormat,
     code: &'static str,
     status: &'static str,
     runtime_diagnostic: &[u8],
+    diagnostics: &[Diagnostic],
+    proof_boundary: &'static str,
     exit: u8,
     declared: registry_platform_config::DeclaredPosture,
 ) -> Result<ExitCode> {
@@ -410,23 +471,23 @@ fn render_refusal(
         .to_owned();
     let report = DoctorReport {
         runtime_config,
-        proof_boundary: if has_assurance_profile_conflict(runtime_diagnostic) {
-            "offline configuration and requested audit path checks; posture conflict prevented live startup dependency checks"
+        proof_boundary,
+        diagnostics: if diagnostics.is_empty() {
+            vec![serde_json::json!({
+                "severity": "error",
+                "code": code,
+                "artifact": runtime_config.display().to_string(),
+                "path": "$",
+                "message": if detail.is_empty() {
+                    "Evidence runtime check failed without a diagnostic."
+                } else {
+                    &detail
+                },
+                "suggestedAction": suggested_action(runtime_diagnostic),
+            })]
         } else {
-            LOCKED_PROOF_BOUNDARY
+            render_diagnostics(diagnostics)
         },
-        diagnostics: vec![Diagnostic {
-            severity: "error",
-            code,
-            artifact: runtime_config.display().to_string(),
-            path: "$",
-            message: if detail.is_empty() {
-                "Evidence runtime check failed without a diagnostic.".to_owned()
-            } else {
-                detail
-            },
-            suggested_action: suggested_action(runtime_diagnostic),
-        }],
     };
     match format {
         OutputFormat::Json => crate::report::print_with_posture(
@@ -499,7 +560,7 @@ mod tests {
         assert_eq!(
             invoked,
             format!(
-                "check\n--posture\nproduction\n--runtime-config\n{}\n--require-runtime-dependencies\n--require-audit-under\n{}\n",
+                "check\n--posture\nproduction\n--runtime-config\n{}\n--require-runtime-dependencies\n--require-audit-under\n{}\n--format\njson\n",
                 runtime.display(),
                 root.path().display()
             )
@@ -522,7 +583,7 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.path().join("arguments")).expect("arguments"),
             format!(
-                "check\n--posture\nproduction\n--runtime-config\n{}\n--require-runtime-dependencies\n--without-audit-lock\n",
+                "check\n--posture\nproduction\n--runtime-config\n{}\n--require-runtime-dependencies\n--without-audit-lock\n--format\njson\n",
                 runtime.display()
             )
         );

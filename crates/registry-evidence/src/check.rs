@@ -337,7 +337,7 @@ pub fn check_runtime_file(
         }
     };
     check.files_checked += verified.files().count();
-    let mut bundle = match Bundle::load_as_found(&root, &verified) {
+    let mut bundle = match Bundle::load_as_found_under(&root, &verified, posture.posture()) {
         Ok(bundle) => bundle,
         Err(error) => {
             push_bundle_error(&mut check, &layout, error);

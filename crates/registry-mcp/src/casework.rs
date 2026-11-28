@@ -10,7 +10,7 @@ use registry_mcp_edge::{
     EffectCertainty, Invocation, Provider, ProviderAuthorization, ProviderFailure, ProviderOutcome,
     ResolvedTool, VerifiedCaller,
 };
-use registry_platform_httputil::client::TokenProvider;
+use registry_platform_httputil::{client::TokenProvider, PeerPolicy};
 use rmcp::model::{Tool, ToolAnnotations};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -24,6 +24,7 @@ pub const TOOL_NAMES: [&str; 2] = [LIST_TASKS, TASK_CONTEXT];
 #[derive(Clone, Debug)]
 pub struct CaseworkOptions {
     base_url: Url,
+    peer_policy: PeerPolicy,
     reader_policy: String,
     source_profile: Option<String>,
     page_size: usize,
@@ -40,6 +41,22 @@ impl CaseworkOptions {
         source_profile: Option<String>,
         page_size: usize,
     ) -> Result<Self, InvalidCaseworkBinding> {
+        Self::new_with_peer_policy(
+            base_url,
+            reader_policy,
+            source_profile,
+            page_size,
+            PeerPolicy::RefuseDevelopmentPeer,
+        )
+    }
+
+    pub fn new_with_peer_policy(
+        base_url: Url,
+        reader_policy: String,
+        source_profile: Option<String>,
+        page_size: usize,
+        peer_policy: PeerPolicy,
+    ) -> Result<Self, InvalidCaseworkBinding> {
         let local = |value: &str| value.parse::<registry_platform_yaml::LocalId>().is_ok();
         if !local(&reader_policy)
             || source_profile.as_deref().is_some_and(|value| !local(value))
@@ -49,12 +66,13 @@ impl CaseworkOptions {
         }
         // Client construction validates the service origin before any credential acquisition.
         CaseworkClient::new(
-            CaseworkClientConfig::new_without_peer_policy(base_url.clone())
+            CaseworkClientConfig::new(base_url.clone(), peer_policy)
                 .with_maximum_mutation_retries(0),
         )
         .map_err(|_| InvalidCaseworkBinding)?;
         Ok(Self {
             base_url,
+            peer_policy,
             reader_policy,
             source_profile,
             page_size,
@@ -70,7 +88,7 @@ pub(crate) struct CaseworkProvider {
 impl CaseworkProvider {
     pub(crate) fn new(options: CaseworkOptions) -> Result<Self, InvalidCaseworkBinding> {
         let client = CaseworkClient::new(
-            CaseworkClientConfig::new_without_peer_policy(options.base_url.clone())
+            CaseworkClientConfig::new(options.base_url.clone(), options.peer_policy)
                 .with_maximum_mutation_retries(0),
         )
         .map_err(|_| InvalidCaseworkBinding)?;
@@ -504,6 +522,54 @@ mod tests {
         );
         response_headers.insert("traceparent", HeaderValue::from_static(TRACEPARENT));
         (StatusCode::BAD_REQUEST, response_headers, body).into_response()
+    }
+
+    #[tokio::test]
+    async fn the_casework_binding_accepts_a_marked_peer_only_in_development() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let app = Router::new().fallback(|| async {
+            (
+                [
+                    ("Registry-Posture", "development"),
+                    (
+                        "traceparent",
+                        "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                    ),
+                    ("cache-control", "no-store"),
+                ],
+                axum::Json(json!({"items": [], "status": "complete"})),
+            )
+        });
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for (policy, accepted) in [
+            (PeerPolicy::RefuseDevelopmentPeer, false),
+            (PeerPolicy::AcceptDevelopmentPeer, true),
+        ] {
+            let options = CaseworkOptions::new_with_peer_policy(
+                origin.clone(),
+                "assistant-reader".to_owned(),
+                None,
+                25,
+                policy,
+            )
+            .unwrap();
+            let provider = CaseworkProvider::new(options).unwrap();
+            let token =
+                registry_platform_httputil::client::BearerToken::new("delegated-token").unwrap();
+            let auth = DelegatedStaffReadAuth::new(&token, "assistant-reader");
+            let result = provider.client.delegated_review_tasks(auth, None, 25).await;
+            if accepted {
+                assert!(result.is_ok(), "{:?}", result.err());
+            } else {
+                assert!(
+                    matches!(result, Err(CaseworkClientError::DevelopmentPeer)),
+                    "{:?}",
+                    result.err()
+                );
+            }
+        }
+        server.abort();
     }
 
     #[tokio::test]

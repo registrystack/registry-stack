@@ -44,6 +44,10 @@ schema:
     displayName: registry_actor_kind
     required: false
     type: string
+  registry_posture:
+    displayName: registry_posture
+    required: false
+    type: string
   registry_purpose:
     displayName: registry_purpose
     required: false

@@ -165,13 +165,6 @@ class DiscoveryDistributionSmokeTests(unittest.TestCase):
         self.assertNotIn("AUTHORIZATION", environment)
         self.assertNotIn("DISCOVERY_API_KEY", environment)
 
-    def test_node_environment_leaves_the_peer_policy_to_the_sdk(self) -> None:
-        environment = self.smoke.node_environment(
-            {"PATH": "/usr/bin", "REGISTRY_STACK_POSTURE": "development"},
-            self.root,
-        )
-        self.assertNotIn("REGISTRY_STACK_POSTURE", environment)
-
     def test_node_journey_keeps_auth_and_acceptance_local(self) -> None:
         source = self.smoke.NODE_JOURNEY
         self.assertIn("authorization: 'Bearer must-be-refused'", source)

@@ -261,13 +261,25 @@ async fn posture_insecure_issuers_are_development_only() {
     );
     // The service above holds the writer lock, so the second process logs
     // its posture and then exits without binding a listener.
-    let startup = std::process::Command::new(binary)
+    let mut child = std::process::Command::new(binary)
         .args(["serve", "--posture", "development", "--runtime-config"])
         .arg(&harness.config_path)
         .env("RUST_LOG", "info")
         .env_remove("REGISTRY_STACK_POSTURE")
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            child.wait().unwrap();
+            panic!("the second verifier did not exit after the audit writer lock refusal");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let startup = child.wait_with_output().unwrap();
     assert!(!startup.status.success());
     let listing = String::from_utf8_lossy(&startup.stdout);
     let logs: Vec<serde_json::Value> = listing

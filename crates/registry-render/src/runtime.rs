@@ -850,7 +850,25 @@ pub fn check_runtime_with_bundle(
     manifest: Option<&Manifest>,
     declared: DeclaredPosture,
 ) -> RuntimeCheck {
-    read_runtime(path, substitute, audit_root, manifest, substitute, declared).1
+    let package = manifest.map_or(CheckPackage::Configured, |manifest| {
+        CheckPackage::Explicit(Some(manifest))
+    });
+    check_runtime_package(path, substitute, audit_root, package, declared)
+}
+
+pub(crate) enum CheckPackage<'a> {
+    Configured,
+    Explicit(Option<&'a Manifest>),
+}
+
+pub(crate) fn check_runtime_package(
+    path: &Path,
+    substitute: bool,
+    audit_root: Option<&Path>,
+    package: CheckPackage<'_>,
+    declared: DeclaredPosture,
+) -> RuntimeCheck {
+    read_runtime(path, substitute, audit_root, package, substitute, declared).1
 }
 
 /// Load and validate a runtime file through the shared loader, with the
@@ -868,17 +886,31 @@ pub fn load_with_positions(
     path: &Path,
     declared: DeclaredPosture,
 ) -> Result<(LoadedRuntimeConfig<RenderRuntime>, RuntimePositions), RenderProblem> {
-    match read_runtime(path, true, None, None, false, declared) {
-        (Some(loaded), _, positions) => {
-            loaded.posture.decide(path).map_err(|error| {
-                RenderProblem::new(
-                    ProblemKind::RuntimeInvalid,
-                    "the runtime configuration was refused",
-                )
-                .with_diagnostics(error.diagnostics().to_vec())
-            })?;
-            Ok((loaded, positions))
-        }
+    let (loaded, positions) = load_before_posture_decision(path, declared)?;
+    loaded.posture.decide(path).map_err(|error| {
+        RenderProblem::new(
+            ProblemKind::RuntimeInvalid,
+            "the runtime configuration was refused",
+        )
+        .with_diagnostics(error.diagnostics().to_vec())
+    })?;
+    Ok((loaded, positions))
+}
+
+/// Load the runtime's structure before evaluating its posture with its package.
+pub(crate) fn load_before_posture_decision(
+    path: &Path,
+    declared: DeclaredPosture,
+) -> Result<(LoadedRuntimeConfig<RenderRuntime>, RuntimePositions), RenderProblem> {
+    match read_runtime(
+        path,
+        true,
+        None,
+        CheckPackage::Explicit(None),
+        false,
+        declared,
+    ) {
+        (Some(loaded), _, positions) => Ok((loaded, positions)),
         (None, check, _) => {
             let detail = if check.unavailable {
                 "the runtime configuration could not be read"
@@ -924,7 +956,7 @@ fn read_runtime(
     path: &Path,
     substitute: bool,
     audit_root: Option<&Path>,
-    manifest: Option<&Manifest>,
+    package: CheckPackage<'_>,
     seal_chains: bool,
     declared: DeclaredPosture,
 ) -> (
@@ -935,6 +967,10 @@ fn read_runtime(
     let mut check =
         runtime_loader(declared).check_offline::<RenderRuntime>(path, substitute, stand_in_for);
     let mut diagnostics = check.diagnostics.clone();
+    // With a decoded file, the shared loader's diagnostics are its posture
+    // findings. Keep them in check output while letting serve decide them
+    // together with the package's findings.
+    let runtime_posture_findings = diagnostics.len();
     let mut unavailable = check.unavailable;
     let mut seal_capacities = BTreeMap::new();
     let mut explicit_production_settings = Vec::new();
@@ -980,6 +1016,34 @@ fn read_runtime(
                 ));
             }
         }
+        let configured_bundle = if matches!(package, CheckPackage::Configured)
+            && !check.defers("/package/root")
+            && !check.defers("/package/expectedDigest")
+            && !diagnostics
+                .iter()
+                .any(|finding| finding.severity == Severity::Error)
+        {
+            match check_package(&loaded.config) {
+                Ok(package) => package,
+                Err((message, unreadable)) => {
+                    unavailable |= unreadable;
+                    diagnostics.push(check.error_at(
+                        RUNTIME_KIND,
+                        "render.runtime.package-refused",
+                        "/package/root",
+                        message,
+                        "Verify the deployed package and its expected digest, or rebuild it with registry-render package.",
+                    ));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let manifest = match package {
+            CheckPackage::Configured => configured_bundle.as_ref().map(|bundle| &bundle.manifest),
+            CheckPackage::Explicit(manifest) => manifest,
+        };
         if let Some(manifest) = manifest {
             let mut posture = PostureReport::new(declared);
             diagnostics.extend(record_seal_binding_posture(
@@ -1070,10 +1134,11 @@ fn read_runtime(
             .as_ref()
             .is_some_and(|loaded| loaded.config.signing.is_some());
     // A warning reports a finding but does not refuse the file.
-    let loaded = check
-        .loaded
-        .take()
-        .filter(|_| diagnostics.iter().all(|d| d.severity != Severity::Error));
+    let loaded = check.loaded.take().filter(|_| {
+        diagnostics[runtime_posture_findings..]
+            .iter()
+            .all(|d| d.severity != Severity::Error)
+    });
     (
         loaded,
         RuntimeCheck {
@@ -1803,6 +1868,33 @@ fn audit_finding(error: &AuditDestinationError) -> Finding {
             "Correct the audit block as the message describes.",
         ),
     }
+}
+
+fn check_package(runtime: &RenderRuntime) -> Result<Option<crate::Bundle>, (String, bool)> {
+    use registry_platform_config::package::PackageErrorKind;
+
+    match runtime.package.root.try_exists() {
+        Ok(false) => return Ok(None),
+        Ok(true) => {}
+        Err(_) => {
+            return Err((
+                "the configured package root could not be read".to_owned(),
+                true,
+            ))
+        }
+    }
+    let verified = runtime
+        .package
+        .verify_package(&package_limits(), "registry-render package")
+        .map_err(|error| {
+            (
+                error.to_string(),
+                matches!(error.kind(), PackageErrorKind::Io { .. }),
+            )
+        })?;
+    crate::Bundle::load_package(&runtime.package.root, &verified)
+        .map(Some)
+        .map_err(|error| (error.to_string(), false))
 }
 
 /// Verify the shared package envelope, apply the optional digest pin, then

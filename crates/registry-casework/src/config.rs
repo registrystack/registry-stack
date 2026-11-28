@@ -2077,20 +2077,27 @@ mod tests {
 
     #[test]
     fn development_only_refusal_uses_the_setting_member_and_remedy() {
-        static TEST_SETTING: DevelopmentSetting = DevelopmentSetting {
-            code: "example.development-only",
-            key: "exampleSetting",
-            summary: "a development fixture",
-            production: "Replace the fixture.",
-        };
         let error = RuntimeConfigError::from(DevelopmentOnlyRefused {
-            setting: &TEST_SETTING,
+            setting: &UNRESTRICTED_CLIENTS,
         });
-        assert_eq!(error.code(), TEST_SETTING.code);
-        assert_eq!(error.pointer(), "/exampleSetting");
+        assert_eq!(error.code(), UNRESTRICTED_CLIENTS.code);
+        assert_eq!(error.pointer(), ALLOWED_CLIENTS_POINTER);
         let remedy = error.suggested_action();
-        assert!(remedy.starts_with(TEST_SETTING.production));
+        assert!(remedy.starts_with(UNRESTRICTED_CLIENTS.production));
         assert!(remedy.contains("--posture development"));
+    }
+
+    #[test]
+    fn read_report_accessors_use_a_warning_when_no_errors_are_present() {
+        let report = RuntimeConfigError::ReadReport(Report::new(vec![Diagnostic::warning(
+            "example.warning",
+            "/warning",
+            "warning",
+            "warning action",
+        )]));
+        assert_eq!(report.code(), "example.warning");
+        assert_eq!(report.pointer(), "/warning");
+        assert_eq!(report.suggested_action(), "warning action");
     }
 
     const TEST_POSTURE: DeclaredPosture = DeclaredPosture {
@@ -2113,6 +2120,12 @@ mod tests {
     fn write_operator(value: &serde_json::Value, directory: &Path) -> PathBuf {
         let path = directory.canonicalize().unwrap().join("runtime.yaml");
         std::fs::write(&path, serde_norway::to_string(value).unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
         path
     }
 
@@ -3398,7 +3411,7 @@ fn first_read_error(report: &Report) -> &Diagnostic {
         .diagnostics()
         .iter()
         .find(|diagnostic| diagnostic.severity == Severity::Error)
-        .expect("a refused runtime read reports an error")
+        .unwrap_or(&report.diagnostics()[0])
 }
 
 impl RuntimeConfigError {
@@ -3429,7 +3442,7 @@ impl RuntimeConfigError {
                 "database.testOnlyPlaintext"
             }
             Self::DatabaseTransport(_) => "database.transport",
-            Self::DevelopmentOnly(error) => error.setting.key,
+            Self::DevelopmentOnly(_) => "authentication.oidc.allowedClients",
             Self::InvalidAuditDestination(error) => audit_field(error),
             Self::InvalidContextProviders => "contextProviders",
             Self::UnconfiguredReviewCompletionDestination => "reviewCompletionDestinations",

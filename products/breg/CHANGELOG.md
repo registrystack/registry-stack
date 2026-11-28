@@ -187,6 +187,7 @@
   names a scope the token held. Refusal statuses, headers and bodies are
   unchanged.
 
+- BReg MCP and BReg Review accept BReg responses marked `Registry-Posture: development` when they run in development. Production refuses marked responses.
 - BREAKING: the BReg MCP gateway (`breg-mcp`) and the review page
   (`breg-review`) default to production when no posture is declared.
   Production refuses every development-only setting at startup, and `check`

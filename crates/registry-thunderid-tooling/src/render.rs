@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::description::{
     ExchangeAttributeKind, ExchangeMapping, IssuerDescription, ASSERTION_ISSUER_CLAIM,
+    POSTURE_CLAIM,
 };
 use crate::ToolingError;
 
@@ -27,7 +28,8 @@ use crate::ToolingError;
 /// renames, or drops upstream fields, and a deployment sharing this schema
 /// with other agents merges rather than overwrites.
 const PINNED_DEFAULT_AGENT_TYPE: &str = include_str!("../fixtures/default-agent-type-v1.0.1.yaml");
-const INSTITUTIONAL_REQUESTER_ATTRIBUTES: [&str; 2] = ["evidence_audience", "evidence_tags"];
+const INSTITUTIONAL_EXCHANGE_ATTRIBUTES: [&str; 3] =
+    ["evidence_audience", "evidence_tags", POSTURE_CLAIM];
 const BRANDING_METADATA: &str =
     include_str!("../../../products/identity/thunderid/branding/branding.json");
 const BRANDING_THEME: &str =
@@ -187,7 +189,7 @@ pub fn agent_type_document(description: &IssuerDescription) -> Result<String, To
                 .flat_map(|issuer| issuer.token_attributes.keys().cloned()),
         )
         .chain(
-            INSTITUTIONAL_REQUESTER_ATTRIBUTES
+            INSTITUTIONAL_EXCHANGE_ATTRIBUTES
                 .iter()
                 .filter(|_| institutional)
                 .map(|name| (*name).to_owned()),
@@ -601,6 +603,7 @@ pub(crate) fn build(
                 json!({"external_attribute": "iss", "local_attribute": "registry_grant_source_issuer"}),
                 json!({"external_attribute": "evidence_audience", "local_attribute": "evidence_audience"}),
                 json!({"external_attribute": "evidence_tags", "local_attribute": "evidence_tags"}),
+                json!({"external_attribute": POSTURE_CLAIM, "local_attribute": POSTURE_CLAIM}),
             ],
             ExchangeMapping::FirstParty => issuer
                 .token_attributes
@@ -851,7 +854,7 @@ pub(crate) fn build(
             } else {
                 crate::description::GRANT_ATTRIBUTES
                     .iter()
-                    .chain(INSTITUTIONAL_REQUESTER_ATTRIBUTES.iter())
+                    .chain(INSTITUTIONAL_EXCHANGE_ATTRIBUTES.iter())
                     .map(|attribute| (*attribute).to_owned())
                     .collect::<Vec<_>>()
             };
@@ -1205,7 +1208,7 @@ mod tests {
                 json!(GRANT_ATTRIBUTES
                     .iter()
                     .copied()
-                    .chain(INSTITUTIONAL_REQUESTER_ATTRIBUTES)
+                    .chain(INSTITUTIONAL_EXCHANGE_ATTRIBUTES)
                     .chain(["synthetic_tag", ASSERTION_ISSUER_CLAIM])
                     .collect::<Vec<_>>())
             );
@@ -1236,9 +1239,21 @@ mod tests {
                     {"external_attribute":"iss","local_attribute":"registry_grant_source_issuer"},
                     {"external_attribute":"evidence_audience","local_attribute":"evidence_audience"},
                     {"external_attribute":"evidence_tags","local_attribute":"evidence_tags"},
+                    {"external_attribute":"registry_posture","local_attribute":"registry_posture"},
                 ])
             );
+            assert!(config["token"]["accessToken"]["userConfig"]["attributes"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("registry_posture")));
+            assert!(
+                !config["token"]["accessToken"]["clientConfig"]["attributes"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("registry_posture"))
+            );
             let schema: Value = serde_yaml_parse(&rendered.agent_type_document).unwrap();
+            assert_eq!(schema["schema"]["registry_posture"]["type"], "string");
             assert_eq!(schema["schema"]["evidence_audience"]["type"], "string");
             assert_eq!(schema["schema"]["evidence_tags"]["type"], "array");
             assert_eq!(schema["schema"]["evidence_tags"]["items"]["type"], "string");

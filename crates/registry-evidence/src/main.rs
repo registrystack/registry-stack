@@ -529,7 +529,9 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             ..
         } => {
             let bundle_path = bundle;
-            let bundle = match Bundle::load(&bundle_path).map_err(deployment_load_error) {
+            let bundle = match Bundle::load_under(&bundle_path, declared.posture)
+                .map_err(deployment_load_error)
+            {
                 Ok(bundle) => Arc::new(bundle),
                 Err(CommandError::Refused(report)) if json => {
                     let document = CheckReport {
@@ -648,10 +650,15 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             explain_format,
             ..
         } => {
-            let mut bundle = Bundle::load(&bundle).map_err(deployment_load_error)?;
+            let mut bundle =
+                Bundle::load_under(&bundle, declared.posture).map_err(deployment_load_error)?;
             let posture = registry_evidence::check::check_bundle_posture(&bundle, declared);
             if posture.has_errors() {
                 return Err(CommandError::Refused(Box::new(posture.report())));
+            }
+            let report = posture.report();
+            if !report.diagnostics().is_empty() {
+                eprint!("{}", report.render_human());
             }
             if let Some(path) = authority_document {
                 let document = read_bundle_authority(&path, &bundle)?;
@@ -711,10 +718,15 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             fixture,
             ..
         } => {
-            let mut bundle = Bundle::load(&bundle).map_err(deployment_load_error)?;
+            let mut bundle =
+                Bundle::load_under(&bundle, declared.posture).map_err(deployment_load_error)?;
             let posture = registry_evidence::check::check_bundle_posture(&bundle, declared);
             if posture.has_errors() {
                 return Err(CommandError::Refused(Box::new(posture.report())));
+            }
+            let report = posture.report();
+            if !report.diagnostics().is_empty() {
+                eprint!("{}", report.render_human());
             }
             if let Some(path) = authority_document {
                 let document = read_bundle_authority(&path, &bundle)?;
@@ -1005,19 +1017,19 @@ async fn run_check(request: CheckRequest) -> ExitCode {
         }
     }
     if let Some(proof) = &request.dependencies {
-        if !proof.offline_only && !check.has_errors() && !check.is_unavailable() {
-            if let Err(error) =
-                prove_runtime_dependencies(&request.runtime_config, proof, request.declared).await
-            {
-                push_dependency_error(&mut check, error);
-            }
-        } else if proof.offline_only
-            || check
-                .report()
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.code == "evidence.posture.assurance-profile-conflict")
-        {
+        let posture_refused = check.report().diagnostics().iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && (diagnostic.code.starts_with("evidence.posture.")
+                    || diagnostic.code.starts_with("platform.posture."))
+        });
+        if proof.offline_only && !posture_refused {
+            check.push_deployment(
+                Severity::Error,
+                "evidence.deployment.offline-proof-requires-posture-refusal",
+                "offline-only dependency checks run only after a posture refusal",
+                "Omit --offline-dependencies-only to prove the live startup dependencies.",
+            );
+        } else if posture_refused {
             // Check local audit storage without opening a writer or resolving secrets.
             if let Some(audit) = check.audit_destination().cloned() {
                 let file = match &audit {
@@ -1040,6 +1052,12 @@ async fn run_check(request: CheckRequest) -> ExitCode {
                         );
                     }
                 }
+            }
+        } else if !check.has_errors() && !check.is_unavailable() {
+            if let Err(error) =
+                prove_runtime_dependencies(&request.runtime_config, proof, request.declared).await
+            {
+                push_dependency_error(&mut check, error);
             }
         }
     }

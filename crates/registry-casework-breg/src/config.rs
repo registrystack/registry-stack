@@ -331,10 +331,13 @@ pub fn build_provider(
     policy: &registry_casework_core::ReviewContextProviderPolicy,
     description: &[u8],
     secrets: &registry_platform_config::SecretResolver,
+    posture: registry_platform_config::Posture,
 ) -> Result<crate::BregContextProvider, ReviewContextError> {
     use registry_breg_client::{
-        BaseRegistryClient, BaseRegistryClientConfig, PrivateKeyJwt, PrivateKeyJwtConfig,
+        BaseRegistryClient, BaseRegistryClientConfig, PeerPolicy, PrivateKeyJwt,
+        PrivateKeyJwtConfig,
     };
+    use registry_platform_config::Posture;
     use registry_platform_crypto::PrivateJwk;
     use std::{sync::Arc, time::Duration};
     if description.is_empty() || description.len() > 1024 * 1024 {
@@ -397,8 +400,13 @@ pub fn build_provider(
         token = token.with_scopes(scopes.clone());
     }
     let token = PrivateKeyJwt::new(token).map_err(|_| ReviewContextError::Invalid)?;
-    let config = BaseRegistryClientConfig::new_without_peer_policy(
+    let peer = match posture {
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    };
+    let config = BaseRegistryClientConfig::new(
         url::Url::parse(&binding.base_url).map_err(|_| ReviewContextError::Invalid)?,
+        peer,
     )
     .with_token_provider(Arc::new(token))
     .with_maximum_response_bytes(1024 * 1024)

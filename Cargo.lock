@@ -6842,6 +6842,7 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-httpsec",
+ "registry-platform-loopback",
  "registry-platform-yaml",
  "schemars",
  "serde",
