@@ -3208,34 +3208,13 @@ mod tests {
         public_app(service, metrics)
     }
 
-    /// A subscriber that keeps every formatted line in memory.
-    #[derive(Clone, Default)]
-    struct LogCapture(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for LogCapture {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("log").extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
-        type Writer = Self;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     /// Every refusal is counted once under the check that refused it, writes
     /// one value-free log line that names that check and the request's trace
     /// id, and leaves every other check at zero.
     #[tokio::test]
     async fn each_refusal_is_counted_and_logged_under_its_check() {
+        use tracing::instrument::WithSubscriber as _;
+
         let canaries = [
             "canary-wrong-key-0123456789abcdef0123456789",
             "canary-invalid-token",
@@ -3252,17 +3231,15 @@ mod tests {
             check,
         } in refusal_cases()
         {
-            let logs = LogCapture::default();
-            let subscriber = tracing_subscriber::fmt()
-                .json()
-                .with_max_level(tracing::Level::INFO)
-                .with_writer(logs.clone())
-                .finish();
-            let _guard = tracing::subscriber::set_default(subscriber);
+            // The shared capture keeps a parallel test that reaches the refusal
+            // callsite with no subscriber from disabling it for this one.
+            let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+            let dispatch = logs.subscriber();
             let service = refusal_service(mode).await;
             let metrics = Arc::new(Metrics::default());
             let response = refusal_stack(Arc::clone(&service), &metrics)
                 .oneshot(bearer_request(method, uri, &authorization))
+                .with_subscriber(dispatch)
                 .await
                 .expect("router");
             let trace = registry_platform_httpsec::response_trace_id(response.headers())
@@ -3281,7 +3258,7 @@ mod tests {
                 )],
                 "{name}"
             );
-            let written = String::from_utf8(logs.0.lock().expect("log").clone()).expect("UTF-8");
+            let written = logs.text();
             // The whole bearer value of a signed token never reaches a log line.
             for value in &authorization {
                 if let Some(token) = value
@@ -3540,13 +3517,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_refusal_with_a_remedy_writes_it_on_the_log_line_and_never_in_the_body() {
-        let logs = LogCapture::default();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_max_level(tracing::Level::INFO)
-            .with_writer(logs.clone())
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        use tracing::instrument::WithSubscriber as _;
+
+        let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+        let dispatch = logs.subscriber();
         let jwt_typed = {
             let now = chrono::Utc::now().timestamp();
             let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
@@ -3567,10 +3541,11 @@ mod tests {
             "/v1/documents",
             Some(format!("Bearer {jwt_typed}")),
         )
+        .with_subscriber(dispatch)
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert!(!body.to_string().contains("accessTokenType"), "{body}");
-        let written = String::from_utf8(logs.0.lock().expect("log").clone()).expect("UTF-8");
+        let written = logs.text();
         let line: serde_json::Value = written
             .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON log line"))
