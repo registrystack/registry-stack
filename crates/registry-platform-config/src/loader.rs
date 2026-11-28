@@ -1105,13 +1105,15 @@ fn require_trusted_entry(
         Posture::Development => 0o002,
     };
     let entry = path.display();
+    let shell_path = || format!("'{}'", entry.to_string().replace('\'', "'\\''"));
     if owner != 0 && owner != effective_user {
         let runtime_user = ownership_target(effective_user);
         return Err(RuntimeConfigError::file_level(
             CODE_UNSAFE_FILE,
             format!("`{entry}` is owned by another user"),
             format!(
-                "Run `chown {runtime_user} {entry}` (you may need `sudo`), or move the file under a directory that root or the runtime user owns."
+                "Run `chown {runtime_user} -- {}` (you may need `sudo`), or move the file under a directory that root or the runtime user owns.",
+                shell_path()
             ),
         ));
     }
@@ -1121,10 +1123,11 @@ fn require_trusted_entry(
         } else {
             ("its group", "g-w")
         };
+        let shell_path = shell_path();
         let action = if permission == "g-w" && !last {
-            format!("Run `chmod g-w {entry}`, or declare development with `--posture development` if this is a development machine.")
+            format!("Run `chmod g-w -- {shell_path}`, or declare development with `--posture development` if this is a development machine.")
         } else {
-            format!("Run `chmod {permission} {entry}`.")
+            format!("Run `chmod {permission} -- {shell_path}`.")
         };
         return Err(RuntimeConfigError::file_level(
             CODE_UNSAFE_FILE,

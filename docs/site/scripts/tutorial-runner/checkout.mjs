@@ -20,8 +20,7 @@ function listFiles(repoRoot, ...args) {
 
 export async function copyCheckout(repoRoot, dest) {
   const deleted = new Set(listFiles(repoRoot, '--deleted'));
-  const files = listFiles(repoRoot, '--cached', '--others', '--exclude-standard')
-    .filter((path) => !deleted.has(path) && !path.startsWith('.lane-scratch/'));
+  const files = listFiles(repoRoot, '--cached').filter((path) => !deleted.has(path));
   for (const path of new Set(files)) {
     await mkdir(dirname(join(dest, path)), { recursive: true });
     await cp(join(repoRoot, path), join(dest, path), { verbatimSymlinks: true, recursive: true });

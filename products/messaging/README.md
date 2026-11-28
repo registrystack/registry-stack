@@ -195,7 +195,10 @@ provider, sends one email and one SMS, requires the SMS to be `delivered`
 through one applied signed callback and the email to be `submitted` with one
 message in Mailpit, and requires the stopped session to leave no container.
 `test-dev-shared-issuer.sh` uses a fixture-owned ThunderID issuer and verifies
-exact audience and refusal of stale tokens after issuer key rotation.
+exact audience, operator submit refusal, SMS delivery, and one email in
+Mailpit. It starts a fresh Messaging run after issuer key rotation to verify
+key loading and refusal of stale tokens. That restart exercises fresh-start
+key loading only. Live JWKS refresh and issuer outages are outside this journey.
 The harness's `--messaging` mode needs Docker: it runs the starter under `rstack dev` with no other
 product, requires the scenario's SMS to reach the run's gateway, sends an email that reaches the
 run's Mailpit, and requires the stopped run to leave no container.

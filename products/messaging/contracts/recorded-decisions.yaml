@@ -420,10 +420,13 @@ decisions:
       Mailpit SMTP relay and signed mock gateway callbacks. A run either uses
       its own test issuer or the exact issuer and key endpoint declared in the
       development plan. The runtime still checks the configured audience and
-      current issuer keys.
+      current issuer keys. The test-dev.sh and test-dev-shared-issuer.sh
+      journeys exercise the bundled and external issuers, respectively.
     evidence:
-      - {path: products/messaging/scripts/test-dev.sh, name: dev_stop}
-      - {path: products/messaging/scripts/test-dev-shared-issuer.sh, name: start_fixture}
+      - {path: crates/registry-rstack-dev/src/messaging.rs, name: gateway_latency_is_optional_and_below_the_provider_timeout}
+      - {path: crates/registry-rstack-dev/src/plan.rs, name: an_external_issuer_accepts_loopback_keys_and_requires_an_empty_scenario_pack}
+      - {path: crates/registry-messaging/src/http.rs, name: a_credential_for_another_audience_is_challenged}
+      - {path: crates/registry-rstack/tests/dev_run.rs, name: messaging_alone_runs_end_to_end}
   - id: MESSAGING-DEC-28
     subject: Provider callbacks are charged to a fixed per-provider rate before they are verified
     decision: >-

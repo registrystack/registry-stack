@@ -63,7 +63,6 @@ def checkpoint_cleanup(state_path, journey, **updates):
         "ownedBinDir": str(journey.bin),
         "ownedContainers": list(journey.containers),
         "ownedRuns": list(journey.rstack_runs),
-        "ownedRunVolumes": list(journey.rstack_volumes),
         "ownedIssuer": str(journey.issuer_fixture),
     })
     current.update(updates)
@@ -75,8 +74,7 @@ def retry_cleanup(session_dir, state):
     bin_dir = Path(state.get("ownedBinDir", ""))
     runs = state.get("ownedRuns", [])
     containers = state.get("ownedContainers", [])
-    volumes = state.get("ownedRunVolumes", [])
-    if not all(isinstance(value, list) for value in (runs, containers, volumes)):
+    if not all(isinstance(value, list) for value in (runs, containers)):
         raise SystemExit("the reviewed-notice cleanup journal is invalid")
     owned = session_dir / "owned"
     environment = dict(os.environ, RSTACK_DEV_STATE_DIR=str(owned / "rstack-runs"))
@@ -84,26 +82,17 @@ def retry_cleanup(session_dir, state):
         if not isinstance(run, str) or not re.fullmatch(r"[0-9a-f]{32}", run):
             failures.append("invalid run ownership")
             continue
-        result = subprocess.run(
-            [str(bin_dir / "rstack"), "--format", "json", "dev", "stop", run, "--recover"],
-            capture_output=True, timeout=120, env=environment,
-        )
+        command = [str(bin_dir / "rstack"), "--format", "json", "dev", "stop", run]
+        for option in ("--clean", "--recover", "--clean"):
+            result = subprocess.run(
+                [*command, option], capture_output=True, timeout=120, env=environment,
+            )
+            if option == "--clean" and result.returncode == 0:
+                break
+            if option == "--recover" and result.returncode != 0:
+                break
         if result.returncode != 0:
             failures.append("rstack " + run)
-    for volume in reversed(volumes):
-        if not isinstance(volume, str) or not re.fullmatch(r"rstack-development-project-[0-9a-f]{32}", volume):
-            failures.append("invalid run volume ownership")
-            continue
-        remaining = subprocess.run(
-            ["docker", "volume", "ls", "--quiet", "--filter", "name=^" + volume + "$"],
-            capture_output=True, text=True, timeout=30,
-        )
-        if remaining.returncode != 0:
-            failures.append("docker volume " + volume)
-        elif volume in remaining.stdout.splitlines():
-            result = subprocess.run(["docker", "volume", "rm", volume], capture_output=True, timeout=60)
-            if result.returncode != 0:
-                failures.append("docker volume " + volume)
     issuer_root = owned / "thunderid"
     if (issuer_root / "fixture.json").is_file():
         result = subprocess.run([state["ownedIssuer"], "stop", str(issuer_root)],

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Shared by test-dev.sh and measure-throughput.sh: build or find messagingctl,
-# write a starter package whose SMS provider is the example mock provider,
-# start `rstack dev` on it, and always stop it and remove what it
-# started. Source it; it defines functions and sets no shell options.
+# Shared by the delivery, shared-issuer and throughput journeys.
+# Prepare a starter with the mock SMS provider and manage its rstack dev run.
+# Source this file to load its functions. The caller sets shell options.
 
 dev_repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 # shellcheck source-path=SCRIPTDIR/../../..
@@ -13,7 +12,6 @@ dev_repo_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && 
 dev_work=
 dev_project=
 dev_run=
-dev_volume=
 # Set by dev_start and read by the sourcing script.
 # shellcheck disable=SC2034
 {
@@ -90,11 +88,11 @@ print(value)' "$1"
 dev_start() {
   local ready config metrics
   if ! ready=$("$rstack_bin" --format json dev start "$dev_project" 2>"$dev_work/dev.err"); then
+    dev_run=$(dev_member run_id <<<"$ready" 2>/dev/null) || dev_run=
     printf '%s\n' "$ready" >&2
     return 1
   fi
   dev_run=$(dev_member run_id <<<"$ready")
-  dev_volume=$(dev_member database.volume <<<"$ready")
   dev_api=$(dev_member products.messaging <<<"$ready")
   dev_mailpit=$(dev_member sinks.mail-relay.url <<<"$ready")
   config=$(dev_member runtimeConfigs.messaging <<<"$ready")
@@ -116,33 +114,23 @@ dev_containers() {
 
 dev_stop() {
   local stopped
-  stopped=$("$rstack_bin" --format json dev stop "$dev_run")
+  if ! stopped=$("$rstack_bin" --format json dev stop "$dev_run" --clean); then
+    "$rstack_bin" --format json dev stop "$dev_run" --recover >/dev/null || return 1
+    stopped=$("$rstack_bin" --format json dev stop "$dev_run" --clean) || return 1
+  fi
   if [[ "$(dev_member status <<<"$stopped")" != stopped || -n "$(dev_containers)" ]]; then
     printf '%s: the run did not stop and release its containers\n' "$dev_name" >&2
     return 1
   fi
   dev_run=
-  dev_remove_volume
-}
-
-dev_remove_volume() {
-  case "$dev_volume" in
-    rstack-development-project-*)
-      docker volume rm "$dev_volume" >/dev/null
-      dev_volume=
-      ;;
-    '') ;;
-    *) return 1 ;;
-  esac
 }
 
 dev_cleanup() {
   local status=${1:-$?}
-  if [[ -n "$dev_run" ]]; then
-    "$rstack_bin" --format json dev stop "$dev_run" >/dev/null 2>&1 ||
-      "$rstack_bin" --format json dev stop "$dev_run" --recover >/dev/null 2>&1 || :
+  if [[ -n "$dev_run" ]] && ! dev_stop; then
+    printf '%s: cleanup failed for run %s, state retained at %s\n' "$dev_name" "$dev_run" "$dev_work" >&2
+    exit 1
   fi
-  dev_remove_volume || :
   if [[ $status -ne 0 && -f "$dev_work/dev.err" ]]; then
     printf '%s: session error output:\n' "$dev_name" >&2
     cat "$dev_work/dev.err" >&2

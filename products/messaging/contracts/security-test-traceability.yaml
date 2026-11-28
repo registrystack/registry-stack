@@ -10,6 +10,8 @@ note: >-
 entries:
   - id: MESSAGING-SEC-01
     tests:
+      - {path: crates/registry-messaging/src/http.rs, name: a_credential_for_another_audience_is_challenged}
+      - {path: crates/registry-platform-oidc/src/lib.rs, name: jwks_fetcher_negative_cache_remembers_unknown_kid}
       - {path: crates/registry-messaging/src/http.rs, name: a_submission_authentication_refusal_does_not_poll_the_body}
       - {path: crates/registry-messaging/src/http.rs, name: a_caller_past_its_profile_rate_is_refused_with_the_wait_needed}
       - {path: crates/registry-messaging-core/src/access.rs, name: a_submission_outside_the_callers_sender_profiles_or_templates_is_refused}

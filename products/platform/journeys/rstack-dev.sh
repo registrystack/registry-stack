@@ -583,7 +583,7 @@ walk_product() {
 		if [[ "$product" != breg ]]; then
 			write_keep "$product" "$work" "$project" "$url" "$run"
 		fi
-		local audit=''
+		local audit='' first_start_file=$START_FILE
 		case "$product" in
 			breg) audit=$(jq -er '.audit.path' "$runtime_file") ;;
 			scheduling)
@@ -602,6 +602,11 @@ walk_product() {
 			stop_adapter_source
 		fi
 		start_run keep "$project" || journey_harness_failure "the project did not start a second time; see $JOURNEY_STEP_STDERR"
+		jq -e --slurpfile first "$first_start_file" '
+			(.scenarios | map(.id)) == ($first[0].scenarios | map(.id))
+			and all(.scenarios[]; .result == "skipped")
+		' "$START_FILE" >/dev/null ||
+			journey_harness_failure "the keep start of $product did not skip every authored scenario"
 		issue_token keep "$RUN" "$KEEP_PERSON" token2
 		local -a keep_options=(--bearer token2)
 		local method=GET

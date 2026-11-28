@@ -9,6 +9,8 @@
 - Lost managed run recovery finishes when the PostgreSQL container is gone and reports any remaining rehearsal objects.
 - Managed development runs recheck the PostgreSQL volume generation after attaching it.
 - External developer issuers and BReg fixture endpoints require numeric loopback HTTP.
+
+- Quote paths in runtime configuration ownership and permission repair commands.
 - Runtime configuration ownership refusals name the runtime account when it resolves and explain that changing ownership may require `sudo`.
 - The TypeScript Registry delivery verifier refuses a signed top-level `posture` member. Use the Standard Webhooks entry points for generic payloads.
 - Runtime checks and startup logs report loopback HTTP issuer and JWKS endpoints as explicit production settings.

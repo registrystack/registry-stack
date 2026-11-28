@@ -4,7 +4,7 @@ set -euo pipefail
 # Run the fixed GovStack Write journey through real Adapter and BReg
 # processes. The Rust harness owns a fresh bregctl project and isolated
 # Adapter schema, runs BReg through `rstack dev start`, and stops the run with
-# `rstack dev stop`, which removes its managed database.
+# `rstack dev stop RUN_ID --clean`, which removes the owned project volume and state.
 
 : "${CARGO_TARGET_DIR:?Set CARGO_TARGET_DIR to the worktree Cargo target.}"
 : "${ADAPTER_TEST_DATABASE_URL:?Set ADAPTER_TEST_DATABASE_URL to the maintained PostgreSQL test server.}"

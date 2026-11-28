@@ -1,6 +1,10 @@
 # Registry Messaging changelog
 
 ## Unreleased
+
+- Verify external-issuer delivery and operator submit refusal in the shared-issuer journey.
+
+- Clean up managed project data through `rstack dev` after fixture runs.
 - `messaging` refuses repeated `--posture` flags, including flags on both sides of `serve`.
 
 - The Node and Python clients accept development peers by default and offer a configuration option to reject them.

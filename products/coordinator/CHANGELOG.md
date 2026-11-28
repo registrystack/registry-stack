@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Verify BReg runtime issuer and audience against fixture tokens in the shared-issuer journeys.
+
+- Clean up managed project data through `rstack dev` after fixture runs.
+
 - The Node and Python clients accept development peers by default and offer a configuration option to reject them.
 
 - `coordinatorctl serve` passes the resolved posture explicitly to the runtime.

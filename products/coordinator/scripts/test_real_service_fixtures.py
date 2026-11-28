@@ -123,10 +123,29 @@ if __name__ == "__main__":
 
 
 class OwnedCleanupTests(unittest.TestCase):
+    def test_failed_journey_recovers_then_cleans_its_managed_run(self):
+        journey = native.Journey.__new__(native.Journey)
+        journey.proxies, journey.children, journey.containers = [], [], []
+        journey.rstack_runs = ["owned-run"]
+        journey.issuer_root = journey.root = Path("/synthetic/owned")
+        calls = []
+
+        def ctl(*args, **kwargs):
+            calls.append(args)
+            return int(len(calls) == 1)
+
+        journey.ctl = ctl
+        journey.cleanup(False)
+        self.assertEqual(calls, [
+            ("rstack", "dev", "stop", "owned-run", "--clean"),
+            ("rstack", "dev", "stop", "owned-run", "--recover"),
+            ("rstack", "dev", "stop", "owned-run", "--clean"),
+        ])
+
     def test_an_auto_removed_owned_image_container_is_already_clean(self):
         journey = native.Journey.__new__(native.Journey)
         journey.proxies, journey.children = [], []
-        journey.rstack_runs, journey.rstack_volumes = [], []
+        journey.rstack_runs = []
         journey.issuer_root = Path("/synthetic/owned/thunderid")
         journey.containers = ["coordinator-tutorial-messagingctl-owned"]
         journey.env, journey.root = {}, Path("/synthetic/owned")
@@ -138,7 +157,7 @@ class OwnedCleanupTests(unittest.TestCase):
     def test_an_unavailable_container_listing_does_not_hide_cleanup_failure(self):
         journey = native.Journey.__new__(native.Journey)
         journey.proxies, journey.children = [], []
-        journey.rstack_runs, journey.rstack_volumes = [], []
+        journey.rstack_runs = []
         journey.issuer_root = Path("/synthetic/owned/thunderid")
         journey.containers = ["coordinator-tutorial-messagingctl-owned"]
         journey.env, journey.root = {}, Path("/synthetic/owned")
