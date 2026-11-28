@@ -1,0 +1,435 @@
+[
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "no-authorization",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "basic-scheme",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "bearer-with-two-tokens",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "bearer-not-a-compact-token",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "bad-signature",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "wrong-audience",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "expired",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "missing-principal",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "act-on-officer-profile",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "grant-claims-on-officer-profile",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The selected Casework profile does not authorize this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "unknown-profile",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The selected Casework profile does not authorize this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "scope-missing",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "profile.not-human",
+      "detail": "This action is reserved for a human session.",
+      "status": 403,
+      "title": "Human session required",
+      "type": "https://id.registrystack.org/problems/registry-casework/profile/not-human"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "service-on-human-profile",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "task-assertion-with-a-profile-header",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "task-assertion-no-authorization",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "task-assertion-bearer-not-a-compact-token",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "task-assertion-without-its-scope",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The selected Casework profile does not authorize this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "delegated-read-with-a-profile-header",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "delegated-read-no-authorization",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The selected Casework profile does not authorize this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "delegated-read-unknown-policy",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "Your current Casework authority does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "supervision-list-on-a-staff-profile",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "operation.not-authorized",
+      "detail": "Your current Casework authority does not allow this operation.",
+      "status": 403,
+      "title": "Operation not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/operation/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "reviewer-list-on-a-requester-profile",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "source-bearer-with-two-tokens",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "status": 401,
+      "title": "Authentication refused",
+      "type": "https://id.registrystack.org/problems/registry-casework/authentication/refused"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "source-bearer-not-a-compact-token",
+    "status": 401
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The selected Casework profile does not authorize this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "source-pair-on-a-requester-profile",
+    "status": 403
+  },
+  {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The selected Casework profile does not authorize this request.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-casework/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "x-content-type-options": "nosniff"
+    },
+    "name": "source-bearer-refused-by-a-staff-profile-scope",
+    "status": 403
+  }
+]

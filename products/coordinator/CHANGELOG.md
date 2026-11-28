@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Coordinator counts every refused caller by the check that refused it, in
+  `coordinator_request_refusals_total{check}` on the metrics listener, and
+  writes one `request refused` line with `failed_check` and the request's
+  trace id, at most five lines per check per minute. A policy denial after
+  authentication and a refused signed event delivery are now counted and
+  logged too. Refusal statuses and bodies are unchanged, and
+  `coordinator_authentication_refusals_total{reason}` stays.
+- Wherever Coordinator and `coordinatorctl` allow plaintext to a loopback
+  host, an IPv4-mapped loopback literal such as `[::ffff:127.0.0.1]` counts as
+  loopback, the same as `127.0.0.1`. A database host of `localhost` is matched
+  in any letter case. Host names other than `localhost` stay refused.
+
+- `GET /health` and `GET /ready` carry the `status` member the other
+  services answer: `{"live":true,"status":"ok"}` and
+  `{"ready":true,"status":"ready"}`. The `live` and `ready` members stay, and
+  the 503 body is unchanged.
+
 - Add native Adapter payment collection operations: request a collection from
   an authoritative bill id and version, read its typed state, and record a
   verified receipt under a separate idempotent command. Collection requests

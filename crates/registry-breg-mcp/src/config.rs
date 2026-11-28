@@ -25,12 +25,12 @@ use registry_platform_config::{
     ConfigBlockError, ConfigBlockErrorKind, LoadedRuntimeConfig, PrivateListenerConfig, RemovedKey,
     RuntimeConfigLoader, RuntimeEnvelope, SecretProvidersConfig, TlsTermination,
 };
+use registry_platform_httputil::loopback::loopback_host;
 use registry_platform_yaml::{
     escape_pointer_segment, BoundedU64, Diagnostic, Invalid, LocalId, Report, RetiredApiVersion,
     UniqueList, Url,
 };
 use serde::{Deserialize, Deserializer};
-use url::Host;
 
 /// apiVersion of the gateway runtime configuration document.
 pub const RUNTIME_API_VERSION: &str = "id.registrystack.org/formats/breg/mcp-runtime/v1alpha1";
@@ -451,7 +451,7 @@ fn endpoint_findings(
     ];
     for (pointer, endpoint) in endpoints {
         let url = endpoint.to_url();
-        let secure = url.scheme() == "https" || (development && loopback_host(&url));
+        let secure = url.scheme() == "https" || (development && is_loopback(&url));
         if termination_known && !secure {
             findings.push(Finding::new(
                 "breg.mcp-runtime.plain-http-endpoint",
@@ -520,14 +520,11 @@ fn cross_member_findings(
     }
 }
 
-fn loopback_host(url: &url::Url) -> bool {
+fn is_loopback(url: &url::Url) -> bool {
     url.scheme() == "http"
-        && match url.host() {
-            Some(Host::Ipv4(address)) => address.is_loopback(),
-            Some(Host::Ipv6(address)) => address.is_loopback(),
-            Some(Host::Domain(domain)) => domain == "localhost",
-            None => false,
-        }
+        && url
+            .host_str()
+            .is_some_and(|host| loopback_host(host).is_some())
 }
 
 /// A value that satisfies the member at `pointer`, so a deferred expression
@@ -1258,6 +1255,29 @@ rateLimits:
             config.resource_server.insecure_http_startup_diagnostic(),
             Some("resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
         );
+    }
+
+    #[test]
+    fn plain_http_follows_the_shared_loopback_definition() {
+        let development =
+            document().replace("operator-controlled-upstream", "development-loopback");
+        for host in ["LOCALHOST", "127.0.0.2", "[::1]", "[::ffff:127.0.0.1]"] {
+            let config = development.replace(
+                "https://registry.example.test/",
+                &format!("http://{host}:8080/"),
+            );
+            load(&config).unwrap_or_else(|_| panic!("{host} is loopback"));
+        }
+        for host in ["localhost.", "app.localhost", "[::ffff:10.0.0.1]"] {
+            refused(
+                &development.replace(
+                    "https://registry.example.test/",
+                    &format!("http://{host}:8080/"),
+                ),
+                "breg.mcp-runtime.plain-http-endpoint",
+                "/registry/baseUrl",
+            );
+        }
     }
 
     #[test]

@@ -18,6 +18,7 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     grant_claims, ClaimNames, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError,
@@ -52,10 +53,24 @@ pub struct AuthorizedOffer {
 pub enum AuthorizationError {
     #[error("the request carried no bearer credential")]
     Missing,
+    /// The credential was refused, under the check that refused it.
     #[error("the presented credential was refused")]
-    Refused,
+    Refused(FailedCheck),
     #[error("the offer key set is unavailable")]
     KeySource,
+}
+
+impl AuthorizationError {
+    /// The check the request failed.
+    #[must_use]
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub const fn failed_check(&self) -> FailedCheck {
+        match self {
+            Self::Missing => FailedCheck::CredentialMissing,
+            Self::Refused(check) => *check,
+            Self::KeySource => FailedCheck::KeySourceUnavailable,
+        }
+    }
 }
 
 /// The seam the offer endpoint authorizes through.
@@ -185,7 +200,7 @@ impl OfferAuthorizer for MintResourceServer {
             Ok(verified) => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|_| AuthorizationError::Refused)?
+                    .map_err(|_| AuthorizationError::Refused(FailedCheck::TokenTime))?
                     .as_secs();
                 if !matches!(grant_claims(&verified.claims, &self.claims, now), Ok(None))
                     || !matches!(
@@ -197,7 +212,7 @@ impl OfferAuthorizer for MintResourceServer {
                     // later redemption cannot recheck the task authority. No
                     // complete, partial, malformed, or expired task grant under
                     // either configured or reserved claim names may cross it.
-                    return Err(AuthorizationError::Refused);
+                    return Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims));
                 }
                 // The scope gate runs only on the verified token's scope set:
                 // a correctly signed token for this audience whose client
@@ -210,7 +225,7 @@ impl OfferAuthorizer for MintResourceServer {
                         .iter()
                         .all(|scope| present.contains(scope.as_str()))
                     {
-                        return Err(AuthorizationError::Refused);
+                        return Err(AuthorizationError::Refused(FailedCheck::Scope));
                     }
                 }
                 let client = match verified.matched_client_id() {
@@ -232,7 +247,7 @@ impl OfferAuthorizer for MintResourceServer {
                             target: "registry_evidence_oid4vci::authorizer",
                             "the token verifier returned a malformed matched client"
                         );
-                        return Err(AuthorizationError::Refused);
+                        return Err(AuthorizationError::Refused(FailedCheck::TokenClient));
                     }
                 };
                 let subject = verified
@@ -241,18 +256,12 @@ impl OfferAuthorizer for MintResourceServer {
                     .clone()
                     .filter(|subject| !subject.is_empty());
                 if client.is_none() && subject.is_none() {
-                    return Err(AuthorizationError::Refused);
+                    return Err(AuthorizationError::Refused(FailedCheck::TokenClient));
                 }
                 Ok(AuthorizedOffer { client, subject })
             }
-            Err(error) if is_key_source_failure(&error) => {
-                tracing::warn!(
-                    target: "registry_evidence_oid4vci::authorizer",
-                    "the offer key set is unavailable"
-                );
-                Err(AuthorizationError::KeySource)
-            }
-            Err(_) => Err(AuthorizationError::Refused),
+            Err(error) if is_key_source_failure(&error) => Err(AuthorizationError::KeySource),
+            Err(error) => Err(AuthorizationError::Refused(error.failed_check())),
         }
     }
 }

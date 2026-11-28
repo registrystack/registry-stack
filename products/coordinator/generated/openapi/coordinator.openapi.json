@@ -1196,10 +1196,14 @@
                   "properties": {
                     "live": {
                       "type": "boolean"
+                    },
+                    "status": {
+                      "const": "ok"
                     }
                   },
                   "required": [
-                    "live"
+                    "live",
+                    "status"
                   ],
                   "type": "object"
                 }
@@ -1248,10 +1252,14 @@
                   "properties": {
                     "ready": {
                       "type": "boolean"
+                    },
+                    "status": {
+                      "const": "ready"
                     }
                   },
                   "required": [
-                    "ready"
+                    "ready",
+                    "status"
                   ],
                   "type": "object"
                 }

@@ -103,7 +103,7 @@ async fn create_run(
     body: Body,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
@@ -113,19 +113,24 @@ async fn create_run(
             &claims,
             None,
             &correlation,
+            FailedCheck::Visibility,
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &binding.base, &claims, &options) else {
-        return audited_mutation_concealment(
-            mutations,
-            &binding.base,
-            &options,
-            &claims,
-            None,
-            &correlation,
-        )
-        .await;
+    let surface = match authorize_route_with_reason(&service, &binding.base, &claims, &options) {
+        Ok(surface) => surface,
+        Err(refusal) => {
+            return audited_mutation_concealment(
+                mutations,
+                &binding.base,
+                &options,
+                &claims,
+                None,
+                &correlation,
+                refusal.check,
+            )
+            .await;
+        }
     };
     if headers.contains_key("idempotency-key") {
         return audited_mutation_refusal(
@@ -202,7 +207,7 @@ async fn list_runs(
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let admission = match ingestion_list_admission_options(raw_query.as_deref()) {
         Ok(options) => options,
@@ -214,20 +219,25 @@ async fn list_runs(
                 &claims,
                 None,
                 &correlation,
+                FailedCheck::Visibility,
             )
             .await;
         }
     };
-    let Some(surface) = authorize_route(&service, &binding.base, &claims, &admission) else {
-        return audited_mutation_concealment(
-            mutations,
-            &binding.base,
-            &admission,
-            &claims,
-            None,
-            &correlation,
-        )
-        .await;
+    let surface = match authorize_route_with_reason(&service, &binding.base, &claims, &admission) {
+        Ok(surface) => surface,
+        Err(refusal) => {
+            return audited_mutation_concealment(
+                mutations,
+                &binding.base,
+                &admission,
+                &claims,
+                None,
+                &correlation,
+                refusal.check,
+            )
+            .await;
+        }
     };
     let query = match parse_list_query(raw_query.as_deref()) {
         Ok(query) => query,
@@ -267,7 +277,7 @@ async fn read_run(
     Path(path): Path<HashMap<String, String>>,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
@@ -277,19 +287,24 @@ async fn read_run(
             &claims,
             None,
             &correlation,
+            FailedCheck::Visibility,
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &binding.base, &claims, &options) else {
-        return audited_mutation_concealment(
-            mutations,
-            &binding.base,
-            &options,
-            &claims,
-            None,
-            &correlation,
-        )
-        .await;
+    let surface = match authorize_route_with_reason(&service, &binding.base, &claims, &options) {
+        Ok(surface) => surface,
+        Err(refusal) => {
+            return audited_mutation_concealment(
+                mutations,
+                &binding.base,
+                &options,
+                &claims,
+                None,
+                &correlation,
+                refusal.check,
+            )
+            .await;
+        }
     };
     let Some(run_id) = path_run_id(&path) else {
         return audited_mutation_refusal(
@@ -297,7 +312,7 @@ async fn read_run(
             &binding.base,
             &surface.context,
             None,
-            concealed(),
+            concealed(FailedCheck::Visibility),
             &correlation,
         )
         .await;
@@ -323,7 +338,7 @@ async fn cancel_run(
     body: Body,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
@@ -333,19 +348,24 @@ async fn cancel_run(
             &claims,
             None,
             &correlation,
+            FailedCheck::Visibility,
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &binding.base, &claims, &options) else {
-        return audited_mutation_concealment(
-            mutations,
-            &binding.base,
-            &options,
-            &claims,
-            None,
-            &correlation,
-        )
-        .await;
+    let surface = match authorize_route_with_reason(&service, &binding.base, &claims, &options) {
+        Ok(surface) => surface,
+        Err(refusal) => {
+            return audited_mutation_concealment(
+                mutations,
+                &binding.base,
+                &options,
+                &claims,
+                None,
+                &correlation,
+                refusal.check,
+            )
+            .await;
+        }
     };
     if headers.contains_key("idempotency-key") {
         return audited_mutation_refusal(
@@ -386,7 +406,7 @@ async fn cancel_run(
             &binding.base,
             &surface.context,
             None,
-            concealed(),
+            concealed(FailedCheck::Visibility),
             &correlation,
         )
         .await;
@@ -431,7 +451,7 @@ async fn submit_chunk(
     body: Body,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
@@ -441,19 +461,24 @@ async fn submit_chunk(
             &claims,
             None,
             &correlation,
+            FailedCheck::Visibility,
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &binding.base, &claims, &options) else {
-        return audited_mutation_concealment(
-            mutations,
-            &binding.base,
-            &options,
-            &claims,
-            None,
-            &correlation,
-        )
-        .await;
+    let surface = match authorize_route_with_reason(&service, &binding.base, &claims, &options) {
+        Ok(surface) => surface,
+        Err(refusal) => {
+            return audited_mutation_concealment(
+                mutations,
+                &binding.base,
+                &options,
+                &claims,
+                None,
+                &correlation,
+                refusal.check,
+            )
+            .await;
+        }
     };
     // The chunk items are the batch items of the compiled route, so the
     // entity must carry a batch surface at all.
@@ -529,7 +554,7 @@ async fn submit_chunk(
             &binding.base,
             &surface.context,
             None,
-            concealed(),
+            concealed(FailedCheck::Visibility),
             &correlation,
         )
         .await;
@@ -579,7 +604,7 @@ async fn chunk_receipt(
     Path(path): Path<HashMap<String, String>>,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(options) = QueryOptions::parse(raw_query.as_deref(), false) else {
         return audited_mutation_concealment(
@@ -589,19 +614,24 @@ async fn chunk_receipt(
             &claims,
             None,
             &correlation,
+            FailedCheck::Visibility,
         )
         .await;
     };
-    let Some(surface) = authorize_route(&service, &binding.base, &claims, &options) else {
-        return audited_mutation_concealment(
-            mutations,
-            &binding.base,
-            &options,
-            &claims,
-            None,
-            &correlation,
-        )
-        .await;
+    let surface = match authorize_route_with_reason(&service, &binding.base, &claims, &options) {
+        Ok(surface) => surface,
+        Err(refusal) => {
+            return audited_mutation_concealment(
+                mutations,
+                &binding.base,
+                &options,
+                &claims,
+                None,
+                &correlation,
+                refusal.check,
+            )
+            .await;
+        }
     };
     let Some(run_id) = path_run_id(&path) else {
         return audited_mutation_refusal(
@@ -609,7 +639,7 @@ async fn chunk_receipt(
             &binding.base,
             &surface.context,
             None,
-            concealed(),
+            concealed(FailedCheck::Visibility),
             &correlation,
         )
         .await;
@@ -620,7 +650,7 @@ async fn chunk_receipt(
             &binding.base,
             &surface.context,
             None,
-            concealed(),
+            concealed(FailedCheck::Visibility),
             &correlation,
         )
         .await;
@@ -677,10 +707,11 @@ fn ingestion_problem(error: IngestionServiceError) -> Response {
         IngestionServiceError::RequestInvalid
         | IngestionServiceError::InvalidTimerWindow { .. } => invalid_request(),
         IngestionServiceError::PreconditionFailed => precondition_failed(),
-        IngestionServiceError::NotFound => concealed(),
-        IngestionServiceError::ProfileMismatch => {
-            fixed_problem(ProblemCode::IngestionProfileMismatch)
-        }
+        IngestionServiceError::NotFound => concealed(FailedCheck::Visibility),
+        IngestionServiceError::ProfileMismatch => crate::correlation::note_refusal(
+            fixed_problem(ProblemCode::IngestionProfileMismatch),
+            FailedCheck::AccessProfile,
+        ),
         IngestionServiceError::RunNotOpen => fixed_problem(ProblemCode::IngestionRunNotOpen),
         IngestionServiceError::RunBlocked => fixed_problem(ProblemCode::IngestionRunBlocked),
         IngestionServiceError::ChunkMismatch => fixed_problem(ProblemCode::IngestionChunkMismatch),

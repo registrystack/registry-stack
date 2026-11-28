@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Verified access-token ownership and exact deployment policy matching.
 use crate::{store::Actor, CoordinatorError, Result};
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::{
     JwksSource, OidcClientsConfig, OidcIssuerConfig, SecretProvidersConfig,
 };
@@ -397,7 +398,7 @@ impl Caller {
         if !self.policy.actions.contains(&action)
             || workflow.is_some_and(|workflow| !self.policy.workflows.iter().any(|f| f == workflow))
         {
-            return Err(denied());
+            return Err(denied(FailedCheck::Operation));
         }
         Ok(())
     }
@@ -411,16 +412,37 @@ impl Caller {
             || !self.policy.operator
             || !self.policy.actions.contains(&action)
         {
-            return Err(denied());
+            return Err(denied(FailedCheck::Operation));
         }
         Ok(())
     }
 }
-fn denied() -> CoordinatorError {
+/// A resolved caller for tests that need no token: the policy lists
+/// `actions` on `workflows`.
+#[cfg(test)]
+pub(crate) fn synthetic_caller(actions: Vec<Action>, workflows: &[&str], operator: bool) -> Caller {
+    Caller {
+        actor: Actor {
+            issuer: "https://issuer.example".into(),
+            subject: "subject".into(),
+            client_id: "client".into(),
+            operator,
+        },
+        policy: ClientPolicy {
+            subjects: vec!["subject".into()],
+            required_scopes: vec!["coordinator:operate".into()],
+            workflows: workflows.iter().map(|w| (*w).to_owned()).collect(),
+            actions,
+            operator,
+        },
+    }
+}
+fn denied(check: FailedCheck) -> CoordinatorError {
     CoordinatorError::new(
         "access.denied",
         "the caller policy does not authorize this operation",
     )
+    .failing(check)
 }
 /// The bound admission puts on a token subject, and so on every subject a
 /// policy may list: non-empty, at most 512 bytes, no control characters.
@@ -442,7 +464,7 @@ impl Authenticator {
     }
     pub async fn authenticate(&self, token: &str) -> Result<Caller> {
         registry_platform_authcommon::validate_compact_access_token(token)
-            .map_err(|_| unauthenticated())?;
+            .map_err(|_| unauthenticated(FailedCheck::CredentialMalformed))?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
             use registry_platform_oidc::OidcError;
             match error {
@@ -458,45 +480,48 @@ impl Authenticator {
                 | OidcError::ConflictingEndpointConfiguration => CoordinatorError::new(
                     "access.unavailable",
                     "the configured verifier cannot answer",
-                ),
-                _ => unauthenticated(),
+                )
+                .failing(FailedCheck::KeySourceUnavailable),
+                _ => unauthenticated(error.failed_check()),
             }
         })?;
         if !self.assertion_issuers && verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM) {
-            return Err(unauthenticated());
+            return Err(unauthenticated(FailedCheck::TokenAssertionIssuer));
         }
         let client = verified
             .matched_client_id()
-            .map_err(|_| unauthenticated())?
-            .ok_or_else(unauthenticated)?;
+            .map_err(|_| unauthenticated(FailedCheck::TokenClient))?
+            .ok_or_else(|| unauthenticated(FailedCheck::TokenClient))?;
         let issuer = verified
             .claims
             .iss
             .as_deref()
             .filter(|s| !s.is_empty())
-            .ok_or_else(unauthenticated)?;
+            .ok_or_else(|| unauthenticated(FailedCheck::TokenClaims))?;
         let subject = verified
             .claims
             .sub
             .as_deref()
             .filter(|s| admitted_subject(s))
-            .ok_or_else(unauthenticated)?;
+            .ok_or_else(|| unauthenticated(FailedCheck::TokenClaims))?;
         // A token carrying `act` was issued for someone other than the client
         // that presents it, typically a person delegated to that client. The
         // Coordinator admits only a client's own identities.
         if verified.claims.extra.contains_key("act") {
-            return Err(denied());
+            return Err(denied(FailedCheck::Delegation));
         }
         let p = self
             .policies
             .get(client)
             .filter(|p| p.subjects.iter().any(|s| s == subject))
-            .filter(|p| {
-                p.required_scopes
-                    .iter()
-                    .all(|s| verified.scopes.contains(s))
-            })
-            .ok_or_else(denied)?;
+            .ok_or_else(|| denied(FailedCheck::AccessProfile))?;
+        if !p
+            .required_scopes
+            .iter()
+            .all(|s| verified.scopes.contains(s))
+        {
+            return Err(denied(FailedCheck::Scope));
+        }
         Ok(Caller {
             actor: Actor {
                 issuer: issuer.into(),
@@ -522,11 +547,12 @@ fn access_error(field: &str, advice: &str) -> CoordinatorError {
     .at("runtime.yaml", crate::runtime::pointer(field))
     .suggest(advice)
 }
-fn unauthenticated() -> CoordinatorError {
+pub(crate) fn unauthenticated(check: FailedCheck) -> CoordinatorError {
     CoordinatorError::new(
         "access.unauthenticated",
         "a verified access token is required",
     )
+    .failing(check)
 }
 
 fn unique_actions<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<Action>, D::Error> {
@@ -566,24 +592,7 @@ mod tests {
     use registry_platform_yaml::Url;
 
     fn caller(actions: Vec<Action>, workflows: &[&str], operator: bool) -> Caller {
-        Caller {
-            actor: Actor {
-                issuer: "https://issuer.example".into(),
-                subject: "subject".into(),
-                client_id: "client".into(),
-                operator,
-            },
-            policy: ClientPolicy {
-                subjects: vec!["subject".into()],
-                required_scopes: vec!["coordinator:operate".into()],
-                workflows: workflows
-                    .iter()
-                    .map(|workflow| (*workflow).to_owned())
-                    .collect(),
-                actions,
-                operator,
-            },
-        }
+        synthetic_caller(actions, workflows, operator)
     }
 
     #[test]
@@ -644,5 +653,22 @@ mod tests {
             scoped.authorized_workflows(Action::Status).unwrap(),
             ["workflow-a"]
         );
+    }
+
+    #[test]
+    fn a_policy_denial_after_authentication_names_the_operation_check() {
+        let scoped = caller(vec![Action::Status, Action::Doctor], &["workflow-a"], true);
+        let not_operator = caller(vec![Action::Doctor], &[], false);
+        for denial in [
+            scoped.authorize(Action::Start, Some("workflow-a")),
+            scoped.authorize(Action::Status, Some("workflow-b")),
+            scoped.authorized_workflows(Action::Start).map(|_| ()),
+            scoped.authorize_deployment(Action::Status),
+            not_operator.authorize_deployment(Action::Doctor),
+        ] {
+            let denial = denial.unwrap_err();
+            assert_eq!(denial.code, "access.denied");
+            assert_eq!(denial.check, Some(FailedCheck::Operation));
+        }
     }
 }

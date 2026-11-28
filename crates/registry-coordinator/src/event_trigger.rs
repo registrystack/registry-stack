@@ -17,13 +17,14 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
 };
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::{sha256_uri, SecretProvidersConfig, SecretReference};
 use registry_platform_crypto::delivery_signature::{MAX_BODY_BYTES, MIN_HMAC_SHA256_KEY_BYTES};
 use registry_platform_dispatch::idempotency_key;
 use registry_platform_hooks::{
     receiver::{
-        verify_delivery as verify_signed_delivery, DeliveryFreshness, SignedDelivery,
-        VerifiedDelivery,
+        verify_delivery as verify_signed_delivery, DeliveryFreshness, ReceiverError,
+        SignedDelivery, VerifiedDelivery,
     },
     EnvelopeLimits, HookEnvelope,
 };
@@ -291,7 +292,14 @@ pub fn verify_delivery(
             skew: DELIVERY_SKEW,
         },
     )
-    .map_err(|_| unauthenticated())?;
+    .map_err(|error| {
+        unauthenticated(match error {
+            ReceiverError::Stale | ReceiverError::InvalidDeliveryTime => {
+                FailedCheck::DeliveryFreshness
+            }
+            _ => FailedCheck::DeliverySignature,
+        })
+    })?;
     if content_type != "application/json"
         || event_source != source.source.as_ref()
         || trigger.source != source_name
@@ -300,7 +308,7 @@ pub fn verify_delivery(
         || delivery_key.is_empty()
         || delivery_key.len() > 256
     {
-        return Err(unauthenticated());
+        return Err(unauthenticated(FailedCheck::DeliveryBinding));
     }
     let envelope = HookEnvelope::from_canonical_bytes(
         body,
@@ -371,13 +379,13 @@ pub async fn receive(
         let package = state
             .workflows
             .get(&workflow_name)
-            .ok_or_else(unauthenticated)?;
+            .ok_or_else(|| unauthenticated(FailedCheck::DeliveryBinding))?;
         let trigger = package
             .definition
             .workflow
             .event_triggers
             .get(&trigger_name)
-            .ok_or_else(unauthenticated)?;
+            .ok_or_else(|| unauthenticated(FailedCheck::DeliveryBinding))?;
         let source = state
             .runtime
             .event_sources
@@ -475,11 +483,12 @@ fn body_too_large() -> CoordinatorError {
         ),
     )
 }
-fn unauthenticated() -> CoordinatorError {
+fn unauthenticated(check: FailedCheck) -> CoordinatorError {
     CoordinatorError::new(
         "event-unauthenticated",
         "a fresh signed delivery from the configured event source is required",
     )
+    .failing(check)
 }
 fn source_unavailable() -> CoordinatorError {
     CoordinatorError::new(

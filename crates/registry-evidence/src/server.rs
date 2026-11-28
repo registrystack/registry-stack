@@ -33,7 +33,9 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use registry_platform_authcommon::parse_bearer_token;
+use registry_platform_authcommon::{
+    parse_bearer_token, BearerParseError, FailedCheck, RefusalNote,
+};
 use registry_platform_crypto::parse_json_strict;
 use registry_platform_httpsec::CspBuilder;
 use serde::Serialize;
@@ -466,7 +468,14 @@ async fn create_evidence_negotiated(state: Arc<ServerState>, request: Request<Bo
 
     let access_token = match bearer_token(request.headers()) {
         Ok(token) => token.to_owned(),
-        Err(code) => return problem_response(code, "authentication", &operation),
+        Err(check) => {
+            return refusal_response(
+                ProblemCode::AuthenticationFailed,
+                "authentication",
+                check,
+                &operation,
+            )
+        }
     };
     // Strict media negotiation resolves the requested response format before
     // the body is read and long before credential acquisition or source
@@ -603,7 +612,14 @@ async fn create_evidence_batch_negotiated(
 
     let access_token = match bearer_token(request.headers()) {
         Ok(token) => token.to_owned(),
-        Err(code) => return problem_response(code, "authentication", &operation),
+        Err(check) => {
+            return refusal_response(
+                ProblemCode::AuthenticationFailed,
+                "authentication",
+                check,
+                &operation,
+            )
+        }
     };
     if !has_exact_accept(request.headers(), EVIDENCE_REQUEST_BATCH_MEDIA_TYPE) {
         return problem_response(
@@ -863,7 +879,14 @@ async fn discover_evidence(
     let started = Instant::now();
     let access_token = match bearer_token(request.headers()) {
         Ok(token) => token.to_owned(),
-        Err(code) => return problem_response(code, "authentication", &operation),
+        Err(check) => {
+            return refusal_response(
+                ProblemCode::AuthenticationFailed,
+                "authentication",
+                check,
+                &operation,
+            )
+        }
     };
     if request.uri().query().is_some() || content_length_exceeds(request.headers(), 0) {
         return problem_response(ProblemCode::MalformedRequest, "request-shape", &operation);
@@ -1130,18 +1153,24 @@ fn parse_evidence_request_batch(bytes: &[u8]) -> Result<EvidenceRequestBatch, Pr
     Ok(request)
 }
 
-fn bearer_token(headers: &HeaderMap) -> Result<&str, ProblemCode> {
+/// The bearer token the request carries, or the check its header failed: no
+/// header, or one that is not a bearer credential, is a missing credential. A
+/// repeated, unreadable or misshapen one is a malformed credential.
+fn bearer_token(headers: &HeaderMap) -> Result<&str, FailedCheck> {
     let mut values = headers.get_all(AUTHORIZATION).iter();
-    let value = values.next().ok_or(ProblemCode::AuthenticationFailed)?;
+    let value = values.next().ok_or(FailedCheck::CredentialMissing)?;
     if values.next().is_some() {
-        return Err(ProblemCode::AuthenticationFailed);
+        return Err(FailedCheck::CredentialMalformed);
     }
     parse_bearer_token(
         value
             .to_str()
-            .map_err(|_| ProblemCode::AuthenticationFailed)?,
+            .map_err(|_| FailedCheck::CredentialMalformed)?,
     )
-    .map_err(|_| ProblemCode::AuthenticationFailed)
+    .map_err(|error| match error {
+        BearerParseError::InvalidScheme => FailedCheck::CredentialMissing,
+        _ => FailedCheck::CredentialMalformed,
+    })
 }
 
 fn has_exact_content_type(headers: &HeaderMap, expected: &str) -> bool {
@@ -1172,7 +1201,10 @@ fn remaining(limit: Duration, started: Instant) -> Option<Duration> {
 }
 
 fn runtime_failure_response(failure: RuntimeFailure, operation: &OperationId) -> Response {
-    problem_response(failure.problem(), failure.category(), operation)
+    match failure.check() {
+        Some(check) => refusal_response(failure.problem(), failure.category(), check, operation),
+        None => problem_response(failure.problem(), failure.category(), operation),
+    }
 }
 
 /// Build one problem response, recording the internal category that caused it.
@@ -1188,6 +1220,37 @@ fn problem_response(
     category: &'static str,
     operation: &OperationId,
 ) -> Response {
+    debug_assert!(
+        !observability::is_refusal_code(code),
+        "a refusal is answered with `refusal_response`, which names its check"
+    );
+    answer(code, category, None, operation)
+}
+
+/// Build the answer to an authentication, authorization or rate-limit refusal.
+///
+/// The check rides in the response extensions with the code and category. The
+/// observation layer counts and logs it. It is not serialized, so the caller's
+/// bytes are the ones `problem_response` would have produced.
+fn refusal_response(
+    code: ProblemCode,
+    category: &'static str,
+    check: FailedCheck,
+    operation: &OperationId,
+) -> Response {
+    debug_assert!(
+        observability::is_refusal_code(code),
+        "`refusal_response` answers only the refusal codes"
+    );
+    answer(code, category, Some(check), operation)
+}
+
+fn answer(
+    code: ProblemCode,
+    category: &'static str,
+    check: Option<FailedCheck>,
+    operation: &OperationId,
+) -> Response {
     let body = code.body(operation.trace_id());
     let mut response = serialize_response(code.status(), PROBLEM_MEDIA_TYPE, &body)
         .unwrap_or_else(|| empty_response(StatusCode::INTERNAL_SERVER_ERROR));
@@ -1199,6 +1262,9 @@ fn problem_response(
     response
         .extensions_mut()
         .insert(observability::FailureCategory(category));
+    if let Some(check) = check {
+        response.extensions_mut().insert(RefusalNote::new(check));
+    }
     if code == ProblemCode::AuthenticationFailed {
         response.headers_mut().insert(
             axum::http::header::WWW_AUTHENTICATE,
@@ -1324,29 +1390,37 @@ mod tests {
             );
         }
 
-        for invalid in [
-            "Basic three.parts.value",
-            "Bearer",
-            "Bearer  three.parts.value",
-            "Bearer three.parts.value ",
-            "Bearer three.parts.value,other",
+        for (invalid, check) in [
+            ("Basic three.parts.value", FailedCheck::CredentialMissing),
+            ("Bearer", FailedCheck::CredentialMalformed),
+            (
+                "Bearer  three.parts.value",
+                FailedCheck::CredentialMalformed,
+            ),
+            (
+                "Bearer three.parts.value ",
+                FailedCheck::CredentialMalformed,
+            ),
+            (
+                "Bearer three.parts.value,other",
+                FailedCheck::CredentialMalformed,
+            ),
         ] {
             headers.insert(
                 AUTHORIZATION,
                 HeaderValue::from_str(invalid).expect("test header is valid"),
             );
-            assert_eq!(
-                bearer_token(&headers),
-                Err(ProblemCode::AuthenticationFailed)
-            );
+            assert_eq!(bearer_token(&headers), Err(check), "{invalid}");
         }
+        headers.clear();
+        assert_eq!(bearer_token(&headers), Err(FailedCheck::CredentialMissing));
 
         headers.clear();
         headers.append(AUTHORIZATION, HeaderValue::from_static("Bearer first"));
         headers.append(AUTHORIZATION, HeaderValue::from_static("Bearer second"));
         assert_eq!(
             bearer_token(&headers),
-            Err(ProblemCode::AuthenticationFailed)
+            Err(FailedCheck::CredentialMalformed)
         );
     }
 
@@ -1489,9 +1563,10 @@ mod tests {
     #[tokio::test]
     async fn problem_responses_have_closed_media_and_challenge_headers() {
         let operation = operation_id(&axum::http::Extensions::new());
-        let authentication = problem_response(
+        let authentication = refusal_response(
             ProblemCode::AuthenticationFailed,
             "authentication",
+            FailedCheck::CredentialMissing,
             &operation,
         );
         assert_eq!(authentication.status(), StatusCode::UNAUTHORIZED);
@@ -1508,7 +1583,12 @@ mod tests {
             ))
         );
 
-        let rate = problem_response(ProblemCode::RateLimited, "rate-limit", &operation);
+        let rate = refusal_response(
+            ProblemCode::RateLimited,
+            "rate-limit",
+            FailedCheck::RateLimit,
+            &operation,
+        );
         assert_eq!(rate.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(
             rate.headers().get(RETRY_AFTER),

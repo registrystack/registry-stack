@@ -14,6 +14,7 @@ mod loader;
 mod metrics_bind;
 mod offline;
 pub mod package;
+mod posture;
 #[cfg(feature = "schema")]
 pub mod schema;
 mod secrets;
@@ -54,6 +55,11 @@ pub use offline::{RuntimeFileCheck, DEFAULT_STAND_IN, INCOMPLETE_CODE};
 pub use package::{
     plan_package, verify_package, write_package, write_sum_file, PackageError, PackageErrorKind,
     PackageLimits, VerifiedPackage, REVISION_FILE, SUM_FILE,
+};
+pub use posture::{
+    collect_development_settings, DeclaredPosture, DevelopmentClass, DevelopmentOnlyRefused,
+    DevelopmentSetting, DevelopmentWitness, ExplicitProductionSetting, FoundExplicitSetting,
+    FoundSetting, Gated, Posture, PostureReport, PostureSource, SettingOrigin,
 };
 pub use secrets::{
     ProtectedSecret, SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,

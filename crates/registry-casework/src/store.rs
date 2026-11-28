@@ -5,6 +5,7 @@ use registry_casework_core::{
     ActorContext, BootstrapDirectoryRequest, CaseworkActsAs, DirectoryMember, DirectoryResponse,
     IssuerPrincipal, TeamRecord,
 };
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::SecretResolver;
 use serde_json::{json, Value};
 use std::str::FromStr;
@@ -425,7 +426,7 @@ impl PostgresStore {
         idempotency_key: &str,
     ) -> Result<i64, StoreError> {
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         let request_hash = request_hash(request)?;
         let mut audit = self
@@ -528,7 +529,7 @@ impl PostgresStore {
         actor: &ActorContext,
     ) -> Result<(i64, Vec<TeamRecord>), StoreError> {
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
@@ -548,7 +549,7 @@ impl PostgresStore {
             CaseworkActsAs::Staff => "staff",
             CaseworkActsAs::Supervisor => "supervisor",
             CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
-                return Err(StoreError::Forbidden);
+                return Err(StoreError::Forbidden(FailedCheck::Operation));
             }
         };
         let client = self.client().await?;
@@ -756,7 +757,7 @@ pub enum StoreError {
     #[error("the requested resource was not found")]
     NotFound,
     #[error("the caller is not authorized for this operation")]
-    Forbidden,
+    Forbidden(FailedCheck),
     #[error("the expected revision is no longer current")]
     Conflict,
     #[error("the review task is already claimed")]

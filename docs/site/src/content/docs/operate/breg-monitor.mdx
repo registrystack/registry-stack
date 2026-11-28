@@ -338,6 +338,35 @@ with one of the `breg.external-refresh.*` codes in [Troubleshooting](#troublesho
     crates/registry-breg/src/subject_access_log.rs, run_retention();
     crates/registry-platform-hooks/src/delivery/service.rs, WORKER_POLL_INTERVAL. */}
 
+## Watch refused requests
+
+`breg_request_refusals_total{check}` counts every request BReg refused, by the check that refused
+it, since the process started. Every `check` value is published from the first scrape at zero, so a
+rate needs no `absent()` guard. A missing or refused credential, a refused token, an unreachable
+key source and a refused review completion callback all count. So does a request answered
+`404 resource.not_found` because the caller may not see the target (a missing scope or purpose, a
+row outside the caller's boundary, a refused task grant, a field beyond the profile), and a write
+refused as outside the caller's boundary.
+
+Each refusal also writes one `request refused` line with `failed_check` and the request's trace id,
+at most five lines per check per minute across the process. The next line for that check carries
+`suppressed`, the number of refusals the minute counted but did not log, so alert on the counter,
+not the log. The counter and the line carry only a fixed check name, never a token, claim, client
+or subject value. Counting changes nothing the caller receives.
+
+A rising `credential-missing` or `credential-malformed` count usually means a caller sends no
+token or a broken one. A rising `key-source-unavailable` count means BReg cannot read its signing
+keys; check the issuer before the callers.
+
+{/* Evidence: crates/registry-breg/src/correlation.rs, finish_response();
+    crates/registry-breg/src/metrics.rs,
+    the_refusal_counter_declares_every_check_and_publishes_it_at_zero;
+    crates/registry-breg/tests/authentication_refusals.rs,
+    every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wire;
+    crates/registry-breg/tests/concealment_refusals.rs,
+    every_concealed_read_refusal_is_counted_logged_and_unchanged_on_the_wire;
+    crates/registry-platform-authcommon/src/refusal.rs, the recorder's per-check window. */}
+
 ## Read audit records
 
 Each audit record names its schema.

@@ -3,12 +3,13 @@
 use std::{collections::BTreeSet, fmt};
 
 use chrono::NaiveDate;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_oidc::ActorKind;
 use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    auth::AuthenticatedContext,
+    auth::{AuthenticatedContext, TaskGrantError},
     binding::{
         subject_binding, BindingError, SelectorField as BindingField,
         SelectorScalar as BindingScalar, SubjectBindingInput, SubjectBindingScope,
@@ -53,8 +54,11 @@ pub(crate) fn validate_subject_binding_key(
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorizationError {
+    /// The request is refused. The check says which part of the decision did
+    /// it, for the operator's count and log line. The caller learns only that
+    /// the request is not permitted.
     #[error("the Evidence request is not authorized")]
-    Unauthorized,
+    Unauthorized(FailedCheck),
     #[error("the Evidence request selector is invalid")]
     Selector,
     #[error("the Evidence authorization decision is ambiguous")]
@@ -459,6 +463,18 @@ pub fn authority_selected_by_principal(
         .all(|required| requester_tags.iter().any(|actual| actual == required))
 }
 
+/// The check a present but untrustworthy task grant failed.
+#[deny(clippy::wildcard_enum_match_arm)]
+fn task_grant_check(error: TaskGrantError) -> FailedCheck {
+    match error {
+        TaskGrantError::Claims => FailedCheck::TaskGrantClaims,
+        TaskGrantError::Expired => FailedCheck::TaskGrantExpired,
+        TaskGrantError::PrincipalMismatch | TaskGrantError::Client | TaskGrantError::Resource => {
+            FailedCheck::TaskGrantBinding
+        }
+    }
+}
+
 /// Match exactly one complete entitlement without inspecting selector values.
 ///
 /// Keeping this decision separate lets the service charge invalid selector
@@ -471,7 +487,8 @@ pub fn match_entitlement(
 ) -> Result<MatchedEntitlement, AuthorizationError> {
     let has_task_grant = match context.grant() {
         Ok(Some(_)) if context.actor_kind() == ActorKind::Agent => true,
-        Ok(Some(_)) | Err(_) => return Err(AuthorizationError::Unauthorized),
+        Ok(Some(_)) => return Err(AuthorizationError::Unauthorized(FailedCheck::ActorKind)),
+        Err(error) => return Err(AuthorizationError::Unauthorized(task_grant_check(error))),
         Ok(None) => false,
     };
     let requirement = bundle
@@ -479,22 +496,31 @@ pub fn match_entitlement(
         .requirements
         .iter()
         .find(|candidate| candidate.id == request.requirement)
-        .ok_or(AuthorizationError::Unauthorized)?;
-    if requirement.grant_ceiling.as_ref().is_some_and(|ceiling| {
-        !ceiling
+        .ok_or(AuthorizationError::Unauthorized(FailedCheck::AccessProfile))?;
+    if let Some(ceiling) = &requirement.grant_ceiling {
+        if !ceiling.actor_kinds.contains(&context.actor_kind()) {
+            return Err(AuthorizationError::Unauthorized(FailedCheck::ActorKind));
+        }
+        if !ceiling
             .audiences
             .iter()
             .any(|audience| audience == context.evidence_audience())
-            || !ceiling.actor_kinds.contains(&context.actor_kind())
-    }) {
-        return Err(AuthorizationError::Unauthorized);
+        {
+            // The audience is the caller's own claim. It is a grant binding
+            // only when the caller presented a task grant.
+            return Err(AuthorizationError::Unauthorized(if has_task_grant {
+                FailedCheck::TaskGrantBinding
+            } else {
+                FailedCheck::AccessProfile
+            }));
+        }
     }
     if !requirement
         .purposes
         .iter()
         .any(|purpose| purpose == &request.purpose)
     {
-        return Err(AuthorizationError::Unauthorized);
+        return Err(AuthorizationError::Unauthorized(FailedCheck::Purpose));
     }
     validate_request_subject_shape(requirement, &request.subjects)?;
 
@@ -545,7 +571,7 @@ pub fn match_entitlement(
 
     match matched.len() {
         1 => Ok(matched.remove(0)),
-        0 => Err(AuthorizationError::Unauthorized),
+        0 => Err(AuthorizationError::Unauthorized(FailedCheck::AccessProfile)),
         _ => Err(AuthorizationError::AmbiguousAuthority),
     }
 }
@@ -589,7 +615,7 @@ pub fn resolve_selectors(
         .requirements
         .iter()
         .find(|candidate| candidate.id == request.requirement)
-        .ok_or(AuthorizationError::Unauthorized)?;
+        .ok_or(AuthorizationError::Unauthorized(FailedCheck::AccessProfile))?;
     let subjects = resolve_grant_subjects(
         bundle,
         requirement,
@@ -667,7 +693,9 @@ pub(crate) fn validate_entitlement_context(
         .iter()
         .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant);
     if uses_authenticated_grant && context.grant_id().is_none() {
-        return Err(AuthorizationError::Unauthorized);
+        return Err(AuthorizationError::Unauthorized(
+            FailedCheck::TaskGrantClaims,
+        ));
     }
 
     for grant in &matched.subjects {
@@ -678,11 +706,15 @@ pub(crate) fn validate_entitlement_context(
             .config
             .selector_profiles
             .get(&grant.selector_profile)
-            .ok_or(AuthorizationError::Unauthorized)?;
+            .ok_or(AuthorizationError::Unauthorized(
+                FailedCheck::SubjectSelector,
+            ))?;
         let claims = grant
             .value_claims
             .as_ref()
-            .ok_or(AuthorizationError::Unauthorized)?;
+            .ok_or(AuthorizationError::Unauthorized(
+                FailedCheck::SubjectSelector,
+            ))?;
         let values = claims
             .iter()
             .map(|(field, path)| {
@@ -733,7 +765,7 @@ pub(crate) fn resolve_request_origin_subjects(
         .iter()
         .any(|configured| configured == purpose)
     {
-        return Err(AuthorizationError::Unauthorized);
+        return Err(AuthorizationError::Unauthorized(FailedCheck::Purpose));
     }
 
     // Value origin belongs to the configured request shape. At least one
@@ -757,7 +789,9 @@ pub(crate) fn resolve_request_origin_subjects(
                     .all(|subject| subject.value_origin == ValueOrigin::Request)
         });
     if !configured_as_request_origin {
-        return Err(AuthorizationError::Unauthorized);
+        return Err(AuthorizationError::Unauthorized(
+            FailedCheck::SubjectSelector,
+        ));
     }
 
     // Emit the requirement's declaration order. Request array position has no
@@ -770,12 +804,16 @@ pub(crate) fn resolve_request_origin_subjects(
             let subject = requested
                 .iter()
                 .find(|subject| subject.role == declared.role)
-                .ok_or(AuthorizationError::Unauthorized)?;
+                .ok_or(AuthorizationError::Unauthorized(
+                    FailedCheck::SubjectSelector,
+                ))?;
             let profile = bundle
                 .config
                 .selector_profiles
                 .get(&subject.selector.profile)
-                .ok_or(AuthorizationError::Unauthorized)?;
+                .ok_or(AuthorizationError::Unauthorized(
+                    FailedCheck::SubjectSelector,
+                ))?;
             let values = subject
                 .selector
                 .values
@@ -859,7 +897,7 @@ pub fn resolve_offline_fixture_authorization(
                 })
                 .map(|grant| (authority, grant))
         })
-        .ok_or(AuthorizationError::Unauthorized)?;
+        .ok_or(AuthorizationError::Unauthorized(FailedCheck::AccessProfile))?;
     let claims = case
         .get("verifiedTokenClaims")
         .or_else(|| common.and_then(|value| value.get("verifiedTokenClaims")))
@@ -869,67 +907,73 @@ pub fn resolve_offline_fixture_authorization(
         .subjects
         .iter()
         .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant);
-    let (actor_kind, client, task_grant) = if uses_task_grant {
-        let client = authority
-            .requester_clients
-            .first()
-            .ok_or(AuthorizationError::Unauthorized)?;
-        let source_issuer = authority
-            .grant_source_issuer
-            .as_deref()
-            .ok_or(AuthorizationError::Unauthorized)?;
-        let resource = bundle.config.authentication.oidc.audience();
-        let names = &bundle.config.authentication.oidc.claims;
-        let now = chrono::Utc::now().timestamp();
-        let mut grant_claims = serde_json::json!({
-            "sub": "offline-fixture-principal",
-            "exp": now + 300,
-        });
-        let object = grant_claims
-            .as_object_mut()
-            .ok_or(AuthorizationError::Unauthorized)?;
-        object.insert(
-            names.grant_id.clone(),
-            Value::String("offline-fixture-grant".to_owned()),
-        );
-        object.insert(
-            names.grant_source_issuer.clone(),
-            Value::String(source_issuer.to_owned()),
-        );
-        object.insert(names.grant_client.clone(), Value::String(client.to_owned()));
-        object.insert(
-            names.grant_resource.clone(),
-            Value::String(resource.to_owned()),
-        );
-        object.insert(
-            names.purpose.clone(),
-            Value::String(request.purpose.clone()),
-        );
-        object.insert(names.grant_exp.clone(), Value::from(now + 300));
-        object.insert(
-            names.grant_bounds.clone(),
-            serde_json::json!({"type": "evidence", "requirement": request.requirement}),
-        );
-        object.insert(
-            names.approver.clone(),
-            Value::String("h:offline-fixture-approver".to_owned()),
-        );
-        let parsed: registry_platform_oidc::Claims =
-            serde_json::from_value(grant_claims).map_err(|_| AuthorizationError::Unauthorized)?;
-        let grant = registry_platform_oidc::grant_claims(
-            &parsed,
-            names,
-            u64::try_from(now).map_err(|_| AuthorizationError::Unauthorized)?,
-        )
-        .map_err(|_| AuthorizationError::Unauthorized)?;
-        (ActorKind::Agent, Some(client.as_str()), Ok(grant))
-    } else {
-        (
-            authority.actor_kind.unwrap_or(ActorKind::Service),
-            None,
-            Ok(None),
-        )
-    };
+    let (actor_kind, client, task_grant) =
+        if uses_task_grant {
+            let client =
+                authority
+                    .requester_clients
+                    .first()
+                    .ok_or(AuthorizationError::Unauthorized(
+                        FailedCheck::TaskGrantBinding,
+                    ))?;
+            let source_issuer = authority.grant_source_issuer.as_deref().ok_or(
+                AuthorizationError::Unauthorized(FailedCheck::TaskGrantBinding),
+            )?;
+            let resource = bundle.config.authentication.oidc.audience();
+            let names = &bundle.config.authentication.oidc.claims;
+            let now = chrono::Utc::now().timestamp();
+            let mut grant_claims = serde_json::json!({
+                "sub": "offline-fixture-principal",
+                "exp": now + 300,
+            });
+            let object = grant_claims
+                .as_object_mut()
+                .ok_or(AuthorizationError::Unauthorized(
+                    FailedCheck::TaskGrantClaims,
+                ))?;
+            object.insert(
+                names.grant_id.clone(),
+                Value::String("offline-fixture-grant".to_owned()),
+            );
+            object.insert(
+                names.grant_source_issuer.clone(),
+                Value::String(source_issuer.to_owned()),
+            );
+            object.insert(names.grant_client.clone(), Value::String(client.to_owned()));
+            object.insert(
+                names.grant_resource.clone(),
+                Value::String(resource.to_owned()),
+            );
+            object.insert(
+                names.purpose.clone(),
+                Value::String(request.purpose.clone()),
+            );
+            object.insert(names.grant_exp.clone(), Value::from(now + 300));
+            object.insert(
+                names.grant_bounds.clone(),
+                serde_json::json!({"type": "evidence", "requirement": request.requirement}),
+            );
+            object.insert(
+                names.approver.clone(),
+                Value::String("h:offline-fixture-approver".to_owned()),
+            );
+            let parsed: registry_platform_oidc::Claims = serde_json::from_value(grant_claims)
+                .map_err(|_| AuthorizationError::Unauthorized(FailedCheck::TaskGrantClaims))?;
+            let grant = registry_platform_oidc::grant_claims(
+                &parsed,
+                names,
+                u64::try_from(now)
+                    .map_err(|_| AuthorizationError::Unauthorized(FailedCheck::TaskGrantClaims))?,
+            )
+            .map_err(|_| AuthorizationError::Unauthorized(FailedCheck::TaskGrantClaims))?;
+            (ActorKind::Agent, Some(client.as_str()), Ok(grant))
+        } else {
+            (
+                authority.actor_kind.unwrap_or(ActorKind::Service),
+                None,
+                Ok(None),
+            )
+        };
     let context = AuthenticatedContext::offline_fixture_context(
         authority.requester_tags.clone().into_vec(),
         audience,
@@ -965,7 +1009,7 @@ fn fixture_audience<'a>(
         },
     };
     if ceiling.is_some_and(|allowed| !allowed.iter().any(|entry| entry == audience)) {
-        return Err(AuthorizationError::Unauthorized.into());
+        return Err(AuthorizationError::Unauthorized(FailedCheck::TaskGrantBinding).into());
     }
     Ok(audience)
 }
@@ -986,7 +1030,7 @@ fn fixture_purpose<'a>(
                 .find(|purpose| purpose.as_str() == declared)
                 .map(String::as_str)
                 .ok_or(OfflineFixtureError::Authorization(
-                    AuthorizationError::Unauthorized,
+                    AuthorizationError::Unauthorized(FailedCheck::Purpose),
                 ))
         }
         None => match purposes {
@@ -1052,13 +1096,17 @@ fn fixture_subjects_from_selectors(
                 && grant.purpose == purpose
                 && same_subject_tuples(&grant.subjects, &requested)
         })
-        .ok_or(AuthorizationError::Unauthorized)?;
+        .ok_or(AuthorizationError::Unauthorized(
+            FailedCheck::SubjectSelector,
+        ))?;
     for subject in &mut requested {
         let granted = grant
             .subjects
             .iter()
             .find(|granted| granted.role == subject.role)
-            .ok_or(AuthorizationError::Unauthorized)?;
+            .ok_or(AuthorizationError::Unauthorized(
+                FailedCheck::SubjectSelector,
+            ))?;
         if granted.value_origin != ValueOrigin::Request {
             subject.selector.values = None;
         }
@@ -1136,24 +1184,32 @@ fn validate_request_subject_shape(
     requested: &[RequestedSubject],
 ) -> Result<(), AuthorizationError> {
     if requested.len() != requirement.subject_roles.len() {
-        return Err(AuthorizationError::Unauthorized);
+        return Err(AuthorizationError::Unauthorized(
+            FailedCheck::SubjectSelector,
+        ));
     }
     let mut roles = BTreeSet::new();
     for subject in requested {
         if !roles.insert(subject.role.as_str()) {
-            return Err(AuthorizationError::Unauthorized);
+            return Err(AuthorizationError::Unauthorized(
+                FailedCheck::SubjectSelector,
+            ));
         }
         let configured = requirement
             .subject_roles
             .iter()
             .find(|configured| configured.role == subject.role)
-            .ok_or(AuthorizationError::Unauthorized)?;
+            .ok_or(AuthorizationError::Unauthorized(
+                FailedCheck::SubjectSelector,
+            ))?;
         if !configured
             .selector_profiles
             .iter()
             .any(|profile| profile == &subject.selector.profile)
         {
-            return Err(AuthorizationError::Unauthorized);
+            return Err(AuthorizationError::Unauthorized(
+                FailedCheck::SubjectSelector,
+            ));
         }
     }
     Ok(())
@@ -1181,10 +1237,14 @@ fn resolve_grant_subjects(
         .iter()
         .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant);
     if uses_authenticated_grant && context.grant_id().is_none() {
-        return Err(AuthorizationError::Unauthorized);
+        return Err(AuthorizationError::Unauthorized(
+            FailedCheck::TaskGrantClaims,
+        ));
     }
     if granted.len() != requirement.subject_roles.len() {
-        return Err(AuthorizationError::Unauthorized);
+        return Err(AuthorizationError::Unauthorized(
+            FailedCheck::SubjectSelector,
+        ));
     }
 
     requirement
@@ -1194,16 +1254,22 @@ fn resolve_grant_subjects(
             let grant = granted
                 .iter()
                 .find(|grant| grant.role == declared.role)
-                .ok_or(AuthorizationError::Unauthorized)?;
+                .ok_or(AuthorizationError::Unauthorized(
+                    FailedCheck::SubjectSelector,
+                ))?;
             let subject = requested
                 .iter()
                 .find(|subject| subject.role == grant.role)
-                .ok_or(AuthorizationError::Unauthorized)?;
+                .ok_or(AuthorizationError::Unauthorized(
+                    FailedCheck::SubjectSelector,
+                ))?;
             let profile = bundle
                 .config
                 .selector_profiles
                 .get(&grant.selector_profile)
-                .ok_or(AuthorizationError::Unauthorized)?;
+                .ok_or(AuthorizationError::Unauthorized(
+                    FailedCheck::SubjectSelector,
+                ))?;
             let input = match grant.value_origin {
                 ValueOrigin::Request => subject
                     .selector
@@ -1215,10 +1281,13 @@ fn resolve_grant_subjects(
                     if subject.selector.values.is_some() {
                         return Err(AuthorizationError::Selector);
                     }
-                    let claims = grant
-                        .value_claims
-                        .as_ref()
-                        .ok_or(AuthorizationError::Unauthorized)?;
+                    let claims =
+                        grant
+                            .value_claims
+                            .as_ref()
+                            .ok_or(AuthorizationError::Unauthorized(
+                                FailedCheck::SubjectSelector,
+                            ))?;
                     claims
                         .iter()
                         .map(|(field, path)| {
@@ -1423,6 +1492,22 @@ mod tests {
     use super::*;
 
     use crate::model::HolderPublicKey;
+
+    #[test]
+    fn every_task_grant_error_is_counted_under_the_member_that_names_it() {
+        for (error, check) in [
+            (TaskGrantError::Claims, FailedCheck::TaskGrantClaims),
+            (TaskGrantError::Expired, FailedCheck::TaskGrantExpired),
+            (
+                TaskGrantError::PrincipalMismatch,
+                FailedCheck::TaskGrantBinding,
+            ),
+            (TaskGrantError::Client, FailedCheck::TaskGrantBinding),
+            (TaskGrantError::Resource, FailedCheck::TaskGrantBinding),
+        ] {
+            assert_eq!(task_grant_check(error), check, "{error:?}");
+        }
+    }
 
     #[test]
     fn resolved_selector_debug_never_exposes_values() {
@@ -1675,7 +1760,7 @@ mod tests {
         let outside = fixture_object(serde_json::json!({"audience":"urn:example:outside"}));
         assert_eq!(
             fixture_audience(Some(&ceiling), None, &outside, "urn:legacy:fixture"),
-            Err(AuthorizationError::Unauthorized.into())
+            Err(AuthorizationError::Unauthorized(FailedCheck::TaskGrantBinding).into())
         );
         let multiple = vec![
             "urn:example:first".to_owned(),
@@ -1746,7 +1831,9 @@ mod tests {
         assert_eq!(error, OfflineFixtureError::Purpose);
         assert_ne!(
             error,
-            OfflineFixtureError::Authorization(AuthorizationError::Unauthorized),
+            OfflineFixtureError::Authorization(AuthorizationError::Unauthorized(
+                FailedCheck::Purpose
+            )),
             "an unselected fixture purpose must not be reported as an authorization denial"
         );
     }
@@ -1774,7 +1861,7 @@ mod tests {
                 &fixture_object(serde_json::json!({"purpose": "other"}))
             ),
             Err(OfflineFixtureError::Authorization(
-                AuthorizationError::Unauthorized
+                AuthorizationError::Unauthorized(FailedCheck::Purpose)
             ))
         );
     }

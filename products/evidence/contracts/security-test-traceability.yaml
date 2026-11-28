@@ -168,6 +168,7 @@ entries:
       - {file: crates/registry-evidence/src/config.rs, name: the_metrics_wildcard_needs_container_private_exposure}
       - {file: crates/registry-evidence/src/observability.rs, name: shape_drift_series_stay_bounded_by_the_governed_sources}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_renamed_source_member_warns_once_per_interval_and_counts_every_drifted_response}
+      - {file: crates/registry-evidence/src/observability.rs, name: a_populated_scrape_is_byte_identical_to_the_recorded_one}
   - id: sec-no-entitlement-union
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}

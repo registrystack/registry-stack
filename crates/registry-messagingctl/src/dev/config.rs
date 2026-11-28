@@ -242,8 +242,6 @@ fn runtime_members(
     loaded: &LoadedPackage,
     endpoints: &Endpoints,
 ) -> Value {
-    let allowed_clients =
-        crate::identity_facts::requester_clients(loaded.package.access_profiles());
     let providers: serde_json::Map<String, Value> = loaded
         .package
         .providers()
@@ -309,7 +307,7 @@ fn runtime_members(
         "authentication": {"oidc": {
             "issuer": ISSUER,
             "audience": AUDIENCE,
-            "allowedClients": allowed_clients,
+            "allowedClients": "from-package",
             // The session's signing key is generated beside this file, so
             // the runtime reads its key set directly.
             "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"},

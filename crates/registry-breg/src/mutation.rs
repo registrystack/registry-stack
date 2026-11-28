@@ -2397,7 +2397,7 @@ pub enum MutationError {
         not_after_field: String,
     },
     #[error("mutation is outside the caller's authorized record boundary")]
-    AuthorizationRefused,
+    AuthorizationRefused(registry_platform_authcommon::FailedCheck),
     /// A direct create or patch produced a row outside the selected access
     /// profile's row boundary. This is distinct from concealed target and
     /// stale-condition failures, which remain generic precondition refusals.
@@ -2491,6 +2491,50 @@ pub enum MutationError {
     /// loads the configured package through this error and can produce it.
     #[error("{0}")]
     PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
+}
+
+impl MutationError {
+    /// The check a refused caller failed, for the operator only. `None` for an
+    /// error that does not refuse the caller. The match names every variant,
+    /// so a new one must decide.
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub(crate) fn failed_check(&self) -> Option<registry_platform_authcommon::FailedCheck> {
+        use registry_platform_authcommon::FailedCheck;
+        match self {
+            Self::AuthorizationRefused(check) => Some(*check),
+            Self::WriteOutsideBoundary => Some(FailedCheck::RowBoundary),
+            Self::FieldGuardFailed { .. } | Self::ProposalGuardFailed(_) => {
+                Some(FailedCheck::ActionGuard)
+            }
+            Self::InvalidRequest
+            | Self::InvalidRequestAt(_)
+            | Self::InvalidTimerWindow { .. }
+            | Self::PreconditionFailed
+            | Self::ProposalReviewResultMismatch
+            | Self::Conflict
+            | Self::ProposalUniqueConflict
+            | Self::ProposalRejected
+            | Self::AttachmentSlotWriteOnce
+            | Self::AttachmentTooLarge
+            | Self::AttachmentContentType
+            | Self::AttachmentDigestMismatch
+            | Self::IdempotencyConflict
+            | Self::IdempotencyExpired
+            | Self::Unavailable
+            | Self::RetryableConflict
+            | Self::CommitUnresolved
+            | Self::ActionHandlerFailure(_)
+            | Self::ActionEvidenceFailure { .. }
+            | Self::ActionRefusal(_)
+            | Self::TimerGenerationUnsupported
+            | Self::FieldPatternViolation { .. }
+            | Self::RowLocalConstraintViolation(_)
+            | Self::FieldEncryptionUnavailable
+            | Self::IngestionRefusal(_)
+            | Self::MigrationLockHeld
+            | Self::PackagePinMismatch(_) => None,
+        }
+    }
 }
 
 /// PostgreSQL allocation schema entry point exposed only to the real-database

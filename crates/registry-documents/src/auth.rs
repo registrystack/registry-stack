@@ -18,10 +18,9 @@
 use std::sync::Arc;
 
 use registry_documents_core::{
-    AccessProfiles, AccessRefusal, ActorKind, ActorKindClaim, Caller, MissingScope,
-    VerifiedTokenFacts,
+    AccessProfiles, AccessRefusal, ActorKind, ActorKindClaim, Caller, VerifiedTokenFacts,
 };
-use registry_platform_authcommon::validate_compact_access_token;
+use registry_platform_authcommon::{validate_compact_access_token, FailedCheck};
 use registry_platform_oidc::{
     actor_kind, ClaimError, ClaimNames, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
     ASSERTION_ISSUER_CLAIM,
@@ -30,9 +29,6 @@ use thiserror::Error;
 
 pub struct DocumentsAuthenticator {
     verifier: TokenVerifier,
-    /// The configured claim the verifier reads scopes from, named in the
-    /// refusal log of a token that lacks a scope its profile requires.
-    scope_claim: String,
     claim_names: ClaimNames,
     profiles: AccessProfiles,
     /// Whether the deployment declared any assertion authority at all.
@@ -52,7 +48,6 @@ impl DocumentsAuthenticator {
             .validate()
             .expect("the default contextual claim names are valid");
         Self {
-            scope_claim: verifier.scope_claim.clone(),
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
             profiles,
@@ -61,12 +56,16 @@ impl DocumentsAuthenticator {
     }
 
     /// Verify one credential and resolve it to exactly one access profile.
+    /// A refusal names the check it failed, for the operator's counter and
+    /// log line. The answer to the caller does not carry it.
     pub async fn authenticate(&self, token: &str) -> Result<Caller, AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| AuthenticationError::Refused)?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            tracing::debug!(error = %error, "the Document Store bearer credential did not verify");
-            verifier_failure(&error)
-        })?;
+        validate_compact_access_token(token)
+            .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
+        let verified = self
+            .verifier
+            .verify(token)
+            .await
+            .map_err(|error| verifier_failure(&error))?;
         // An exchanged token names the authority whose assertion produced it.
         // The platform applies no rule while the deployment's map is empty,
         // so an empty map would trust every authority the issuer federates.
@@ -77,11 +76,13 @@ impl DocumentsAuthenticator {
             tracing::debug!(
                 "an exchanged credential arrived at a deployment that declared no assertion authority"
             );
-            return Err(AuthenticationError::Profile);
+            return Err(AuthenticationError::Profile(
+                FailedCheck::TokenAssertionIssuer,
+            ));
         }
         let client_id = verified
             .matched_client_id()
-            .map_err(|_| AuthenticationError::Claims)?;
+            .map_err(|_| AuthenticationError::Claims(FailedCheck::TokenClient))?;
         let facts = VerifiedTokenFacts {
             issuer: verified.claims.iss.as_deref(),
             subject: verified.claims.sub.as_deref(),
@@ -93,39 +94,45 @@ impl DocumentsAuthenticator {
         self.profiles
             .resolve(&facts)
             .map_err(|refusal| match refusal {
-                AccessRefusal::Profile => {
-                    // A scope miss is the refusal an operator can fix. Log
-                    // the configured claim and scope, never the token's own.
-                    if let Some(missing) = self.profiles.missing_scope(&facts) {
-                        tracing::info!(
-                            "{}",
-                            ScopeRefusal {
-                                claim: &self.scope_claim,
-                                missing,
-                            }
-                        );
-                    }
-                    AuthenticationError::Profile
-                }
-                AccessRefusal::Claims => AuthenticationError::Claims,
+                AccessRefusal::Profile => AuthenticationError::Profile(self.profile_check(&facts)),
+                AccessRefusal::Claims => AuthenticationError::Claims(claims_check(&facts)),
             })
+    }
+
+    /// Which check a profile refusal failed. The access profiles answer only
+    /// that no profile admits the token. A missing scope is the one the
+    /// profiles name themselves. Resolving the same facts under each kind a
+    /// profile can admit separates a client no profile lists from a profile
+    /// that wants another actor kind: when no kind reaches past the profile
+    /// lookup, the client has no profile.
+    fn profile_check(&self, facts: &VerifiedTokenFacts<'_>) -> FailedCheck {
+        if self.profiles.missing_scope(facts).is_some() {
+            return FailedCheck::Scope;
+        }
+        let profile_exists = [ActorKind::Human, ActorKind::Service]
+            .into_iter()
+            .any(|kind| {
+                let probe = VerifiedTokenFacts {
+                    actor_kind: ActorKindClaim::Present(kind),
+                    ..*facts
+                };
+                !matches!(self.profiles.resolve(&probe), Err(AccessRefusal::Profile))
+            });
+        if profile_exists {
+            FailedCheck::ActorKind
+        } else {
+            FailedCheck::AccessProfile
+        }
     }
 }
 
-/// The value-free sentence logged when a token lacks a scope its access
-/// profile requires.
-struct ScopeRefusal<'a> {
-    claim: &'a str,
-    missing: MissingScope<'a>,
-}
-
-impl std::fmt::Display for ScopeRefusal<'_> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "a Document Store request was refused because the token's `{}` claim does not carry the `{}` scope access profile `{}` requires; issue that scope to the client, or set authentication.oidc.scopeClaim to the claim the issuer emits",
-            self.claim, self.missing.scope, self.missing.profile
-        )
+/// Which check an identity-claims refusal failed: a malformed actor-kind
+/// claim, or a principal or issuer the profile cannot use.
+fn claims_check(facts: &VerifiedTokenFacts<'_>) -> FailedCheck {
+    if facts.actor_kind == ActorKindClaim::Malformed {
+        FailedCheck::ActorKind
+    } else {
+        FailedCheck::TokenClaims
     }
 }
 
@@ -139,17 +146,32 @@ impl std::fmt::Debug for DocumentsAuthenticator {
     }
 }
 
+/// Why authentication did not admit a caller. Each refusal carries the check
+/// it failed, which is operator-side only and never written to a response.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum AuthenticationError {
     #[error("the bearer credential was refused")]
-    Refused,
+    Refused(FailedCheck),
     #[error("the verified identity claims are invalid")]
-    Claims,
+    Claims(FailedCheck),
     #[error("the caller's access profile is not authorized for this request")]
-    Profile,
+    Profile(FailedCheck),
     /// The verifier could not reach a verdict at all.
     #[error("the credential could not be verified because this verifier cannot answer")]
     Unavailable,
+}
+
+impl AuthenticationError {
+    /// The check this refusal failed. A new variant does not compile until it
+    /// names its check.
+    #[must_use]
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub const fn failed_check(&self) -> FailedCheck {
+        match self {
+            Self::Refused(check) | Self::Claims(check) | Self::Profile(check) => *check,
+            Self::Unavailable => FailedCheck::KeySourceUnavailable,
+        }
+    }
 }
 
 /// Separate a verifier outage from a bad credential.
@@ -158,6 +180,8 @@ pub enum AuthenticationError {
 /// for credentials. When the issuer's discovery document or key set cannot
 /// be fetched, read, parsed, or used, nothing has been learned about the
 /// credential.
+///
+/// A refusal of the credential names the check the verifier says it failed.
 fn verifier_failure(error: &OidcError) -> AuthenticationError {
     match error {
         OidcError::Transport(_)
@@ -174,7 +198,7 @@ fn verifier_failure(error: &OidcError) -> AuthenticationError {
         // an unknown `kid`: a key the issuer never published is a forgery
         // signal. A variant the platform adds later reads as a refusal until
         // it is classified here, so a new outcome can never widen the door.
-        _ => AuthenticationError::Refused,
+        _ => AuthenticationError::Refused(error.failed_check()),
     }
 }
 
@@ -216,7 +240,7 @@ pub(crate) mod tests {
         .value
     }
 
-    fn keys() -> Arc<JwksFetcher> {
+    pub(crate) fn keys() -> Arc<JwksFetcher> {
         Arc::new(JwksFetcher::new_static(
             serde_json::from_value(json!({"keys": [{
                 "kty": "oct",
@@ -289,53 +313,110 @@ pub(crate) mod tests {
         assert_eq!(caller.kind, ActorKind::Human);
     }
 
+    /// The check `authenticate` reports for `claims`, signed as a real token.
+    async fn refused_check(claims: serde_json::Value) -> FailedCheck {
+        authenticator()
+            .authenticate(&token(claims))
+            .await
+            .expect_err("the token is refused")
+            .failed_check()
+    }
+
     #[tokio::test]
     async fn a_malformed_or_foreign_credential_is_refused() {
         let authenticator = authenticator();
         assert_eq!(
             authenticator.authenticate("not-a-token").await,
-            Err(AuthenticationError::Refused)
+            Err(AuthenticationError::Refused(
+                FailedCheck::CredentialMalformed
+            ))
         );
         let mut foreign = citizen_claims();
         foreign["iss"] = json!("https://other.example.test");
         assert_eq!(
             authenticator.authenticate(&token(foreign)).await,
-            Err(AuthenticationError::Refused)
+            Err(AuthenticationError::Refused(FailedCheck::TokenIssuer))
         );
         let mut expired = citizen_claims();
         expired["exp"] = json!(chrono::Utc::now().timestamp() - 3_600);
         assert_eq!(
             authenticator.authenticate(&token(expired)).await,
-            Err(AuthenticationError::Refused)
+            Err(AuthenticationError::Refused(FailedCheck::TokenTime))
+        );
+        let mut elsewhere = citizen_claims();
+        elsewhere["aud"] = json!("urn:example:elsewhere");
+        assert_eq!(
+            authenticator.authenticate(&token(elsewhere)).await,
+            Err(AuthenticationError::Refused(FailedCheck::TokenAudience))
         );
     }
 
     #[tokio::test]
     async fn a_token_outside_every_profile_is_a_profile_refusal() {
-        let authenticator = authenticator();
         let mut unscoped = citizen_claims();
         unscoped["scope"] = json!("documents:read");
         assert_eq!(
-            authenticator.authenticate(&token(unscoped)).await,
-            Err(AuthenticationError::Profile)
+            authenticator().authenticate(&token(unscoped)).await,
+            Err(AuthenticationError::Profile(FailedCheck::Scope))
         );
+        // The verifier admits this client and no access profile lists it.
         let mut unprofiled = citizen_claims();
         unprofiled["azp"] = json!("unprofiled-client");
         assert_eq!(
-            authenticator.authenticate(&token(unprofiled)).await,
-            Err(AuthenticationError::Profile)
+            authenticator().authenticate(&token(unprofiled)).await,
+            Err(AuthenticationError::Profile(FailedCheck::AccessProfile))
         );
         let mut agent = citizen_claims();
         agent["registry_actor_kind"] = json!("agent");
         assert_eq!(
-            authenticator.authenticate(&token(agent)).await,
-            Err(AuthenticationError::Profile)
+            authenticator().authenticate(&token(agent)).await,
+            Err(AuthenticationError::Profile(FailedCheck::ActorKind))
         );
         let mut service = citizen_claims();
         service["registry_actor_kind"] = json!("service");
         assert_eq!(
-            authenticator.authenticate(&token(service)).await,
-            Err(AuthenticationError::Profile)
+            authenticator().authenticate(&token(service)).await,
+            Err(AuthenticationError::Profile(FailedCheck::ActorKind))
+        );
+        let mut absent = citizen_claims();
+        absent
+            .as_object_mut()
+            .unwrap()
+            .remove("registry_actor_kind");
+        assert_eq!(refused_check(absent).await, FailedCheck::ActorKind);
+    }
+
+    #[tokio::test]
+    async fn a_client_no_profile_lists_is_not_a_missing_actor_kind() {
+        // With no actor kind either, the profile lookup still fails first.
+        let mut unprofiled = citizen_claims();
+        unprofiled["azp"] = json!("unprofiled-client");
+        unprofiled
+            .as_object_mut()
+            .unwrap()
+            .remove("registry_actor_kind");
+        assert_eq!(refused_check(unprofiled).await, FailedCheck::AccessProfile);
+    }
+
+    #[tokio::test]
+    async fn identity_claims_a_profile_cannot_use_are_claims_refusals() {
+        let mut malformed = citizen_claims();
+        malformed["registry_actor_kind"] = json!(7);
+        assert_eq!(
+            authenticator().authenticate(&token(malformed)).await,
+            Err(AuthenticationError::Claims(FailedCheck::ActorKind))
+        );
+        let mut principal = citizen_claims();
+        principal["sub"] = json!("a principal\u{7}with a control");
+        assert_eq!(
+            authenticator().authenticate(&token(principal)).await,
+            Err(AuthenticationError::Claims(FailedCheck::TokenClaims))
+        );
+        let mut unlisted = citizen_claims();
+        unlisted["azp"] = json!("unlisted-client");
+        assert_eq!(
+            authenticator().authenticate(&token(unlisted)).await,
+            Err(AuthenticationError::Refused(FailedCheck::TokenClient))
         );
     }
 
@@ -345,7 +426,9 @@ pub(crate) mod tests {
         exchanged[ASSERTION_ISSUER_CLAIM] = json!("https://partner.example.test");
         assert_eq!(
             authenticator().authenticate(&token(exchanged)).await,
-            Err(AuthenticationError::Profile)
+            Err(AuthenticationError::Profile(
+                FailedCheck::TokenAssertionIssuer
+            ))
         );
     }
 
@@ -359,5 +442,31 @@ pub(crate) mod tests {
             verifier_failure(&OidcError::Parse),
             AuthenticationError::Unavailable
         );
+        assert_eq!(
+            AuthenticationError::Unavailable.failed_check(),
+            FailedCheck::KeySourceUnavailable
+        );
+    }
+
+    #[test]
+    fn a_refused_credential_carries_the_check_the_verifier_names() {
+        assert_eq!(
+            verifier_failure(&OidcError::SignatureInvalid),
+            AuthenticationError::Refused(FailedCheck::TokenSignature)
+        );
+        assert_eq!(
+            verifier_failure(&OidcError::UnknownKid),
+            AuthenticationError::Refused(FailedCheck::TokenKey)
+        );
+    }
+
+    #[test]
+    fn no_refusal_prints_a_value_the_caller_sent() {
+        let canary = "canary-issuer.example.test";
+        let error = verifier_failure(&OidcError::IssuerMismatch {
+            expected: "expected".to_owned(),
+            actual: canary.to_owned(),
+        });
+        assert!(!format!("{error} {error:?}").contains(canary));
     }
 }

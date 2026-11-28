@@ -127,7 +127,7 @@ impl crate::CaseworkService {
                     Err(error) => Err(error),
                 }
             }
-            Ok(_) => Err(crate::ReviewRuntimeError::NotFound),
+            Ok(_) => Err(crate::ReviewRuntimeError::NotHeldByReader),
             Err(error) => Err(error),
         };
         let terminal = delegated_audit_outcome(&outcome);
@@ -142,8 +142,9 @@ fn delegated_audit_outcome<T>(
     match outcome {
         Ok(_) => crate::audit::AuditOutcome::Succeeded,
         Err(
-            crate::ReviewRuntimeError::Forbidden
+            crate::ReviewRuntimeError::Forbidden(_)
             | crate::ReviewRuntimeError::NotFound
+            | crate::ReviewRuntimeError::NotHeldByReader
             | crate::ReviewRuntimeError::SourceProfileRequired
             | crate::ReviewRuntimeError::ResultExpired
             | crate::ReviewRuntimeError::Invalid,
@@ -159,7 +160,7 @@ fn delegated_recheck(
         Ok(true) => Ok(()),
         Ok(false)
         | Err(
-            crate::ReviewRuntimeError::Forbidden
+            crate::ReviewRuntimeError::Forbidden(_)
             | crate::ReviewRuntimeError::NotFound
             | crate::ReviewRuntimeError::ResultExpired,
         ) => Err(crate::ReviewRuntimeError::NotFound),
@@ -168,82 +169,51 @@ fn delegated_recheck(
 }
 
 impl CaseworkAuthenticator {
-    fn delegated_staff_refusal(
-        &self,
-        stage: registry_platform_oidc::AuthenticationStage,
-        error: AuthenticationError,
-    ) -> AuthenticationError {
-        registry_platform_oidc::log_authentication_refusal!(
-            self.verifier,
-            stage,
-            "Casework delegated staff authentication refused",
-            remedy = "check delegatedStaffReaders and authentication.oidc client, assertion, actor, scope and lifetime bindings"
-        );
-        error
-    }
-
     pub(crate) async fn authenticate_staff_read(
         &self,
         token: &str,
         policy_id: &str,
         source_profile: Option<&str>,
     ) -> Result<DelegatedStaffReader, AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| {
-            self.record_header_refusal();
-            AuthenticationError::Refused
-        })?;
-        let verified = self.verifier.verify(token).await.map_err(|error| {
-            registry_platform_oidc::log_authentication_refusal!(
-                self.verifier,
-                error.authentication_stage(),
-                "Casework delegated staff authentication refused"
-            );
-            AuthenticationError::Refused
-        })?;
-        let binding = self.delegated_staff_readers.get(policy_id).ok_or_else(|| {
-            self.delegated_staff_refusal(
-                registry_platform_oidc::AuthenticationStage::Profile,
-                AuthenticationError::Profile,
-            )
-        })?;
+        validate_compact_access_token(token)
+            .map_err(|_| AuthenticationError::Refused(FailedCheck::CredentialMalformed))?;
+        let verified = self
+            .verifier
+            .verify(token)
+            .await
+            .map_err(|error| AuthenticationError::Refused(error.failed_check()))?;
+        let binding = self
+            .delegated_staff_readers
+            .get(policy_id)
+            .ok_or(AuthenticationError::Profile(FailedCheck::AccessProfile))?;
         let profile = self
             .profiles
             .get(&binding.profile)
             .filter(|profile| profile.acts_as == CaseworkActsAs::Staff)
-            .ok_or_else(|| {
-                self.delegated_staff_refusal(
-                    registry_platform_oidc::AuthenticationStage::Profile,
-                    AuthenticationError::Profile,
-                )
-            })?;
+            .ok_or(AuthenticationError::Profile(FailedCheck::AccessProfile))?;
         if source_profile.is_some_and(|source| {
             !binding
                 .source_profiles
                 .iter()
                 .any(|allowed| allowed == source)
         }) {
-            return Err(self.delegated_staff_refusal(
-                registry_platform_oidc::AuthenticationStage::Profile,
-                AuthenticationError::Profile,
-            ));
+            return Err(AuthenticationError::Profile(FailedCheck::AccessProfile));
         }
-        let matched_client = verified.matched_client_id().map_err(|_| {
-            self.delegated_staff_refusal(
-                registry_platform_oidc::AuthenticationStage::Client,
-                AuthenticationError::Refused,
-            )
-        })?;
-        if matched_client != Some(binding.client.as_str())
-            || verified
-                .claims
-                .extra
-                .get(ASSERTION_ISSUER_CLAIM)
-                .and_then(Value::as_str)
-                != Some(binding.assertion_issuer.as_str())
+        let matched_client = verified
+            .matched_client_id()
+            .map_err(|_| AuthenticationError::Refused(FailedCheck::TokenClient))?;
+        if matched_client != Some(binding.client.as_str()) {
+            return Err(AuthenticationError::Refused(FailedCheck::TokenClient));
+        }
+        if verified
+            .claims
+            .extra
+            .get(ASSERTION_ISSUER_CLAIM)
+            .and_then(Value::as_str)
+            != Some(binding.assertion_issuer.as_str())
         {
-            return Err(self.delegated_staff_refusal(
-                registry_platform_oidc::AuthenticationStage::Client,
-                AuthenticationError::Refused,
+            return Err(AuthenticationError::Refused(
+                FailedCheck::TokenAssertionIssuer,
             ));
         }
         if verified
@@ -252,10 +222,7 @@ impl CaseworkAuthenticator {
             .keys()
             .any(|key| key.starts_with("registry_grant_"))
         {
-            return Err(self.delegated_staff_refusal(
-                registry_platform_oidc::AuthenticationStage::Profile,
-                AuthenticationError::Refused,
-            ));
+            return Err(AuthenticationError::Refused(FailedCheck::TaskGrantClaims));
         }
         let audience = match verified.claims.aud.as_ref() {
             Some(Audience::One(audience)) if audience == &self.audience => audience.clone(),
@@ -264,30 +231,19 @@ impl CaseworkAuthenticator {
             {
                 audiences[0].clone()
             }
-            _ => {
-                return Err(self.delegated_staff_refusal(
-                    registry_platform_oidc::AuthenticationStage::Audience,
-                    AuthenticationError::Refused,
-                ))
-            }
+            _ => return Err(AuthenticationError::Refused(FailedCheck::TokenAudience)),
         };
-        let issuer = verified.claims.iss.as_deref().ok_or_else(|| {
-            self.delegated_staff_refusal(
-                registry_platform_oidc::AuthenticationStage::Issuer,
-                AuthenticationError::Refused,
-            )
-        })?;
+        let issuer = verified
+            .claims
+            .iss
+            .as_deref()
+            .ok_or(AuthenticationError::Refused(FailedCheck::TokenClaims))?;
         let subject = verified
             .claims
             .sub
             .as_deref()
             .filter(|subject| !subject.is_empty())
-            .ok_or_else(|| {
-                self.delegated_staff_refusal(
-                    registry_platform_oidc::AuthenticationStage::Profile,
-                    AuthenticationError::Claims,
-                )
-            })?;
+            .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
         let expires_at = match (verified.claims.iat, verified.claims.exp) {
             (Some(issued_at), Some(expires_at))
                 if issued_at >= 0
@@ -298,21 +254,13 @@ impl CaseworkAuthenticator {
             {
                 expires_at
             }
-            _ => {
-                return Err(self.delegated_staff_refusal(
-                    registry_platform_oidc::AuthenticationStage::Time,
-                    AuthenticationError::Refused,
-                ))
-            }
+            _ => return Err(AuthenticationError::Refused(FailedCheck::TokenTime)),
         };
         let act = strict_actor(
             verified.claims.extra.get("act"),
             issuer,
             &binding.actor_subject,
-        )
-        .map_err(|error| {
-            self.delegated_staff_refusal(registry_platform_oidc::AuthenticationStage::Client, error)
-        })?;
+        )?;
         let actual_scopes = verified.scopes.iter().cloned().collect::<BTreeSet<_>>();
         let mut expected_scopes = profile
             .required_scopes
@@ -323,10 +271,7 @@ impl CaseworkAuthenticator {
         if !expected_scopes.is_subset(&actual_scopes)
             || actual_scopes.len() != verified.scopes.len()
         {
-            return Err(self.delegated_staff_refusal(
-                registry_platform_oidc::AuthenticationStage::Scope,
-                AuthenticationError::Profile,
-            ));
+            return Err(AuthenticationError::Profile(FailedCheck::Scope));
         }
         if verified
             .claims
@@ -335,10 +280,7 @@ impl CaseworkAuthenticator {
             .and_then(Value::as_str)
             != Some(self.human_identity.value.as_str())
         {
-            return Err(self.delegated_staff_refusal(
-                registry_platform_oidc::AuthenticationStage::Profile,
-                AuthenticationError::NotHuman,
-            ));
+            return Err(AuthenticationError::NotHuman(FailedCheck::ActorKind));
         }
         let principal = if profile.principal_claim == "sub" {
             Some(subject)
@@ -350,12 +292,7 @@ impl CaseworkAuthenticator {
                 .and_then(Value::as_str)
         }
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            self.delegated_staff_refusal(
-                registry_platform_oidc::AuthenticationStage::Profile,
-                AuthenticationError::Claims,
-            )
-        })?;
+        .ok_or(AuthenticationError::Claims(FailedCheck::TokenClaims))?;
         Ok(DelegatedStaffReader {
             actor: ActorContext {
                 principal: IssuerPrincipal {
@@ -388,20 +325,20 @@ fn strict_actor(
 ) -> Result<(String, String), AuthenticationError> {
     let object = value
         .and_then(Value::as_object)
-        .ok_or(AuthenticationError::Refused)?;
+        .ok_or(AuthenticationError::Refused(FailedCheck::Delegation))?;
     if object.contains_key("act") {
-        return Err(AuthenticationError::Refused);
+        return Err(AuthenticationError::Refused(FailedCheck::Delegation));
     }
     if let Some(issuer) = object.get("iss") {
         if issuer.as_str() != Some(expected_issuer) {
-            return Err(AuthenticationError::Refused);
+            return Err(AuthenticationError::Refused(FailedCheck::Delegation));
         }
     }
     let subject = object
         .get("sub")
         .and_then(Value::as_str)
         .filter(|value| *value == expected_subject)
-        .ok_or(AuthenticationError::Refused)?;
+        .ok_or(AuthenticationError::Refused(FailedCheck::Delegation))?;
     Ok((expected_issuer.to_owned(), subject.to_owned()))
 }
 
@@ -410,12 +347,14 @@ mod tests {
     use super::{delegated_audit_outcome, delegated_recheck};
     use crate::audit::AuditOutcome;
     use crate::{ReviewRuntimeError, StoreError};
+    use registry_platform_authcommon::FailedCheck;
 
     #[test]
     fn delegated_caller_refusals_are_not_audited_as_runtime_failures() {
         for error in [
-            ReviewRuntimeError::Forbidden,
+            ReviewRuntimeError::Forbidden(FailedCheck::Operation),
             ReviewRuntimeError::NotFound,
+            ReviewRuntimeError::NotHeldByReader,
             ReviewRuntimeError::SourceProfileRequired,
             ReviewRuntimeError::ResultExpired,
             ReviewRuntimeError::Invalid,
@@ -441,7 +380,7 @@ mod tests {
             Err(ReviewRuntimeError::NotFound)
         ));
         assert!(matches!(
-            delegated_recheck(Err(ReviewRuntimeError::Forbidden)),
+            delegated_recheck(Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))),
             Err(ReviewRuntimeError::NotFound)
         ));
         assert!(matches!(

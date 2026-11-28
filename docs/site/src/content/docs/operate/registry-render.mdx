@@ -706,6 +706,7 @@ The metrics listener has no authentication, so keep it on a private network that
 | Series | Labels | Meaning |
 | --- | --- | --- |
 | `render_documents_total` | `operation`: `render`, `seal`. `result`: `ok`, `refused`, `failed` | Calls to the render and seal routes. `ok` is a 2xx answer, `refused` a 4xx answer, and `failed` a 5xx answer |
+| `render_request_refusals_total` | `check`: one fixed check name per refusal reason, for example `credential-missing`, `token-audience`, `scope`, `requester-client` | Requests refused to a caller, by the check that failed. Every check starts at zero. Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute |
 | `render_audit_write_failures_total` | none | Audit entries that could not be written |
 | `render_seal_certificate_expiry_seconds` | `seal`: each seal id from your `signing.seals` | Gauge of seconds until the seal's certificate stops being valid. Negative once it has |
 

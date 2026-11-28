@@ -11,6 +11,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use registry_platform_authcommon::{record_refusal, FailedCheck, RefusalNote, RefusalRecorder};
 use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder, Problem};
 use rmcp::transport::streamable_http_server::{
     session::never::NeverSessionManager, StreamableHttpServerConfig, StreamableHttpService,
@@ -79,16 +80,23 @@ impl ResourceAuthority {
     }
 }
 
+/// The host and origin check, with the recorder that counts its refusals.
+struct HostGate {
+    authority: Option<ResourceAuthority>,
+    refusals: Arc<RefusalRecorder>,
+}
+
 async fn require_resource_host(
-    State(authority): State<Arc<Option<ResourceAuthority>>>,
+    State(gate): State<Arc<HostGate>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let admitted = authority
-        .as_ref()
+    let admitted = gate
+        .authority
         .as_ref()
         .is_some_and(|authority| authority.admits(request.uri(), request.headers()));
     if !admitted || request.headers().contains_key(header::ORIGIN) {
+        record_refusal!(gate.refusals, RefusalNote::new(FailedCheck::HostOrigin));
         return forbidden();
     }
     next.run(request).await
@@ -118,7 +126,10 @@ pub fn router(
             require_caller,
         ))
         .layer(from_fn_with_state(
-            Arc::new(ResourceAuthority::of(&options.resource)),
+            Arc::new(HostGate {
+                authority: ResourceAuthority::of(&options.resource),
+                refusals: Arc::clone(resource_server.refusal_recorder()),
+            }),
             require_resource_host,
         ));
     let metadata_path = format!("{METADATA_PREFIX}{MCP_PATH}");

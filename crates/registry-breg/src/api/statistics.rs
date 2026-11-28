@@ -156,7 +156,7 @@ pub(super) fn authorize_with_reason(
     kind: Kind,
     claims: &VerifiedRequestClaims,
     selected: Option<&str>,
-) -> Result<AuthorizedRequestContext, ReadRefusalReason> {
+) -> Result<AuthorizedRequestContext, RouteRefusal> {
     let eligible = |id: &str| match kind {
         Kind::Live => dataset.live_profiles.contains(id),
         Kind::Exact => dataset
@@ -181,13 +181,13 @@ pub(super) fn authorize_with_reason(
     let selected = selected
         .or(configured_default)
         .or_else(|| default.map(String::as_str))
-        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
+        .ok_or(RouteRefusal::surface(FailedCheck::AccessProfile))?;
     if !eligible(selected) {
-        return Err(ReadRefusalReason::SurfaceUnavailable);
+        return Err(RouteRefusal::surface(FailedCheck::AccessProfile));
     }
     claims
         .principal()
-        .ok_or(ReadRefusalReason::ProfileAdmission)?;
+        .ok_or(RouteRefusal::admission_check(FailedCheck::TokenClaims))?;
     if matches!(
         kind,
         Kind::Live | Kind::Publish | Kind::DryRun | Kind::Withdraw
@@ -202,7 +202,7 @@ pub(super) fn authorize_with_reason(
                     && route.operation == Operation::List
                     && read_path_for_route(service, route).is_none()
             })
-            .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
+            .ok_or(RouteRefusal::surface(FailedCheck::AccessProfile))?;
         let mut options = QueryOptions::default();
         options.parsed.access_profile = Some(selected.to_owned());
         return authorize_route_with_reason(service, route, claims, &options)
@@ -211,18 +211,15 @@ pub(super) fn authorize_with_reason(
     let profile = dataset
         .access_profiles
         .get(selected)
-        .ok_or(ReadRefusalReason::SurfaceUnavailable)?;
-    let boundaries = authorize_profile_claims(profile, claims)
-        .map_err(|_| ReadRefusalReason::ProfileAdmission)?;
+        .ok_or(RouteRefusal::surface(FailedCheck::AccessProfile))?;
+    let boundaries = authorize_profile_claims(profile, claims).map_err(RouteRefusal::admission)?;
     Ok(AuthorizedRequestContext::new(
         claims.principal().map(str::to_owned),
         claims.purpose().map(str::to_owned),
         selected.to_owned(),
         boundaries,
     )
-    .with_task_grant(
-        task_grant_binding(profile, claims).map_err(|_| ReadRefusalReason::ProfileAdmission)?,
-    )
+    .with_task_grant(task_grant_binding(profile, claims).map_err(RouteRefusal::admission)?)
     .with_audit_context(claims)
     .with_recipients(claims))
 }
@@ -397,7 +394,7 @@ async fn dispatch(
             &claims,
             None,
             &correlation,
-            concealed(),
+            concealed(FailedCheck::Visibility),
         )
         .await;
     };
@@ -405,17 +402,17 @@ async fn dispatch(
     let context =
         match authorize_with_reason(&service, dataset, route.kind, &claims, selected.as_deref()) {
             Ok(context) => context,
-            Err(reason) => {
+            Err(refusal) => {
                 let reason = (route.kind.method() == HttpMethod::Get
-                    && reason == ReadRefusalReason::ProfileAdmission)
-                    .then_some(reason);
+                    && refusal.reason == ReadRefusalReason::ProfileAdmission)
+                    .then_some(refusal.reason);
                 return refusal_with_reason(
                     &service,
                     &route,
                     &claims,
                     selected.as_deref(),
                     &correlation,
-                    concealed(),
+                    concealed(refusal.check),
                     reason,
                 )
                 .await;
@@ -681,13 +678,13 @@ async fn execute(
         }
         Kind::Latest | Kind::Version => {
             if route.kind == Kind::Version && version.is_none() {
-                return Err(concealed());
+                return Err(concealed(FailedCheck::Visibility));
             }
             let stored = backend
                 .read_version(StatisticsVersionReadRequest {
                     context,
                     dataset_id: &route.dataset,
-                    period_code: period.ok_or_else(concealed)?,
+                    period_code: period.ok_or_else(|| concealed(FailedCheck::Visibility))?,
                     version,
                     selection,
                     deadline,
@@ -791,7 +788,7 @@ async fn execute(
                 .dry_run(StatisticsDryRunRequest {
                     context,
                     dataset_id: &route.dataset,
-                    period_code: period.ok_or_else(concealed)?,
+                    period_code: period.ok_or_else(|| concealed(FailedCheck::Visibility))?,
                     status,
                     computed_at: now,
                     today,
@@ -825,7 +822,7 @@ async fn execute(
                 .as_object()
                 .filter(|o| o.len() == 1)
                 .ok_or_else(invalid_request)?;
-            let period = period.ok_or_else(concealed)?;
+            let period = period.ok_or_else(|| concealed(FailedCheck::Visibility))?;
             let held = if route.kind == Kind::Publish {
                 let status = match object.get("status").and_then(Value::as_str) {
                     Some("provisional") => ReleaseStatus::Provisional,
@@ -858,7 +855,7 @@ async fn execute(
                         context,
                         dataset_id: &route.dataset,
                         period_code: period,
-                        version: version.ok_or_else(concealed)?,
+                        version: version.ok_or_else(|| concealed(FailedCheck::Visibility))?,
                         reason,
                         idempotency_key: key,
                         route_id: &route.id(),
@@ -953,7 +950,7 @@ fn negotiate(headers: &HeaderMap) -> bool {
 }
 fn service_problem(error: StatisticsServiceError) -> Response {
     match error {
-        StatisticsServiceError::Concealed => concealed(),
+        StatisticsServiceError::Concealed => concealed(FailedCheck::Visibility),
         StatisticsServiceError::QueryInvalid { field_path } => {
             statistics_invalid_query_at(field_path)
         }
@@ -1142,7 +1139,7 @@ pub(super) async fn unknown(
         claims,
         None,
         correlation,
-        concealed(),
+        super::unknown_route(),
         RefusalHttpMethod::from_request(method),
         "statistics.unknown",
         None,

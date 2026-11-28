@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Render counts every refusal of a caller in `render_request_refusals_total{check}`
+  on the metrics listener and writes one `request refused` log line with
+  `failed_check` and the trace id, at most five per check per minute. The
+  counter and the line carry a fixed check name only. Responses are unchanged.
+- A test timestamp authority may use an IPv4-mapped loopback literal in plain
+  `http`, such as `http://[::ffff:127.0.0.1]/tsr`, the same as `127.0.0.1`.
+  An IPv4-mapped address off the host, such as `[::ffff:10.0.0.5]`, stays
+  refused.
 - `registry-render test-seal` creates a test-signed PDF and its public test CA
   certificate from a bundle and an example record. Each run uses a fresh local
   development signer.

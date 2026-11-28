@@ -302,7 +302,8 @@ operational_telemetry:
     delivery listener's binding. An operator may declare
     metricsListener.networkExposure: container-private to bind the wildcard
     address inside a container network it controls. Its route,
-    method, status, problem, and outcome labels come from closed vocabularies,
+    method, status, problem, outcome, and refused-check labels come from closed
+    vocabularies,
     state pressure and cleanup are unlabeled gauges or counters, and neither
     metrics nor request logs carry a request-derived or deployment-specific
     identifier.

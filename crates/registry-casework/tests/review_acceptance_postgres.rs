@@ -348,7 +348,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
                 "reviewer-create"
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     let accepted = f.create("notice").await;
     assert!(f.request("notice").policy.matches(&accepted.policy));
@@ -370,7 +370,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
                 accepted.request_id
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     assert!(matches!(
         f.service
@@ -383,7 +383,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
                 "producer-claim"
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
 }
 #[tokio::test]
@@ -520,7 +520,7 @@ async fn current_policy_selection_recovers_before_updates_and_requires_live_auth
         revoked
             .create_review_request(&producer, request, "current-policy")
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     assert_eq!(
         f.db.query_one("SELECT count(*) FROM casework_review_requests", &[])
@@ -582,7 +582,7 @@ async fn concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_in
         f.service
             .create_review_request(&producer, wrong_subject, "incompatible-subject")
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
 }
 
@@ -632,7 +632,7 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
                 "same-reviewer"
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     let held = f.claim(second, "b").await;
     f.service
@@ -1204,7 +1204,7 @@ async fn source_visibility_and_directory_authority_are_both_live_at_caseload_app
                 }
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     assert_eq!(before, f.holders().await);
 }
@@ -1471,7 +1471,7 @@ async fn admission_namespace_cannot_substitute_the_pinned_provider_namespace() {
                 "wrong-namespace"
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
     assert_eq!(
         f.db.query_one("SELECT count(*) FROM casework_review_requests", &[])
@@ -1655,7 +1655,7 @@ async fn clock_recompute_uses_pinned_calendar_and_fences_changed_holiday_inputs(
                 }
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden)
+        Err(ReviewRuntimeError::Forbidden(_))
     ));
 }
 

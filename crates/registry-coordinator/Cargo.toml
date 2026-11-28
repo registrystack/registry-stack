@@ -147,10 +147,10 @@ registry-platform-activation.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-provision = { workspace = true, features = ["cli"] }
-registry-platform-authcommon.workspace = true
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-calendar.workspace = true
-registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httpsec = { workspace = true, features = ["server", "refusal-trace-id"] }
 registry-platform-metrics.workspace = true
 jsonwebtoken.workspace = true
 registry-platform-canonical-json.workspace = true

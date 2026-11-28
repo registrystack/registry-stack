@@ -126,12 +126,13 @@ pub(super) async fn boundary(
 /// answers as not found.
 fn conceal_target_error(target: Target, error: HttpError) -> HttpError {
     match (target, error) {
+        (Target::Task(_) | Target::Request(_), HttpError::NotFound(check)) => {
+            HttpError::NotFound(check)
+        }
         (
             Target::Task(_) | Target::Request(_),
-            HttpError::AuthenticationRefused
-            | HttpError::NotFound
-            | HttpError::SourceProfileNotApplicable,
-        ) => HttpError::NotFound,
+            HttpError::AuthenticationRefused(_) | HttpError::SourceProfileNotApplicable,
+        ) => HttpError::NotFound(FailedCheck::Visibility),
         (_, error) => error,
     }
 }
@@ -148,9 +149,9 @@ async fn admit(
 ) -> Result<Option<HttpState>, HttpError> {
     let target = target(method, path).ok_or(HttpError::Invalid)?;
     let source = parse_bearer_token(single_header(headers, SOURCE_AUTHORIZATION_HEADER)?)
-        .map_err(|_| HttpError::AuthenticationRefused)?;
+        .map_err(bearer_refusal)?;
     registry_platform_authcommon::validate_compact_access_token(source)
-        .map_err(|_| HttpError::AuthenticationRefused)?;
+        .map_err(|_| HttpError::AuthenticationRefused(FailedCheck::CredentialMalformed))?;
     single_header(headers, AUTHORIZATION.as_str())?;
     single_header(headers, CASEWORK_PROFILE_HEADER)?;
     if !headers.contains_key(SOURCE_PROFILE_HEADER) {
@@ -162,7 +163,7 @@ async fn admit(
     }
     let (actor, primary) = authenticate(state, headers).await?;
     if actor.role == CaseworkActsAs::Requester {
-        return Err(HttpError::ProfileNotAuthorized);
+        return Err(HttpError::ProfileNotAuthorized(FailedCheck::AccessProfile));
     }
     let Some(provider) = state
         .service
@@ -186,12 +187,13 @@ async fn admit(
         .authenticator
         .verify_human_source_pair(primary, source, &provider)
         .await
-        .map_err(|_| conceal_target_error(target, HttpError::AuthenticationRefused))?;
-    let original = state
-        .service
-        .providers
-        .get(&provider)
-        .ok_or_else(|| conceal_target_error(target, HttpError::AuthenticationRefused))?;
+        .map_err(|error| conceal_target_error(target, error.into()))?;
+    let original = state.service.providers.get(&provider).ok_or_else(|| {
+        conceal_target_error(
+            target,
+            HttpError::AuthenticationRefused(FailedCheck::AccessProfile),
+        )
+    })?;
     let scoped = VerifiedSourceProvider {
         inner: Arc::clone(original),
         token: Zeroizing::new(source.to_owned()),

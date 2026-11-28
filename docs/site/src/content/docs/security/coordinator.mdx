@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -38,6 +38,19 @@ Deployment steps are in [Deploy Registry Coordinator](../../operate/coordinator/
   Admission accepts a token only when its caller policy lists the token's exact `sub`, and refuses
   a delegated token (COORDINATOR-INV-10).
   Start input is the caller's assertion: Coordinator does not compare it with the caller's `sub`.
+- Coordinator counts every refused request by the check that refused it, in
+  `coordinator_request_refusals_total{check}` on the private metrics listener.
+  The `check` label is a closed set of 45 names, every one published at zero, and no caller value
+  becomes a label.
+  The counter covers a refused credential, a policy denial after authentication, a refused signed
+  event delivery or completion callback, an unreachable key source, and a run the caller cannot
+  see.
+  Each refusal also writes one `request refused` log line with `failed_check` and the request's
+  trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
+  a window held back.
+  Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and
+  recording a refusal changes nothing the caller receives.
+  The older `coordinator_authentication_refusals_total{reason}` counter is unchanged.
 - Host users run `coordinatorctl`, which is local operator tooling for a trusted single-user
   machine.
 - PostgreSQL holds run, wait and job state.
@@ -49,7 +62,15 @@ Deployment steps are in [Deploy Registry Coordinator](../../operate/coordinator/
     crates/registry-coordinator/tests/deployment_surface.rs a_policy_admits_only_the_subjects_it_lists,
     a_token_carrying_act_is_refused_and_an_exchange_without_one_is_not;
     crates/registry-coordinator/tests/deployment_postgres.rs
-    start_input_is_not_bound_to_the_caller_subject. */}
+    start_input_is_not_bound_to_the_caller_subject;
+    crates/registry-coordinator/src/http.rs
+    every_refusal_the_service_answers_is_counted_and_logged_under_its_check,
+    a_policy_denial_after_authentication_is_counted,
+    the_authorization_header_names_a_missing_or_a_malformed_credential;
+    crates/registry-coordinator/src/event_trigger_tests.rs
+    a_refused_delivery_names_the_check_that_failed;
+    crates/registry-coordinator/src/completion.rs
+    a_refused_sender_names_the_check_that_failed. */}
 
 ## Guarantees
 
@@ -342,8 +363,11 @@ Enforcement:
   Inspection adds the connection's `requestLink` with the Proposal id filled in, only for a caller
   already authorised to inspect the run; the id grants nothing without BReg's own grant.
   The link must be `https` unless its host is a loopback IP address, the same rule as a connection
-  endpoint; a host name such as `localhost` is refused because name resolution is outside
-  Coordinator's control.
+  endpoint.
+  Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8`
+  address.
+  Coordinator accepts no name as loopback, not even `localhost`, because name resolution is outside
+  its control.
 - The run list finds waits on one Proposal through the keyed wait commitment over the database
   identity and the Proposal id, so neither the database nor the list cursor holds the id in clear.
   Each page reapplies the caller's owner and workflow scope, and a cursor is refused unless its

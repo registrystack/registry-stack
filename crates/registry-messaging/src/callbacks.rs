@@ -12,7 +12,9 @@
 //! that does not verify, and a token segment on a provider whose verifier is
 //! not `path-token` (or none on one whose verifier is) all answer
 //! `callback.unverified` alike, so the route reveals neither which providers
-//! receive callbacks nor why a request was refused.
+//! receive callbacks nor why a request was refused. The operator learns why
+//! from the refusal's failed check, counted on the metrics listener and named
+//! in one bounded log line that carries nothing the caller sent.
 //!
 //! A verified callback answers 204 when its receipt was applied, changed
 //! nothing, reported nothing this runtime records, or named no message:
@@ -34,8 +36,10 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use registry_messaging_core::{
-    verify_callback, CallbackRequest, ProblemCode, Receipt, PROVIDER_CALLBACK_PATH,
+    verify_callback, CallbackRequest, CallbackVerificationRefusal, ProblemCode, Receipt,
+    PROVIDER_CALLBACK_PATH,
 };
+use registry_platform_authcommon::FailedCheck;
 
 use crate::http::{rate_limited_response, read_request_body, HttpError, HttpState};
 use crate::http_provider::ReceiptScriptError;
@@ -85,7 +89,7 @@ async fn answer(
         Err(LimitRefusal::Unavailable) => {
             tracing::error!("the Messaging callback-rate limiter could not decide");
             state.metrics.record_callback(CallbackOutcome::Unavailable);
-            return Err(HttpError(ProblemCode::ServiceUnavailable).into_response());
+            return Err(HttpError::problem(ProblemCode::ServiceUnavailable).into_response());
         }
     }
     let uri = request.uri().clone();
@@ -96,22 +100,39 @@ async fn answer(
     let (outcome, answer) =
         match receive_callback(state, provider_id, token, &uri, &headers, body).await {
             Ok(outcome) => (outcome, Ok(StatusCode::NO_CONTENT)),
-            Err((outcome, problem)) => (outcome, Err(HttpError(problem).into_response())),
+            Err((outcome, error)) => (outcome, Err(error.into_response())),
         };
     state.metrics.record_callback(outcome);
     answer
 }
 
-type Refusal = (CallbackOutcome, ProblemCode);
+type Refusal = (CallbackOutcome, HttpError);
 
-const fn unverified() -> Refusal {
-    (CallbackOutcome::Unverified, ProblemCode::CallbackUnverified)
+/// A callback that did not verify, and the check that failed.
+fn unverified(check: FailedCheck) -> Refusal {
+    (
+        CallbackOutcome::Unverified,
+        HttpError::refused(ProblemCode::CallbackUnverified, check),
+    )
 }
 
-const fn unavailable() -> Refusal {
+/// The check a verifier's refusal names: a missing or wrong path token is a
+/// shared secret that did not match, every other refusal a signature that did
+/// not.
+const fn verification_check(refusal: CallbackVerificationRefusal) -> FailedCheck {
+    match refusal {
+        CallbackVerificationRefusal::MissingHeader
+        | CallbackVerificationRefusal::MalformedSignature
+        | CallbackVerificationRefusal::SignatureMismatch => FailedCheck::DeliverySignature,
+        CallbackVerificationRefusal::MissingPathToken
+        | CallbackVerificationRefusal::TokenMismatch => FailedCheck::SharedSecret,
+    }
+}
+
+fn unavailable() -> Refusal {
     (
         CallbackOutcome::Unavailable,
-        ProblemCode::ServiceUnavailable,
+        HttpError::problem(ProblemCode::ServiceUnavailable),
     )
 }
 
@@ -124,15 +145,10 @@ async fn receive_callback(
     body: Bytes,
 ) -> Result<CallbackOutcome, Refusal> {
     let Some(receiver) = state.callbacks.get(provider_id).map(Arc::clone) else {
-        tracing::warn!("a provider callback named no provider that receives callbacks");
-        return Err(unverified());
+        return Err(unverified(FailedCheck::DeliveryBinding));
     };
     if receiver.uses_path_token() != token.is_some() {
-        tracing::warn!(
-            provider = provider_id,
-            "a provider callback arrived on the route its verifier does not use"
-        );
-        return Err(unverified());
+        return Err(unverified(FailedCheck::DeliveryBinding));
     }
     let path = PROVIDER_CALLBACK_PATH.replace("{provider_id}", provider_id);
     let callback = OwnedCallback {
@@ -157,12 +173,7 @@ async fn receive_callback(
     if let Err(refusal) =
         callback.with_request(|request| verify_callback(&receiver.verifier(), request))
     {
-        tracing::warn!(
-            provider = provider_id,
-            reason = %refusal,
-            "a provider callback did not verify"
-        );
-        return Err(unverified());
+        return Err(unverified(verification_check(refusal)));
     }
     let Some(service) = state.messages.as_deref() else {
         return Err(unavailable());
@@ -192,7 +203,10 @@ async fn receive_callback(
                 reason = %error,
                 "a verified provider callback could not be read"
             );
-            return Err((CallbackOutcome::Unreadable, ProblemCode::CallbackUnreadable));
+            return Err((
+                CallbackOutcome::Unreadable,
+                HttpError::problem(ProblemCode::CallbackUnreadable),
+            ));
         }
     };
     let recorded = service

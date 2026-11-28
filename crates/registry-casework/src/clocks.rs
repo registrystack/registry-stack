@@ -1,6 +1,7 @@
 use crate::{CaseworkService, PostgresStore, ServiceError, StoreError};
 use chrono::Utc;
 use registry_casework_core::*;
+use registry_platform_authcommon::FailedCheck;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
@@ -13,7 +14,7 @@ impl PostgresStore {
         idempotency_key: &str,
     ) -> Result<(), StoreError> {
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         if document.holiday_set.is_empty()
             || document.holiday_set.len() > 64
@@ -146,7 +147,7 @@ impl CaseworkService {
         revision: u64,
     ) -> Result<HolidaySetDocument, ServiceError> {
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(StoreError::Forbidden.into());
+            return Err(StoreError::Forbidden(FailedCheck::Operation).into());
         }
         self.store
             .holiday_set(holiday_set, revision)

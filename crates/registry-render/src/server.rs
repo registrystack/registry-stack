@@ -28,7 +28,8 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 
 use registry_platform_authcommon::{
-    parse_bearer_token, validate_api_key_entropy, MIN_API_KEY_ENTROPY_BYTES,
+    parse_bearer_token, validate_api_key_entropy, BearerParseError, FailedCheck, RefusalNote,
+    RefusalRecorder, MIN_API_KEY_ENTROPY_BYTES,
 };
 use registry_platform_canonical_json::parse_json_preserving_integers;
 use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder};
@@ -266,12 +267,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         }
         None => None,
     };
-    let app = router(Arc::clone(&service))
-        .layer(axum::middleware::from_fn(lifecycle_log))
-        .layer(axum::middleware::from_fn_with_state(
-            Arc::clone(&metrics),
-            count_documents,
-        ));
+    let app = public_app(Arc::clone(&service), &metrics);
     let grace = runtime.listener.shutdown_grace();
     let drain_service = Arc::clone(&service);
     // The stop signal is observed once and broadcast, so the drain and the
@@ -440,6 +436,21 @@ pub(crate) fn router(service: Arc<Service>) -> Router {
         .layer(security_headers(CspBuilder::restrictive()))
 }
 
+/// The public application: the router under the request log, the refusal
+/// recording and the document counter.
+fn public_app(service: Arc<Service>, metrics: &Arc<Metrics>) -> Router {
+    router(service)
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(metrics.refusal_recorder()),
+            record_refusals,
+        ))
+        .layer(axum::middleware::from_fn(lifecycle_log))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(metrics),
+            count_documents,
+        ))
+}
+
 /// The caller guidance a credential without `render:seal` receives on the
 /// seal route.
 const SEAL_SCOPE_GUIDANCE: &str = "Obtain a Render resource credential with the render:seal scope.";
@@ -478,11 +489,14 @@ async fn require_bearer(
         Ok(caller) => caller,
         Err(error) => {
             use crate::auth::AuthenticationError;
+            let check = error.failed_check();
             let (kind, caller) = match error {
-                AuthenticationError::Refused => (ProblemKind::Unauthorized, "unknown".to_owned()),
-                AuthenticationError::Forbidden { caller_fingerprint } => {
-                    (ProblemKind::Forbidden, caller_fingerprint)
+                AuthenticationError::Refused(_) => {
+                    (ProblemKind::Unauthorized, "unknown".to_owned())
                 }
+                AuthenticationError::Forbidden {
+                    caller_fingerprint, ..
+                } => (ProblemKind::Forbidden, caller_fingerprint),
                 AuthenticationError::Unavailable => {
                     (ProblemKind::AuthenticationUnavailable, "unknown".to_owned())
                 }
@@ -492,7 +506,7 @@ async fn require_bearer(
                 problem = problem.with_public_detail(SEAL_SCOPE_GUIDANCE);
             }
             let (path, headers) = (request.uri().path(), request.headers());
-            return refuse_access(&service, path, headers, &problem, &caller).await;
+            return refuse_access(&service, path, headers, &problem, &caller, check).await;
         }
     };
     // The legacy API key never seals. The runtime already refuses a signing
@@ -501,19 +515,29 @@ async fn require_bearer(
         let problem = RenderProblem::new(ProblemKind::Forbidden, "the legacy API key cannot seal")
             .with_public_detail(LEGACY_KEY_GUIDANCE);
         let (path, headers) = (request.uri().path(), request.headers());
-        return refuse_access(&service, path, headers, &problem, &caller.fingerprint).await;
+        return refuse_access(
+            &service,
+            path,
+            headers,
+            &problem,
+            &caller.fingerprint,
+            FailedCheck::Operation,
+        )
+        .await;
     }
     request.extensions_mut().insert(caller);
     next.run(request).await
 }
 
-/// Audit an access refusal as one response entry, then answer with it.
+/// Audit an access refusal as one response entry, then answer with it. The
+/// answer carries the check that refused the caller for the recording layer.
 async fn refuse_access(
     service: &Service,
     path: &str,
     headers: &HeaderMap,
     problem: &RenderProblem,
     caller: &str,
+    check: FailedCheck,
 ) -> Response {
     let target = sanitize_route_target(path);
     let correlation = correlation_id(headers);
@@ -529,7 +553,36 @@ async fn refuse_access(
     if let Err(audit_problem) = service.audit.response(&envelope, event).await {
         return problem_response(&audit_problem, trace.as_deref());
     }
-    problem_response(problem, trace.as_deref())
+    refusal_response(problem, trace.as_deref(), check)
+}
+
+/// A refusal answer with the check that refused the caller in its response
+/// extensions, which are never serialized.
+fn refusal_response(problem: &RenderProblem, trace: Option<&str>, check: FailedCheck) -> Response {
+    let mut response = problem_response(problem, trace);
+    response.extensions_mut().insert(RefusalNote::new(check));
+    response
+}
+
+/// Count each refusal answer under its check and write the admitted log line.
+/// The trace id is the one the answer carries.
+async fn record_refusals(
+    State(refusals): State<Arc<RefusalRecorder>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let response = next.run(request).await;
+    if let Some(note) = response.extensions().get::<RefusalNote>() {
+        match registry_platform_httpsec::response_trace_id(response.headers()) {
+            Ok(trace) => {
+                registry_platform_authcommon::record_refusal!(refusals, *note, trace_id = trace);
+            }
+            Err(_) => {
+                registry_platform_authcommon::record_refusal!(refusals, *note);
+            }
+        }
+    }
+    response
 }
 
 /// The verified caller of an API route.
@@ -935,12 +988,24 @@ async fn authorized(
 ) -> Result<Caller, crate::auth::AuthenticationError> {
     use crate::auth::AuthenticationError;
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
-    let value = values.next().ok_or(AuthenticationError::Refused)?;
+    let value = values
+        .next()
+        .ok_or(AuthenticationError::Refused(FailedCheck::CredentialMissing))?;
     if values.next().is_some() {
-        return Err(AuthenticationError::Refused);
+        return Err(AuthenticationError::Refused(
+            FailedCheck::CredentialMalformed,
+        ));
     }
-    let token = parse_bearer_token(value.to_str().map_err(|_| AuthenticationError::Refused)?)
-        .map_err(|_| AuthenticationError::Refused)?;
+    let malformed = || AuthenticationError::Refused(FailedCheck::CredentialMalformed);
+    let token =
+        parse_bearer_token(value.to_str().map_err(|_| malformed())?).map_err(
+            |error| match error {
+                BearerParseError::InvalidScheme => {
+                    AuthenticationError::Refused(FailedCheck::CredentialMissing)
+                }
+                _ => malformed(),
+            },
+        )?;
     if let Some(verifier) = &service.oidc {
         let verified = crate::auth::authenticate(verifier, token, scope).await?;
         return Ok(Caller {
@@ -955,7 +1020,7 @@ async fn authorized(
             fingerprint: service.caller_fingerprint.clone(),
             client_id: None,
         })
-        .ok_or(AuthenticationError::Refused)
+        .ok_or(AuthenticationError::Refused(FailedCheck::SharedSecret))
 }
 
 /// Caller-supplied trace id from a W3C traceparent header, fully
@@ -1145,6 +1210,17 @@ impl SealCall {
     /// Refuse the call before any render starts: one response entry naming
     /// the seal when it is known, accepted before responding.
     async fn refuse(&self, service: &Service, problem: RenderProblem) -> Response {
+        self.refuse_checked(service, problem, None).await
+    }
+
+    /// Refuse the call as `refuse` does, and record the check that refused
+    /// the caller when there is one.
+    async fn refuse_checked(
+        &self,
+        service: &Service,
+        problem: RenderProblem,
+        check: Option<FailedCheck>,
+    ) -> Response {
         let mut event = RenderAuditEvent::refused(
             &self.document_type,
             &problem,
@@ -1158,7 +1234,10 @@ impl SealCall {
         if let Err(audit_problem) = service.audit.response(&self.envelope, event).await {
             return problem_response(&audit_problem, self.trace.as_deref());
         }
-        problem_response(&problem, self.trace.as_deref())
+        match check {
+            Some(check) => refusal_response(&problem, self.trace.as_deref(), check),
+            None => problem_response(&problem, self.trace.as_deref()),
+        }
     }
 }
 
@@ -1234,7 +1313,9 @@ async fn seal_route(
             ProblemKind::SealClientNotAllowed,
             format!("the verified client is not in signing.seals.{seal_id}.allowedClients"),
         );
-        return call.refuse(&service, problem).await;
+        return call
+            .refuse_checked(&service, problem, Some(FailedCheck::RequesterClient))
+            .await;
     }
     seal.recover_signer().await;
     // One clock reading decides availability and is the signing time.
@@ -2607,6 +2688,412 @@ mod tests {
         );
         for phases in correlations.values() {
             assert_eq!(phases, &["request", "response"]);
+        }
+    }
+
+    /// One refused answer, as the golden freezes it: status, the headers a
+    /// caller or proxy acts on, and the body without its per-request trace id.
+    async fn frozen_answer(response: Response) -> serde_json::Value {
+        let status = response.status().as_u16();
+        let mut headers = serde_json::Map::new();
+        for name in [
+            "content-type",
+            "www-authenticate",
+            "cache-control",
+            "retry-after",
+        ] {
+            if let Some(value) = response.headers().get(name) {
+                headers.insert(
+                    name.to_owned(),
+                    value.to_str().expect("ASCII header").into(),
+                );
+            }
+        }
+        let bytes = axum::body::to_bytes(response.into_body(), 16384)
+            .await
+            .expect("body");
+        let mut body: serde_json::Value = serde_json::from_slice(&bytes).expect("problem body");
+        assert!(body["traceId"].is_string(), "{body}");
+        body.as_object_mut().expect("object").remove("traceId");
+        serde_json::json!({"status": status, "headers": headers, "body": body})
+    }
+
+    fn bearer_request(
+        method: Method,
+        uri: &str,
+        credential: Option<String>,
+    ) -> axum::extract::Request {
+        let mut request = axum::http::Request::builder().method(method).uri(uri);
+        if let Some(credential) = credential {
+            request = request.header(header::AUTHORIZATION, credential);
+        }
+        request
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from("{}"))
+            .expect("request")
+    }
+
+    /// The service a refusal case runs against.
+    #[derive(Clone, Copy)]
+    enum Mode {
+        /// The legacy API key.
+        Legacy,
+        /// An OIDC verifier over a static key set.
+        Oidc,
+        /// The legacy API key on a service that loaded a seal.
+        LegacySealed,
+        /// An OIDC verifier and a seal that allows a different client.
+        OidcSealed,
+        /// An OIDC verifier whose key source answers 503.
+        Outage,
+    }
+
+    async fn refusal_service(mode: Mode) -> Arc<Service> {
+        use registry_platform_crypto::document_signature::test_support::TestPki;
+        let lines = AuditLines::new(None);
+        let mut service = service(&lines, 1);
+        let inner = Arc::get_mut(&mut service).expect("fixture owns service");
+        if matches!(mode, Mode::Oidc | Mode::OidcSealed) {
+            inner.oidc = Some(crate::auth::tests::test_verifier());
+        }
+        if matches!(mode, Mode::Outage) {
+            let origin = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("key source listener");
+            let url = format!("http://{}/jwks", origin.local_addr().expect("address"));
+            let keys_app =
+                Router::new().route("/jwks", get(|| async { StatusCode::SERVICE_UNAVAILABLE }));
+            tokio::spawn(async move {
+                axum::serve(origin, keys_app).await.expect("key source");
+            });
+            let fetch_policy = registry_platform_oidc::IssuerNetworkPolicy::new(&url, true)
+                .expect("loopback policy")
+                .declared_jwks_fetch_policy();
+            inner.oidc = Some(crate::auth::tests::test_verifier_over(Arc::new(
+                registry_platform_oidc::JwksFetcher::new_with_fetch_url_policy(
+                    url,
+                    registry_platform_oidc::JwksFetcherConfig::defaults(),
+                    fetch_policy,
+                ),
+            )));
+        }
+        if matches!(mode, Mode::LegacySealed | Mode::OidcSealed) {
+            let pki = TestPki::generate().expect("test PKI");
+            let test_seal = pki
+                .issue_seal(registry_platform_crypto::SigningAlgorithm::Es256)
+                .expect("test seal");
+            let signer = Arc::new(test_seal.signer().expect("test signer"));
+            inner.seals.insert(
+                "ministry".to_owned(),
+                Arc::new(Seal::for_test("ministry", &test_seal, signer)),
+            );
+            // The receipt names the seal, as a sealable document type does.
+            inner
+                .bundle
+                .documents
+                .get_mut("receipt")
+                .expect("receipt document")
+                .spec
+                .seal = Some("ministry".to_owned());
+        }
+        service
+    }
+
+    fn token_header(overrides: serde_json::Value) -> Option<String> {
+        Some(format!("Bearer {}", crate::auth::tests::token(overrides)))
+    }
+
+    /// One refusal: its name, the service, the request, and the check that
+    /// must refuse it.
+    struct RefusalCase {
+        name: &'static str,
+        mode: Mode,
+        method: Method,
+        uri: &'static str,
+        credential: Option<String>,
+        check: &'static str,
+    }
+
+    impl RefusalCase {
+        fn new(
+            name: &'static str,
+            mode: Mode,
+            method: Method,
+            uri: &'static str,
+            credential: Option<String>,
+            check: &'static str,
+        ) -> Self {
+            Self {
+                name,
+                mode,
+                method,
+                uri,
+                credential,
+                check,
+            }
+        }
+    }
+
+    /// Every refusal the access layers and the seal handler make, with the
+    /// check each one must record.
+    fn refusal_cases() -> Vec<RefusalCase> {
+        let legacy = |key: &str| Some(format!("Bearer {key}"));
+        vec![
+            RefusalCase::new(
+                "no-authorization-header",
+                Mode::Legacy,
+                Method::GET,
+                "/v1/documents",
+                None,
+                "credential-missing",
+            ),
+            RefusalCase::new(
+                "scheme-not-bearer",
+                Mode::Legacy,
+                Method::GET,
+                "/v1/documents",
+                Some("Basic dXNlcjpwYXNz".to_owned()),
+                "credential-missing",
+            ),
+            RefusalCase::new(
+                "empty-bearer-token",
+                Mode::Legacy,
+                Method::GET,
+                "/v1/documents",
+                Some("Bearer ".to_owned()),
+                "credential-malformed",
+            ),
+            RefusalCase::new(
+                "legacy-key-mismatch",
+                Mode::Legacy,
+                Method::GET,
+                "/v1/documents",
+                legacy("canary-wrong-key-0123456789abcdef0123456789"),
+                "shared-secret",
+            ),
+            RefusalCase::new(
+                "compact-token-shape",
+                Mode::Oidc,
+                Method::GET,
+                "/v1/documents",
+                Some("Bearer canary-invalid-token".to_owned()),
+                "credential-malformed",
+            ),
+            RefusalCase::new(
+                "token-audience",
+                Mode::Oidc,
+                Method::GET,
+                "/v1/documents",
+                token_header(serde_json::json!({"aud":"urn:other"})),
+                "token-audience",
+            ),
+            RefusalCase::new(
+                "token-expired",
+                Mode::Oidc,
+                Method::GET,
+                "/v1/documents",
+                token_header(serde_json::json!({"exp":1})),
+                "token-time",
+            ),
+            RefusalCase::new(
+                "token-client",
+                Mode::Oidc,
+                Method::GET,
+                "/v1/documents",
+                token_header(serde_json::json!({"client_id":"other"})),
+                "token-client",
+            ),
+            RefusalCase::new(
+                "scope-on-render-route",
+                Mode::Oidc,
+                Method::GET,
+                "/v1/documents",
+                token_header(serde_json::json!({"scope":"other"})),
+                "scope",
+            ),
+            RefusalCase::new(
+                "render-scope-on-seal-route",
+                Mode::OidcSealed,
+                Method::POST,
+                "/v1/seal/receipt",
+                token_header(serde_json::json!({})),
+                "scope",
+            ),
+            RefusalCase::new(
+                "legacy-key-on-seal-route",
+                Mode::LegacySealed,
+                Method::POST,
+                "/v1/seal/receipt",
+                legacy(TEST_API_KEY),
+                "operation",
+            ),
+            RefusalCase::new(
+                "key-source-unavailable",
+                Mode::Outage,
+                Method::GET,
+                "/v1/documents",
+                token_header(serde_json::json!({})),
+                "key-source-unavailable",
+            ),
+            RefusalCase::new(
+                "seal-client-not-allowed",
+                Mode::OidcSealed,
+                Method::POST,
+                "/v1/seal/receipt",
+                token_header(serde_json::json!({"scope":"render:seal"})),
+                "requester-client",
+            ),
+        ]
+    }
+
+    /// The refusals as the whole stack answers them, frozen in a checked-in
+    /// file that was written from the tree before any recording existed. Run
+    /// with `REGISTRY_RENDER_WRITE_GOLDEN=1` to rewrite it.
+    #[tokio::test]
+    async fn refusal_answers_match_the_golden() {
+        let mut answers = serde_json::Map::new();
+        for RefusalCase {
+            name,
+            mode,
+            method,
+            uri,
+            credential,
+            ..
+        } in refusal_cases()
+        {
+            let service = refusal_service(mode).await;
+            let response = refusal_stack(service, &Arc::new(Metrics::default()))
+                .oneshot(bearer_request(method, uri, credential))
+                .await
+                .expect("router");
+            answers.insert(name.to_owned(), frozen_answer(response).await);
+        }
+        let actual = serde_json::Value::Object(answers);
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/authentication_refusals.json");
+        if std::env::var_os("REGISTRY_RENDER_WRITE_GOLDEN").is_some() {
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("golden directory");
+            std::fs::write(
+                &path,
+                format!("{}\n", serde_json::to_string_pretty(&actual).expect("json")),
+            )
+            .expect("write golden");
+        }
+        let expected: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("golden file"))
+                .expect("golden json");
+        assert_eq!(actual, expected);
+    }
+
+    /// The stack `serve` builds around the router, for the refusal tests.
+    fn refusal_stack(service: Arc<Service>, metrics: &Arc<Metrics>) -> Router {
+        public_app(service, metrics)
+    }
+
+    /// A subscriber that keeps every formatted line in memory.
+    #[derive(Clone, Default)]
+    struct LogCapture(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogCapture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Every refusal is counted once under the check that refused it, writes
+    /// one value-free log line that names that check and the request's trace
+    /// id, and leaves every other check at zero.
+    #[tokio::test]
+    async fn each_refusal_is_counted_and_logged_under_its_check() {
+        let canaries = [
+            "canary-wrong-key-0123456789abcdef0123456789",
+            "canary-invalid-token",
+            "canary-principal",
+        ];
+        for RefusalCase {
+            name,
+            mode,
+            method,
+            uri,
+            credential,
+            check,
+        } in refusal_cases()
+        {
+            let logs = LogCapture::default();
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_max_level(tracing::Level::INFO)
+                .with_writer(logs.clone())
+                .finish();
+            let _guard = tracing::subscriber::set_default(subscriber);
+            let service = refusal_service(mode).await;
+            let metrics = Arc::new(Metrics::default());
+            let response = refusal_stack(Arc::clone(&service), &metrics)
+                .oneshot(bearer_request(method, uri, credential))
+                .await
+                .expect("router");
+            let trace = registry_platform_httpsec::response_trace_id(response.headers())
+                .expect("trace id")
+                .to_string();
+            let text = scraped(&service, &metrics).await;
+            let counted: Vec<&str> = text
+                .lines()
+                .filter(|line| line.starts_with("render_request_refusals_total{"))
+                .filter(|line| !line.ends_with(" 0"))
+                .collect();
+            assert_eq!(
+                counted,
+                [format!(
+                    "render_request_refusals_total{{check=\"{check}\"}} 1"
+                )],
+                "{name}"
+            );
+            let written = String::from_utf8(logs.0.lock().expect("log").clone()).expect("UTF-8");
+            let lines: Vec<serde_json::Value> = written
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON log line"))
+                .filter(|line| line["fields"]["message"] == "request refused")
+                .collect();
+            assert_eq!(lines.len(), 1, "{name}: {written}");
+            let fields = &lines[0]["fields"];
+            assert_eq!(fields["decision"], "refused", "{name}");
+            assert_eq!(fields["failed_check"], check, "{name}");
+            assert_eq!(fields["trace_id"], trace.as_str(), "{name}");
+            for canary in canaries {
+                assert!(!written.contains(canary), "{name}: {written}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_refusal_counter_is_exposed_from_zero_for_every_check() {
+        let service = refusal_service(Mode::Legacy).await;
+        let text = scraped(&service, &Arc::new(Metrics::default())).await;
+        assert!(text.contains(
+            "# HELP render_request_refusals_total Requests refused, by the check that failed.\n# TYPE render_request_refusals_total counter\n"
+        ));
+        for check in registry_platform_authcommon::FailedCheck::ALL {
+            assert!(
+                text.contains(&format!(
+                    "render_request_refusals_total{{check=\"{}\"}} 0",
+                    check.as_str()
+                )),
+                "{}",
+                check.as_str()
+            );
         }
     }
 }

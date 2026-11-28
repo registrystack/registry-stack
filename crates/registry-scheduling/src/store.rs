@@ -896,8 +896,14 @@ pub enum CommitError {
     KeyExpired,
     #[error("the caller holds more active holds than the hold policy allows")]
     HoldCeiling,
-    #[error("the task grant lapsed before the commitment")]
+    /// The target is not the caller's to change: another caller holds it, or
+    /// its source manager differs.
+    #[error("the target is not managed by this caller")]
     Unauthorized,
+    /// The task grant, or the access token that carried it, lapsed before the
+    /// commitment.
+    #[error("the task grant lapsed before the commitment")]
+    GrantLapsed,
     #[error("the observed revision does not match the current revision")]
     RevisionMismatch,
     #[error("the attendance observation time is in the future")]
@@ -3862,7 +3868,7 @@ fn check_grant_current_at(
 ) -> Result<(), CommitError> {
     match commitment.grant_exp_unix {
         Some(exp) if now.timestamp() < i64::try_from(exp).unwrap_or(i64::MAX) => Ok(()),
-        Some(_) => Err(CommitError::Unauthorized),
+        Some(_) => Err(CommitError::GrantLapsed),
         // A mutating commitment without a grant never reaches the store: the
         // service refuses it before the transaction opens.
         None => Ok(()),

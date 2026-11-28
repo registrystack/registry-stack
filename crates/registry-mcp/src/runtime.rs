@@ -17,7 +17,7 @@ use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::client::StaticToken;
 use registry_platform_oidc::{
     fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy, JwksFetcher,
-    JwksFetcherConfig, OidcDiscoveryConfig,
+    JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
 };
 use std::{fmt, future::Future, io, sync::Arc, time::Duration};
 use zeroize::Zeroizing;
@@ -85,8 +85,31 @@ fn secret_failure(field: String, reference: &str, error: &SecretError) -> Startu
     )
 }
 
-fn invalid_secret_value(field: String, cause: &'static str, remedy: &'static str) -> StartupError {
+fn invalid_secret_value(
+    field: String,
+    cause: impl Into<String>,
+    remedy: &'static str,
+) -> StartupError {
     startup_failure(field, cause, remedy)
+}
+
+/// Reads the static key document. A refusal of the document's own contents
+/// names what it refused, in words that carry no key material.
+fn static_key_fetcher(bytes: &[u8], field: String) -> Result<JwksFetcher, StartupError> {
+    let keys = parse_static_jwks(bytes).map_err(|error| {
+        let cause = match &error {
+            OidcError::StaticKeySet(refused) => {
+                format!("the resolved secret is not a usable JWKS document: {refused}")
+            }
+            _ => "the resolved secret is not a usable JWKS document".to_owned(),
+        };
+        invalid_secret_value(
+            field,
+            cause,
+            "Replace it with a bounded JSON Web Key Set containing the issuer's active verification keys.",
+        )
+    })?;
+    Ok(JwksFetcher::new_static(keys, JwksFetcherConfig::defaults()))
 }
 
 fn audit_failure(error: AuditError) -> StartupError {
@@ -178,14 +201,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                 document_ref,
                 "resourceServer.jwksSource.documentRef".to_owned(),
             )?;
-            let keys = parse_static_jwks(&bytes).map_err(|_| {
-                invalid_secret_value(
-                    "resourceServer.jwksSource.documentRef".to_owned(),
-                    "the resolved secret is not a usable JWKS document",
-                    "Replace it with a bounded JSON Web Key Set containing the issuer's active verification keys.",
-                )
-            })?;
-            JwksFetcher::new_static(keys, JwksFetcherConfig::defaults())
+            static_key_fetcher(&bytes, "resourceServer.jwksSource.documentRef".to_owned())?
         }
         JwksSource::Discovery {} => {
             let (discovery, network) = fetch_discovery_for_issuer(
@@ -498,6 +514,35 @@ mod tests {
     use registry_platform_config::SecretError;
 
     use super::*;
+
+    /// A public EC key as a provider publishes it, with members the verifier
+    /// does not read.
+    fn provider_key_set(extra: &str) -> Vec<u8> {
+        format!(
+            r#"{{"keys":[{{"kty":"EC","crv":"P-256","kid":"key-1","use":"sig","alg":"ES256","ext":true,"x5c":["MIIB"],"x5t":"abc","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"{extra}}}]}}"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn a_static_key_set_with_unknown_public_members_loads() {
+        static_key_fetcher(&provider_key_set(""), "field".to_owned())
+            .expect("a provider key set with ext and x5c members loads");
+    }
+
+    #[test]
+    fn a_static_key_set_with_a_private_member_is_refused_with_the_validator_text() {
+        let Err(error) = static_key_fetcher(
+            &provider_key_set(r#","d":"CANARY-PRIVATE""#),
+            "field".to_owned(),
+        ) else {
+            panic!("a private member is refused");
+        };
+        let error = error.to_string();
+        assert!(error.contains("not a usable JWKS document"), "{error}");
+        assert!(error.contains("private-key member \"d\""), "{error}");
+        assert!(!error.contains("CANARY-PRIVATE"), "{error}");
+    }
 
     #[test]
     fn missing_secret_and_malformed_key_have_distinct_value_free_guidance() {

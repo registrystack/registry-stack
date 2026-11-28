@@ -1230,10 +1230,16 @@ fn compile_binding<S: ArtifactSource + ?Sized>(
         &format!("{{{}}}", operation.record_type_parameter.as_str()),
         binding.record_type.as_str(),
     );
-    if concrete_method_path == crate::effective_contract::WELL_KNOWN_PATH {
+    if [
+        crate::effective_contract::WELL_KNOWN_PATH,
+        registry_platform_httputil::probe::HEALTH_PATH,
+        registry_platform_httputil::probe::READY_PATH,
+    ]
+    .contains(&concrete_method_path.as_str())
+    {
         return Err(not_served(
             UnservedReason::ReservedFacadePath,
-            "the facade path is reserved for the Adapter effective-contract route",
+            "the facade path is reserved for the Adapter effective-contract, health and ready routes",
         ));
     }
     let is_post_read =

@@ -1,0 +1,224 @@
+{
+  "bearer-with-two-spaces": {
+    "body": {
+      "code": "invalid-token",
+      "detail": "The access token is not valid for this resource.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer error=\"invalid_token\", resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
+  "bearer-without-token": {
+    "body": {
+      "code": "unauthorized",
+      "detail": "A bearer access token is required.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
+  "client-not-allowed": {
+    "body": {
+      "code": "invalid-token",
+      "detail": "The access token is not valid for this resource.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer error=\"invalid_token\", resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
+  "expired": {
+    "body": {
+      "code": "invalid-token",
+      "detail": "The access token is not valid for this resource.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer error=\"invalid_token\", resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
+  "host-not-admitted": {
+    "body": {
+      "code": "forbidden",
+      "detail": "The request's host or origin is not accepted.",
+      "status": 403,
+      "title": "Forbidden",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "key-set-unreachable": {
+    "body": {
+      "code": "temporarily-unavailable",
+      "detail": "The gateway cannot verify the request right now.",
+      "status": 503,
+      "title": "Service Unavailable",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 503
+  },
+  "no-authorization-header": {
+    "body": {
+      "code": "unauthorized",
+      "detail": "A bearer access token is required.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
+  "non-bearer-scheme": {
+    "body": {
+      "code": "unauthorized",
+      "detail": "A bearer access token is required.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
+  "not-a-jwt": {
+    "body": {
+      "code": "invalid-token",
+      "detail": "The access token is not valid for this resource.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer error=\"invalid_token\", resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
+  "origin-present": {
+    "body": {
+      "code": "forbidden",
+      "detail": "The request's host or origin is not accepted.",
+      "status": 403,
+      "title": "Forbidden",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
+  "rate-limited": {
+    "body": {
+      "code": "rate-limited",
+      "detail": "Too many requests; retry after the indicated delay.",
+      "status": 429,
+      "title": "Too Many Requests",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "retry-after": "present"
+    },
+    "status": 429
+  },
+  "repeated-authorization-header": {
+    "body": {
+      "code": "invalid-token",
+      "detail": "The access token is not valid for this resource.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer error=\"invalid_token\", resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
+  "scope-missing": {
+    "body": {
+      "code": "insufficient-scope",
+      "detail": "The access token lacks a required scope.",
+      "status": 403,
+      "title": "Forbidden",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer error=\"insufficient_scope\", scope=\"test:read\", resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 403
+  },
+  "unreadable-authorization-header": {
+    "body": {
+      "code": "invalid-token",
+      "detail": "The access token is not valid for this resource.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer error=\"invalid_token\", resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
+  "wrong-audience": {
+    "body": {
+      "code": "invalid-token",
+      "detail": "The access token is not valid for this resource.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer error=\"invalid_token\", resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  }
+}

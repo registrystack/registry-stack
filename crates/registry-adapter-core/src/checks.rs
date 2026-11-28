@@ -6995,7 +6995,7 @@ fn check_token_endpoint(
 /// address, so the parse below would read every IPv6 loopback as
 /// non-loopback.
 fn is_loopback_origin(url: &registry_platform_yaml::Url) -> bool {
-    literal_origin_address(url).is_some_and(|address| address.is_loopback())
+    literal_origin_address(url).is_some_and(registry_platform_httputil::loopback::loopback_address)
 }
 
 /// The address literal a bound origin's host carries, when it carries
@@ -7016,14 +7016,9 @@ fn literal_origin_address(url: &registry_platform_yaml::Url) -> Option<std::net:
 /// load cannot disagree about the exception.
 #[must_use]
 pub fn loopback_exception_origin(url: &registry_platform_yaml::Url) -> bool {
-    let parsed = url.to_url();
-    if parsed
+    url.to_url()
         .host_str()
-        .is_some_and(|host| host.eq_ignore_ascii_case("localhost"))
-    {
-        return true;
-    }
-    literal_origin_address(url).is_some_and(|address| address.is_loopback())
+        .is_some_and(|host| registry_platform_httputil::loopback::loopback_host(host).is_some())
 }
 
 /// The one plain-HTTP rule:
@@ -7048,9 +7043,9 @@ pub fn plain_http_origin_admitted(
         // A named host resolves at send, where the same containment rule
         // runs on the answers; the check cannot resolve, so it defers to the
         // send. With an empty `allowedPrivateCidrs` the send admits no
-        // private address, and the destination policy refuses the origin
-        // when the runtime freezes it, naming the missing range.
-        None => true,
+        // private address, so the check refuses the origin and names the
+        // missing range.
+        None => !allowed_private_cidrs.is_empty(),
     }
 }
 
@@ -13978,6 +13973,41 @@ mod tests {
         assert!(
             !codes(&check_runtime(&ws, &named)).contains(&CheckCode::RuntimeInsecureOrigin.code())
         );
+        // With no declared CIDR the send admits no private address, so the
+        // check refuses the named host and names the missing range.
+        let undeclared = runtime_builder(vec![oauth_binding("http://internal-api:8080")]);
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.runtime = Some(&undeclared);
+        assert_has(
+            &check_runtime(&ws, &undeclared),
+            CheckCode::RuntimeInsecureOrigin,
+        );
+        // Every loopback spelling is the loopback exception; a name that only
+        // looks like it is a named host.
+        for origin in [
+            "http://localhost:8081",
+            "http://127.0.0.2:8081",
+            "http://[::1]:8081",
+            "http://[::ffff:127.0.0.1]:8081",
+        ] {
+            let spelled = runtime_builder(vec![oauth_binding(origin)]);
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&spelled);
+            assert!(
+                !codes(&check_runtime(&ws, &spelled))
+                    .contains(&CheckCode::RuntimeInsecureOrigin.code()),
+                "{origin}"
+            );
+        }
+        for origin in ["http://a.localhost:8081", "http://localhost.:8081"] {
+            let spelled = runtime_builder(vec![oauth_binding(origin)]);
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&spelled);
+            assert_has(
+                &check_runtime(&ws, &spelled),
+                CheckCode::RuntimeInsecureOrigin,
+            );
+        }
     }
 
     #[test]

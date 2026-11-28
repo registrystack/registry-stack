@@ -1848,7 +1848,7 @@ async fn review_task_grant_approval_recovers_a_lost_response_after_the_task_revi
         f.store
             .approve_review_task_grant(&actor, "lost-response", grant)
             .await,
-        Err(StoreError::Forbidden)
+        Err(StoreError::Forbidden(_))
     ));
 
     f.admin

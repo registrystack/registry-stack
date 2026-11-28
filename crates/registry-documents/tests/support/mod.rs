@@ -66,6 +66,7 @@ pub struct Deployment {
     erasure: &'static str,
     extra: String,
     hooks_url: String,
+    allowed_clients: String,
 }
 
 impl Deployment {
@@ -122,6 +123,9 @@ impl Deployment {
             erasure: "active",
             extra: String::new(),
             hooks_url: UNREACHABLE_HOOKS_URL.to_owned(),
+            allowed_clients:
+                "[civil-registry-app, citizen-portal, case-portal, partner-portal, partner-service]"
+                    .to_owned(),
         };
         deployment.secret("runtime-database-url", runtime_url.unwrap_or(&scoped_url));
         deployment.secret("migration-database-url", &scoped_url);
@@ -180,6 +184,13 @@ impl Deployment {
         self.write_runtime();
     }
 
+    /// Write `allowedClients: from-package`, so the runtime admits exactly the
+    /// requester clients the package names and the file lists none.
+    pub fn admit_package_clients(&mut self) {
+        self.allowed_clients = "from-package".to_owned();
+        self.write_runtime();
+    }
+
     /// Append `block`, top-level runtime keys, to the runtime document.
     pub fn configure(&mut self, block: &str) {
         self.extra = block.to_owned();
@@ -211,7 +222,7 @@ authentication:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:documents
     scopeClaim: scope
-    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal, partner-service]
+    allowedClients: {allowed_clients}
     jwksSource:
       type: static
       documentRef: secret:file/jwks.json
@@ -237,6 +248,7 @@ destinations:
             erasure = self.erasure,
             extra = self.extra,
             hooks_url = self.hooks_url,
+            allowed_clients = self.allowed_clients,
         );
         std::fs::write(&self.runtime, document).unwrap();
     }

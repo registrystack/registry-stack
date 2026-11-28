@@ -25,9 +25,13 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use registry_platform_authcommon::{
+    record_refusal, BearerParseError, FailedCheck, RefusalNote, RefusalRecorder,
+};
 use registry_platform_httpsec::{
     normalize_framework_rejection, FrameworkRejection, ProblemBody, TraceContext,
 };
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 use std::{future::Future, sync::Arc, time::Duration};
@@ -118,12 +122,13 @@ where
     }
 }
 pub fn router(state: HttpState) -> Router {
+    let refusals = state.store.metrics().refusal_recorder().clone();
     let ready_state = state.clone();
     let ready_bindings = Arc::new(BindingReadiness::default());
     let routes = Router::new()
-        .route("/health", get(|| async { Json(json!({"live":true})) }))
+        .route(HEALTH_PATH, get(|| async { Json(live_body()) }))
         .route(
-            "/ready",
+            READY_PATH,
             get(move || ready(ready_state.clone(), ready_bindings.clone())),
         )
         .route("/v1/workflows/{workflow}", get(workflow_contract))
@@ -151,12 +156,12 @@ pub fn router(state: HttpState) -> Router {
             post(crate::event_trigger::receive),
         )
         .with_state(state);
-    http_edge(routes, signed_events)
+    http_edge(routes, signed_events, refusals)
 }
 /// Every route takes at most 128 KiB, except the signed event route, which
 /// takes up to the Version 1 signable bound so every event a producer can sign
 /// reaches the verifier.
-fn http_edge(router: Router, signed_events: Router) -> Router {
+fn http_edge(router: Router, signed_events: Router, refusals: Arc<RefusalRecorder>) -> Router {
     let signable = crate::event_trigger::MAXIMUM_EVENT_BYTES;
     router
         .layer(DefaultBodyLimit::max(131_072))
@@ -168,6 +173,7 @@ fn http_edge(router: Router, signed_events: Router) -> Router {
         )
         .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
+        .layer(middleware::from_fn_with_state(refusals, record_refusals))
         .layer(middleware::from_fn(http_boundary))
         .layer(registry_platform_httpsec::security_headers(
             registry_platform_httpsec::CspBuilder::deny_by_default(),
@@ -184,6 +190,22 @@ async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Nex
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+/// The one point where a refusal is counted and logged. A refusal answer
+/// carries a `RefusalNote` in its response extensions, which is not part of
+/// the serialized answer. The log line carries the fixed check and the request
+/// trace, so it runs inside the request's trace scope and outside any span.
+async fn record_refusals(
+    State(refusals): State<Arc<RefusalRecorder>>,
+    request: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let response = next.run(request).await;
+    if let Some(note) = response.extensions().get::<RefusalNote>() {
+        let trace = current_trace();
+        record_refusal!(refusals, *note, trace_id = trace.trace_id);
+    }
     response
 }
 /// Framework rejections carry axum's own bodies, which no Coordinator caller
@@ -225,7 +247,36 @@ pub(crate) fn problem(error: CoordinatorError) -> Response {
             "the service answered a server problem"
         );
     }
-    problem_response(problem)
+    let check = refusal_check(&error, problem);
+    let mut response = problem_response(problem);
+    if let Some(check) = check {
+        response.extensions_mut().insert(RefusalNote::new(check));
+    }
+    response
+}
+/// The check that refused the caller, for the answers that refuse one: a 401
+/// or 403, a service outage of the token verifier, and a concealed run. A run
+/// that is absent or not visible is one code in every store path, so the
+/// member is set here. Any other refusal must carry its member from the
+/// constructor; one that does not is a defect and is reported, not counted
+/// under a guess.
+fn refusal_check(error: &CoordinatorError, problem: ProblemCode) -> Option<FailedCheck> {
+    if error.check.is_some() {
+        return error.check;
+    }
+    match problem {
+        ProblemCode::RunNotVisible => Some(FailedCheck::Visibility),
+        ProblemCode::AuthenticationRefused
+        | ProblemCode::OperationNotAuthorized
+        | ProblemCode::EventUnauthenticated => {
+            tracing::error!(
+                code = %error.code,
+                "a caller refusal carries no failed check and was not counted"
+            );
+            None
+        }
+        _ => None,
+    }
 }
 pub(crate) fn current_trace() -> TraceContext {
     REQUEST_TRACE
@@ -321,15 +372,39 @@ pub(crate) async fn caller(s: &HttpState, headers: &HeaderMap) -> Result<Caller>
     result
 }
 async fn authenticated_caller(s: &HttpState, headers: &HeaderMap) -> Result<Caller> {
-    let token = single_header(headers, axum::http::header::AUTHORIZATION.as_str())
-        .and_then(|value| registry_platform_authcommon::parse_bearer_token(value).ok())
-        .ok_or_else(|| {
-            CoordinatorError::new(
-                "access.unauthenticated",
-                "a verified access token is required",
-            )
-        })?;
+    let token = bearer_token(headers).map_err(crate::access::unauthenticated)?;
     s.authenticator.authenticate(token).await
+}
+/// The bearer credential an `Authorization` header carries, or the check that
+/// refuses it: no header, or not the Bearer scheme, is a missing credential. A
+/// repeated, unreadable or misshapen header is a malformed one.
+pub(crate) fn bearer_token(headers: &HeaderMap) -> std::result::Result<&str, FailedCheck> {
+    let mut values = headers.get_all(axum::http::header::AUTHORIZATION).iter();
+    let Some(value) = values.next() else {
+        return Err(FailedCheck::CredentialMissing);
+    };
+    if values.next().is_some() {
+        return Err(FailedCheck::CredentialMalformed);
+    }
+    let value = value
+        .to_str()
+        .map_err(|_| FailedCheck::CredentialMalformed)?;
+    registry_platform_authcommon::parse_bearer_token(value).map_err(|error| match error {
+        BearerParseError::InvalidScheme => FailedCheck::CredentialMissing,
+        _ => FailedCheck::CredentialMalformed,
+    })
+}
+/// The shared probe object with the member this service has always answered.
+fn probe_body(shared: &str, member: &str) -> Value {
+    let mut body: Value = serde_json::from_str(shared).expect("shared probe bodies are JSON");
+    body[member] = json!(true);
+    body
+}
+fn live_body() -> Value {
+    probe_body(HEALTH_BODY, "live")
+}
+fn ready_body() -> Value {
+    probe_body(READY_BODY, "ready")
 }
 async fn ready(s: HttpState, bindings: Arc<BindingReadiness>) -> Response {
     if !s.recovery_only
@@ -341,7 +416,7 @@ async fn ready(s: HttpState, bindings: Arc<BindingReadiness>) -> Response {
             .check(|| s.store.check_runtime_bindings(&s.runtime))
             .await
     {
-        (StatusCode::OK, Json(json!({"ready":true}))).into_response()
+        (StatusCode::OK, Json(ready_body())).into_response()
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -661,6 +736,7 @@ mod problem_tests {
                     }),
                 ),
                 Router::new(),
+                Arc::new(RefusalRecorder::new("coordinator").unwrap()),
             )
         };
         let traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
@@ -712,6 +788,7 @@ mod problem_tests {
                     "/v1/events/{workflow}/{trigger}",
                     post(|body: axum::body::Bytes| async move { body.len().to_string() }),
                 ),
+                Arc::new(RefusalRecorder::new("coordinator").unwrap()),
             )
         };
         let signable = crate::event_trigger::MAXIMUM_EVENT_BYTES;
@@ -773,6 +850,31 @@ mod problem_tests {
             .unwrap()
             .values()
             .flat_map(|path| path.as_object().unwrap().iter())
+    }
+
+    #[test]
+    fn probe_bodies_keep_their_own_member_and_add_the_shared_status() {
+        assert_eq!(live_body(), json!({"live":true,"status":"ok"}));
+        assert_eq!(ready_body(), json!({"ready":true,"status":"ready"}));
+    }
+
+    #[test]
+    fn probe_routes_use_the_shared_paths() {
+        let document = openapi();
+        for (path, key, word) in [
+            (registry_platform_httputil::probe::HEALTH_PATH, "live", "ok"),
+            (
+                registry_platform_httputil::probe::READY_PATH,
+                "ready",
+                "ready",
+            ),
+        ] {
+            let schema = &document["paths"][path]["get"]["responses"]["200"]["content"]
+                ["application/json"]["schema"];
+            assert_eq!(schema["required"], json!([key, "status"]), "{path}");
+            assert_eq!(schema["properties"][key]["type"], "boolean", "{path}");
+            assert_eq!(schema["properties"]["status"]["const"], word, "{path}");
+        }
     }
 
     #[test]
@@ -1789,9 +1891,9 @@ pub fn openapi() -> Value {
     );
     paths[registry_review_protocol::REVIEW_COMPLETIONS_PATH]["post"]["responses"] =
         Value::Object(responses);
-    for (path, key) in [("/health", "live"), ("/ready", "ready")] {
+    for (path, key, word) in [(HEALTH_PATH, "live", "ok"), (READY_PATH, "ready", "ready")] {
         let mut responses = problem_responses(&[ProblemCode::RequestMethodNotAllowed]);
-        responses.insert("200".into(), json!({"description":"Health result","content":{"application/json":{"schema":{"type":"object","required":[key],"properties":{key:{"type":"boolean"}}}}}}));
+        responses.insert("200".into(), json!({"description":"Health result","content":{"application/json":{"schema":{"type":"object","required":[key,"status"],"properties":{key:{"type":"boolean"},"status":{"const":word}}}}}}));
         responses.insert(
             "503".into(),
             json!({"description":"Deployment unavailable or in recovery hold"}),
@@ -1838,4 +1940,265 @@ pub fn openapi() -> Value {
     schemas["CheckNowResult"] = json!({"type":"object","required":["runId","step","nextObservationAt","observations","observationLimit"],"properties":{"runId":{"type":"string","format":"uuid"},"step":{"type":"string"},"nextObservationAt":{"type":["string","null"],"format":"date-time","description":"When the early read is due, no sooner than the read floor after the last read; null while a read is already in flight."},"observations":{"type":"integer","minimum":0},"observationLimit":{"type":"integer","minimum":1}}});
     admission_contracts::extend(&mut paths, &mut schemas);
     json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION"),"description":"Registry Coordinator HTTP contract. Refusals use the closed problem vocabulary."},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."},"eventSource":{"type":"apiKey","in":"header","name":"X-Registry-Signature","description":"The platform v1 HMAC delivery signature, bound to the canonical envelope, signed delivery headers, HTTP method and exact request target. The configured event source key is separate from caller bearer tokens."}},"schemas":schemas},"paths":paths})
+}
+
+#[cfg(test)]
+mod refusal_recording_tests {
+    use super::*;
+    use registry_platform_metrics::Exposition;
+    use std::sync::Mutex;
+
+    /// A value no refusal may carry into the counter or the log.
+    const CANARY: &str = "canary-subject-7f3a91";
+
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn exposition(recorder: &RefusalRecorder) -> String {
+        let mut out = Exposition::new();
+        recorder.counter().write(&mut out).unwrap();
+        out.finish()
+    }
+
+    /// Send one request through the edge. Returns the status, the body, the
+    /// counter exposition and the captured log.
+    async fn refused(error: CoordinatorError) -> (StatusCode, Value, String, String) {
+        use tower::ServiceExt as _;
+        let recorder = Arc::new(RefusalRecorder::new("coordinator").unwrap());
+        let error = Arc::new(Mutex::new(Some(error)));
+        let app = http_edge(
+            Router::new().route(
+                "/v1/refuse",
+                get(move || async move { problem(error.lock().unwrap().take().unwrap()) }),
+            ),
+            Router::new(),
+            recorder.clone(),
+        );
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/refuse")
+                    .header(
+                        "traceparent",
+                        "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+                    )
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap();
+        let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        (status, body, exposition(&recorder), log)
+    }
+
+    #[tokio::test]
+    async fn every_refusal_the_service_answers_is_counted_and_logged_under_its_check() {
+        for (error, status, code, check) in [
+            (
+                crate::access::unauthenticated(FailedCheck::CredentialMissing),
+                401,
+                "authentication.refused",
+                "credential-missing",
+            ),
+            (
+                crate::access::unauthenticated(FailedCheck::TokenSignature),
+                401,
+                "authentication.refused",
+                "token-signature",
+            ),
+            (
+                CoordinatorError::new("access.unavailable", CANARY)
+                    .failing(FailedCheck::KeySourceUnavailable),
+                503,
+                "service.unavailable",
+                "key-source-unavailable",
+            ),
+            (
+                CoordinatorError::new("access.denied", CANARY).failing(FailedCheck::Operation),
+                403,
+                "operation.not-authorized",
+                "operation",
+            ),
+            (
+                CoordinatorError::new("access.denied", CANARY).failing(FailedCheck::Scope),
+                403,
+                "operation.not-authorized",
+                "scope",
+            ),
+            (
+                CoordinatorError::new("event-unauthenticated", CANARY)
+                    .failing(FailedCheck::DeliverySignature),
+                401,
+                "event.unauthenticated",
+                "delivery-signature",
+            ),
+            (
+                // Every store path raises this one code for a run the caller
+                // cannot see, so the member is set where the answer is made.
+                CoordinatorError::new("run-absent", CANARY),
+                404,
+                "run.not-visible",
+                "visibility",
+            ),
+        ] {
+            let (answered, body, counters, log) = refused(error).await;
+            assert_eq!(answered.as_u16(), status, "{check}");
+            assert_eq!(body["code"], code, "{check}");
+            assert_eq!(body["traceId"], "0af7651916cd43dd8448eb211c80319c");
+            assert!(
+                counters.lines().any(|line| line
+                    == format!("coordinator_request_refusals_total{{check=\"{check}\"}} 1")),
+                "{check}: {counters}"
+            );
+            assert_eq!(
+                counters.lines().filter(|line| line.ends_with(" 1")).count(),
+                1,
+                "{check}: one series moved"
+            );
+            assert_eq!(
+                log.lines()
+                    .filter(|line| line.contains("request refused"))
+                    .count(),
+                1,
+                "{check}: {log}"
+            );
+            for field in [
+                "request refused",
+                "decision=\"refused\"",
+                &format!("failed_check=\"{check}\""),
+                "suppressed=0",
+                "trace_id=0af7651916cd43dd8448eb211c80319c",
+            ] {
+                assert!(log.contains(field), "{check}: {field} in {log}");
+            }
+            assert!(!log.contains(CANARY), "{check}: {log}");
+            assert!(!body.to_string().contains(CANARY), "{check}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_is_not_a_caller_refusal_is_not_counted() {
+        for error in [
+            CoordinatorError::new("request.invalid", CANARY),
+            CoordinatorError::new("store-unavailable", CANARY),
+        ] {
+            let (_, _, counters, log) = refused(error).await;
+            assert!(
+                counters
+                    .lines()
+                    .all(|line| line.starts_with('#') || line.ends_with(" 0")),
+                "{counters}"
+            );
+            assert!(!log.contains("request refused"), "{log}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_caller_refusal_without_a_check_is_reported_and_not_counted_under_a_guess() {
+        let (status, _, counters, log) =
+            refused(CoordinatorError::new("access.denied", CANARY)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(
+            counters
+                .lines()
+                .all(|line| line.starts_with('#') || line.ends_with(" 0")),
+            "{counters}"
+        );
+        assert!(log.contains("carries no failed check"), "{log}");
+        assert!(!log.contains(CANARY), "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_policy_denial_after_authentication_is_counted() {
+        use tower::ServiceExt as _;
+        // The gap the authentication counter left: `Caller::authorize` runs
+        // after the caller is resolved, so its denial reached no counter.
+        let recorder = Arc::new(RefusalRecorder::new("coordinator").unwrap());
+        let app = http_edge(
+            Router::new().route(
+                "/v1/denied",
+                get(|| async {
+                    let caller =
+                        crate::access::synthetic_caller(vec![Action::Start], &["workflow"], false);
+                    answer(
+                        caller
+                            .authorize(Action::Start, Some("another-workflow"))
+                            .map(|()| json!({})),
+                    )
+                }),
+            ),
+            Router::new(),
+            recorder.clone(),
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/denied")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(exposition(&recorder)
+            .contains("coordinator_request_refusals_total{check=\"operation\"} 1"));
+    }
+
+    #[test]
+    fn the_authorization_header_names_a_missing_or_a_malformed_credential() {
+        let headers = |values: &[&'static [u8]]| {
+            let mut headers = HeaderMap::new();
+            for value in values {
+                headers.append(
+                    axum::http::header::AUTHORIZATION,
+                    HeaderValue::from_bytes(value).unwrap(),
+                );
+            }
+            headers
+        };
+        assert_eq!(
+            bearer_token(&headers(&[])),
+            Err(FailedCheck::CredentialMissing)
+        );
+        assert_eq!(
+            bearer_token(&headers(&[b"Basic c3ludGhldGlj"])),
+            Err(FailedCheck::CredentialMissing)
+        );
+        for malformed in [
+            &[b"Bearer a-token" as &[u8], b"Bearer another-token"][..],
+            &[b"Bearer"],
+            &[b"Bearer  two-spaces"],
+            &[b"Bearer "],
+            &[b"Bearer has space"],
+            &[b"Bearer \xff\xfe"],
+        ] {
+            assert_eq!(
+                bearer_token(&headers(malformed)),
+                Err(FailedCheck::CredentialMalformed),
+                "{malformed:?}"
+            );
+        }
+        assert_eq!(bearer_token(&headers(&[b"Bearer a-token"])), Ok("a-token"));
+    }
 }

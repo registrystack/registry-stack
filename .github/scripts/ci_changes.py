@@ -607,6 +607,25 @@ NATIVE_BINDING_PACKAGES = (
 # spread across parallel `postgres:i/N` shard lanes — the runner's owned
 # target lists cover every test exactly once across the shard set.
 BREG_POSTGRES_SHARDS = 3
+# The packages whose provisioning journey runs against the contracts-journeys
+# lane's TLS-only PostgreSQL service, and the inputs that select that lane.
+PROVISION_JOURNEY_PACKAGES = (
+    "registry-bregctl",
+    "registry-caseworkctl",
+    "registry-coordinator",
+    "registry-documentsctl",
+    "registry-messagingctl",
+    "registry-schedulingctl",
+)
+PROVISION_JOURNEY_INPUTS = (
+    *(f"crates/{package}/src/provision.rs" for package in PROVISION_JOURNEY_PACKAGES),
+    *(f"crates/{package}/tests/provision*.rs" for package in PROVISION_JOURNEY_PACKAGES),
+    "crates/registry-casework/migrations/**",
+    "crates/registry-documents/migrations/**",
+    "crates/registry-messaging/migrations/**",
+    "crates/registry-scheduling/migrations/**",
+)
+
 BREG_CONTRACTS_LANES = (
     "contracts",
     "contracts-journeys",
@@ -1671,7 +1690,12 @@ def classify(
     # joins only the breg_contracts output: breg_integration and
     # casework_postgres read the selection above, so the provisioning crate
     # on its own does not select them.
-    provision_postgres = "registry-platform-provision" in affected
+    # Each product's provisioning journey runs in the same lane after the
+    # suite, so a product's provision command, its journey or its migrations
+    # select the lane too.
+    provision_postgres = "registry-platform-provision" in affected or any(
+        matches(path, *PROVISION_JOURNEY_INPUTS) for path in paths
+    )
 
     outputs = {
         "full_sweep": full_sweep,

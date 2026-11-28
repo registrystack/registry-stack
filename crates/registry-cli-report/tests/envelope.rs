@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_cli_report::{json_requested, Report, Status};
+use registry_platform_posture::{DeclaredPosture, Posture, PostureSource};
 use serde_json::{json, Value};
 
 fn members() -> Value {
@@ -88,4 +89,81 @@ fn panic_output_selection_understands_both_format_spellings_and_the_terminator()
             args.into_iter().map(std::ffi::OsString::from)
         ));
     }
+}
+
+fn declared(posture: Posture, source: PostureSource) -> DeclaredPosture {
+    DeclaredPosture { posture, source }
+}
+
+#[test]
+fn a_report_without_posture_is_unchanged() {
+    let value = members();
+    let rendered = serde_json::to_string(&Report::new(&value, "1.0.0-dev").unwrap()).unwrap();
+    assert_eq!(
+        rendered,
+        concat!(
+            r#"{"ok":true,"command":"check","status":"complete","#,
+            r#""apiVersion":"format/v1","kind":"CtlReport","version":"1.0.0-dev","#,
+            r#""filesChecked":2,"diagnostics":[]}"#
+        )
+    );
+}
+
+#[test]
+fn with_posture_adds_value_and_source_after_the_command_members() {
+    let value = members();
+    let report = Report::new(&value, "1.0.0-dev")
+        .unwrap()
+        .with_posture(declared(Posture::Production, PostureSource::Default));
+    let rendered = serde_json::to_string(&report).unwrap();
+    assert_eq!(
+        rendered,
+        concat!(
+            r#"{"ok":true,"command":"check","status":"complete","#,
+            r#""apiVersion":"format/v1","kind":"CtlReport","version":"1.0.0-dev","#,
+            r#""filesChecked":2,"posture":{"value":"production","source":"default"},"#,
+            r#""diagnostics":[]}"#
+        )
+    );
+}
+
+#[test]
+fn posture_value_and_source_use_the_documented_spellings() {
+    for (posture, value) in [
+        (Posture::Development, "development"),
+        (Posture::Production, "production"),
+    ] {
+        for (source, word) in [
+            (PostureSource::Flag, "flag"),
+            (PostureSource::Environment, "environment"),
+            (PostureSource::Default, "default"),
+        ] {
+            let envelope = members();
+            let report = serde_json::to_value(
+                Report::new(&envelope, "1.0.0")
+                    .unwrap()
+                    .with_posture(declared(posture, source)),
+            )
+            .unwrap();
+            assert_eq!(report["posture"], json!({"value": value, "source": word}));
+        }
+    }
+}
+
+#[test]
+fn the_declared_posture_replaces_a_command_member_of_the_same_name() {
+    let mut envelope = members();
+    envelope["posture"] = json!("free text");
+    let rendered = serde_json::to_string(
+        &Report::new(&envelope, "1.0.0")
+            .unwrap()
+            .with_posture(declared(Posture::Development, PostureSource::Flag)),
+    )
+    .unwrap();
+    assert_eq!(rendered.matches("\"posture\"").count(), 1, "{rendered}");
+    let report: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(
+        report["posture"],
+        json!({"value": "development", "source": "flag"})
+    );
 }

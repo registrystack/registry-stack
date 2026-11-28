@@ -1168,8 +1168,8 @@ fn config_error(field: &str, action: &str) -> CoordinatorError {
 }
 fn is_loopback(url: &Url) -> bool {
     match url.host() {
-        Some(Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(Host::Ipv4(ip)) => registry_platform_httputil::loopback::loopback_address(ip.into()),
+        Some(Host::Ipv6(ip)) => registry_platform_httputil::loopback::loopback_address(ip.into()),
         _ => false,
     }
 }
@@ -1448,4 +1448,33 @@ fn serialize_database<S: serde::Serializer>(
         map.serialize_entry("testOnlyPlaintext", &true)?;
     }
     map.end()
+}
+
+#[cfg(test)]
+mod loopback_tests {
+    use super::*;
+
+    #[test]
+    fn loopback_endpoints_are_the_shared_numeric_literals_and_never_names() {
+        for loopback in [
+            "http://127.0.0.1:8080",
+            "http://127.9.9.9:8080",
+            "http://[::1]:8080",
+            "http://[::ffff:127.0.0.1]:8080",
+        ] {
+            let url = Url::parse(loopback).unwrap();
+            assert!(is_loopback(&url), "{loopback}");
+            check_endpoint(&url).unwrap_or_else(|error| panic!("{loopback}: {error}"));
+        }
+        for other in [
+            "http://localhost:8080",
+            "http://10.0.0.1:8080",
+            "http://[::ffff:10.0.0.1]:8080",
+            "http://example.test:8080",
+        ] {
+            let url = Url::parse(other).unwrap();
+            assert!(!is_loopback(&url), "{other}");
+            assert!(check_endpoint(&url).is_err(), "{other}: cleartext refused");
+        }
+    }
 }

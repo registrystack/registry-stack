@@ -574,7 +574,7 @@ async fn directory_revocation_during_source_io_is_rechecked_in_both_paths() {
             Ok(page) => assert!(page.items.is_empty()),
             Err(error) => assert!(matches!(
                 error,
-                ReviewRuntimeError::Forbidden
+                ReviewRuntimeError::Forbidden(_)
                     | ReviewRuntimeError::NotFound
                     | ReviewRuntimeError::ResultExpired
             )),

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - operator
@@ -303,16 +303,16 @@ versions, a package that was not applied, and a database that names another `dat
 route instead:
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8105/readyz
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8105/ready
 ```
 
 ```text
 200
 ```
 
-`/readyz` answers unavailable while PostgreSQL is unreachable, while the schema is not the one
+`/ready` answers unavailable while PostgreSQL is unreachable, while the schema is not the one
 this release expects, and while the audit destination refuses writes, because no booking proceeds
-without its audit entry.
+without its audit entry. `/readyz` answers the same way with an empty body.
 
 ## Read the deployment
 
@@ -359,6 +359,7 @@ the series below and nothing else. The public listener does not route `/metrics`
 | `scheduling_hook_oldest_pending_age_seconds` | none | Gauge of how many seconds ago the oldest pending hook delivery's event was captured. Zero when none is pending |
 | `scheduling_worker_last_success_age_seconds` | `worker`: `hold-expiry`, `retention` | Gauge of seconds since the worker last finished a pass |
 | `scheduling_metrics_sample_failures_total` | `queue`: `outbox`, `hook-deliveries` | Scrapes in which that queue could not be read |
+| `scheduling_request_refusals_total` | `check`: the closed set of 45 failed checks, every value published at zero | Requests refused, by the check that failed. Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute, with `suppressed` counting what a window held back. Neither carries a token, claim, client, subject or identifier |
 
 Every state is listed, with a zero when no row is in it. Watch
 `scheduling_outbox_items{state="dead-lettered"}` and
@@ -445,7 +446,7 @@ to a new, empty database; the old ledger is not carried over.
 {/* Evidence: crates/registry-schedulingctl/src/{activation,records,intents}.rs;
     crates/registry-scheduling/src/store/activation.rs, publication and PolicyInUse;
     crates/registry-scheduling/src/runtime.rs, startup ready() and check_active_package(), workers
-    and retention; crates/registry-scheduling/src/http.rs, readyz();
+    and retention; crates/registry-scheduling/src/http.rs, ready() and readyz();
     crates/registry-schedulingctl/src/project.rs, package(); crates/registry-platform-config/src/loader.rs,
     validate_absolute_lexical_path(); crates/registry-scheduling/src/config.rs. Success lines observed with scheduling 0.42.0-dev against
     PostgreSQL 17, the standalone-exact-time project, and single-role credentials. */}

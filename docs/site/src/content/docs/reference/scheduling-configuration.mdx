@@ -561,14 +561,14 @@ separate connection that changes nothing:
   `service.unavailable`, because it may have taken effect.
   A retry under the same idempotency key then replays whatever committed.
 
-`/readyz` reports unavailable while the destination refuses writes.
+`/ready` and `/readyz` report unavailable while the destination refuses writes.
 An expired hold writes its history entry as `system` and no audit entry.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs AuditConfig,
     the_audit_block_takes_a_file_or_stdout_destination, MAXIMUM_AUDIT_ROTATE_BYTES;
     crates/registry-scheduling/src/audit.rs; crates/registry-scheduling/src/service.rs
     commitment.unfinished, idempotency.expired;
-    crates/registry-scheduling/src/http.rs readyz;
+    crates/registry-scheduling/src/http.rs ready and readyz;
     crates/registry-scheduling/tests/postgres_commitments.rs. */}
 
 ## Destinations

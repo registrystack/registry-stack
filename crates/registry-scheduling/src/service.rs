@@ -19,6 +19,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use registry_platform_audit::{
     AuditKeyHasher, AuditRequest, AuthorizationAuditEvent, AuthorizationOutcome,
 };
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_calendar::CalendarInterval;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_oidc::{
@@ -165,16 +166,41 @@ pub enum CommitmentAnswer<T> {
     Replay { status_code: u16, receipt: Value },
 }
 
+pub use crate::refusal::RefusalCode;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
-    /// The refusal the caller sees, in its public projection. Every service
-    /// failure, internal bound, and cursor verdict lands here too: the edge
-    /// renders one problem shape.
-    #[error("the request was refused: {}", .0.code())]
+    /// The answer the caller sees, in its public projection, for every
+    /// service failure, internal bound, and cursor verdict that is not a
+    /// refusal of authority: the edge renders one problem shape. A code for
+    /// which `RefusalCode::of` answers `Some` is built as `Refused`.
+    #[error("the request was answered: {}", .0.code())]
     Problem(ProblemCode),
+    /// A refusal of authority, with the check it failed.
+    #[error("the request was refused: {}", .code.problem().code())]
+    Refused {
+        code: RefusalCode,
+        check: FailedCheck,
+    },
 }
 
 impl ServiceError {
+    /// The refusal that conceals a target the caller may not see: the row is
+    /// absent or foreign, and the answer does not say which.
+    fn not_visible() -> Self {
+        Self::Refused {
+            code: RefusalCode::OperationNotAuthorized,
+            check: FailedCheck::Visibility,
+        }
+    }
+
+    fn operation_refused(check: FailedCheck) -> Self {
+        Self::Refused {
+            code: RefusalCode::OperationNotAuthorized,
+            check,
+        }
+    }
+
     fn internal(reason: &'static str) -> Self {
         tracing::error!(reason, "the Scheduling service hit an internal bound");
         Self::Problem(ProblemCode::ServiceUnavailable)
@@ -1103,7 +1129,7 @@ impl SchedulingService {
         let hold = self
             .hold(hold_id)
             .await?
-            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
+            .ok_or_else(ServiceError::not_visible)?;
         let offering = self.claim_offering(&hold, now).await?;
         let grant = self
             .require_permission(caller, &offering, HOLD_RELEASE_ACTION)
@@ -1126,7 +1152,7 @@ impl SchedulingService {
             self.commitment(caller, &actor, &grant, &release_key, &request_hash, now, 0)?;
         commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(
+            .audit_named_request(
                 caller,
                 &grant,
                 HOLD_RELEASE_ACTION,
@@ -1193,7 +1219,7 @@ impl SchedulingService {
         let hold = self
             .hold(hold_id)
             .await?
-            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
+            .ok_or_else(ServiceError::not_visible)?;
         let offering = self.policy.offering(&hold.offering).ok_or_else(|| {
             ServiceError::internal("a committed hold names no offering in the policy")
         })?;
@@ -1249,7 +1275,7 @@ impl SchedulingService {
         )?;
         commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, operation, now, assisted)
+            .audit_named_request(caller, &grant, operation, now, assisted)
             .await?;
         let outcome = match (&supply, confirmation_request.as_ref()) {
             (ResolvedRequestSupply::Exact(bundle), Some(request)) => {
@@ -1566,19 +1592,31 @@ impl SchedulingService {
         let claim = self
             .booking(appointment_id)
             .await?
-            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
+            .ok_or_else(ServiceError::not_visible)?;
         match claim.source_manager.as_ref() {
             None if admission == DetailAdmission::ReadsScope
                 && claim.is_owned_by(&caller.issuer, &caller.subject) => {}
             None if claim.owner.is_some() => {
                 let offering = self.claim_offering(&claim, now).await?;
-                let grant = self
+                let grant = match self
                     .require_permission(caller, &offering, APPOINTMENT_READ_ACTION)
-                    .await?;
+                    .await
+                {
+                    // A reads-scope caller carries no task grant, and the
+                    // appointment is another caller's: that is an ownership
+                    // refusal, not a missing grant.
+                    Err(ServiceError::Refused {
+                        check: FailedCheck::TaskGrantMissing,
+                        ..
+                    }) if admission == DetailAdmission::ReadsScope => {
+                        return Err(ServiceError::operation_refused(FailedCheck::Ownership));
+                    }
+                    other => other?,
+                };
                 self.require_current_task_grant(caller, &grant, APPOINTMENT_READ_ACTION, now, true)
                     .await?;
             }
-            None => return Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized)),
+            None => return Err(ServiceError::not_visible()),
             Some(expected) => {
                 let offering = self.claim_offering(&claim, now).await?;
                 let grant = self
@@ -1784,7 +1822,7 @@ impl SchedulingService {
         let appointment = self
             .booking(appointment_id)
             .await?
-            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
+            .ok_or_else(ServiceError::not_visible)?;
         let offering = self.policy.offering(&appointment.offering).ok_or_else(|| {
             ServiceError::internal("a committed appointment names no offering in the policy")
         })?;
@@ -1837,7 +1875,7 @@ impl SchedulingService {
         )?;
         commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(
+            .audit_named_request(
                 caller,
                 &grant,
                 APPOINTMENT_RESCHEDULE_ACTION,
@@ -1914,7 +1952,7 @@ impl SchedulingService {
         let appointment = self
             .booking(appointment_id)
             .await?
-            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
+            .ok_or_else(ServiceError::not_visible)?;
         let offering = self.claim_offering(&appointment, now).await?;
         let grant = self
             .require_permission(caller, &offering, ATTENDANCE_RECORD_ACTION)
@@ -1946,7 +1984,7 @@ impl SchedulingService {
             0,
         )?;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, ATTENDANCE_RECORD_ACTION, now, false)
+            .audit_named_request(caller, &grant, ATTENDANCE_RECORD_ACTION, now, false)
             .await?;
         let outcome = self
             .store
@@ -1992,7 +2030,7 @@ impl SchedulingService {
         let appointment = self
             .booking(appointment_id)
             .await?
-            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
+            .ok_or_else(ServiceError::not_visible)?;
         let offering = self.claim_offering(&appointment, now).await?;
         let grant = self
             .require_permission(caller, &offering, APPOINTMENT_CANCEL_ACTION)
@@ -2027,7 +2065,7 @@ impl SchedulingService {
         )?;
         commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(
+            .audit_named_request(
                 caller,
                 &grant,
                 APPOINTMENT_CANCEL_ACTION,
@@ -2079,7 +2117,7 @@ impl SchedulingService {
         let limit = page_limit(limit);
         self.owned_booking(caller, appointment_id)
             .await?
-            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
+            .ok_or_else(ServiceError::not_visible)?;
         let context = format!("history:{appointment_id}");
         let position = self.resolve_position(cursor, &context, now).await?;
         let before = match position {
@@ -2293,8 +2331,9 @@ impl SchedulingService {
     /// the bound that failed nor whether a grant was carried at all. The one
     /// later answer that does say a grant was carried is a current-grant
     /// refusal for too much lifetime left, and it is given only after this
-    /// check has passed, so it tells a caller nothing about which services
-    /// and locations a grant reaches.
+    /// check has passed and only on a route that names no existing hold or
+    /// appointment, so it tells a caller nothing about which services and
+    /// locations a grant reaches or which ids exist.
     async fn require_permission(
         &self,
         caller: &Caller,
@@ -2307,7 +2346,9 @@ impl SchedulingService {
                 grantless_refusal_record(&self.hasher, &self.scheduling_id, caller, action),
             )
             .await?;
-            return Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized));
+            return Err(ServiceError::operation_refused(
+                FailedCheck::TaskGrantMissing,
+            ));
         };
         let allowed = grant
             .bounds()
@@ -2338,7 +2379,7 @@ impl SchedulingService {
                 ),
             )
             .await?;
-            Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized))
+            Err(ServiceError::operation_refused(FailedCheck::TaskGrantScope))
         }
     }
 
@@ -2380,7 +2421,7 @@ impl SchedulingService {
             ),
         )
         .await?;
-        Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized))
+        Err(ServiceError::operation_refused(FailedCheck::Ownership))
     }
 
     /// Write one refusal, or one commitment nothing decided, as the
@@ -2448,13 +2489,24 @@ impl SchedulingService {
                     ),
                 )
                 .await?;
-                Err(ServiceError::Problem(
-                    if refused == GrantVerdict::LifetimeTooLong {
-                        ProblemCode::GrantLifetimeTooLong
-                    } else {
-                        ProblemCode::OperationNotAuthorized
-                    },
-                ))
+                Err(if refused == GrantVerdict::LifetimeTooLong {
+                    ServiceError::Refused {
+                        code: RefusalCode::GrantLifetimeTooLong,
+                        check: FailedCheck::TaskGrantLifetime,
+                    }
+                } else {
+                    // A deployment that asks a status authority, or one that
+                    // listed none for an operation that needs a current
+                    // status, refuses on status. The offline path refuses an
+                    // expired grant.
+                    ServiceError::operation_refused(
+                        if online_required || self.task_grant_status.is_some() {
+                            FailedCheck::TaskGrantStatus
+                        } else {
+                            FailedCheck::TaskGrantExpired
+                        },
+                    )
+                })
             }
             GrantVerdict::Unavailable => {
                 tracing::warn!("the task-grant authority could not establish current status");
@@ -2465,6 +2517,30 @@ impl SchedulingService {
                 Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
             }
         }
+    }
+
+    /// `audit_request` for a route that names an existing hold or
+    /// appointment. A grant with too much lifetime left answers
+    /// `operation.not-authorized` there, as an unknown id does, so the answer
+    /// never says whether the id exists (SCHEDULING-DEC-01). The refusal
+    /// still counts under `task-grant-lifetime`.
+    async fn audit_named_request(
+        &self,
+        caller: &Caller,
+        grant: &GrantClaims,
+        operation: &str,
+        now: DateTime<Utc>,
+        online_required: bool,
+    ) -> Result<(Uuid, AuditRequest), ServiceError> {
+        self.audit_request(caller, grant, operation, now, online_required)
+            .await
+            .map_err(|error| match error {
+                ServiceError::Refused {
+                    code: RefusalCode::GrantLifetimeTooLong,
+                    check,
+                } => ServiceError::operation_refused(check),
+                other => other,
+            })
     }
 
     /// Append the `request` entry of one commitment and return the
@@ -2836,7 +2912,9 @@ impl SchedulingService {
                     CommitError::KeyReused | CommitError::KeyExpired => {
                         Unanswered::Unfinished(key_refusal_reason(&error))
                     }
-                    CommitError::Unauthorized => Unanswered::Denied("authorization.refused"),
+                    CommitError::Unauthorized | CommitError::GrantLapsed => {
+                        Unanswered::Denied("authorization.refused")
+                    }
                     CommitError::Refused(_)
                     | CommitError::HoldCeiling
                     | CommitError::RevisionMismatch
@@ -2936,7 +3014,21 @@ impl SchedulingService {
                     .map(|record| unfinished_record(record, reason)),
                 };
                 self.record_refusal(correlation, record).await?;
-                Err(ServiceError::Problem(problem))
+                Err(match RefusalCode::of(problem) {
+                    // `CommitError::Unauthorized` and `CommitError::GrantLapsed`
+                    // are the only commit failures that refuse authority: the
+                    // target is not this caller's to change, or the grant or
+                    // its access token lapsed inside the transaction.
+                    Some(code) => ServiceError::Refused {
+                        code,
+                        check: if matches!(error, CommitError::GrantLapsed) {
+                            FailedCheck::TaskGrantExpired
+                        } else {
+                            FailedCheck::Ownership
+                        },
+                    },
+                    None => ServiceError::Problem(problem),
+                })
             }
         }
     }
@@ -3786,7 +3878,7 @@ fn problem_of(error: &CommitError) -> ProblemCode {
         CommitError::KeyReused => ProblemCode::IdempotencyKeyReused,
         CommitError::KeyExpired => ProblemCode::IdempotencyExpired,
         CommitError::HoldCeiling => ProblemCode::CapacityExhausted,
-        CommitError::Unauthorized => ProblemCode::OperationNotAuthorized,
+        CommitError::Unauthorized | CommitError::GrantLapsed => ProblemCode::OperationNotAuthorized,
         CommitError::RevisionMismatch => ProblemCode::RevisionMismatch,
         CommitError::ObservationInFuture => ProblemCode::RequestUnprocessable,
         CommitError::CutoffPassed => ProblemCode::CancellationCutoffPassed,
@@ -4495,6 +4587,10 @@ mod tests {
         );
         assert_eq!(
             problem_of(&CommitError::Unauthorized),
+            ProblemCode::OperationNotAuthorized
+        );
+        assert_eq!(
+            problem_of(&CommitError::GrantLapsed),
             ProblemCode::OperationNotAuthorized
         );
         assert_eq!(

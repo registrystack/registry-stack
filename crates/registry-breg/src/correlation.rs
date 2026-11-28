@@ -9,6 +9,7 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
+use registry_platform_authcommon::{record_refusal, FailedCheck, RefusalNote};
 use registry_platform_httpsec::{Problem, ProblemBody, TraceContext, TraceId};
 use serde_json::Value;
 use uuid::Uuid;
@@ -115,6 +116,15 @@ pub(crate) fn problem_response(
         .with_extra("code", Value::String(code.to_owned()))
         .into_response();
     response.extensions_mut().insert(problem);
+    response
+}
+
+/// Name the check a refusal failed. The member rides in the response
+/// extensions to [`finish_response`], which counts it and writes the one
+/// bounded log line. It is never serialized, so the answer's bytes do not
+/// change.
+pub(crate) fn note_refusal(mut response: Response, check: FailedCheck) -> Response {
+    response.extensions_mut().insert(RefusalNote::new(check));
     response
 }
 
@@ -435,6 +445,13 @@ pub(crate) fn finish_response(
         );
     }
     correlation.apply_trace(response.headers_mut());
+    if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
+        record_refusal!(
+            crate::metrics::process_refusal_recorder(),
+            note,
+            trace_id = correlation.trace_id()
+        );
+    }
 
     let status = status_class(response.status());
     let problem_code = problem.as_ref().map_or("none", |problem| problem.code);

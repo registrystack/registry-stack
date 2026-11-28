@@ -249,6 +249,44 @@ fn the_actual_check_accepts_a_file_source_when_the_host_feature_is_present() {
     assert_eq!(report["source"]["route"], "kobo-submissions");
 }
 
+/// The check's findings: standard output and error together.
+fn check_findings(fixture: &FileFixture) -> String {
+    let output = run_check(fixture);
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+#[cfg(feature = "signed-coordinator-event")]
+#[test]
+fn a_named_plain_http_endpoint_needs_a_declared_private_range() {
+    let fixture = FileFixture::new("csv", "file", 1_048_576);
+    let declared = std::fs::read_to_string(&fixture.runtime).expect("the runtime config");
+    let named = declared.replace(
+        "https://cases.example.invalid",
+        "http://cases.internal.example",
+    );
+    assert_ne!(named, declared, "the fixture names an https endpoint");
+    let empty = named.replace(
+        "\"allowedPrivateCidrs\": [\n    \"10.0.0.0/8\"\n  ]",
+        "\"allowedPrivateCidrs\": []",
+    );
+    assert_ne!(empty, named, "the fixture declares one private range");
+
+    std::fs::write(&fixture.runtime, &empty).expect("the runtime config");
+    assert!(
+        check_findings(&fixture).contains("adapter.runtime.insecure-origin"),
+        "an empty list admits no private address"
+    );
+    std::fs::write(&fixture.runtime, &named).expect("the runtime config");
+    assert!(
+        !check_findings(&fixture).contains("adapter.runtime.insecure-origin"),
+        "a declared range admits the named host"
+    );
+}
+
 #[tokio::test]
 async fn csv_and_jsonl_values_cross_the_existing_destination_seam() {
     let cases = [

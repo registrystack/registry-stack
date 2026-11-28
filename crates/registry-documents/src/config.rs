@@ -21,10 +21,10 @@ use registry_platform_audit::{
 };
 use registry_platform_config::JwksSource;
 pub use registry_platform_config::{
-    AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig, MetricsListenerConfig,
-    ObjectStorageConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig,
-    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
-    UrlHookDestinationConfig,
+    AdmittedClients, AttachmentVerifierConfig, AuditKeyConfig, DatabaseConfig,
+    MetricsListenerConfig, ObjectStorageConfig, OidcIssuerConfig, OidcPackageClientsConfig,
+    PackageClients, PackageClientsError, PackageConfig, PrivateListenerConfig as ListenerConfig,
+    SecretProvidersConfig, TlsTermination, UrlHookDestinationConfig,
 };
 use registry_platform_config::{
     ConfigBlockError, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretResolver,
@@ -33,7 +33,8 @@ use registry_platform_config::{
 use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
-    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
+    TokenVerifierConfig,
 };
 use registry_platform_yaml::{BoundedU32, BoundedU64, Diagnostic, ExternalId, LocalId, Report};
 use serde::Deserialize;
@@ -81,6 +82,11 @@ pub const MAXIMUM_HOOK_PAYLOAD_RETENTION_DAYS: u32 = 30;
 
 /// The largest `audit.rotateBytes`.
 pub const MAXIMUM_AUDIT_ROTATE_BYTES: u64 = u32::MAX as u64;
+
+const ALLOWED_CLIENTS_REQUIRED_CODE: &str = "documents.runtime.allowed-clients-required";
+const PROFILE_CLIENT_NOT_ALLOWED_CODE: &str = "documents.runtime.profile-client-not-allowed";
+const ASSERTION_ISSUER_CLIENT_NOT_ALLOWED_CODE: &str =
+    "documents.runtime.assertion-issuer-client-not-allowed";
 
 /// The code of the refusal a runtime document earns when `destinations.hooks`
 /// leaves unbound a destination the project's hooks name. `documentsctl
@@ -155,11 +161,13 @@ pub struct OidcConfig {
     #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
     pub provider: OidcIssuerConfig,
-    /// The OAuth clients this runtime admits. Every access profile resolves
-    /// its caller from the matched client, so the list is never empty.
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-clients"))]
+    /// The OAuth clients this runtime admits: `from-package` for the
+    /// requester clients of the project's access profiles, or a list that
+    /// covers every client a profile names. Every access profile resolves its
+    /// caller from the matched client, so the admitted set is never empty.
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-package-clients"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub clients: OidcClientsConfig,
+    pub clients: OidcPackageClientsConfig,
     #[serde(default = "default_scope_claim")]
     pub scope_claim: ExternalId,
 }
@@ -510,6 +518,18 @@ pub enum RuntimeConfigError {
     OidcJwksSecret(String),
 }
 
+/// The static key set the operator pinned. A document that breaks a key set
+/// rule is the operator's to fix, so the refusal says which rule: it never
+/// holds a key value.
+fn parse_static_key_set(document: &[u8]) -> Result<jsonwebtoken::jwk::JwkSet, RuntimeConfigError> {
+    parse_static_jwks(document).map_err(|error| match error {
+        OidcError::StaticKeySet(refusal) => RuntimeConfigError::OidcJwksSecret(format!(
+            "the document at authentication.oidc.jwksSource.documentRef was refused: {refusal}"
+        )),
+        _ => RuntimeConfigError::Oidc,
+    })
+}
+
 fn refused(findings: &[Finding]) -> String {
     match findings {
         [] => "the runtime configuration was refused".to_owned(),
@@ -596,8 +616,7 @@ impl RuntimeConfig {
                         &error,
                     ))
                 })?;
-                let jwks = parse_static_jwks(document.expose_secret())
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                let jwks = parse_static_key_set(document.expose_secret())?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
@@ -608,7 +627,7 @@ impl RuntimeConfig {
     /// describe: RFC 9068 access tokens only, from the configured issuer,
     /// for the configured audience, from an admitted client.
     #[must_use]
-    pub fn verifier_profile(&self) -> TokenVerifierConfig {
+    pub fn verifier_profile(&self, admitted: &AdmittedClients) -> TokenVerifierConfig {
         let oidc = &self.authentication.oidc;
         TokenVerifierConfig::access_token_profile(
             oidc.provider.issuer.to_string(),
@@ -620,7 +639,7 @@ impl RuntimeConfig {
             access_token_typ_set(DOCUMENTS_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(oidc.scope_claim.as_str().to_owned())
-        .with_allowed_clients(oidc.clients.allowed_clients.clone())
+        .with_allowed_clients(admitted.as_slice().to_vec())
         .with_assertion_issuers(oidc.clients.assertion_issuers.clone())
     }
 
@@ -769,13 +788,8 @@ impl RuntimeConfig {
         if let Err(error) = oidc.clients.check("authentication.oidc") {
             findings.push(Finding::block("/authentication/oidc", &error));
         }
-        if oidc.clients.allowed_clients.is_empty() {
-            findings.push(Finding::new(
-                "documents.runtime.allowed-clients-required",
-                "/authentication/oidc/allowedClients",
-                "authentication.oidc.allowedClients must list the clients this runtime admits; `unrestricted` is refused",
-                "List every OAuth client an access profile names under allowedClients.",
-            ));
+        if oidc.clients.allowed_clients == PackageClients::Unrestricted {
+            findings.push(allowed_clients_required());
         }
     }
 
@@ -868,6 +882,79 @@ impl RuntimeConfig {
     /// `destinations.hooks`.
     #[must_use]
     pub fn project_findings(&self, project: &DocumentsProject) -> Vec<Finding> {
+        let mut findings = self.client_findings(project);
+        findings.extend(self.hook_findings(project));
+        findings
+    }
+
+    /// The clients the token verifier admits, given the project this runtime
+    /// serves. `from-package` is the sorted union of the access profiles'
+    /// requester clients, and a list must cover every one of them, or the
+    /// profile naming the missing client could never be reached. The verifier
+    /// is never handed an empty list, which it reads as "every client".
+    pub fn admitted_clients(&self, project: &DocumentsProject) -> Result<AdmittedClients, Finding> {
+        self.authentication
+            .oidc
+            .clients
+            .allowed_clients
+            .resolve(&requester_clients(project))
+            .map_err(|error| match error {
+                PackageClientsError::Unrestricted | PackageClientsError::Empty => {
+                    allowed_clients_required()
+                }
+                PackageClientsError::Missing(client) => {
+                    let profile = project
+                        .access_profiles
+                        .iter()
+                        .find(|(_, profile)| {
+                            profile
+                                .requester_clients
+                                .as_slice()
+                                .iter()
+                                .any(|listed| listed.as_str() == client)
+                        })
+                        .map_or("", |(id, _)| id.as_str());
+                    Finding::new(
+                        PROFILE_CLIENT_NOT_ALLOWED_CODE,
+                        "/authentication/oidc/allowedClients",
+                        format!(
+                            "authentication.oidc.allowedClients does not list {client}, a requester client of access profile {profile}"
+                        ),
+                        "Add the client to allowedClients, or write allowedClients: from-package to admit every requester client the project names.",
+                    )
+                }
+            })
+    }
+
+    /// What the admitted clients leave wrong against the project. An
+    /// `unrestricted` value is reported by [`Self::findings`] alone.
+    fn client_findings(&self, project: &DocumentsProject) -> Vec<Finding> {
+        let oidc = &self.authentication.oidc;
+        if oidc.clients.allowed_clients == PackageClients::Unrestricted {
+            return Vec::new();
+        }
+        let admitted = match self.admitted_clients(project) {
+            Ok(admitted) => admitted,
+            Err(finding) => return vec![finding],
+        };
+        oidc.clients
+            .assertion_issuers
+            .keys()
+            .filter(|client| !admitted.as_slice().contains(client))
+            .map(|client| {
+                Finding::new(
+                    ASSERTION_ISSUER_CLIENT_NOT_ALLOWED_CODE,
+                    &dotted_pointer(&format!("authentication.oidc.assertionIssuers.{client}")),
+                    format!(
+                        "authentication.oidc.assertionIssuers names {client}, which no access profile of the project lists as a requester client"
+                    ),
+                    "Name a requester client of an access profile, or remove the entry.",
+                )
+            })
+            .collect()
+    }
+
+    fn hook_findings(&self, project: &DocumentsProject) -> Vec<Finding> {
         let unbound = project.hooks.iter().any(|hook| {
             let HookHandler::Url { destination_id } = &hook.handler;
             !self
@@ -898,6 +985,29 @@ fn dotted_pointer(field: &str) -> String {
         .split('.')
         .map(|segment| format!("/{}", escape(segment)))
         .collect()
+}
+
+/// The requester clients of every access profile of `project`, sorted and
+/// distinct.
+fn requester_clients(project: &DocumentsProject) -> Vec<String> {
+    let mut clients: Vec<String> = project
+        .access_profiles
+        .values()
+        .flat_map(|profile| profile.requester_clients.as_slice())
+        .map(|client| client.as_str().to_owned())
+        .collect();
+    clients.sort();
+    clients.dedup();
+    clients
+}
+
+fn allowed_clients_required() -> Finding {
+    Finding::new(
+        ALLOWED_CLIENTS_REQUIRED_CODE,
+        "/authentication/oidc/allowedClients",
+        "authentication.oidc.allowedClients must be `from-package` or list the clients this runtime admits; `unrestricted` is refused",
+        "Write allowedClients: from-package, or list every OAuth client an access profile names.",
+    )
 }
 
 /// What an offline check of one runtime document found (CFG-CHECK-1).
@@ -1155,6 +1265,46 @@ pub(crate) mod tests {
         );
     }
 
+    const PUBLIC_KEY: &str = r#"{"kty":"EC","crv":"P-256","kid":"k1","alg":"ES256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}"#;
+
+    fn key_set(extra: &str) -> String {
+        let key = if extra.is_empty() {
+            PUBLIC_KEY.to_owned()
+        } else {
+            PUBLIC_KEY.replacen('}', &format!(",{extra}}}"), 1)
+        };
+        format!(r#"{{"keys":[{key}]}}"#)
+    }
+
+    #[test]
+    fn a_static_key_set_with_unknown_public_members_loads() {
+        let document = key_set(r#""ext":true,"x5t":"abc","x5c":["AAAA"]"#);
+        let jwks = parse_static_key_set(document.as_bytes()).expect("unknown public members load");
+        assert_eq!(jwks.keys.len(), 1);
+    }
+
+    #[test]
+    fn a_static_key_set_that_holds_a_private_member_is_refused_by_rule_and_not_by_value() {
+        let secret = "private-canary-value";
+        let document = key_set(&format!(r#""d":"{secret}""#));
+        let RuntimeConfigError::OidcJwksSecret(message) =
+            parse_static_key_set(document.as_bytes()).expect_err("a private member is refused")
+        else {
+            panic!("a refused key set is not an issuer outage");
+        };
+        assert!(message.contains(r#"private-key member "d""#), "{message}");
+        assert!(message.contains("authentication.oidc.jwksSource.documentRef"));
+        assert!(!message.contains(secret), "{message}");
+    }
+
+    #[test]
+    fn a_static_key_set_that_is_not_json_is_not_an_issuer_outage() {
+        assert!(matches!(
+            parse_static_key_set(b"not json"),
+            Err(RuntimeConfigError::OidcJwksSecret(_))
+        ));
+    }
+
     #[test]
     fn the_starter_runtime_document_is_accepted() {
         let config = parse(STARTER_RUNTIME).expect("the starter runtime document");
@@ -1241,6 +1391,190 @@ pub(crate) mod tests {
             codes(parse(&text).unwrap_err()),
             ["documents.runtime.allowed-clients-required"]
         );
+    }
+
+    const STARTER_CLIENTS: &str =
+        "allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]";
+
+    fn from_package_runtime() -> String {
+        let text = STARTER_RUNTIME.replace(STARTER_CLIENTS, "allowedClients: from-package");
+        assert_ne!(text, STARTER_RUNTIME);
+        text
+    }
+
+    fn starter_project() -> DocumentsProject {
+        DocumentsProject::decode(
+            "documents.yaml",
+            include_bytes!("../../../products/documents/examples/starter/documents.yaml"),
+        )
+        .expect("the starter project decodes")
+        .value
+    }
+
+    fn project_finding_codes(config: &RuntimeConfig, project: &DocumentsProject) -> Vec<String> {
+        config
+            .project_findings(project)
+            .iter()
+            .map(|finding| format!("{} {}", finding.code, finding.pointer))
+            .collect()
+    }
+
+    #[test]
+    fn from_package_is_accepted_and_names_no_second_list() {
+        let config = parse(&from_package_runtime()).expect("from-package loads");
+        assert_eq!(
+            config.authentication.oidc.clients.allowed_clients,
+            PackageClients::FromPackage
+        );
+        assert_eq!(
+            project_finding_codes(&config, &starter_project()),
+            [] as [String; 0]
+        );
+    }
+
+    #[test]
+    fn an_omitted_allowed_clients_member_is_refused() {
+        let text = STARTER_RUNTIME.replace(STARTER_CLIENTS, "");
+        assert_ne!(text, STARTER_RUNTIME);
+        let found = codes(parse(&text).unwrap_err());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("config."), "{found:?}");
+    }
+
+    #[test]
+    fn an_empty_list_and_an_unknown_keyword_are_refused() {
+        for written in ["allowedClients: []", "allowedClients: any"] {
+            let text = STARTER_RUNTIME.replace(STARTER_CLIENTS, written);
+            assert!(parse(&text).is_err(), "{written}");
+        }
+    }
+
+    #[test]
+    fn explicit_list_missing_a_package_client_is_refused() {
+        let text = STARTER_RUNTIME.replace(
+            STARTER_CLIENTS,
+            "allowedClients: [civil-registry-app, citizen-portal, case-portal]",
+        );
+        let config = parse(&text).expect("a list is a valid file on its own");
+        assert_eq!(
+            project_finding_codes(&config, &starter_project()),
+            ["documents.runtime.profile-client-not-allowed /authentication/oidc/allowedClients"]
+        );
+    }
+
+    #[test]
+    fn an_explicit_list_with_a_client_the_package_does_not_name_is_accepted() {
+        let text = STARTER_RUNTIME.replace(
+            STARTER_CLIENTS,
+            "allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal, extra-app]",
+        );
+        let config = parse(&text).unwrap();
+        assert_eq!(
+            project_finding_codes(&config, &starter_project()),
+            [] as [String; 0]
+        );
+    }
+
+    #[test]
+    fn assertion_issuer_client_outside_the_package_is_refused_under_from_package() {
+        let with_issuers = |client: &str| {
+            from_package_runtime().replace(
+                "allowedClients: from-package\n",
+                &format!(
+                    "allowedClients: from-package\n    assertionIssuers:\n      {client}: [https://assertions.example.test]\n"
+                ),
+            )
+        };
+        let config = parse(&with_issuers("unknown-client")).unwrap();
+        assert_eq!(
+            project_finding_codes(&config, &starter_project()),
+            ["documents.runtime.assertion-issuer-client-not-allowed /authentication/oidc/assertionIssuers/unknown-client"]
+        );
+        let config = parse(&with_issuers("citizen-portal")).unwrap();
+        assert_eq!(
+            project_finding_codes(&config, &starter_project()),
+            [] as [String; 0]
+        );
+    }
+
+    #[test]
+    fn assertion_issuer_client_outside_an_explicit_list_is_refused() {
+        let text = STARTER_RUNTIME.replace(
+            "allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]\n",
+            "allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]\n    assertionIssuers:\n      unknown-client: [https://assertions.example.test]\n",
+        );
+        assert_ne!(text, STARTER_RUNTIME);
+        let config = parse(&text).unwrap();
+        assert_eq!(
+            project_finding_codes(&config, &starter_project()),
+            ["documents.runtime.assertion-issuer-client-not-allowed /authentication/oidc/assertionIssuers/unknown-client"]
+        );
+    }
+
+    #[tokio::test]
+    async fn from_package_admits_exactly_the_package_clients() {
+        use crate::auth::tests::{keys, token};
+        use registry_platform_oidc::TokenVerifier;
+
+        let project = DocumentsProject::decode(
+            "documents.yaml",
+            include_str!("../../../products/documents/examples/starter/documents.yaml")
+                .replacen(
+                    "requesterClients: [civil-registry-app]",
+                    "requesterClients: [civil-registry-app, second-app]",
+                    1,
+                )
+                .as_bytes(),
+        )
+        .expect("the project decodes")
+        .value;
+        let config = parse(&from_package_runtime()).unwrap();
+        let admitted = config.admitted_clients(&project).unwrap();
+        assert_eq!(
+            admitted.as_slice(),
+            [
+                "case-portal",
+                "citizen-portal",
+                "civil-registry-app",
+                "partner-portal",
+                "second-app"
+            ]
+        );
+        let mut profile = config.verifier_profile(&admitted);
+        profile.allowed_algorithms = vec![jsonwebtoken::Algorithm::HS256];
+        let verifier = TokenVerifier::new(profile, keys());
+        let signed = |client: &str| {
+            token(serde_json::json!({
+                "iss": "https://identity.example.test/realms/registry",
+                "aud": "urn:example:documents",
+                "sub": "principal",
+                "azp": client,
+                "scope": "documents:read",
+            }))
+        };
+        for client in admitted.as_slice() {
+            verifier
+                .verify(&signed(client))
+                .await
+                .unwrap_or_else(|error| panic!("{client} is admitted: {error}"));
+        }
+        let refused = verifier.verify(&signed("stranger-app")).await;
+        assert!(
+            matches!(
+                refused,
+                Err(registry_platform_oidc::OidcError::ClientNotAllowed)
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn from_package_never_reaches_the_verifier_as_an_empty_list() {
+        let config = parse(&from_package_runtime()).unwrap();
+        let mut project = starter_project();
+        project.access_profiles.clear();
+        let finding = config.admitted_clients(&project).unwrap_err();
+        assert_eq!(finding.code, "documents.runtime.allowed-clients-required");
     }
 
     #[test]

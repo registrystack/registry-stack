@@ -306,7 +306,7 @@ impl PostgresStore {
             CaseworkActsAs::Staff => "staff",
             CaseworkActsAs::Supervisor => "supervisor",
             CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
-                return Err(ReviewRuntimeError::Forbidden);
+                return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
             }
         };
         let client = self.client().await?;
@@ -402,7 +402,7 @@ impl PostgresStore {
             CaseworkActsAs::Staff => "staff",
             CaseworkActsAs::Supervisor => "supervisor",
             CaseworkActsAs::Administrator | CaseworkActsAs::Requester => {
-                return Err(ReviewRuntimeError::Forbidden);
+                return Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation));
             }
         };
         let supervisory = view.is_supervisory();

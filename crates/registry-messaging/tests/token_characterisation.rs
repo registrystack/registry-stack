@@ -161,10 +161,14 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
         .await
         .expect("the static key source");
 
+    let profiles = profiles(&case, &scope);
+    let admitted = config
+        .admitted_clients(&profiles)
+        .expect("the listed clients cover the profile");
     let authenticator = MessagingAuthenticator::new(
-        config.verifier_profile(),
+        config.verifier_profile(&admitted),
         Arc::clone(&keys),
-        profiles(&case, &scope),
+        profiles,
         config.binds_assertion_issuers(),
     );
     let token = case.token.expose();
@@ -175,13 +179,13 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
                 .map_or("unspecified", ActorKind::as_str)
                 .to_owned(),
         )),
-        Err(AuthenticationError::Claims) => refusal("claims"),
+        Err(AuthenticationError::Claims(_)) => refusal("claims"),
         Err(AuthenticationError::Unavailable) => refusal("unavailable"),
-        Err(error @ (AuthenticationError::Refused | AuthenticationError::Profile)) => {
-            let reference = TokenVerifier::new(config.verifier_profile(), keys);
+        Err(error @ (AuthenticationError::Refused(_) | AuthenticationError::Profile(_))) => {
+            let reference = TokenVerifier::new(config.verifier_profile(&admitted), keys);
             match reference.verify(token).await {
                 Err(failure) => refusal(failure.authentication_stage().label()),
-                Ok(verified) if error == AuthenticationError::Profile => {
+                Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {
                     if verified.scopes.iter().any(|held| held == &scope) {
                         refusal("profile")
                     } else {

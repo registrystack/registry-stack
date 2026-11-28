@@ -71,40 +71,47 @@ async fn authorize(
     method: HttpMethod,
     correlation: &RequestCorrelation,
 ) -> Result<(String, ProposalAuthority), Response> {
-    let mutations = service.mutations.as_ref().ok_or_else(concealed)?;
+    let mutations = service
+        .mutations
+        .as_ref()
+        .ok_or_else(|| concealed(FailedCheck::Visibility))?;
     let action_id = mutations
         .proposal_action_id(id)
         .await
         .map_err(super::proposals::proposal_problem)?
-        .ok_or_else(concealed)?;
+        .ok_or_else(|| concealed(FailedCheck::Visibility))?;
     let action = service
         .registry
         .actions()
         .actions
         .iter()
         .find(|action| action.id == action_id)
-        .ok_or_else(concealed)?;
+        .ok_or_else(|| concealed(FailedCheck::Visibility))?;
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
-        return Err(concealed());
+        return Err(concealed(FailedCheck::Operation));
     };
-    let Some(authority) = super::proposals::authorize(
+    let authority = match super::proposals::authorize_checked(
         &service.registry,
         action,
         claims,
         selected,
         ProposalAuthorityOperation::Lifecycle(operation),
         Some(id),
-    ) else {
-        return Err(super::proposals::known_action_refusal(
-            mutations,
-            action,
-            claims,
-            selected,
-            ProposalAuthorityOperation::Lifecycle(operation),
-            method,
-            correlation,
-        )
-        .await);
+    ) {
+        Ok(authority) => authority,
+        Err(check) => {
+            return Err(super::proposals::known_action_refusal(
+                mutations,
+                action,
+                claims,
+                selected,
+                ProposalAuthorityOperation::Lifecycle(operation),
+                method,
+                correlation,
+                check,
+            )
+            .await);
+        }
     };
     let grant = proposal.permissions.iter().find(|grant| {
         grant.profile_id == authority.common.access_profile()
@@ -125,7 +132,7 @@ async fn authorize(
             &authority,
             method,
             correlation,
-            concealed(),
+            concealed(FailedCheck::Operation),
         )
         .await);
     }
@@ -145,13 +152,13 @@ async fn mutate(
     removal: bool,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(id) = Uuid::parse_str(&id) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(selected) = super::proposals::selected_profile(raw.as_deref()) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let (action_id, authority) = match authorize(
         &service,
@@ -211,7 +218,7 @@ async fn mutate(
         .find(|action| action.id == action_id)
         .expect("admitted Action");
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
-        return concealed();
+        return concealed(FailedCheck::Operation);
     };
     let definition = &proposal.attachments[&slot];
     let (content_type, bytes) = if removal {
@@ -322,13 +329,13 @@ async fn download(
     RawQuery(raw): RawQuery,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(id) = Uuid::parse_str(&id) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(query) = parse_download_query(raw.as_deref()) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let (field, operation) = match &query.review {
         Some(review) => (
@@ -360,7 +367,7 @@ async fn download(
         .iter()
         .find(|action| action.id == action_id)
     else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Some(records) = super::proposals::review_record_authorities(
         &service.registry,
@@ -375,7 +382,7 @@ async fn download(
             &authority,
             HttpMethod::Get,
             &correlation,
-            concealed(),
+            concealed(FailedCheck::Visibility),
         )
         .await;
     };
@@ -411,7 +418,7 @@ async fn download(
             .header(VARY, "authorization")
             .body(Body::from(bytes))
             .unwrap_or_else(|_| unavailable()),
-        Err(MutationError::PreconditionFailed) => concealed(),
+        Err(MutationError::PreconditionFailed) => concealed(FailedCheck::Visibility),
         Err(error) => super::proposals::proposal_problem(error),
     }
 }

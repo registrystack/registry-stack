@@ -12,7 +12,7 @@ use crate::postgres::{ProposalAuthority, ProposalAuthorityOperation, RowBoundary
 
 pub(super) fn proposal_problem(error: MutationError) -> Response {
     match error {
-        MutationError::AuthorizationRefused => concealed(),
+        MutationError::AuthorizationRefused(check) => concealed(check),
         error => mutation_problem(error),
     }
 }
@@ -156,34 +156,64 @@ fn permission_matches(
     permission: &CompiledProposalPermission,
     claims: &VerifiedRequestClaims,
     standing_own_draft: bool,
-) -> bool {
-    permission.principal_claim.as_deref() == claims.principal_claim()
-        && permission
-            .required_scopes
-            .iter()
-            .all(|scope| claims.has_scope(scope))
-        && (permission.required_purposes.is_empty()
-            || claims
-                .purpose()
-                .is_some_and(|purpose| permission.required_purposes.contains(purpose)))
-        && actor_matches(permission.actor_kind, claims, standing_own_draft)
-        && (permission.requester_clients.is_empty()
-            || claims
-                .requester_client()
-                .is_some_and(|client| permission.requester_clients.contains(client)))
+) -> Result<(), FailedCheck> {
+    request_matches(
+        permission.principal_claim.as_deref(),
+        &permission.required_scopes,
+        &permission.required_purposes,
+        permission.actor_kind,
+        &permission.requester_clients,
+        claims,
+        standing_own_draft,
+    )
+}
+
+/// The checks a Proposal permission and an Action start grant share, in the
+/// order they are made. The first that fails names itself.
+fn request_matches(
+    principal_claim: Option<&str>,
+    required_scopes: &BTreeSet<String>,
+    required_purposes: &BTreeSet<String>,
+    actor_kind: Option<crate::contract::ActorKindSource>,
+    requester_clients: &BTreeSet<String>,
+    claims: &VerifiedRequestClaims,
+    standing_own_draft: bool,
+) -> Result<(), FailedCheck> {
+    if principal_claim != claims.principal_claim() {
+        return Err(FailedCheck::TokenClaims);
+    }
+    if !required_scopes.iter().all(|scope| claims.has_scope(scope)) {
+        return Err(FailedCheck::Scope);
+    }
+    if !required_purposes.is_empty()
+        && !claims
+            .purpose()
+            .is_some_and(|purpose| required_purposes.contains(purpose))
+    {
+        return Err(FailedCheck::Purpose);
+    }
+    actor_matches(actor_kind, claims, standing_own_draft)?;
+    if !requester_clients.is_empty()
+        && !claims
+            .requester_client()
+            .is_some_and(|client| requester_clients.contains(client))
+    {
+        return Err(FailedCheck::RequesterClient);
+    }
+    Ok(())
 }
 
 fn actor_matches(
     expected: Option<crate::contract::ActorKindSource>,
     claims: &VerifiedRequestClaims,
     standing_own_draft: bool,
-) -> bool {
+) -> Result<(), FailedCheck> {
     use crate::contract::ActorKindSource;
     use registry_platform_oidc::ActorKind;
     if claims.actor_subject().is_some() && expected != Some(ActorKindSource::Agent) {
-        return false;
+        return Err(FailedCheck::Delegation);
     }
-    match expected {
+    let matches = match expected {
         None => true,
         Some(ActorKindSource::Human) => claims.actor_kind() == Some(ActorKind::Human),
         Some(ActorKindSource::Agent) => {
@@ -193,6 +223,11 @@ fn actor_matches(
                     || standing_own_draft)
         }
         Some(ActorKindSource::Service) => claims.actor_kind() == Some(ActorKind::Service),
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(FailedCheck::ActorKind)
     }
 }
 
@@ -233,15 +268,28 @@ pub(crate) fn authorize(
     operation: ProposalAuthorityOperation,
     proposal_id: Option<Uuid>,
 ) -> Option<ProposalAuthority> {
+    authorize_checked(registry, action, claims, selected, operation, proposal_id).ok()
+}
+
+/// The admission of a Proposal operation. The refusal names the first check
+/// that failed, for the operator only.
+pub(crate) fn authorize_checked(
+    registry: &CompiledRegistry,
+    action: &CompiledAction,
+    claims: &VerifiedRequestClaims,
+    selected: Option<&str>,
+    operation: ProposalAuthorityOperation,
+    proposal_id: Option<Uuid>,
+) -> Result<ProposalAuthority, FailedCheck> {
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
-        return None;
+        return Err(FailedCheck::Operation);
     };
     if matches!(
         operation,
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply | ProposalOperation::Retry)
     ) && !external_recovery_actor_allowed(&proposal.application, Some(claims))
     {
-        return None;
+        return Err(FailedCheck::ActorKind);
     }
     let standing_agent = (claims.actor_subject().is_some()
         || claims.actor_kind() == Some(registry_platform_oidc::ActorKind::Agent))
@@ -254,31 +302,27 @@ pub(crate) fn authorize(
                 | ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext)
         )
     {
-        return None;
+        return Err(FailedCheck::TaskGrantMissing);
     }
     let (profile, targets, task_source) = match operation {
         ProposalAuthorityOperation::Start => {
-            let grant = action.permissions.iter().find(|grant| {
-                selected.map_or(grant.default, |profile| profile == grant.profile_id)
-                    && grant.operations.contains(&Operation::Start)
-            })?;
-            if grant.principal_claim.as_deref() != claims.principal_claim()
-                || !grant
-                    .required_scopes
-                    .iter()
-                    .all(|scope| claims.has_scope(scope))
-                || (!grant.required_purposes.is_empty()
-                    && !claims
-                        .purpose()
-                        .is_some_and(|p| grant.required_purposes.contains(p)))
-                || !actor_matches(grant.actor_kind, claims, standing_agent)
-                || (!grant.requester_clients.is_empty()
-                    && !claims
-                        .requester_client()
-                        .is_some_and(|c| grant.requester_clients.contains(c)))
-            {
-                return None;
-            }
+            let grant = action
+                .permissions
+                .iter()
+                .find(|grant| {
+                    selected.map_or(grant.default, |profile| profile == grant.profile_id)
+                        && grant.operations.contains(&Operation::Start)
+                })
+                .ok_or(FailedCheck::AccessProfile)?;
+            request_matches(
+                grant.principal_claim.as_deref(),
+                &grant.required_scopes,
+                &grant.required_purposes,
+                grant.actor_kind,
+                &grant.requester_clients,
+                claims,
+                standing_agent,
+            )?;
             let targets = grant
                 .targets
                 .iter()
@@ -288,7 +332,8 @@ pub(crate) fn authorize(
                         boundaries(&target.row_boundaries, claims)?,
                     ))
                 })
-                .collect::<Option<BTreeMap<_, _>>>()?;
+                .collect::<Option<BTreeMap<_, _>>>()
+                .ok_or(FailedCheck::RowBoundary)?;
             (
                 grant.profile_id.as_str(),
                 targets,
@@ -296,15 +341,19 @@ pub(crate) fn authorize(
             )
         }
         ProposalAuthorityOperation::Lifecycle(operation) => {
-            let grant = proposal.permissions.iter().find(|grant| {
-                selected.map_or(grant.default, |profile| profile == grant.profile_id)
-                    && grant.operations.contains(&operation)
-            })?;
+            let grant = proposal
+                .permissions
+                .iter()
+                .find(|grant| {
+                    selected.map_or(grant.default, |profile| profile == grant.profile_id)
+                        && grant.operations.contains(&operation)
+                })
+                .ok_or(FailedCheck::AccessProfile)?;
             if standing_agent
                 && operation == ProposalOperation::Edit
                 && grant.ownership != Some(crate::model::ProposalOwnership::Caller)
             {
-                return None;
+                return Err(FailedCheck::Operation);
             }
             // A standing agent edits only its caller-owned draft. The one
             // additional operation is current review-context disclosure, and
@@ -315,16 +364,14 @@ pub(crate) fn authorize(
                 && operation == ProposalOperation::GetReviewContext
                 && (claims.actor_subject().is_none() || grant.requester_clients.is_empty())
             {
-                return None;
+                return Err(FailedCheck::Delegation);
             }
-            if !permission_matches(grant, claims, standing_agent) {
-                return None;
-            }
+            permission_matches(grant, claims, standing_agent)?;
             if grant.review_authority.is_some()
                 && (operation != ProposalOperation::GetReviewStatus
                     || claims.actor_kind() != Some(registry_platform_oidc::ActorKind::Service))
             {
-                return None;
+                return Err(FailedCheck::ActorKind);
             }
             let targets = grant
                 .targets
@@ -335,7 +382,8 @@ pub(crate) fn authorize(
                         boundaries(&target.row_boundaries, claims)?,
                     ))
                 })
-                .collect::<Option<BTreeMap<_, _>>>()?;
+                .collect::<Option<BTreeMap<_, _>>>()
+                .ok_or(FailedCheck::RowBoundary)?;
             (
                 grant.profile_id.as_str(),
                 targets,
@@ -347,20 +395,24 @@ pub(crate) fn authorize(
         registry,
         &action.id,
         operation,
-        claims.principal()?,
+        claims.principal().ok_or(FailedCheck::TokenClaims)?,
         profile,
         claims.purpose(),
         targets,
     )
-    .ok()?;
+    .map_err(|_| FailedCheck::Operation)?;
     authority.common = authority
         .common
         .with_audit_context(crate::audit::RequestAuditContext::from_claims(claims));
     match (task_source, claims.grant()) {
         (None, None) => {}
         (Some(source), Some(grant)) => {
-            let binding = bind_task_grant(&source.source_issuer, claims).ok()?;
-            let bounds = grant.bounds().breg_permissions()?;
+            let binding =
+                bind_task_grant(&source.source_issuer, claims).map_err(|refusal| refusal.check)?;
+            let bounds = grant
+                .bounds()
+                .breg_permissions()
+                .ok_or(FailedCheck::TaskGrantScope)?;
             let operation_name = crate::mutation::proposal_operation_name(operation);
             let scope = match operation {
                 ProposalAuthorityOperation::Start => {
@@ -369,7 +421,7 @@ pub(crate) fn authorize(
                         bound.collection() == collection
                             && bound.operations().iter().any(|op| op == operation_name)
                     }) {
-                        return None;
+                        return Err(FailedCheck::TaskGrantScope);
                     }
                     None
                 }
@@ -384,7 +436,7 @@ pub(crate) fn authorize(
                         })
                         .collect::<BTreeSet<_>>();
                     if scope.is_empty() || proposal_id.is_some_and(|id| !scope.contains(&id)) {
-                        return None;
+                        return Err(FailedCheck::TaskGrantScope);
                     }
                     Some(scope)
                 }
@@ -392,13 +444,14 @@ pub(crate) fn authorize(
             authority.common = authority
                 .common
                 .with_proposal_task_grant(binding.clone(), operation)
-                .ok()?;
+                .map_err(|_| FailedCheck::TaskGrantScope)?;
             authority.task_grant = Some(binding);
             authority.proposal_scope = scope;
         }
-        _ => return None,
+        (Some(_), None) => return Err(FailedCheck::TaskGrantMissing),
+        (None, Some(_)) => return Err(FailedCheck::TaskGrantScope),
     }
-    Some(authority)
+    Ok(authority)
 }
 
 pub(super) fn selected_profile(raw: Option<&str>) -> Result<Option<String>, ()> {
@@ -490,6 +543,7 @@ pub(super) async fn known_action_refusal(
     operation: ProposalAuthorityOperation,
     method: HttpMethod,
     correlation: &RequestCorrelation,
+    check: FailedCheck,
 ) -> Response {
     let profile = selected.filter(|profile| match operation {
         ProposalAuthorityOperation::Start => action.permissions.iter().any(|grant| {
@@ -526,7 +580,7 @@ pub(super) async fn known_action_refusal(
         )
         .await
     {
-        Ok(()) => concealed(),
+        Ok(()) => concealed(check),
         Err(_) => unavailable(),
     }
 }
@@ -537,6 +591,7 @@ async fn audited_list_concealment(
     claims: &VerifiedRequestClaims,
     selected: Option<&str>,
     correlation: &RequestCorrelation,
+    check: FailedCheck,
 ) -> Response {
     let selected_access_profile = selected.filter(|selected| {
         service.registry.actions().actions.iter().any(|action| {
@@ -565,7 +620,7 @@ async fn audited_list_concealment(
         })
         .await
     {
-        Ok(()) => concealed(),
+        Ok(()) => concealed(check),
         Err(_) => unavailable(),
     }
 }
@@ -581,10 +636,10 @@ pub(super) async fn start(
     body: Body,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(selected) = selected_profile(raw_query.as_deref()) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Some(action) = service
         .registry
@@ -593,29 +648,33 @@ pub(super) async fn start(
         .iter()
         .find(|action| action.id == route.action_id)
     else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     if route.operation != Operation::Start || route.path != action.route {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     }
-    let Some(authority) = authorize(
+    let authority = match authorize_checked(
         &service.registry,
         action,
         &claims,
         selected.as_deref(),
         ProposalAuthorityOperation::Start,
         None,
-    ) else {
-        return known_action_refusal(
-            mutations,
-            action,
-            &claims,
-            selected.as_deref(),
-            ProposalAuthorityOperation::Start,
-            HttpMethod::Post,
-            &correlation,
-        )
-        .await;
+    ) {
+        Ok(authority) => authority,
+        Err(check) => {
+            return known_action_refusal(
+                mutations,
+                action,
+                &claims,
+                selected.as_deref(),
+                ProposalAuthorityOperation::Start,
+                HttpMethod::Post,
+                &correlation,
+                check,
+            )
+            .await;
+        }
     };
     if !single_content_type(&headers, "application/json") {
         return admitted_http_refusal(
@@ -728,17 +787,17 @@ pub(super) async fn get(
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(id) = Uuid::parse_str(&id) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(selected) = selected_profile(raw_query.as_deref()) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let action_id = match mutations.proposal_action_id(id).await {
         Ok(Some(id)) => id,
-        Ok(None) => return concealed(),
+        Ok(None) => return concealed(FailedCheck::Visibility),
         Err(error) => return proposal_problem(error),
     };
     let Some(action) = service
@@ -748,33 +807,37 @@ pub(super) async fn get(
         .iter()
         .find(|a| a.id == action_id)
     else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
-    let Some(authority) = authorize(
+    let authority = match authorize_checked(
         &service.registry,
         action,
         &claims,
         selected.as_deref(),
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
         Some(id),
-    ) else {
-        return known_action_refusal(
-            mutations,
-            action,
-            &claims,
-            selected.as_deref(),
-            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
-            HttpMethod::Get,
-            &correlation,
-        )
-        .await;
+    ) {
+        Ok(authority) => authority,
+        Err(check) => {
+            return known_action_refusal(
+                mutations,
+                action,
+                &claims,
+                selected.as_deref(),
+                ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
+                HttpMethod::Get,
+                &correlation,
+                check,
+            )
+            .await;
+        }
     };
     match mutations
         .proposal_document(id, &authority, &claims, &correlation)
         .await
     {
         Ok((value, etag)) => json_response(value, Some(&etag)),
-        Err(MutationError::PreconditionFailed) => concealed(),
+        Err(MutationError::PreconditionFailed) => concealed(FailedCheck::Visibility),
         Err(error) => proposal_problem(error),
     }
 }
@@ -790,24 +853,24 @@ pub(super) async fn submission(
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(id) = Uuid::parse_str(&id) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Some(version) = version
         .parse::<u32>()
         .ok()
         .filter(|parsed| *parsed > 0 && parsed.to_string() == version)
     else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(selected) = selected_profile(raw_query.as_deref()) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let action_id = match mutations.proposal_action_id(id).await {
         Ok(Some(id)) => id,
-        Ok(None) => return concealed(),
+        Ok(None) => return concealed(FailedCheck::Visibility),
         Err(error) => return proposal_problem(error),
     };
     let Some(action) = service
@@ -817,26 +880,30 @@ pub(super) async fn submission(
         .iter()
         .find(|a| a.id == action_id)
     else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
-    let Some(authority) = authorize(
+    let authority = match authorize_checked(
         &service.registry,
         action,
         &claims,
         selected.as_deref(),
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
         Some(id),
-    ) else {
-        return known_action_refusal(
-            mutations,
-            action,
-            &claims,
-            selected.as_deref(),
-            ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
-            HttpMethod::Get,
-            &correlation,
-        )
-        .await;
+    ) {
+        Ok(authority) => authority,
+        Err(check) => {
+            return known_action_refusal(
+                mutations,
+                action,
+                &claims,
+                selected.as_deref(),
+                ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get),
+                HttpMethod::Get,
+                &correlation,
+                check,
+            )
+            .await;
+        }
     };
     match mutations
         .proposal_submission_read(id, version, &authority, &correlation)
@@ -844,7 +911,7 @@ pub(super) async fn submission(
     {
         Ok(Some(value)) => json_response(value, None),
         Ok(None) => fixed_problem(ProblemCode::ProposalSubmissionExpired),
-        Err(MutationError::PreconditionFailed) => concealed(),
+        Err(MutationError::PreconditionFailed) => concealed(FailedCheck::Visibility),
         Err(error) => proposal_problem(error),
     }
 }
@@ -860,10 +927,10 @@ pub(super) async fn transition(
     body: Body,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(id) = Uuid::parse_str(&id) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let operation = match operation.as_str() {
         "edit" => ProposalOperation::Edit,
@@ -873,14 +940,14 @@ pub(super) async fn transition(
         "apply" => ProposalOperation::Apply,
         "rebase" => ProposalOperation::Rebase,
         "retry" => ProposalOperation::Retry,
-        _ => return concealed(),
+        _ => return concealed(FailedCheck::Operation),
     };
     let Ok(selected) = selected_profile(raw_query.as_deref()) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let action_id = match mutations.proposal_action_id(id).await {
         Ok(Some(id)) => id,
-        Ok(None) => return concealed(),
+        Ok(None) => return concealed(FailedCheck::Visibility),
         Err(error) => return proposal_problem(error),
     };
     let Some(action) = service
@@ -890,29 +957,33 @@ pub(super) async fn transition(
         .iter()
         .find(|a| a.id == action_id)
     else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
-    let Some(authority) = authorize(
+    let authority = match authorize_checked(
         &service.registry,
         action,
         &claims,
         selected.as_deref(),
         ProposalAuthorityOperation::Lifecycle(operation),
         Some(id),
-    ) else {
-        return known_action_refusal(
-            mutations,
-            action,
-            &claims,
-            selected.as_deref(),
-            ProposalAuthorityOperation::Lifecycle(operation),
-            HttpMethod::Post,
-            &correlation,
-        )
-        .await;
+    ) {
+        Ok(authority) => authority,
+        Err(check) => {
+            return known_action_refusal(
+                mutations,
+                action,
+                &claims,
+                selected.as_deref(),
+                ProposalAuthorityOperation::Lifecycle(operation),
+                HttpMethod::Post,
+                &correlation,
+                check,
+            )
+            .await;
+        }
     };
     let rebase_start_authority = if operation == ProposalOperation::Rebase {
-        match authorize(
+        match authorize_checked(
             &service.registry,
             action,
             &claims,
@@ -920,14 +991,14 @@ pub(super) async fn transition(
             ProposalAuthorityOperation::Start,
             None,
         ) {
-            Some(authority) => Some(authority),
-            None => {
+            Ok(authority) => Some(authority),
+            Err(check) => {
                 return admitted_http_refusal(
                     mutations,
                     &authority,
                     HttpMethod::Post,
                     &correlation,
-                    concealed(),
+                    concealed(check),
                 )
                 .await;
             }
@@ -1105,7 +1176,7 @@ pub(super) async fn transition(
             "",
             service.field_encryption.as_deref(),
         ),
-        Err(MutationError::ProposalGuardFailed(failure)) => {
+        Err(MutationError::ProposalGuardFailed(failure)) => crate::correlation::note_refusal(
             guard_failure_response(
                 &service,
                 &authority,
@@ -1114,8 +1185,9 @@ pub(super) async fn transition(
                 &correlation,
                 *failure,
             )
-            .await
-        }
+            .await,
+            FailedCheck::ActionGuard,
+        ),
         Err(error) => proposal_problem(error),
     }
 }
@@ -1184,23 +1256,23 @@ pub(super) async fn review_context_batch(
     RawQuery(raw): RawQuery,
 ) -> Response {
     let Some(raw) = raw.filter(|raw| raw.len() <= MAX_RAW_QUERY_BYTES) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let mut ids = None;
     let mut profile = Vec::new();
     for pair in raw.split('&') {
         let Some((key, value)) = pair.split_once('=') else {
-            return concealed();
+            return concealed(FailedCheck::Visibility);
         };
         let Ok(key) = percent_decode(key) else {
-            return concealed();
+            return concealed(FailedCheck::Visibility);
         };
         if key == "ids" {
             if ids.is_some() {
-                return concealed();
+                return concealed(FailedCheck::Visibility);
             }
             let Ok(value) = percent_decode(value) else {
-                return concealed();
+                return concealed(FailedCheck::Visibility);
             };
             ids = Some(value);
         } else {
@@ -1208,7 +1280,7 @@ pub(super) async fn review_context_batch(
         }
     }
     let Some(ids) = ids else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let ids = ids.split(',').collect::<Vec<_>>();
     let mut distinct = BTreeSet::new();
@@ -1219,11 +1291,11 @@ pub(super) async fn review_context_batch(
                 || !distinct.insert(*id)
         })
     {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     }
     let profile = Some(profile.join("&"));
     if selected_profile(profile.as_deref()).is_err() {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     }
     // Bound the aggregate independently of each Proposal's configured context.
     let mut remaining = 8 * 1024 * 1024 - 64 * 1024;
@@ -1302,17 +1374,17 @@ pub(super) async fn task_grant_context(
     body: Body,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(id) = Uuid::parse_str(&id) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(selected) = selected_profile(raw.as_deref()) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let action_id = match mutations.proposal_action_id(id).await {
         Ok(Some(id)) => id,
-        Ok(None) => return concealed(),
+        Ok(None) => return concealed(FailedCheck::Visibility),
         Err(error) => return proposal_problem(error),
     };
     let Some(action) = service
@@ -1322,27 +1394,31 @@ pub(super) async fn task_grant_context(
         .iter()
         .find(|action| action.id == action_id)
     else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let operation = ProposalOperation::GetTaskGrantContext;
-    let Some(authority) = authorize(
+    let authority = match authorize_checked(
         &service.registry,
         action,
         &claims,
         selected.as_deref(),
         ProposalAuthorityOperation::Lifecycle(operation),
         Some(id),
-    ) else {
-        return known_action_refusal(
-            mutations,
-            action,
-            &claims,
-            selected.as_deref(),
-            ProposalAuthorityOperation::Lifecycle(operation),
-            HttpMethod::Post,
-            &correlation,
-        )
-        .await;
+    ) {
+        Ok(authority) => authority,
+        Err(check) => {
+            return known_action_refusal(
+                mutations,
+                action,
+                &claims,
+                selected.as_deref(),
+                ProposalAuthorityOperation::Lifecycle(operation),
+                HttpMethod::Post,
+                &correlation,
+                check,
+            )
+            .await;
+        }
     };
     if !single_content_type(&headers, "application/json") {
         return admitted_http_refusal(
@@ -1393,13 +1469,13 @@ pub(super) async fn task_grant_context(
             &authority,
             HttpMethod::Post,
             &correlation,
-            concealed(),
+            concealed(FailedCheck::Visibility),
         )
         .await;
     }
     let selected_fields = request.fields.iter().cloned().collect::<BTreeSet<_>>();
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
-        return concealed();
+        return concealed(FailedCheck::Operation);
     };
     let granted = proposal.permissions.iter().find(|permission| {
         permission.profile_id == authority.common.access_profile()
@@ -1414,7 +1490,7 @@ pub(super) async fn task_grant_context(
             &authority,
             HttpMethod::Post,
             &correlation,
-            concealed(),
+            concealed(FailedCheck::Disclosure),
         )
         .await;
     }
@@ -1431,7 +1507,7 @@ pub(super) async fn task_grant_context(
             &authority,
             HttpMethod::Post,
             &correlation,
-            concealed(),
+            concealed(FailedCheck::Visibility),
         )
         .await;
     };
@@ -1455,7 +1531,7 @@ pub(super) async fn task_grant_context(
             );
             response
         }
-        Err(MutationError::PreconditionFailed) => concealed(),
+        Err(MutationError::PreconditionFailed) => concealed(FailedCheck::Visibility),
         Err(error) => proposal_problem(error),
     }
 }
@@ -1469,21 +1545,21 @@ async fn review_read(
     correlation: RequestCorrelation,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok(id) = Uuid::parse_str(&id) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let Ok((selected, include_progress)) = (if operation == ProposalOperation::GetReviewStatus {
         review_status_options(raw.as_deref())
     } else {
         selected_profile(raw.as_deref()).map(|selected| (selected, false))
     }) else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let action_id = match mutations.proposal_action_id(id).await {
         Ok(Some(id)) => id,
-        Ok(None) => return concealed(),
+        Ok(None) => return concealed(FailedCheck::Visibility),
         Err(error) => return proposal_problem(error),
     };
     let Some(action) = service
@@ -1493,26 +1569,30 @@ async fn review_read(
         .iter()
         .find(|action| action.id == action_id)
     else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
-    let Some(authority) = authorize(
+    let authority = match authorize_checked(
         &service.registry,
         action,
         &claims,
         selected.as_deref(),
         ProposalAuthorityOperation::Lifecycle(operation),
         Some(id),
-    ) else {
-        return known_action_refusal(
-            mutations,
-            action,
-            &claims,
-            selected.as_deref(),
-            ProposalAuthorityOperation::Lifecycle(operation),
-            HttpMethod::Get,
-            &correlation,
-        )
-        .await;
+    ) {
+        Ok(authority) => authority,
+        Err(check) => {
+            return known_action_refusal(
+                mutations,
+                action,
+                &claims,
+                selected.as_deref(),
+                ProposalAuthorityOperation::Lifecycle(operation),
+                HttpMethod::Get,
+                &correlation,
+                check,
+            )
+            .await;
+        }
     };
     let records = review_record_authorities(
         &service.registry,
@@ -1528,7 +1608,7 @@ async fn review_read(
             &authority,
             HttpMethod::Get,
             &correlation,
-            concealed(),
+            concealed(FailedCheck::Visibility),
         )
         .await;
     };
@@ -1537,7 +1617,7 @@ async fn review_read(
         .await
     {
         Ok((value, etag)) => json_response(value, etag.as_deref()),
-        Err(MutationError::PreconditionFailed) => concealed(),
+        Err(MutationError::PreconditionFailed) => concealed(FailedCheck::Visibility),
         Err(error) => proposal_problem(error),
     }
 }
@@ -1634,31 +1714,42 @@ pub(super) async fn list(
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
-        return concealed();
+        return concealed(FailedCheck::Visibility);
     };
     let selected = match proposal_list_admission_profile(raw_query.as_deref()) {
         Ok(selected) => selected,
         Err(()) => {
-            return audited_list_concealment(mutations, &service, &claims, None, &correlation)
-                .await;
+            return audited_list_concealment(
+                mutations,
+                &service,
+                &claims,
+                None,
+                &correlation,
+                FailedCheck::AccessProfile,
+            )
+            .await;
         }
     };
-    let authorities = service
-        .registry
-        .actions()
-        .actions
-        .iter()
-        .filter_map(|action| {
-            authorize(
-                &service.registry,
-                action,
-                &claims,
-                selected.as_deref(),
-                ProposalAuthorityOperation::Lifecycle(ProposalOperation::List),
-                None,
-            )
-        })
-        .collect::<Vec<_>>();
+    // When no Proposal action admits the caller, the first Proposal action's
+    // refusal names the check. A registry with none refuses on the profile.
+    let mut first_refusal = None;
+    let mut authorities = Vec::new();
+    for action in &service.registry.actions().actions {
+        match authorize_checked(
+            &service.registry,
+            action,
+            &claims,
+            selected.as_deref(),
+            ProposalAuthorityOperation::Lifecycle(ProposalOperation::List),
+            None,
+        ) {
+            Ok(authority) => authorities.push(authority),
+            Err(check) if matches!(action.execution, CompiledActionExecution::Proposal { .. }) => {
+                first_refusal.get_or_insert(check);
+            }
+            Err(_) => {}
+        }
+    }
     if authorities.is_empty() {
         return audited_list_concealment(
             mutations,
@@ -1666,6 +1757,7 @@ pub(super) async fn list(
             &claims,
             selected.as_deref(),
             &correlation,
+            first_refusal.unwrap_or(FailedCheck::AccessProfile),
         )
         .await;
     }

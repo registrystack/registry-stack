@@ -21,7 +21,7 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::extract::{MatchedPath, State};
 use axum::http::header::CONTENT_TYPE;
@@ -31,6 +31,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use registry_adapter_core::ErrorClass;
+use registry_platform_authcommon::{RefusalNote, RefusalRecorder};
 use registry_platform_metrics::{
     CounterVec, Exposition, LabelSpace, CONTENT_TYPE as METRICS_CONTENT_TYPE,
 };
@@ -68,7 +69,20 @@ const UPSTREAM_CLASSES: [ErrorClass; 11] = [
 /// `adapter_retention_sweep_failures_total`.
 const SWEEP_STORES: [&str; 3] = ["journal", "idempotency", "other"];
 
+/// The process's refusal recorder: one counter and one log budget for every
+/// listener of this process, the facade and the payment routes alike.
+static REFUSALS: OnceLock<Arc<RefusalRecorder>> = OnceLock::new();
+
+/// The recorder behind `adapter_request_refusals_total` and the
+/// `request refused` log line.
+pub fn refusal_recorder() -> Arc<RefusalRecorder> {
+    Arc::clone(
+        REFUSALS.get_or_init(|| Arc::new(RefusalRecorder::new("adapter").expect(DECLARATION))),
+    )
+}
+
 pub struct Metrics {
+    refusals: Arc<RefusalRecorder>,
     requests: CounterVec,
     upstream_failures: CounterVec,
     journal_write_failures: CounterVec,
@@ -88,6 +102,7 @@ impl Default for Metrics {
         let sweep: Vec<[&str; 1]> = SWEEP_STORES.iter().map(|s| [*s]).collect();
         let sweep: Vec<&[&str]> = sweep.iter().map(|s| s.as_slice()).collect();
         Self {
+            refusals: refusal_recorder(),
             requests: CounterVec::new(
                 "adapter_http_requests_total",
                 "Answered facade HTTP requests, by route template, method, and status class.",
@@ -118,6 +133,12 @@ impl Default for Metrics {
 }
 
 impl Metrics {
+    /// The recorder that counts and logs every refused request.
+    #[must_use]
+    pub fn refusals(&self) -> Arc<RefusalRecorder> {
+        Arc::clone(&self.refusals)
+    }
+
     /// Count one answered request under its closed labels.
     pub fn record_request(&self, route: &str, method: &Method, status: StatusCode) {
         count(
@@ -158,6 +179,7 @@ impl Metrics {
             &self.upstream_failures,
             &self.journal_write_failures,
             &self.sweep_failures,
+            self.refusals.counter(),
         ] {
             counter.write(&mut out).expect(DECLARATION);
         }
@@ -219,6 +241,21 @@ pub async fn count_requests(
     let method = request.method().clone();
     let response = next.run(request).await;
     metrics.record_request(&route, &method, response.status());
+    response
+}
+
+/// Count and log every refused request once, under the check its answer
+/// carries in the response extensions. The extension is not serialized, so
+/// no byte of the answer depends on it.
+pub async fn record_refusals(
+    State(recorder): State<Arc<RefusalRecorder>>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let response = next.run(request).await;
+    if let Some(note) = response.extensions().get::<RefusalNote>() {
+        registry_platform_authcommon::record_refusal!(recorder, *note);
+    }
     response
 }
 
@@ -351,6 +388,16 @@ mod tests {
             &metrics,
             "adapter_retention_sweep_failures_total{store=\"other\"} 1"
         ));
+    }
+
+    #[test]
+    fn the_refusal_counter_declares_every_check_and_publishes_it_at_zero() {
+        let text = Metrics::default().render();
+        let declared = text
+            .lines()
+            .filter(|line| line.starts_with("adapter_request_refusals_total{check=\""))
+            .count();
+        assert_eq!(declared, registry_platform_authcommon::FailedCheck::COUNT);
     }
 
     fn text_has(metrics: &Metrics, line: &str) -> bool {

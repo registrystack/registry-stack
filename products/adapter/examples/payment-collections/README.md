@@ -107,26 +107,17 @@ step. `adapter effective-contract` exports the record-facade contract;
 
 ## Grant the payment tables
 
-The configured migration role creates the payment tables at startup. If the
-runtime role differs, grant it the following privileges after migration and
-restart the host. Startup refuses missing grants before binding the listener.
-Replace `payment_adapter_runtime` with the operator's runtime role.
-
-```sql
-GRANT SELECT, INSERT, UPDATE ON adapter_payment_attempts TO payment_adapter_runtime;
-GRANT SELECT, INSERT ON adapter_payment_commands, adapter_payment_events TO payment_adapter_runtime;
-GRANT USAGE, SELECT ON SEQUENCE adapter_payment_events_sequence_seq
-  TO payment_adapter_runtime;
-```
-
-When the payments configuration also declares `disbursements`, startup checks
-the disbursement tables too. Grant these as well:
-
-```sql
-GRANT SELECT, INSERT, UPDATE ON adapter_g2p_attempts TO payment_adapter_runtime;
-GRANT SELECT, INSERT ON adapter_g2p_commands, adapter_g2p_events TO payment_adapter_runtime;
-GRANT USAGE ON SEQUENCE adapter_g2p_events_sequence_seq TO payment_adapter_runtime;
-```
+The configured migration role creates the payment tables at startup. When the
+runtime role differs, `adapter serve` grants it the privileges the payment host
+checks, after migration and before binding the listener: the collection tables
+always, the disbursement tables when the payments configuration declares
+`disbursements`, and `USAGE` on the schema when serving payments without a
+project. See
+[Grant the runtime database role](https://docs.registrystack.org/operate/adapter/#grant-the-runtime-database-role)
+for the rules and for the SQL to run yourself when `adapter serve` makes no
+grant (a runtime role with members that would inherit them, or a migration role
+that does not own the tables). Startup refuses missing grants before binding
+the listener.
 
 Production builds retain the shared Adapter PostgreSQL TLS requirement. The
 `postgres-test` feature permits explicitly configured plaintext only for

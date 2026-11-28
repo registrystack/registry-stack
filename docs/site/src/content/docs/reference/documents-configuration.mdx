@@ -132,7 +132,8 @@ The other blocks are checked, so a deployment written now keeps its meaning when
 - `database.testOnlyPlaintext` is accepted only by builds with the `postgres-test` feature, for the PostgreSQL test suites.
   An operator build refuses it with `documents.runtime.plaintext-database`, so a local run needs a database that serves TLS too.
 - `authentication.oidc` is the shared OIDC issuer block (`issuer`, `audience`, `jwksSource`), with `allowedClients` and `scopeClaim` (default `scope`).
-  `allowedClients` must list clients, and `unrestricted` is refused.
+  `allowedClients` is required. Write `from-package` to admit exactly the `requesterClients` of the package's access profiles, so the clients are written once, in `documents.yaml`. A list is also accepted, and it must include every client an access profile names, or the runtime refuses to start with `documents.runtime.profile-client-not-allowed`. Clients in the list that no profile names are admitted by the verifier but reach no profile. `unrestricted` and an empty list are refused.
+  Each client named under `assertionIssuers` must be one of the admitted clients, or the runtime refuses to start with `documents.runtime.assertion-issuer-client-not-allowed`.
   `jwksSource` defaults to the key set that the issuer's discovery document names.
   [Access tokens](../../operate/documents/#access-tokens) states what a token must carry and describes the other key sources.
 - `audit` takes `destination` (`file`, the default, or `stdout`), `path` for a file journal, and `hashKeyRef`.

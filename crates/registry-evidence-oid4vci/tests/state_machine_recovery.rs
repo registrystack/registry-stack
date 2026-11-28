@@ -37,6 +37,7 @@ use registry_evidence_oid4vci::{
     PRE_AUTHORIZED_CODE_GRANT_TYPE,
 };
 use registry_platform_audit::AuditWriter;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_crypto::{sign, PrivateJwk};
 use serde_json::{json, Value};
 use tokio::sync::Barrier;
@@ -123,7 +124,7 @@ impl OfferAuthorizer for StubAuthorizer {
             return Err(AuthorizationError::Missing);
         }
         if credential != OFFER_TOKEN {
-            return Err(AuthorizationError::Refused);
+            return Err(AuthorizationError::Refused(FailedCheck::TokenSignature));
         }
         Ok(AuthorizedOffer {
             client: Some("adopter-front-end".to_owned()),

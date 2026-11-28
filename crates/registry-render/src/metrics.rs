@@ -14,7 +14,9 @@
 //! the metrics are scraped. It reads no database and calls no key provider.
 
 use axum::http::StatusCode;
+use registry_platform_authcommon::RefusalRecorder;
 use registry_platform_metrics::{CounterVec, Exposition, LabelSpace, MetricKind};
+use std::sync::Arc;
 use time::OffsetDateTime;
 
 use crate::seal::Seals;
@@ -80,6 +82,7 @@ impl Outcome {
 
 pub struct Metrics {
     documents: CounterVec,
+    refusals: Arc<RefusalRecorder>,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -105,11 +108,18 @@ impl Default for Metrics {
                     .expect(DECLARATION),
             )
             .expect(DECLARATION),
+            refusals: Arc::new(RefusalRecorder::new("render").expect(DECLARATION)),
         }
     }
 }
 
 impl Metrics {
+    /// The recorder that counts each refused request under its check and
+    /// admits a bounded number of log lines.
+    pub(crate) fn refusal_recorder(&self) -> &Arc<RefusalRecorder> {
+        &self.refusals
+    }
+
     /// Count one answered call to a document operation under its status
     /// class.
     pub fn record_document(&self, operation: Operation, status: StatusCode) {
@@ -128,6 +138,7 @@ impl Metrics {
     pub fn render(&self, audit_write_failures: u64, seals: &Seals, now: OffsetDateTime) -> String {
         let mut out = Exposition::new();
         self.documents.write(&mut out).expect(DECLARATION);
+        self.refusals.counter().write(&mut out).expect(DECLARATION);
         out.header(
             "render_audit_write_failures_total",
             Some("Audit entries that could not be written."),

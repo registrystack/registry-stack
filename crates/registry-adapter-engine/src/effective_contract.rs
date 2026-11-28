@@ -432,7 +432,7 @@ fn public_unserved_reason(code: &str) -> &'static str {
         }
         "adapter.operation.route-missing" => "the binding has no loaded route",
         "adapter.operation.reserved-facade-path" => {
-            "the facade path is reserved for the Adapter effective-contract route"
+            "the facade path is reserved for the Adapter effective-contract, health and ready routes"
         }
         "adapter.operation.cursor-key-missing" => {
             "the paginated operation has no configured cursor key"

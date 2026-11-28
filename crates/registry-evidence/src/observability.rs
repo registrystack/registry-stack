@@ -24,6 +24,10 @@
 //! drifted from the declared projection and emits rate-limited operator WARN
 //! records that name the source, declared JSON pointers, and closed reasons,
 //! never a response value, an undeclared member name, a selector, or a subject.
+//!
+//! The refusal counter is the second exception. Its `check` label is the
+//! closed [`FailedCheck`](registry_platform_authcommon::FailedCheck) set, fixed
+//! and zero-filled at construction, so no request can extend it.
 
 use std::{
     collections::BTreeMap,
@@ -44,6 +48,7 @@ use axum::{
     routing::get,
     Router,
 };
+use registry_platform_authcommon::{record_refusal, RefusalNote, RefusalRecorder};
 use registry_platform_httpsec::{TraceContext, TraceId};
 use registry_platform_metrics::{
     Exposition, HistogramSnapshot, MetricKind, SumCountOrder, CONTENT_TYPE as METRICS_CONTENT_TYPE,
@@ -153,6 +158,25 @@ pub(crate) fn operation_id(extensions: &axum::http::Extensions) -> OperationId {
     )
 }
 
+/// Whether a public problem code is a refusal the check counter covers: the
+/// authentication, authorization and rate-limit answers.
+#[deny(clippy::wildcard_enum_match_arm)]
+pub(crate) fn is_refusal_code(code: ProblemCode) -> bool {
+    match code {
+        ProblemCode::AuthenticationFailed
+        | ProblemCode::NotAuthorized
+        | ProblemCode::RateLimited => true,
+        ProblemCode::MalformedRequest
+        | ProblemCode::InvalidRequestNonce
+        | ProblemCode::InvalidSelector
+        | ProblemCode::ResponseFormatNotAcceptable
+        | ProblemCode::EvidenceNotAvailable
+        | ProblemCode::DependencyUnavailable
+        | ProblemCode::ServiceUnavailable
+        | ProblemCode::ResourceNotFound => false,
+    }
+}
+
 /// Coarse outcome class. Operational records report the class, never the exact
 /// status, because the exact status of a denial is part of the closed public
 /// problem contract rather than an operational signal.
@@ -212,6 +236,7 @@ pub(crate) async fn observe(
         .get::<FailureCategory>()
         .map_or(NO_CATEGORY, |category| category.0);
     operation.apply_trace(response.headers_mut());
+    record_response_refusal(&metrics, &response, &operation);
 
     metrics.record(route, method, status, error, elapsed);
     tracing::info!(
@@ -226,6 +251,34 @@ pub(crate) async fn observe(
         "evidence request served"
     );
     response
+}
+
+/// Count and log the refusal a response carries, once, at the single point
+/// every route passes.
+///
+/// The note is in the response extensions, which are not serialized, so this
+/// reads nothing a caller was given. A refusal code that arrives without a note
+/// is a defect in the code that built it: it is reported, not counted under a
+/// check it never named.
+fn record_response_refusal(metrics: &Metrics, response: &Response, operation: &OperationId) {
+    match response.extensions().get::<RefusalNote>() {
+        Some(note) => {
+            record_refusal!(metrics.refusals, *note, trace_id = operation.trace_id());
+        }
+        None => {
+            if response
+                .extensions()
+                .get::<ProblemCode>()
+                .is_some_and(|code| is_refusal_code(*code))
+            {
+                tracing::error!(
+                    target: module_path!(),
+                    trace_id = operation.trace_id().as_str(),
+                    "a refusal was answered without the check that failed"
+                );
+            }
+        }
+    }
 }
 
 /// Choose the W3C trace for one request.
@@ -280,7 +333,6 @@ fn duration_milliseconds(elapsed: Duration) -> u64 {
 ///
 /// Series are keyed only by the closed label set above, so the registry is
 /// bounded by the route table regardless of traffic and needs no eviction.
-#[derive(Default)]
 pub(crate) struct Metrics {
     series: Mutex<BTreeMap<SeriesKey, Series>>,
     /// Current count of pseudonym keys tracked by the rate limiter, for the
@@ -297,6 +349,21 @@ pub(crate) struct Metrics {
     /// The per-source counters the runtime's source executors increment.
     /// `None` for registries built without a runtime.
     source_diagnostics: Option<Arc<SourceDiagnostics>>,
+    /// Counts refusals by the check that failed and bounds the log lines they
+    /// write. Keyed by no request value.
+    refusals: RefusalRecorder,
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Self {
+            series: Mutex::default(),
+            rate_limiter_tracked_keys: AtomicUsize::default(),
+            rate_limiter: None,
+            source_diagnostics: None,
+            refusals: RefusalRecorder::new("evidence").expect(DECLARATION),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -426,6 +493,7 @@ impl Metrics {
             self.rate_limiter_tracked_keys.load(Ordering::Relaxed),
         )
         .expect(DECLARATION);
+        self.refusals.counter().write(&mut out).expect(DECLARATION);
         if let Some(source_diagnostics) = &self.source_diagnostics {
             source_diagnostics.render(&mut out);
         }

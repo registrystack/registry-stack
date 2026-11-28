@@ -48,6 +48,7 @@ use registry_evidence_verifier::{
     EVIDENCE_SCHEMA_V1,
 };
 use registry_platform_audit::AuditWriter;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_crypto::{hmac_sha256_base64url_no_pad, sign, PrivateJwk};
 use registry_platform_sdjwt::SdJwtIssuer;
 use serde_json::{json, Value};
@@ -151,7 +152,7 @@ impl OfferAuthorizer for StubAuthorizer {
             return Err(AuthorizationError::Missing);
         }
         if credential != OFFER_TOKEN {
-            return Err(AuthorizationError::Refused);
+            return Err(AuthorizationError::Refused(FailedCheck::TokenSignature));
         }
         Ok(AuthorizedOffer {
             client: Some("adopter-front-end".to_owned()),

@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- Messaging counts every refused request by the check that refused it, in
+  `messaging_request_refusals_total{check}` on the metrics listener, published
+  at zero for every check. Each refusal writes one `request refused` line with
+  `failed_check` and the request's trace id, at most five lines per check per
+  minute. That line replaces the authentication refusal line that carried a
+  `stage` field, and the three callback refusal lines. The count covers
+  authentication, message, rate limit and callback refusals, each under the
+  check its producer names, and a key endpoint outage under
+  `key-source-unavailable`. `messaging_authentication_refusals_total{reason}`
+  is unchanged. Refusal statuses, headers and bodies are unchanged.
+- A static key set with a private key member or a repeated member name is
+  refused at startup under `messaging.runtime.unreadable-jwks-secret`, with
+  the rule it broke, and `messagingctl` names the rule when it refuses a
+  borrowed owner's key set. A public member the service does not know loads.
+- A plain `http` provider base URL and an SMTP relay in development use the
+  same loopback rule: `127.0.0.0/8`, `::1`, or an IPv4-mapped form of
+  `127.0.0.0/8`. The name `localhost` is accepted for a provider base URL as
+  before, and a name such as `relay.localhost` stays refused for SMTP.
+
+- `authentication.oidc.allowedClients` accepts the keyword `from-package`,
+  which admits the requester clients of the package's access profiles, so the
+  clients are written once, in the package. The member stays required, and an
+  omitted member, an empty list and `unrestricted` are still refused. A list
+  must still include every client a profile names. `rstack dev` writes
+  `from-package`.
+
+- `registry-messaging-client` accepts an empty body or a JSON object of at
+  most 4096 bytes from `/health` and `/ready`, and refuses a larger one. The
+  runtime still answers an empty `200`.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: `providers`, `senderProfiles`, and `accessProfiles` in

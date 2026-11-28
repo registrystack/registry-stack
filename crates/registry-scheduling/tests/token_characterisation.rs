@@ -20,6 +20,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::write_package;
 use registry_platform_oidc::TokenVerifier;
 use registry_platform_testing::{
@@ -151,22 +152,43 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
     let token = case.token.expose();
     match authenticator.authenticate_read(token).await {
         Ok(caller) => Outcome::Admitted(Some(caller.actor_kind)),
-        Err(AuthenticationError::Claims) => refusal("claims"),
+        Err(AuthenticationError::Claims(_)) => refusal("claims"),
         Err(AuthenticationError::Unavailable) => refusal("unavailable"),
-        Err(error @ (AuthenticationError::Refused | AuthenticationError::Profile)) => {
+        Err(error @ (AuthenticationError::Refused(_) | AuthenticationError::Profile(_))) => {
             let reference = TokenVerifier::new(verifier, keys);
             match reference.verify(token).await {
-                Err(failure) => refusal(failure.authentication_stage().label()),
-                Ok(verified) if error == AuthenticationError::Profile => {
+                Err(failure) => {
+                    // The refusal records the shared verifier's own check, or
+                    // the malformed credential the compact-token admission
+                    // refuses before the verifier runs.
+                    assert!(
+                        matches!(
+                            error,
+                            AuthenticationError::Refused(check)
+                                if check == failure.failed_check()
+                                    || check == FailedCheck::CredentialMalformed
+                        ),
+                        "{error:?} does not carry the verifier check"
+                    );
+                    refusal(failure.authentication_stage().label())
+                }
+                Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {
                     if verified.scopes.iter().any(|held| held == &scope) {
                         refusal("profile")
                     } else {
+                        assert_eq!(error, AuthenticationError::Profile(FailedCheck::Scope));
                         refusal("scope")
                     }
                 }
                 // The credential is not a compact access token, so the
                 // verifier is never reached.
-                Ok(_) => refusal("header"),
+                Ok(_) => {
+                    assert_eq!(
+                        error,
+                        AuthenticationError::Refused(FailedCheck::CredentialMalformed)
+                    );
+                    refusal("header")
+                }
             }
         }
     }

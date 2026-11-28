@@ -14,6 +14,7 @@ use axum::{
     Router,
 };
 use registry_platform_audit::AuditProfile;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     access_token_typ_set, is_access_token_typ_pair, Claims, JwksFetcher, JwksFetcherConfig,
@@ -27,8 +28,8 @@ use zeroize::Zeroizing;
 
 use crate::{
     inbound::{metadata_url, require_caller, retry_after_seconds, Refusal},
-    token_verifier, AccessTokenAlgorithm, RateLimitOptions, ResourceServer, ResourceServerOptions,
-    TokenBucketOptions, VerifiedCaller,
+    token_verifier, AccessTokenAlgorithm, RateLimitOptions, ResourceServer, ResourceServerError,
+    ResourceServerOptions, TokenBucketOptions, VerifiedCaller,
 };
 
 const RESOURCE: &str = "https://gateway.example.test/mcp";
@@ -433,9 +434,15 @@ async fn every_refusal_is_a_problem_document() {
     let auth = authorization_server().await;
     let server = resource_server_for(&auth, 10, 10);
     let cases = [
-        (Refusal::Missing, 401, "Unauthorized", "unauthorized", true),
         (
-            Refusal::InvalidToken,
+            Refusal::Missing(FailedCheck::CredentialMissing),
+            401,
+            "Unauthorized",
+            "unauthorized",
+            true,
+        ),
+        (
+            Refusal::InvalidToken(FailedCheck::TokenAudience),
             401,
             "Unauthorized",
             "invalid-token",
@@ -593,6 +600,37 @@ fn retry_after_rounds_up_to_whole_seconds() {
 }
 
 #[tokio::test]
+async fn only_the_loopback_forms_are_a_development_resource_and_issuer() {
+    let auth = authorization_server().await;
+    for host in [
+        "127.0.0.1",
+        "127.0.0.2",
+        "[::1]",
+        "LOCALHOST",
+        "[::ffff:127.0.0.1]",
+    ] {
+        let mut options = options(&auth);
+        options.resource = format!("http://{host}:8095/mcp");
+        options.issuer = format!("http://{host}:8096");
+        assert_eq!(options.validate(), Ok(()), "{host}");
+    }
+    for host in [
+        "localhost.",
+        "app.localhost",
+        "10.0.0.1",
+        "[::ffff:10.0.0.1]",
+    ] {
+        let mut options = options(&auth);
+        options.resource = format!("http://{host}:8095/mcp");
+        assert_eq!(
+            options.validate(),
+            Err(ResourceServerError::Resource),
+            "{host}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn localhost_is_a_development_loopback_resource_and_issuer() {
     let auth = authorization_server().await;
     let mut options = options(&auth);
@@ -636,15 +674,53 @@ async fn a_token_that_already_names_an_actor_is_refused() {
         matched_client: Some(format!("client_id:{CHAT_HOST}")),
         scopes: vec![SCOPE.to_owned()],
     };
-    assert!(server.caller_for_test(&delegated, "token").is_err());
+    assert_eq!(
+        server.caller_for_test(&delegated, "token").err(),
+        Some(Refusal::InvalidToken(FailedCheck::Delegation))
+    );
+    claims
+        .extra
+        .insert("may_act".to_owned(), json!({"sub": "x"}));
     claims.extra.remove("act");
-    claims.sub = None;
-    let anonymous = VerifiedToken {
-        claims,
+    let may_act = VerifiedToken {
+        claims: claims.clone(),
         matched_client: Some(format!("client_id:{CHAT_HOST}")),
         scopes: vec![SCOPE.to_owned()],
     };
-    assert!(server.caller_for_test(&anonymous, "token").is_err());
+    assert_eq!(
+        server.caller_for_test(&may_act, "token").err(),
+        Some(Refusal::InvalidToken(FailedCheck::Delegation))
+    );
+    claims.extra.remove("may_act");
+    let verified = |claims: Claims, matched_client: Option<String>| VerifiedToken {
+        claims,
+        matched_client,
+        scopes: vec![SCOPE.to_owned()],
+    };
+    let matched = || Some(format!("client_id:{CHAT_HOST}"));
+
+    let mut anonymous = claims.clone();
+    anonymous.sub = None;
+    assert_eq!(
+        server
+            .caller_for_test(&verified(anonymous, matched()), "token")
+            .err(),
+        Some(Refusal::InvalidToken(FailedCheck::TokenClaims))
+    );
+    assert_eq!(
+        server
+            .caller_for_test(&verified(claims.clone(), None), "token")
+            .err(),
+        Some(Refusal::InvalidToken(FailedCheck::TokenClient))
+    );
+    let mut unbounded = claims;
+    unbounded.exp = None;
+    assert_eq!(
+        server
+            .caller_for_test(&verified(unbounded, matched()), "token")
+            .err(),
+        Some(Refusal::InvalidToken(FailedCheck::TokenClaims))
+    );
 }
 
 #[test]

@@ -2,6 +2,7 @@
 use crate::{CaseworkService, PostgresStore, ServiceError, StoreError};
 use chrono::{TimeDelta, Utc};
 use registry_casework_core::*;
+use registry_platform_authcommon::FailedCheck;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -140,7 +141,7 @@ impl PostgresStore {
                     CaseworkActsAs::Administrator | CaseworkActsAs::Requester => false,
                 };
                 if !authorized {
-                    return Err(StoreError::Forbidden);
+                    return Err(StoreError::Forbidden(FailedCheck::Operation));
                 }
                 transaction
                     .query(
@@ -174,12 +175,12 @@ impl PostgresStore {
                         )
                         .await?
                 }
-                CaseworkActsAs::Requester => return Err(StoreError::Forbidden),
+                CaseworkActsAs::Requester => return Err(StoreError::Forbidden(FailedCheck::Operation)),
             },
             DirectoryTargetPurpose::AbsenceCover => {
                 let person = person.ok_or(StoreError::Invalid)?;
                 if !can_manage_person(&transaction, actor, person).await? {
-                    return Err(StoreError::Forbidden);
+                    return Err(StoreError::Forbidden(FailedCheck::Operation));
                 }
                 if actor.role == CaseworkActsAs::Supervisor {
                     // A supervisor covers only inside the teams they lead, so a
@@ -250,7 +251,7 @@ impl PostgresStore {
         idempotency_key: &str,
     ) -> Result<i64, StoreError> {
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         validate_reason(
             idempotency_key,
@@ -380,7 +381,7 @@ impl PostgresStore {
             actor.role,
             CaseworkActsAs::Staff | CaseworkActsAs::Supervisor | CaseworkActsAs::Administrator
         ) {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         if !(1..=1_000).contains(&limit) {
             return Err(StoreError::Invalid);
@@ -587,7 +588,7 @@ impl PostgresStore {
         if !can_manage_person(&transaction, actor, managed_person).await?
             || !valid_absence_cover(&transaction, actor, managed_person, &input.cover).await?
         {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         if let Some(response) = assignment_replay(
             &transaction,
@@ -697,7 +698,7 @@ impl PostgresStore {
             let replay: AbsenceDeleteReplay =
                 serde_json::from_value(response).map_err(StoreError::Json)?;
             if !can_manage_person(&transaction, actor, &replay.person).await? {
-                return Err(StoreError::Forbidden);
+                return Err(StoreError::Forbidden(FailedCheck::Operation));
             }
             audit.record_outcome(crate::audit::AuditOutcome::Replayed);
             audit.commit(transaction).await?;
@@ -716,7 +717,7 @@ impl PostgresStore {
         let row=transaction.query_opt("SELECT absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision FROM casework_absences WHERE absence_id=$1 FOR UPDATE",&[&absence_id]).await?.ok_or(StoreError::NotFound)?;
         let record = absence_from_row(row)?;
         if !can_manage_person(&transaction, actor, &record.person).await? {
-            return Err(StoreError::Forbidden);
+            return Err(StoreError::Forbidden(FailedCheck::Operation));
         }
         let next = actual.checked_add(1).ok_or(StoreError::Corrupt)?;
         transaction
@@ -769,7 +770,7 @@ impl CaseworkService {
         idempotency_key: &str,
     ) -> Result<i64, ServiceError> {
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(StoreError::Forbidden.into());
+            return Err(StoreError::Forbidden(FailedCheck::Operation).into());
         }
         if expected_directory_revision < 0
             || !valid_directory_identifier(&request.team_id)
@@ -798,7 +799,7 @@ impl CaseworkService {
         idempotency_key: &str,
     ) -> Result<i64, ServiceError> {
         if actor.role != CaseworkActsAs::Administrator {
-            return Err(StoreError::Forbidden.into());
+            return Err(StoreError::Forbidden(FailedCheck::Operation).into());
         }
         if expected_directory_revision < 0
             || !valid_directory_identifier(team_id)

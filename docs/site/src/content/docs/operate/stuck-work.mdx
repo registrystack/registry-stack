@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -50,6 +50,7 @@ Four more gauges show holds and attention, all read from the database at scrape 
 - `coordinator_runs_restore_review_required` counts runs held for review after a restore.
 - `coordinator_hold_active{hold}` is 1 while the `restore` or `admissions` hold is set.
 - `coordinator_metrics_sample_failures_total{sample}` counts scrapes where the dispatch queue or the held-work gauges could not be read.
+- `coordinator_request_refusals_total{check}` counts requests refused to a caller, by the check that failed.
 - `coordinator_oldest_due_age_seconds` is how long ago the oldest pending step was due, counting only steps the worker can claim.
   Runs a worker cannot claim, such as runs waiting for restore review or with a refused definition, are not counted.
   Read `coordinator_runs_attention` and `coordinator_hold_active` beside it.
@@ -90,6 +91,7 @@ Fix the definition and apply it instead.
 - `breg_ingestion_runs{state}` counts durable ingestion runs in `open`, `complete`, `cancelled`, or `blocked`.
 - `breg_metrics_sample_failures_total{sample}` counts scrapes where a database sample failed.
   The `sample` label is `queue`, `record-timer`, `hook-delivery`, or `ingestion-run`.
+- `breg_request_refusals_total{check}` counts requests refused to a caller, by the check that failed.
 - `bregctl status` and `bregctl doctor` take `--runtime-config`.
   Doctor reports `external-refresh.status` and `external-projection.status`.
 
@@ -122,6 +124,7 @@ The signals show a failing dependency instead.
   Outcomes other than `success` are failures, for example `timeout`, `transport`, `credential`, and `rate-limited`.
 - `evidence_signer_requests_total{signer,outcome}` does the same for the signer.
 - `evidence_source_shape_drift_total{source}` rises when a source starts answering in a shape the bundle does not describe.
+- `evidence_request_refusals_total{check}` counts requests refused with `401`, `403` or `429`, by the check that failed. A rise under `key-source-unavailable` means Evidence cannot reach or use the issuer's key set, or a caller named a published key that Evidence refuses.
 - `evidence_rate_limiter_tracked_keys` rises toward its ceiling of 100,000 keys.
 - With OID4VCI enabled, `evidence_oid4vci_store_entries` approaches `evidence_oid4vci_store_capacity`, and `evidence_oid4vci_outcomes_total{outcome}` counts `store-saturated` and `store-fault`.
 - `evidencectl doctor --runtime-config` is a preflight of the runtime file and, with `--require-audit-under`, of the audit path.
@@ -138,7 +141,7 @@ Use the metrics.
 **Read more.** [Preflight the audit path](../evidence-audit/), [OID4VCI metrics](../../configure/evidence-oid4vci/#metrics).
 
 {/* Evidence: crates/registry-evidence/src/observability/golden-scrape.txt;
-    crates/registry-evidence/src/observability.rs, evidence_source_shape_drift_total;
+    crates/registry-evidence/src/observability.rs, evidence_source_shape_drift_total and evidence_request_refusals_total;
     crates/registry-evidence-oid4vci/src/observability.rs, evidence_oid4vci_store_capacity;
     crates/registry-evidencectl/src/runtime.rs, DoctorArgs. */}
 
@@ -151,6 +154,7 @@ Use the metrics.
   It is the overdue signal.
 - `casework_database_up` is 0 when the database cannot answer the review counts.
 - `casework_metrics_sample_failures_total{sample}` counts each read of the review counts or the completion backlog that failed.
+- `casework_request_refusals_total{check}` counts requests refused to a caller, by the check that failed.
 - `casework_completion_deliveries{state}` counts completion deliveries in `pending`, `retrying`, `leased`, `unknown`, `dead-lettered`, or `expired`.
 - `casework_completion_oldest_undelivered_age_seconds` is how long the oldest undelivered completion has waited.
 - `caseworkctl status` and `caseworkctl doctor` take `--runtime-config`.
@@ -184,6 +188,7 @@ See the retention guide for what is kept.
 - `messaging_provider_attempts_total{outcome}` counts `accepted`, `transient`, `permanent`, and `maybe-sent`.
 - `messaging_provider_callbacks_total{outcome}` counts callbacks, including `unmatched` and `ambiguous`.
 - `messaging_metrics_sample_failures_total{sample}` counts scrapes where the dispatch queue could not be read.
+- `messaging_request_refusals_total{check}` counts requests refused to a caller, by the check that failed.
 - `messagingctl messages list --status` filters by status, with `--limit` (default 50).
 
 A message whose attempts run out leaves `pending` and becomes `failed`.
@@ -221,6 +226,7 @@ These series show stuck work:
 - `scheduling_hook_deliveries{state}` counts observer-hook deliveries by state, and `scheduling_hook_oldest_pending_age_seconds` is the age of the oldest pending one.
 - `scheduling_worker_last_success_age_seconds{worker}` is the age of the last completed pass of the `hold-expiry` or `retention` worker.
 - `scheduling_metrics_sample_failures_total{queue}` counts scrapes where a queue could not be read.
+- `scheduling_request_refusals_total{check}` counts requests refused to a caller, by the check that failed.
 
 The operate page lists the states and the other series.
 Its probes are `/healthz` and `/readyz`.
@@ -252,6 +258,7 @@ The signals are:
   The reasons are `page-fault`, `destination-stop`, `refusal-limit`, and `store-unreachable`.
   A standby process that finds the lease held by another process is not counted.
 - `adapter_job_hook_refusals_total{reason}` counts refused hook-trigger requests.
+- `adapter_job_request_refusals_total{check}` counts hook requests refused for a credential or the rate limit, by the check that failed.
 - `adapter_job_gauge_sample_failures_total` counts item count reads that failed or timed out. Scrapes served from the cached result do not count again.
   The items gauge then has no samples.
 
@@ -280,6 +287,7 @@ It can publish metrics on an optional `metricsListener.bind`, off by default and
 - `adapter_journal_write_failures_total` counts audit journal writes that failed.
 - `adapter_retention_sweep_failures_total{store}` counts failed retention sweeps of the `journal`, `idempotency`, or `other` store.
 - `adapter_http_requests_total{route,method,status}` counts answered requests.
+- `adapter_request_refusals_total{check}` counts refused requests by the check that failed.
 
 The operate page has the full table.
 
@@ -302,6 +310,7 @@ With the optional `metricsListener` turned on, Documents also publishes these se
 - `documents_worker_last_success_age_seconds{worker}` is the age of the last completed pass of the `cleanup` worker. The other workers have no age, so watch their overdue ages.
 - `documents_metrics_sample_failures_total{sample}` counts scrapes where a queue could not be read.
 - `documents_http_requests_total{route,method,status}` counts answered requests.
+- `documents_request_refusals_total{check}` counts requests refused to a caller, by the check that failed.
 
 The operate page has the full table.
 
@@ -340,6 +349,7 @@ Readiness also fails when the audit writer has stopped.
 Render can also publish metrics on an optional `metricsListener`, which is off by default and must bind a private address.
 
 - `render_documents_total{operation,result}` counts calls, with `operation` of `render` or `seal` and `result` of `ok`, `refused`, or `failed`.
+- `render_request_refusals_total{check}` counts requests refused to a caller, by the check that failed.
 - `render_audit_write_failures_total` counts failed audit writes.
 - `render_seal_certificate_expiry_seconds{seal}` is the time until each seal certificate stops being valid, negative once it has.
 

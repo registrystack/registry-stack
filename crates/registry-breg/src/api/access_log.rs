@@ -50,7 +50,7 @@ async fn read(
     let mut surface = match super::authorize_route_with_reason(&service, &route, &claims, &options)
     {
         Ok(surface) => surface,
-        Err(reason) => {
+        Err(refusal) => {
             return audited_read_concealment(
                 &service,
                 &route,
@@ -58,7 +58,7 @@ async fn read(
                 &claims,
                 path.get("record_id"),
                 &correlation,
-                reason,
+                refusal,
             )
             .await;
         }
@@ -78,17 +78,23 @@ async fn read(
         )
         .await;
     }
-    if claims.principal().is_none()
-        || record_id.is_none_or(|id| !valid_canonical_record_uuid(id))
+    let refused_check = if claims.principal().is_none() {
+        Some(FailedCheck::TokenClaims)
+    } else if record_id.is_none_or(|id| !valid_canonical_record_uuid(id))
         || headers.contains_key(crate::subject_access_log::REQUESTER_HEADER)
         || headers.contains_key(crate::subject_access_log::PURPOSE_HEADER)
     {
+        Some(FailedCheck::Visibility)
+    } else {
+        None
+    };
+    if let Some(check) = refused_check {
         return audited_read_refusal(
             &service,
             &route,
             &surface,
             record_id,
-            concealed(),
+            concealed(check),
             &correlation,
         )
         .await;
@@ -121,7 +127,7 @@ async fn read(
                 .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response
         }
-        Ok(None) => concealed(),
+        Ok(None) => concealed(FailedCheck::Visibility),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
         Err(_) => unavailable(),
     }

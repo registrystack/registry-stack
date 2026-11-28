@@ -527,7 +527,7 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
                 None,
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(_)))
     ));
 
     let bulk_a = (0..100)
@@ -553,7 +553,7 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
                 None,
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(_)))
     ));
     let staff_absence_people = fixture
         .service
@@ -583,7 +583,7 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
                 None,
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(_)))
     ));
     let revision = fixture
         .service
@@ -743,7 +743,7 @@ async fn directory_targets_are_paged_query_bound_and_recheck_current_authority()
                 None,
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(_)))
     ));
     let unrelated_supervisor = actor("unrelated", CaseworkActsAs::Supervisor, "supervisor");
     let empty = fixture
@@ -1006,7 +1006,7 @@ async fn supervisor_cannot_record_cover_from_an_unsupervised_shared_team() {
                 "unsupervised-shared-cover",
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(_)))
     ));
 }
 
@@ -1166,7 +1166,7 @@ async fn absence_update_preserves_owner_and_delete_replay_rechecks_current_autho
                 "delete-own-absence",
             )
             .await,
-        Err(ServiceError::Store(StoreError::Forbidden))
+        Err(ServiceError::Store(StoreError::Forbidden(_)))
     ));
 }
 

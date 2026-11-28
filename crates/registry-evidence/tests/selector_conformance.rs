@@ -38,6 +38,7 @@ use registry_evidence::selector::{
 };
 use registry_evidence::signing::{jwks_document, EvidenceSigner};
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_crypto::{sign, LocalJwkSigner, PrivateJwk, SigningProvider};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
 use serde_json::{json, Value};
@@ -527,7 +528,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
             "record_reference",
             SelectorValue::String("synthetic-record-001".to_owned()),
         )])),
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::AccessProfile),
     )
     .await;
     executed.insert("identifier-possession-without-entitlement");
@@ -629,14 +630,13 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
             "event_reference": "synthetic-event-001"
         }}
     }));
-    assert!(matches!(
-        service
-            .authorize(&grant_source_without_id, &grant_request(None))
-            .await,
-        Err(AuthorizationStageError::Authorization(
-            AuthorizationError::Unauthorized
-        ))
-    ));
+    assert_authorization_error(
+        &service,
+        &grant_source_without_id,
+        &grant_request(None),
+        AuthorizationError::Unauthorized(FailedCheck::TaskGrantClaims),
+    )
+    .await;
     executed.insert("authenticated-grant-id-not-bound");
 
     let mut wrong_grant_source_issuer = task_grant_claims(json!({
@@ -651,7 +651,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
         &service,
         &access_token(wrong_grant_source_issuer),
         &grant_request(None),
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::AccessProfile),
     )
     .await;
     executed.insert("authenticated-grant-source-issuer-not-bound");
@@ -663,7 +663,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
             PROPERTY_WITH_EVENT,
             vec![subject("subject", "demographics-v1", None)],
         ),
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::SubjectSelector),
     )
     .await;
     executed.insert("alternative-field-set-not-inferred");
@@ -684,7 +684,13 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
             subject("subject-b", "opaque-record-v1", role_a.clone()),
         ],
     );
-    assert_authorization_error(&service, &base, &swapped, AuthorizationError::Unauthorized).await;
+    assert_authorization_error(
+        &service,
+        &base,
+        &swapped,
+        AuthorizationError::Unauthorized(FailedCheck::SubjectSelector),
+    )
+    .await;
     executed.insert("swapped-role-selectors");
 
     let substituted = request(
@@ -698,7 +704,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
         &service,
         &base,
         &substituted,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::SubjectSelector),
     )
     .await;
     executed.insert("unauthorized-subject-b-substitution");
@@ -711,7 +717,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
         &service,
         &base,
         &missing_role,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::SubjectSelector),
     )
     .await;
     executed.insert("missing-one-role");
@@ -727,7 +733,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
         &service,
         &base,
         &duplicate_role,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::SubjectSelector),
     )
     .await;
     executed.insert("duplicate-subject-role");
@@ -743,7 +749,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
         &service,
         &base,
         &unknown_role,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::SubjectSelector),
     )
     .await;
     executed.insert("unknown-subject-role");
@@ -766,7 +772,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
         &service,
         &base,
         &union_attempt,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::AccessProfile),
     )
     .await;
     executed.insert("entitlement-union-across-roles");
@@ -887,7 +893,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
                 ]),
             )],
         ),
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::SubjectSelector),
     )
     .await;
     executed.insert("unauthorized-profile");
@@ -901,7 +907,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
         &service,
         &base,
         &wrong_purpose,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::Purpose),
     )
     .await;
     executed.insert("unauthorized-purpose");
@@ -969,7 +975,7 @@ async fn standing_agent_requires_an_explicit_agent_profile() {
         &service,
         &access_token(json!({"registry_actor_kind": "agent"})),
         &request,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::AccessProfile),
     )
     .await;
     assert!(service.server.received_requests().await.unwrap().is_empty());
@@ -986,10 +992,61 @@ async fn standing_agent_requires_an_explicit_agent_profile() {
         &bound,
         &access_token(json!({"registry_actor_kind": "service"})),
         &request,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::AccessProfile),
     )
     .await;
     assert!(bound.server.received_requests().await.unwrap().is_empty());
+}
+
+/// The package grant ceiling names the actor kinds and audiences a definition
+/// serves for every caller, so a standing caller outside it is counted under
+/// the member for the claim that failed, not under a task-grant member.
+#[tokio::test]
+async fn a_package_grant_ceiling_refusal_is_counted_under_the_claim_that_failed() {
+    let request = grant_request(None);
+
+    let wrong_actor_kind = prepare_service_with_ceiling(
+        false,
+        None,
+        Some(("agent", &format!("\"{EVIDENCE_AUDIENCE}\""))),
+    )
+    .await;
+    assert_authorization_error(
+        &wrong_actor_kind,
+        &access_token(json!({})),
+        &request,
+        AuthorizationError::Unauthorized(FailedCheck::ActorKind),
+    )
+    .await;
+
+    let wrong_audience =
+        prepare_service_with_ceiling(false, None, Some(("service", "\"urn:example:other\""))).await;
+    assert_authorization_error(
+        &wrong_audience,
+        &access_token(json!({})),
+        &request,
+        AuthorizationError::Unauthorized(FailedCheck::AccessProfile),
+    )
+    .await;
+    let subject = json!({
+        "given_name": "Adaeze",
+        "family_name": "Okafor",
+        "birth_date": "1990-07-11",
+        "event_reference": "synthetic-event-001"
+    });
+    let wrong_audience_for_a_grant = prepare_service_with_ceiling(
+        false,
+        None,
+        Some(("service, agent", "\"urn:example:other\"")),
+    )
+    .await;
+    assert_authorization_error(
+        &wrong_audience_for_a_grant,
+        &access_token(task_grant_claims(subject)),
+        &request,
+        AuthorizationError::Unauthorized(FailedCheck::TaskGrantBinding),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1000,7 +1057,7 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
         &service,
         &access_token(json!({})),
         &request,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::AccessProfile),
     )
     .await;
     let subject = json!({
@@ -1010,23 +1067,36 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
         "event_reference": "synthetic-event-001"
     });
 
-    for (name, member, value) in [
+    for (name, member, value, check) in [
         (
             "source issuer",
             "registry_grant_source_issuer",
             json!("https://other.invalid"),
+            FailedCheck::AccessProfile,
         ),
-        ("client", "registry_grant_client", json!("other-client")),
+        (
+            "client",
+            "registry_grant_client",
+            json!("other-client"),
+            FailedCheck::TaskGrantBinding,
+        ),
         (
             "resource",
             "registry_grant_resource",
             json!("other-resource"),
+            FailedCheck::TaskGrantBinding,
         ),
-        ("purpose", "registry_purpose", json!("other-purpose")),
+        (
+            "purpose",
+            "registry_purpose",
+            json!("other-purpose"),
+            FailedCheck::AccessProfile,
+        ),
         (
             "requirement",
             "registry_grant_bounds",
             json!({"type":"evidence", "requirement":"urn:example:other"}),
+            FailedCheck::AccessProfile,
         ),
     ] {
         let mut claims = task_grant_claims(subject.clone());
@@ -1035,7 +1105,7 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
             &service,
             &access_token(claims),
             &request,
-            AuthorizationError::Unauthorized,
+            AuthorizationError::Unauthorized(check),
         )
         .await;
         assert!(!name.is_empty());
@@ -1047,7 +1117,7 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
         &service,
         &access_token(wrong_actor),
         &request,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::ActorKind),
     )
     .await;
 
@@ -1057,7 +1127,7 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
         &service,
         &access_token(expired),
         &request,
-        AuthorizationError::Unauthorized,
+        AuthorizationError::Unauthorized(FailedCheck::TaskGrantExpired),
     )
     .await;
 
@@ -1102,6 +1172,16 @@ async fn prepare_service_for_actor(
     write_source_secret: bool,
     profile_actor: Option<&str>,
 ) -> PreparedService {
+    prepare_service_with_ceiling(write_source_secret, profile_actor, None).await
+}
+
+/// `ceiling` is the actor kinds and audiences, as YAML flow sequence bodies,
+/// that every requirement's package grant ceiling admits.
+async fn prepare_service_with_ceiling(
+    write_source_secret: bool,
+    profile_actor: Option<&str>,
+    ceiling: Option<(&str, &str)>,
+) -> PreparedService {
     let temporary = tempfile::tempdir().expect("temporary selector conformance root");
     let root = temporary
         .path()
@@ -1129,6 +1209,16 @@ async fn prepare_service_for_actor(
             config.replacen(marker, &format!("{marker}    actorKind: {actor}\n"), 1),
         )
         .unwrap();
+    }
+    if let Some((actor_kinds, audiences)) = ceiling {
+        let config_path = bundle_root.join("evidence.yaml");
+        let config = fs::read_to_string(&config_path).unwrap();
+        let marker = "  purposes:\n";
+        assert!(config.contains(marker));
+        let block = format!(
+            "  grantCeiling:\n    authorities: [statutory, organizational, consent, delegated, explicit-request]\n    actorKinds: [{actor_kinds}]\n    valueOrigins: [authenticated-context, authenticated-grant, request]\n    audiences: [{audiences}]\n{marker}"
+        );
+        fs::write(&config_path, config.replace(marker, &block)).unwrap();
     }
     write_secret(&secret_root, "audit-key", AUDIT_KEY);
     write_secret(&secret_root, "binding-key", BINDING_KEY);
@@ -1379,9 +1469,9 @@ async fn assert_authorization_error(
         let stage = match first {
             Ok(_) => "authorized",
             Err(AuthorizationStageError::Authentication) => "authentication",
-            Err(AuthorizationStageError::Authorization(AuthorizationError::Unauthorized)) => {
-                "unauthorized"
-            }
+            Err(AuthorizationStageError::Authorization(AuthorizationError::Unauthorized(
+                check,
+            ))) => check.as_str(),
             Err(AuthorizationStageError::Authorization(AuthorizationError::Selector)) => "selector",
             Err(AuthorizationStageError::Authorization(AuthorizationError::AmbiguousAuthority)) => {
                 "ambiguous-authority"

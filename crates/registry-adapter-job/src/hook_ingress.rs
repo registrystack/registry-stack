@@ -18,6 +18,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures::StreamExt as _;
 use registry_adapter_core::AdapterJob;
 use registry_adapter_engine::job_sources::{HookSourceConfig, JobRuntimeConfig};
+use registry_platform_authcommon::{record_refusal, FailedCheck, RefusalNote};
 use registry_platform_config::{ProtectedSecret, SecretError, SecretResolver};
 use registry_platform_crypto::mac::constant_time_eq;
 use registry_platform_ratelimit::token_bucket::{
@@ -365,35 +366,43 @@ impl BasicCredential {
         Ok(Self { username, password })
     }
 
-    fn authenticates(&self, authorization: &[u8]) -> bool {
+    /// `Ok` for the exact canonical pair, else the check that refused it.
+    fn authenticates(&self, authorization: &[u8]) -> Result<(), FailedCheck> {
+        let malformed = FailedCheck::CredentialMalformed;
         if authorization.len() > MAX_BASIC_PAYLOAD_BYTES + 6 {
-            return false;
+            return Err(malformed);
         }
         let Some((scheme, payload)) = split_once(authorization, b' ') else {
-            return false;
+            return Err(malformed);
         };
-        if !scheme.eq_ignore_ascii_case(b"Basic")
-            || payload.is_empty()
+        if !scheme.eq_ignore_ascii_case(b"Basic") {
+            return Err(FailedCheck::CredentialMissing);
+        }
+        if payload.is_empty()
             || payload.iter().any(u8::is_ascii_whitespace)
             || payload.len() > MAX_BASIC_PAYLOAD_BYTES
         {
-            return false;
+            return Err(malformed);
         }
         let Ok(mut decoded) = STANDARD.decode(payload).map(Zeroizing::new) else {
-            return false;
+            return Err(malformed);
         };
         let canonical = Zeroizing::new(STANDARD.encode(decoded.as_slice()));
         if canonical.as_bytes() != payload {
-            return false;
+            return Err(malformed);
         }
         let Some(colon) = decoded.iter().position(|byte| *byte == b':') else {
-            return false;
+            return Err(malformed);
         };
         let password = Zeroizing::new(decoded.split_off(colon + 1));
         decoded.truncate(colon);
         let username_matches = constant_time_eq(decoded.as_slice(), self.username.expose_secret());
         let password_matches = constant_time_eq(password.as_slice(), self.password.expose_secret());
-        username_matches & password_matches
+        if username_matches & password_matches {
+            Ok(())
+        } else {
+            Err(FailedCheck::SharedSecret)
+        }
     }
 }
 
@@ -434,6 +443,9 @@ async fn receive_hook_until(
     if let Some(reason) = refusal_reason(answer.status()) {
         metrics.record_hook_refusal(reason);
     }
+    if let Some(note) = answer.extensions().get::<RefusalNote>() {
+        record_refusal!(metrics.refusals(), *note);
+    }
     answer
 }
 
@@ -468,11 +480,14 @@ async fn answer_hook(
             None,
         );
     }
-    if !authenticated(request.headers(), &source.credential) {
-        return response(
-            StatusCode::UNAUTHORIZED,
-            "adapter.job.hook-unauthenticated",
-            None,
+    if let Err(check) = authenticated(request.headers(), &source.credential) {
+        return noted(
+            response(
+                StatusCode::UNAUTHORIZED,
+                "adapter.job.hook-unauthenticated",
+                None,
+            ),
+            check,
         );
     }
     let retry_after = match source.limiter.check("source", 1).await {
@@ -491,10 +506,13 @@ async fn answer_hook(
         }
     };
     if let Some(retry_after) = retry_after {
-        return response(
-            StatusCode::TOO_MANY_REQUESTS,
-            "adapter.job.hook-rate-limited",
-            Some(retry_after.as_secs_f64().ceil().max(1.0) as u64),
+        return noted(
+            response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "adapter.job.hook-rate-limited",
+                Some(retry_after.as_secs_f64().ceil().max(1.0) as u64),
+            ),
+            FailedCheck::RateLimit,
         );
     }
     let discarded = tokio::select! {
@@ -532,15 +550,21 @@ async fn answer_hook(
     }
 }
 
-fn authenticated(headers: &HeaderMap, credential: &BasicCredential) -> bool {
+fn authenticated(headers: &HeaderMap, credential: &BasicCredential) -> Result<(), FailedCheck> {
     let mut values = headers.get_all(AUTHORIZATION).iter();
     let Some(value) = values.next() else {
-        return false;
+        return Err(FailedCheck::CredentialMissing);
     };
     if values.next().is_some() {
-        return false;
+        return Err(FailedCheck::CredentialMalformed);
     }
     credential.authenticates(value.as_bytes())
+}
+
+/// Mark a response as the refusal of `check`, for the ingress to record.
+fn noted(mut response: Response<Body>, check: FailedCheck) -> Response<Body> {
+    response.extensions_mut().insert(RefusalNote::new(check));
+    response
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -801,7 +825,7 @@ mod tests {
             "Basic {}",
             STANDARD.encode(b"kobo-webhook:correct horse battery staple")
         );
-        assert!(credential.authenticates(exact.as_bytes()));
+        assert_eq!(credential.authenticates(exact.as_bytes()), Ok(()));
         for refused in [
             String::new(),
             "Bearer token".to_string(),
@@ -812,7 +836,10 @@ mod tests {
                 STANDARD.encode(b"wrong:correct horse battery staple")
             ),
         ] {
-            assert!(!credential.authenticates(refused.as_bytes()), "{refused:?}");
+            assert!(
+                credential.authenticates(refused.as_bytes()).is_err(),
+                "{refused:?}"
+            );
         }
         assert_eq!(format!("{credential:?}"), "BasicCredential([REDACTED])");
     }
@@ -1102,6 +1129,82 @@ mod tests {
                 .any(|line| line == "adapter_job_hook_refusals_total{reason=\"body-timeout\"} 0"),
             "an accepted hook is not a refusal"
         );
+    }
+
+    #[tokio::test]
+    async fn each_refused_credential_is_counted_under_its_check_with_an_unchanged_answer() {
+        let (root, resolver) = secret_resolver();
+        let source = Arc::new(HookSource {
+            credential: BasicCredential::resolve("kobo-submissions", &source_config(), &resolver)
+                .expect("the credential resolves"),
+            limiter: TokenBucketLimiter::new(TokenBucketConfig {
+                requests_per_minute: 60,
+                burst: 1,
+            })
+            .expect("a bounded rate limit"),
+        });
+        let metrics = Arc::new(JobMetrics::default());
+        let state = IngressState {
+            sources: Arc::new(BTreeMap::from([("/hooks/kobo".to_string(), source)])),
+            gate: Arc::new(HookPassGate::default()),
+            metrics: Arc::clone(&metrics),
+        };
+        let send = |headers: Vec<String>| {
+            let mut request = Request::builder().method(Method::POST).uri("/hooks/kobo");
+            for value in headers {
+                request = request.header(AUTHORIZATION, value);
+            }
+            receive_hook_until(
+                State(state.clone()),
+                request.body(Body::empty()).expect("a hook request"),
+                std::future::pending(),
+            )
+        };
+        let password =
+            std::fs::read_to_string(root.path().join("password")).expect("the synthetic password");
+        let good = basic_header(&password);
+        let wrong = basic_header(&uuid::Uuid::new_v4().to_string());
+        let unauthenticated = [
+            (vec![], "credential-missing"),
+            (vec!["Bearer token".to_string()], "credential-missing"),
+            (vec![good.clone(), good.clone()], "credential-malformed"),
+            (vec!["Basic !!!".to_string()], "credential-malformed"),
+            (vec![wrong], "shared-secret"),
+        ];
+        for (headers, check) in &unauthenticated {
+            let answer = send(headers.clone()).await;
+            assert_eq!(answer.status(), StatusCode::UNAUTHORIZED, "{check}");
+            assert_eq!(
+                answer.headers().get(WWW_AUTHENTICATE),
+                Some(&HeaderValue::from_static(
+                    "Basic realm=\"adapter-job-hook\", charset=\"UTF-8\""
+                ))
+            );
+            let body = axum::body::to_bytes(answer.into_body(), 1024)
+                .await
+                .expect("a static body");
+            assert_eq!(&body[..], br#"{"code":"adapter.job.hook-unauthenticated"}"#);
+        }
+        assert_eq!(
+            send(vec![good.clone()]).await.status(),
+            StatusCode::ACCEPTED
+        );
+        let limited = send(vec![good]).await;
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(limited.headers().contains_key(RETRY_AFTER));
+        let text = metrics.render(None);
+        let counted = |check: &str| {
+            let line = format!("adapter_job_request_refusals_total{{check=\"{check}\"}}");
+            text.lines()
+                .find_map(|found| found.strip_prefix(&format!("{line} ")))
+                .unwrap_or_else(|| panic!("{check} is declared: {text}"))
+                .to_owned()
+        };
+        assert_eq!(counted("credential-missing"), "2");
+        assert_eq!(counted("credential-malformed"), "2");
+        assert_eq!(counted("shared-secret"), "1");
+        assert_eq!(counted("rate-limit"), "1");
+        assert_eq!(counted("scope"), "0");
     }
 
     #[test]

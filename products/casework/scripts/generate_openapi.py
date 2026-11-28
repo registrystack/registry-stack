@@ -36,8 +36,8 @@ class Endpoint:
 
 # Transport metadata only. DTO shapes and all statuses/problems come from Rust.
 ENDPOINTS = [
-    Endpoint("GET","/health","health",public=True),
-    Endpoint("GET","/ready","readiness",public=True),
+    Endpoint("GET","/health","health","HealthStatus",public=True),
+    Endpoint("GET","/ready","readiness","ReadyStatus",public=True),
     Endpoint("GET","/.well-known/jwks.json","getTaskAuthorityKeys","TaskAuthorityJwks",public=True),
     Endpoint("GET","/v1/casework","describeCasework","Description"),
     Endpoint("GET","/v1/review-policies","listReviewPolicies","ReviewPolicyClosureList"),
@@ -127,6 +127,8 @@ def merge_wire_schemas(wire: dict) -> dict:
             put(component(name), rewrite(definition))
         put(root_name, rewrite(schema))
     result["TaskAuthorityJwks"] = {"type":"object","description":"JSON Web Key Set of the configured task authority's public verification keys.","required":["keys"],"properties":{"keys":{"type":"array","items":{"type":"object"}}}}
+    for name,word in (("HealthStatus","ok"),("ReadyStatus","ready")):
+        result[name]={"type":"object","description":"Probe answer. Members beside status may be added.","required":["status"],"properties":{"status":{"type":"string","enum":[word]}}}
     return result
 
 def parameter(name: str, where: str, schema: dict, required: bool = False, description: str = "") -> dict:
@@ -281,7 +283,8 @@ def verify_refs(document: dict) -> None:
 
 def verify_source(repository_root: Path, openapi: dict) -> None:
     source=(repository_root/"crates/registry-casework/src/http.rs").read_text().split("#[cfg(test)]",1)[0]
-    routes=set(re.findall(r'\.route\(\s*"([^"]+)"',source))
+    probe_paths={"HEALTH_PATH":"/health","READY_PATH":"/ready"}
+    routes={literal or probe_paths[name] for literal,name in re.findall(r'\.route\(\s*(?:"([^"]+)"|([A-Z_]+_PATH))',source)}
     if routes!=set(openapi["paths"]):raise ValueError(f"runtime route inventory drifted: {sorted(routes ^ set(openapi['paths']))}")
     if "SourceBinding" in openapi["components"]["schemas"]:raise ValueError("retired SourceBinding remains")
     rendered=json.dumps(openapi)

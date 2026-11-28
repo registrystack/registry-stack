@@ -238,7 +238,7 @@ pub(in crate::api) async fn observe_target(
             ReadServiceError::FieldEncryptionUnavailable => field_encryption_unavailable(),
             _ => unavailable(),
         })?
-        .ok_or_else(concealed)?;
+        .ok_or_else(|| concealed(FailedCheck::Visibility))?;
     // Held bytes have already passed the ordinary GET terminal audit gate.
     let value: Value = serde_json::from_slice(read.body()).map_err(|_| unavailable())?;
     let data = value
@@ -277,7 +277,7 @@ pub(in crate::api) async fn observe_target(
     )
     .map_err(|_| unavailable())?
     {
-        return Err(concealed());
+        return Err(concealed(FailedCheck::RowBoundary));
     }
     Ok(Some(ObservedTarget { revision, current }))
 }

@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-breg
   - registry-casework
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -165,6 +165,16 @@ Correct the responsible policy, grants, or credentials and rerun the test before
   components as well as the runtime.
 - Keep the refusal surface uninformative end to end. Do not let the edge add distinguishing error
   pages, redirects, or timing differences in front of the runtime's closed problem shapes.
+- Alert on the runtime's refusal counter. Each runtime counts every refused request by the check that
+  refused it, in `<product>_request_refusals_total{check}`, and writes one `request refused` log line
+  per refusal with no caller value. The line is limited to five per check per minute, so the counter
+  is the signal ([refused requests](../#refused-requests)).
+- Treat loopback as one rule on every outbound destination. A host is loopback when it is an
+  address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name
+  `localhost`, which the runtime connects to only through loopback addresses. `a.localhost` and
+  `localhost.` are ordinary named hosts. Allow plain `http` only to loopback.
+- Leave `allowedPrivateCidrs` out unless a destination needs a private address. An omitted or empty
+  list admits no private address. Name the smallest range that holds the service when one does.
 - Do not let an edge cache store an authenticated response. BReg, Casework and Registry Evidence
   mark such responses `no-store`. Render marks only its error responses, so set the cache policy for
   Render at the edge.

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -29,8 +29,35 @@ and the restore drill is in
   clients, signature from the configured key set) and resolves exactly one access profile before it
   reads a body or the store.
   An unreachable key set answers 503, never 401.
-  The deployment trusts one issuer; `allowedClients: unrestricted` is refused.
+  The deployment trusts one issuer.
+  `allowedClients` is required in every runtime file. `allowedClients: from-package` admits the sorted
+  union of the access profiles' `requesterClients` and nothing more, so the package and the runtime
+  file cannot disagree. An explicit list must include every client an access profile names, or the
+  runtime refuses to start with `documents.runtime.profile-client-not-allowed`.
+  `allowedClients: unrestricted` and an empty list are refused in every mode.
   Declared issuer and key addresses are trusted on the operator's word (DOCUMENTS-RES-17).
+  A static key set (`jwksSource: static`) holds public keys only.
+  The runtime refuses to start on a set that carries a private member (`d`, `p`, `q`, `dp`, `dq`,
+  `qi`, `oth` or `k`), a symmetric key, a repeated member name, or a key without a unique `kid`.
+  The startup error names the rule and the key's position, never a key value.
+  Members it does not know, such as `x5c` or `ext`, are ignored.
+- The operator's view of a refusal: the answer to the caller names a problem code and no cause, so
+  an operator tells the causes apart from the private metrics listener and the log.
+  The Document Store counts every refused request by the check that refused it, in
+  `documents_request_refusals_total{check}` on the private metrics listener.
+  The `check` label is a closed set of 45 names such as `credential-missing`, `token-signature`,
+  `scope`, `actor-kind`, `access-profile`, `operation`, `ownership` and `visibility`, every one
+  published at zero, and no caller value becomes a label.
+  The counter covers a missing or refused credential, a token that resolves to no access profile, a
+  refused custody placement, a caller that sees a document but may not act on it, a document or
+  upload the caller may not see, and a verifier that cannot reach its key source
+  (`key-source-unavailable`).
+  Each refusal also writes one `request refused` log line with `failed_check` and the request's
+  trace id when it has one, at most five lines per check per minute, with `suppressed` counting what
+  a window held back.
+  A scope refusal carries a fixed remedy that names `authentication.oidc.scopeClaim`.
+  Neither the counter nor the line holds a token, claim, client, subject, scope or identifier, and
+  recording a refusal changes nothing the caller receives.
 - The custodian alone removes a document and issues, lists and revokes its grants.
   Under citizen delivery the citizen is the custodian and the reserving system keeps metadata and
   status only.
@@ -67,7 +94,13 @@ Findings name the member and rule, never the value.
     DOCUMENTS-SEC-03, DOCUMENTS-SEC-04, DOCUMENTS-SEC-05, DOCUMENTS-SEC-06, DOCUMENTS-SEC-08,
     DOCUMENTS-SEC-10, DOCUMENTS-SEC-11, DOCUMENTS-SEC-21, DOCUMENTS-SEC-24, DOCUMENTS-SEC-26,
     DOCUMENTS-SEC-32, DOCUMENTS-SEC-34, DOCUMENTS-SEC-48;
-    crates/registry-documents/src/http.rs ready, readiness_router;
+    crates/registry-documents/src/http.rs ready, readiness_router, refusal_response;
+    crates/registry-documents/src/metrics.rs, Metrics, count_requests,
+    the_refusal_counter_lists_every_check_from_zero_and_counts_by_check;
+    crates/registry-documents/tests/refusal_golden.rs,
+    every_refusal_is_counted_and_logged_under_the_check_it_failed,
+    every_refusal_answers_the_bytes_the_golden_file_holds;
+    crates/registry-platform-oidc/src/static_jwks.rs, StaticJwksError;
     crates/registry-documents/src/config.rs check_secret_providers, unrestricted_clients_are_refused,
     plaintext_database_is_refused_outside_test_builds,
     disabled_content_verification_requires_development_loopback,
@@ -81,6 +114,7 @@ Findings name the member and rule, never the value.
 
 `development-loopback` is the only listener setting that permits a disabled verifier or an `http`
 hook URL, and the hook URL must also be a loopback address.
+Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which the Document Store connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
 Do not set it in production.
 
 {/* Evidence: crates/registry-documents/src/config.rs

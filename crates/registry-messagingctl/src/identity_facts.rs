@@ -15,7 +15,7 @@ use std::path::Path;
 
 use registry_messaging::config::RuntimeConfig;
 use registry_messaging::package::LoadedPackage;
-use registry_messaging_core::{AccessProfiles, ActorKind};
+use registry_messaging_core::ActorKind;
 use registry_thunderid_tooling::identity_facts::{
     self, AccessProfile as FactsProfile, ActorKind as FactsActorKind, Admission, ClaimType,
     IdentityFacts,
@@ -30,17 +30,6 @@ const DEFAULT_SCOPE_CLAIM: &str = "scope";
 /// Claims the token verifier reads for other purposes; a scope claim named
 /// one of these grants no scope without a mapping Messaging does not offer.
 const RESERVED_SCOPE_CLAIMS: [&str; 4] = ["sub", "client_id", "azp", "aud"];
-
-/// The clients the package's access profiles name, sorted and distinct.
-pub(crate) fn requester_clients(profiles: &AccessProfiles) -> Vec<String> {
-    let mut clients: Vec<String> = profiles
-        .iter()
-        .flat_map(|profile| profile.requester_clients.iter().cloned())
-        .collect();
-    clients.sort();
-    clients.dedup();
-    clients
-}
 
 #[derive(Debug)]
 pub(crate) enum FactsError {
@@ -71,12 +60,10 @@ pub(crate) fn facts(
     loaded: &LoadedPackage,
 ) -> Result<IdentityFacts, FactsError> {
     let oidc = &config.authentication.oidc;
-    let admitted = &oidc.clients.allowed_clients;
-    let allowed = if admitted.is_empty() {
-        Admission::Unrestricted
-    } else {
-        Admission::Clients(admitted.clone())
-    };
+    let admitted = config
+        .admitted_clients(loaded.package.access_profiles())
+        .map_err(|error| FactsError::Unstatable(error.to_string()))?;
+    let allowed = Admission::Clients(admitted.into_vec());
     let mut facts = IdentityFacts::new(
         PRODUCT,
         oidc.provider.issuer.as_str(),
@@ -100,16 +87,6 @@ pub(crate) fn facts(
         if profile.required_scopes.is_empty() {
             return Err(FactsError::Unstatable(format!(
                 "the access profile `{}` requires no scope, so it names no scope to grant; list its scopes in requiredScopes",
-                profile.id
-            )));
-        }
-        if let Some(client) = profile
-            .requester_clients
-            .iter()
-            .find(|client| !allowed.admits(client))
-        {
-            return Err(FactsError::Unstatable(format!(
-                "the access profile `{}` names the client `{client}`, which authentication.oidc.allowedClients does not admit",
                 profile.id
             )));
         }

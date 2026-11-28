@@ -1439,7 +1439,11 @@ jobs:
       - name: Verify messagingctl messages commands
         env:
           MESSAGING_TEST_DATABASE_URL: postgresql://messaging:messaging_test@localhost:${{ job.services.postgres.ports['5432'] }}/messaging
-        run: cargo test --locked -p registry-messagingctl --features postgres-test --tests
+        # The provisioning journey needs a TLS server and runs in the
+        # contracts-journeys lane.
+        run: >-
+          cargo test --locked -p registry-messagingctl --features postgres-test --tests
+          -- --skip provision_then_apply_then_serve_with_split_roles
       - name: Send one email and one SMS through messagingctl dev
         env:
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
@@ -1993,6 +1997,46 @@ jobs:
           # pass count and no ignored test.
           for target in lib suite; do
             grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored' "${RUNNER_TEMP}/provision-postgres-${target}.log" || { echo "::error::expected the provisioning PostgreSQL ${target} tests to pass with no test ignored"; exit 1; }
+          done
+
+      - name: Product provisioning PostgreSQL journeys
+        if: matrix.lane == 'contracts-journeys'
+        shell: bash
+        env:
+          DATABASE_PORT: ${{ job.services.postgres.ports['5432'] }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${DATABASE_PORT}" =~ ^[0-9]+$ ]]; then
+            echo "::error::the provisioning journeys need the port of the TLS PostgreSQL service"
+            exit 1
+          fi
+          if [[ ! -s "${BREG_TEST_TLS_CA_PEM_PATH}" ]]; then
+            echo "::error::the provisioning journeys need the CA file ${BREG_TEST_TLS_CA_PEM_PATH}"
+            exit 1
+          fi
+          # Each journey provisions its product's database and roles on the
+          # TLS-only service, applies as the owner role and serves as the
+          # runtime role.
+          export PROVISION_TEST_DATABASE_URL="postgresql://breg:breg_test@localhost:${DATABASE_PORT}/postgres?sslmode=verify-full"
+          export PROVISION_TEST_DATABASE_CA="${BREG_TEST_TLS_CA_PEM_PATH}"
+          cargo test --locked -p registry-bregctl --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-bregctl.log"
+          cargo test --locked -p registry-caseworkctl --features postgres-test --test provision \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-caseworkctl.log"
+          cargo test --locked -p registry-coordinator --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-coordinator.log"
+          cargo test --locked -p registry-documentsctl --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-documentsctl.log"
+          cargo test --locked -p registry-messagingctl --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-messagingctl.log"
+          cargo test --locked -p registry-schedulingctl --features postgres-test --test provision_postgres \
+            | tee "${RUNNER_TEMP}/provision-journey-registry-schedulingctl.log"
+          # A run that selected no test still exits 0, so every log needs a
+          # pass count, no ignored test, and the journey's own line.
+          for package in registry-bregctl registry-caseworkctl registry-coordinator registry-documentsctl registry-messagingctl registry-schedulingctl; do
+            log="${RUNNER_TEMP}/provision-journey-${package}.log"
+            grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored' "${log}" || { echo "::error::expected the ${package} provisioning journey tests to pass with no test ignored"; exit 1; }
+            grep -Eq '^test ([a-z_]+::)?provision_then_apply_then_serve_with_[a-z_]+ \.\.\. ok$' "${log}" || { echo "::error::expected the ${package} provisioning journey to run and pass"; exit 1; }
           done
 
       - name: Stop PostgreSQL 16 for the provisioning floor test
