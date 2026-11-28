@@ -1700,6 +1700,9 @@ pub enum HttpError {
     /// A target that is absent or that the caller may not see, answered
     /// alike.
     NotFound(FailedCheck),
+    /// An absence that conceals nothing. It answers like `NotFound` and is
+    /// not recorded as a refusal.
+    Absent,
     PreconditionFailed,
     PreconditionRequired,
     IdempotencyKeyReused,
@@ -1726,9 +1729,9 @@ pub enum HttpError {
     Internal,
     Validation(ReviewValidationError),
 }
-// A refused operation carries the check its producer named. An absent or
-// concealed target is recorded as `visibility`, unless the producer named the
-// check that hid it.
+// A refused operation carries the check its producer named. A concealed
+// target is recorded as `visibility`, unless the producer named the check that
+// hid it. An absence that conceals nothing records no check.
 impl From<StoreError> for HttpError {
     fn from(e: StoreError) -> Self {
         match e {
@@ -1737,6 +1740,7 @@ impl From<StoreError> for HttpError {
             StoreError::CursorInvalid => Self::CursorInvalid,
             StoreError::IdempotencyExpired => Self::IdempotencyExpired,
             StoreError::NotFound => Self::NotFound(FailedCheck::Visibility),
+            StoreError::Absent => Self::Absent,
             StoreError::Forbidden(check) => Self::Forbidden(check),
             StoreError::Conflict => Self::PreconditionFailed,
             StoreError::AlreadyClaimed | StoreError::NotHolder => Self::ReviewTaskNotHeld,
@@ -1757,6 +1761,7 @@ impl From<ServiceError> for HttpError {
         match e {
             ServiceError::Store(e) => e.into(),
             ServiceError::NotFound(check) => Self::NotFound(check),
+            ServiceError::Absent => Self::Absent,
             ServiceError::Forbidden(check) => Self::Forbidden(check),
             ServiceError::ReviewValidation(e) => Self::Validation(e),
             ServiceError::Configuration => Self::Internal,
@@ -1843,7 +1848,8 @@ impl HttpError {
             Self::ReviewDistinctApproverRequired | Self::ReviewInitiatorExcluded => {
                 Some(FailedCheck::SeparationOfDuties)
             }
-            Self::PreconditionFailed
+            Self::Absent
+            | Self::PreconditionFailed
             | Self::PreconditionRequired
             | Self::IdempotencyKeyReused
             | Self::IdempotencyExpired
@@ -1883,7 +1889,6 @@ impl HttpError {
                     | FailedCheck::TaskGrantClaims
                     | FailedCheck::TokenAudience
                     | FailedCheck::TokenClaims
-                    | FailedCheck::TokenTime
                     | FailedCheck::Delegation
                     | FailedCheck::Scope
                     | FailedCheck::ActorKind
@@ -1907,7 +1912,7 @@ impl HttpError {
                 }
             },
             Self::Forbidden(_) => ProblemCode::OperationNotAuthorized,
-            Self::NotFound(_) => ProblemCode::RequestNotFound,
+            Self::NotFound(_) | Self::Absent => ProblemCode::RequestNotFound,
             Self::PreconditionFailed => ProblemCode::PreconditionFailed,
             Self::PreconditionRequired => ProblemCode::PreconditionRequired,
             Self::IdempotencyKeyReused => ProblemCode::IdempotencyKeyReused,
@@ -2853,6 +2858,7 @@ mod tests {
                     answer(|| HttpError::ReviewDistinctApproverRequired),
                 )
                 .route("/excluded", answer(|| HttpError::ReviewInitiatorExcluded))
+                .route("/absent", answer(|| HttpError::Absent))
                 .route("/invalid", answer(|| HttpError::Invalid))
                 .route("/outage", answer(|| HttpError::ServiceUnavailable)),
             None,
@@ -2907,6 +2913,12 @@ mod tests {
                 Some(check)
             );
         }
+        assert_eq!(HttpError::from(StoreError::Absent).failed_check(), None);
+        assert_eq!(HttpError::from(ServiceError::Absent).failed_check(), None);
+        assert_eq!(
+            HttpError::from(StoreError::NotFound).failed_check(),
+            Some(FailedCheck::Visibility)
+        );
         assert_eq!(
             HttpError::from(ReviewRuntimeError::NotHeldByReader).failed_check(),
             Some(FailedCheck::Ownership)
@@ -2974,11 +2986,66 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(refused(&app, "/unrouted").await, StatusCode::NOT_FOUND);
+        assert_eq!(refused(&app, "/absent").await, StatusCode::NOT_FOUND);
         let counted: u64 = FailedCheck::ALL
             .iter()
             .map(|check| recorder.counter().get(&[check.as_str()]).unwrap_or(0))
             .sum();
         assert_eq!(counted, 0);
+    }
+
+    /// Every answer that refuses a caller's credential or authority carries a
+    /// check, so the operator's counter sees it. A variant that answers 401 or
+    /// 403 and names no check fails here.
+    #[test]
+    fn every_unauthorized_or_forbidden_answer_names_a_check() {
+        use registry_casework_core::AbsenceError;
+        let check = FailedCheck::Operation;
+        let answers = [
+            HttpError::AuthenticationRefused(check),
+            HttpError::ProfileNotAuthorized(check),
+            HttpError::ProfileNotHuman(check),
+            HttpError::DelegatedStaff(AuthenticationError::Refused(check)),
+            HttpError::DelegatedStaff(AuthenticationError::Claims(check)),
+            HttpError::DelegatedStaff(AuthenticationError::Profile(check)),
+            HttpError::DelegatedStaff(AuthenticationError::NotHuman(check)),
+            HttpError::Forbidden(check),
+            HttpError::NotFound(check),
+            HttpError::Absent,
+            HttpError::PreconditionFailed,
+            HttpError::PreconditionRequired,
+            HttpError::IdempotencyKeyReused,
+            HttpError::IdempotencyExpired,
+            HttpError::Invalid,
+            HttpError::LimitOutOfRange,
+            HttpError::ServiceUnavailable,
+            HttpError::SourceProfileNotApplicable,
+            HttpError::SourceProfileRequired,
+            HttpError::SourceBadGateway,
+            HttpError::SourceVersionMismatch,
+            HttpError::SourceVersionUnavailable,
+            HttpError::ReviewDistinctApproverRequired,
+            HttpError::ReviewInitiatorExcluded,
+            HttpError::ReviewInitiatorRequired,
+            HttpError::ReviewResultExpired,
+            HttpError::ReviewSubmissionConflict,
+            HttpError::ReviewTaskNotHeld,
+            HttpError::ReviewPolicyMismatch,
+            HttpError::ReviewQueryTooBroad,
+            HttpError::CursorInvalid,
+            HttpError::CursorExpired,
+            HttpError::Absence(AbsenceError::SelfCover),
+            HttpError::Internal,
+        ];
+        for answer in answers {
+            let status = answer.problem().status();
+            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                assert!(
+                    answer.failed_check().is_some(),
+                    "{answer:?} answers {status} and names no check"
+                );
+            }
+        }
     }
 
     #[tokio::test]

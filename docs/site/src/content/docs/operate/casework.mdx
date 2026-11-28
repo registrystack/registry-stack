@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-28"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -79,59 +79,6 @@ The container image carries both binaries. Its entrypoint serves Casework from
 root read-only, and give the audit directory durable writable storage.
 
 {/* Evidence: crates/registry-casework/install.sh; release/docker/Dockerfile.casework, ENTRYPOINT and CMD. */}
-
-## Provision PostgreSQL
-
-Use a new database. Your runtime file names the roles, their passwords, and the database: they are
-the URLs in `database.migrationUrlRef` and `database.runtimeUrlRef`, which
-[the next section](#write-the-runtime-file) writes. Put both URLs in their secret files, then run
-`caseworkctl provision` once as a PostgreSQL role that can create roles and databases:
-
-```sh
-caseworkctl provision --runtime-config runtime.yaml --admin-url-file admin-url
-```
-
-The `admin-url` file holds one PostgreSQL URL for that administrator, for example
-`postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
-`CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable instead,
-use `--admin-url-env NAME`. The connection requires TLS and verifies the server certificate. Set
-`database.caBundleRef` in the runtime file to trust a private CA. The command never prints the
-administrator URL or a password.
-
-The command:
-
-- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
-- Creates the database and closes it to `PUBLIC`.
-- Grants both roles `CONNECT` on the database.
-- Gives the migration role `USAGE` and `CREATE` on the `public` schema, and takes `CREATE` on it
-  from `PUBLIC`.
-
-Run it again at any time. It creates only what is missing and refuses a role that exists with
-different attributes. When both URLs name one role, it creates that one role and the deployment
-records single-role mode.
-
-If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
-flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
-`\password` line that prompts for the password in `psql`, so the script holds no password.
-
-{/* Evidence: crates/registry-caseworkctl/src/provision.rs; crates/registry-platform-provision/src/plan.rs,
-    SchemaLayout::PublicForMigration; crates/registry-caseworkctl/tests/provision.rs. */}
-
-Each runtime holds up to 32 connections and waits up to 5 seconds for one; neither is configurable,
-so allow 32 connections per replica.
-
-{/* Evidence: crates/registry-casework/src/store.rs, max_size(32) and wait_timeout. */}
-
-Only `caseworkctl apply` uses the migration credential, so keep it off the serving host. Apply
-grants the runtime role what it serves with and keeps the activation ledger read-only to it.
-
-If apply reports `casework.activation.role-mode-weakened`, make the ownership, privilege, or
-trigger correction it names, then plan again; never give the runtime role ledger writes to get past
-it. When both credentials name one role, the deployment records single-role mode, and `status`
-says the runtime credential can activate packages.
-
-{/* Evidence: crates/registry-casework/src/activation.rs, grant_runtime_role(), observe_role(), and stray_authority();
-    crates/registry-casework/src/store.rs, tcp_user_timeout. */}
 
 ## Write the runtime file
 
@@ -240,6 +187,75 @@ Keep earlier package directories for recovery, and plan every activation, rollba
 {/* Evidence: crates/registry-casework/src/config.rs, verify_casework_package() and expected_digest;
     crates/registry-casework/src/config.rs, RuntimePackageConfig. */}
 
+## Provision PostgreSQL
+
+Use a new database. Your runtime file names the roles, their passwords, and the database: they are
+the URLs in `database.migrationUrlRef` and `database.runtimeUrlRef`, which
+[the runtime file](#write-the-runtime-file) names. `caseworkctl provision` loads that file and
+verifies the package it points at, so write the runtime file and verify the package first. Put both
+URLs in their secret files, then run `caseworkctl provision` once as a PostgreSQL role that can
+create roles and databases:
+
+```sh
+caseworkctl provision --runtime-config runtime.yaml --admin-url-file admin-url
+```
+
+The `admin-url` file holds one PostgreSQL URL for that administrator, for example
+`postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
+`CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable instead,
+use `--admin-url-env NAME`. The connection requires TLS and verifies the server certificate. Set
+`database.caBundleRef` in the runtime file to trust a private CA. The command never prints the
+administrator URL or a password.
+
+The command:
+
+- Creates the migration role and the runtime role, each with `LOGIN` and no other privilege.
+- Creates the database and closes it to `PUBLIC`.
+- Grants both roles `CONNECT` on the database.
+- Gives the migration role `USAGE` and `CREATE` on the `public` schema and the runtime role `USAGE`
+  on it, and takes `CREATE` on it from `PUBLIC`.
+
+Run it again at any time. It creates only what is missing and refuses a role that exists with
+different attributes. When both URLs name one role, it creates that one role and the deployment
+records single-role mode.
+
+If a database administrator must run the SQL, add `--print-sql` and leave out the administrator
+flags. The command connects to nothing and prints the script. Each `CREATE ROLE` is followed by a
+`\password` line that prompts for the password in `psql`, so the script holds no password:
+
+```sql
+SET createrole_self_grant = 'set,inherit';
+CREATE ROLE "casework_migration" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "casework_migration"
+CREATE ROLE "casework_runtime" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+\password "casework_runtime"
+CREATE DATABASE "casework" WITH ALLOW_CONNECTIONS false;
+REVOKE ALL ON DATABASE "casework" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "casework" TO "casework_migration", "casework_runtime";
+ALTER DATABASE "casework" ALLOW_CONNECTIONS true;
+\connect "casework"
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "casework_migration"; GRANT USAGE ON SCHEMA public TO "casework_runtime";
+```
+
+{/* Evidence: crates/registry-caseworkctl/src/provision.rs; crates/registry-platform-provision/src/plan.rs,
+    SchemaLayout::PublicForMigration; crates/registry-caseworkctl/tests/provision.rs. */}
+
+Each runtime holds up to 32 connections and waits up to 5 seconds for one; neither is configurable,
+so allow 32 connections per replica.
+
+{/* Evidence: crates/registry-casework/src/store.rs, max_size(32) and wait_timeout. */}
+
+Only `caseworkctl apply` uses the migration credential, so keep it off the serving host. Apply
+grants the runtime role what it serves with and keeps the activation ledger read-only to it.
+
+If apply reports `casework.activation.role-mode-weakened`, make the ownership, privilege, or
+trigger correction it names, then plan again; never give the runtime role ledger writes to get past
+it. When both credentials name one role, the deployment records single-role mode, and `status`
+says the runtime credential can activate packages.
+
+{/* Evidence: crates/registry-casework/src/activation.rs, grant_runtime_role(), observe_role(), and stray_authority();
+    crates/registry-casework/src/store.rs, tcp_user_timeout. */}
+
 ## Refuse a package that strands pinned work
 
 An accepted review keeps the policy closure it was admitted under. A candidate that removes a
@@ -270,7 +286,8 @@ Applying the package that is already active is refused with
 
 If apply returns `casework.activation.applied-unaudited`, the activation committed but its audit
 entry did not: restore audit, read `status`, and record the recovery. A runtime role that cannot
-read the ledger gets `casework.activation.ledger-unreadable`; apply restores its grants. Exit codes
+read the ledger gets `casework.activation.ledger-unreadable`; apply restores its grants. `USAGE` on
+`public` comes from `provision`, so run `provision` again if the runtime role lost it. Exit codes
 are `0` for success, `1` for a refusal, `2` for usage, and `3` for an operational failure.
 
 Then serve as the runtime user:

@@ -490,3 +490,28 @@ decisions:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
       - {path: crates/registry-documents-core/src/access.rs, name: the_reserving_system_sees_a_delivered_document_but_may_neither_grant_nor_read_it}
       - {path: crates/registry-documents/tests/postgres_journey.rs, name: a_rendered_document_reaches_a_named_recipient_and_outlives_its_share}
+  - id: DOCUMENTS-DEC-36
+    subject: An explicit allowedClients list must cover every package client, and from-package admits exactly them
+    decision: >-
+      authentication.oidc.allowedClients: from-package admits the requester
+      clients of the package's access profiles and no others. An explicit list
+      that omits a client a profile names is refused at startup with
+      documents.runtime.profile-client-not-allowed, so a missing client
+      never fails at run time. A client named under assertionIssuers that is
+      not admitted is refused with
+      documents.runtime.assertion-issuer-client-not-allowed.
+    evidence:
+      - {path: crates/registry-documents/src/config.rs, name: explicit_list_missing_a_package_client_is_refused}
+      - {path: crates/registry-documents/src/config.rs, name: from_package_admits_exactly_the_package_clients}
+  - id: DOCUMENTS-DEC-37
+    subject: A path id that is not an id, and a grant naming another version, answer as a concealed document
+    decision: >-
+      A document or grant id in a path that is not a UUID answers 404
+      resource.not-found, and so does a grant request whose versionId is not
+      the document's current version. Both are validation of a name that
+      points at nothing the caller may see, answered like an absent document,
+      and the operator's counter records them under the visibility check.
+    evidence:
+      - {path: crates/registry-documents/src/http.rs, name: a_path_id_that_is_not_an_id_names_nothing}
+      - {path: crates/registry-documents/tests/refusal_golden.rs, name: every_refusal_answers_the_bytes_the_golden_file_holds}
+      - {path: crates/registry-documents/tests/refusal_golden.rs, name: every_refusal_is_counted_and_logged_under_the_check_it_failed}

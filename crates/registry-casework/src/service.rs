@@ -78,6 +78,9 @@ pub enum ServiceError {
     Configuration,
     #[error("the requested review task was not found")]
     NotFound(FailedCheck),
+    /// An absence that conceals nothing and is not counted as a refusal.
+    #[error("the requested resource was not found")]
+    Absent,
     #[error("the caller is not authorized")]
     Forbidden(FailedCheck),
     #[error(transparent)]

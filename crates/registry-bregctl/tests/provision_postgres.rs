@@ -371,8 +371,14 @@ impl Deployment {
         ]);
         build.join("package")
     }
+}
 
-    async fn finish(self) {
+/// Removes the databases and roles the suite created, whether the test passed
+/// or an assertion failed. The statements run on a thread of their own with a
+/// fresh session, so they do not depend on the test's runtime, which may be
+/// unwinding.
+impl Drop for Deployment {
+    fn drop(&mut self) {
         // Dropping a database waits for its sessions to end, which the
         // administrator session's statement timeout would cut short.
         let mut statements: Vec<String> = vec!["SET statement_timeout = 0".to_owned()];
@@ -388,8 +394,30 @@ impl Deployment {
         for role in [&self.runtime_role, &self.migration, &self.owner] {
             statements.push(format!("DROP ROLE IF EXISTS {role}"));
         }
-        for statement in statements {
-            self.admin.batch_execute(&statement).await.unwrap();
+        let (base_url, ca) = (self.base_url.clone(), self.ca.clone());
+        let cleanup = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime for the cleanup")
+                .block_on(async {
+                    let admin = connect_verified(&base_url, &ca, None).await;
+                    for statement in statements {
+                        admin
+                            .batch_execute(&statement)
+                            .await
+                            .unwrap_or_else(|error| {
+                                panic!("cleanup statement `{statement}` failed: {error}")
+                            });
+                    }
+                });
+        });
+        if let Err(failure) = cleanup.join() {
+            if std::thread::panicking() {
+                eprintln!("the suite's databases and roles were not removed: {failure:?}");
+            } else {
+                std::panic::resume_unwind(failure);
+            }
         }
     }
 }
@@ -481,7 +509,6 @@ async fn provision_then_apply_then_serve_with_split_roles() {
     assert!(ready, "the readiness route answers");
     stop.send(()).unwrap();
     server.await.unwrap().expect("the server stops cleanly");
-    deployment.finish().await;
 }
 
 /// A package with a polygon field needs PostGIS, and `CREATE EXTENSION
@@ -518,5 +545,4 @@ async fn spatial_package_as_a_non_superuser_owner_names_the_postgis_statement() 
         "{refused:#}"
     );
     assert_eq!(diagnostic["path"], "extension.postgis", "{refused:#}");
-    deployment.finish().await;
 }

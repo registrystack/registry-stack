@@ -57,7 +57,15 @@ pub enum ProvisionError {
         step: &'static str,
         role: String,
     },
+    /// An existing product role is a member of a role the plan did not grant it.
+    RoleMembershipDiffers {
+        step: &'static str,
+        role: String,
+    },
     DatabaseOwnerDiffers {
+        database: String,
+    },
+    DatabaseIsTemplate {
         database: String,
     },
     SchemaOwnerDiffers {
@@ -69,8 +77,17 @@ pub enum ProvisionError {
         step: &'static str,
         extension: String,
     },
+    /// The extension exists, but not in the schema or with the role
+    /// membership its statement block sets up.
+    ExtensionIncomplete {
+        step: &'static str,
+        extension: String,
+    },
+    /// `sqlstate` is the server's answer, `None` when none came (a timeout or
+    /// a lost connection).
     RoleLoginFailed {
         role: String,
+        sqlstate: Option<String>,
     },
     EffectUnconfirmed {
         step: &'static str,
@@ -88,13 +105,24 @@ impl ProvisionError {
             Self::UnsupportedPostgres => "platform.provision.unsupported-postgres",
             Self::StatementNeedsPrivilege { .. } => "platform.provision.statement-needs-privilege",
             Self::RoleAttributesDiffer { .. } => "platform.provision.role-attributes-differ",
+            Self::RoleMembershipDiffers { .. } => "platform.provision.role-membership-differs",
             Self::DatabaseOwnerDiffers { .. } => "platform.provision.database-owner-differs",
+            Self::DatabaseIsTemplate { .. } => "platform.provision.database-is-template",
             Self::SchemaOwnerDiffers { .. } => "platform.provision.schema-owner-differs",
             Self::ExtensionTooOld { .. } => "platform.provision.extension-too-old",
+            Self::ExtensionIncomplete { .. } => "platform.provision.extension-incomplete",
             Self::RoleLoginFailed { .. } => "platform.provision.role-login-failed",
             Self::EffectUnconfirmed { .. } => "platform.provision.effect-unconfirmed",
             Self::StatementFailed { .. } => "platform.provision.statement-failed",
         }
+    }
+
+    /// Whether any statement could have been sent before this error.
+    pub fn may_have_run_statements(&self) -> bool {
+        !matches!(
+            self,
+            Self::AdminConnectFailed { .. } | Self::UnsupportedPostgres
+        )
     }
 
     /// The step of the plan the error belongs to, the report's `path`.
@@ -102,11 +130,15 @@ impl ProvisionError {
         match self {
             Self::StatementNeedsPrivilege { step, .. }
             | Self::RoleAttributesDiffer { step, .. }
+            | Self::RoleMembershipDiffers { step, .. }
             | Self::SchemaOwnerDiffers { step, .. }
             | Self::ExtensionTooOld { step, .. }
+            | Self::ExtensionIncomplete { step, .. }
             | Self::EffectUnconfirmed { step }
             | Self::StatementFailed { step, .. } => Some(step),
-            Self::DatabaseOwnerDiffers { .. } => Some("database.create"),
+            Self::DatabaseOwnerDiffers { .. } | Self::DatabaseIsTemplate { .. } => {
+                Some("database.create")
+            }
             Self::AdminConnectFailed { .. }
             | Self::UnsupportedPostgres
             | Self::RoleLoginFailed { .. } => None,
@@ -175,6 +207,16 @@ impl fmt::Display for ProvisionError {
                  creates it with. It is not altered: use another name or correct the role as \
                  an administrator"
             ),
+            Self::RoleMembershipDiffers { role, .. } => write!(
+                f,
+                "the role \"{role}\" already exists and is a member of a role provisioning did \
+                 not grant it. It is not altered: use another name or revoke the membership as \
+                 an administrator"
+            ),
+            Self::DatabaseIsTemplate { database } => write!(
+                f,
+                "the database \"{database}\" is a template database and is not adopted"
+            ),
             Self::DatabaseOwnerDiffers { database } => write!(
                 f,
                 "the database \"{database}\" already exists under an owner the administrator \
@@ -191,9 +233,25 @@ impl fmt::Display for ProvisionError {
                 f,
                 "the extension \"{extension}\" is installed below the version this product needs"
             ),
-            Self::RoleLoginFailed { role } => write!(
+            Self::ExtensionIncomplete { extension, .. } => write!(
+                f,
+                "the extension \"{extension}\" exists outside the schema or without the role \
+                 membership its prerequisites set up"
+            ),
+            Self::RoleLoginFailed {
+                role,
+                sqlstate: None,
+            } => write!(
                 f,
                 "the role \"{role}\" cannot open a session with its configured credential"
+            ),
+            Self::RoleLoginFailed {
+                role,
+                sqlstate: Some(sqlstate),
+            } => write!(
+                f,
+                "the role \"{role}\" cannot open a session with its configured credential \
+                 (SQLSTATE {sqlstate})"
             ),
             Self::EffectUnconfirmed { step } => write!(
                 f,
@@ -231,6 +289,23 @@ fn call_error(step: &'static str, failure: CallFailure) -> ProvisionError {
     }
 }
 
+/// Why a run stopped, with the statements that had already run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub error: ProvisionError,
+    /// The outcome of each statement before the one that failed, in plan order.
+    pub reached: Vec<(&'static str, StatementOutcome)>,
+}
+
+impl From<ProvisionError> for Failure {
+    fn from(error: ProvisionError) -> Self {
+        Self {
+            error,
+            reached: Vec::new(),
+        }
+    }
+}
+
 /// Runs every statement of `plan` as the administrator `admin`.
 ///
 /// In [`Mode::Converge`] the server version is checked against the shared
@@ -242,12 +317,42 @@ pub async fn execute(
     plan: &Plan,
     mode: Mode,
 ) -> Result<Outcome, ProvisionError> {
+    execute_recording(admin, plan, mode)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+/// [`execute`] that keeps the outcomes of the statements that ran before a
+/// failure, so a report can say what changed on the server.
+pub async fn execute_recording(
+    admin: &AdminConfig,
+    plan: &Plan,
+    mode: Mode,
+) -> Result<Outcome, Failure> {
+    let mut statements = Vec::with_capacity(plan.statements().len());
+    match run_plan(admin, plan, mode, &mut statements).await {
+        Ok(()) => Ok(Outcome {
+            statements,
+            single_role: plan.single_role(),
+        }),
+        Err(error) => Err(Failure {
+            error,
+            reached: statements,
+        }),
+    }
+}
+
+async fn run_plan(
+    admin: &AdminConfig,
+    plan: &Plan,
+    mode: Mode,
+    statements: &mut Vec<(&'static str, StatementOutcome)>,
+) -> Result<(), ProvisionError> {
     let server = admin.connect(None).await.map_err(connect_failed)?;
     if mode == Mode::Converge {
         verify_floor(&server).await?;
     }
     let mut database: Option<Session> = None;
-    let mut statements = Vec::with_capacity(plan.statements().len());
     for statement in plan.statements() {
         let session = match statement.scope {
             Scope::Server => &server,
@@ -264,10 +369,7 @@ pub async fn execute(
         let outcome = run_statement(session, plan, statement, mode).await?;
         statements.push((statement.step, outcome));
     }
-    Ok(Outcome {
-        statements,
-        single_role: plan.single_role(),
-    })
+    Ok(())
 }
 
 async fn verify_floor(server: &Session) -> Result<(), ProvisionError> {
@@ -334,12 +436,27 @@ async fn probe_is_satisfied(
 ) -> Result<bool, ProvisionError> {
     let step = statement.step;
     match probe {
-        Probe::Role { name, login } => {
+        Probe::Role {
+            name,
+            login,
+            member_of,
+        } => {
+            // Columns 1 to 7 are attributes that must be false: the six
+            // flags and role-level settings. Column 8 is membership of any
+            // role other than `member_of` granted as the plan grants it.
             let row = bounded_call(session.client.query_opt(
-                "SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit, \
-                        rolbypassrls, rolreplication \
-                   FROM pg_catalog.pg_roles WHERE rolname = $1",
-                &[name],
+                "SELECT r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole, \
+                        r.rolinherit, r.rolbypassrls, r.rolreplication, \
+                        r.rolconfig IS NOT NULL, \
+                        EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m \
+                                  JOIN pg_catalog.pg_roles g ON g.oid = m.roleid \
+                                 WHERE m.member = r.oid \
+                                   AND NOT (coalesce(g.rolname = $2::text, false) \
+                                            AND NOT m.inherit_option \
+                                            AND m.set_option \
+                                            AND NOT m.admin_option)) \
+                   FROM pg_catalog.pg_roles r WHERE r.rolname = $1",
+                &[name, member_of],
             ))
             .await
             .map_err(|failure| call_error(step, failure))?;
@@ -348,12 +465,19 @@ async fn probe_is_satisfied(
             };
             let can_login: bool = row.try_get(0).map_err(|_| unreadable(step))?;
             let mut others = false;
-            for column in 1..7 {
+            for column in 1..8 {
                 let flag: bool = row.try_get(column).map_err(|_| unreadable(step))?;
                 others |= flag;
             }
             if can_login != *login || others {
                 return Err(ProvisionError::RoleAttributesDiffer {
+                    step,
+                    role: name.clone(),
+                });
+            }
+            let other_membership: bool = row.try_get(8).map_err(|_| unreadable(step))?;
+            if other_membership {
+                return Err(ProvisionError::RoleMembershipDiffers {
                     step,
                     role: name.clone(),
                 });
@@ -365,7 +489,7 @@ async fn probe_is_satisfied(
             // what `pg_has_role(..., 'USAGE')` tests, and are held by every
             // superuser.
             let row = bounded_call(session.client.query_opt(
-                "SELECT pg_catalog.pg_has_role(current_user, datdba, 'USAGE') \
+                "SELECT pg_catalog.pg_has_role(current_user, datdba, 'USAGE'), datistemplate \
                    FROM pg_catalog.pg_database WHERE datname = $1",
                 &[name],
             ))
@@ -375,7 +499,12 @@ async fn probe_is_satisfied(
                 None => Ok(false),
                 Some(row) => {
                     let can_act: bool = row.try_get(0).map_err(|_| unreadable(step))?;
-                    if can_act {
+                    let template: bool = row.try_get(1).map_err(|_| unreadable(step))?;
+                    if template {
+                        Err(ProvisionError::DatabaseIsTemplate {
+                            database: name.clone(),
+                        })
+                    } else if can_act {
                         Ok(true)
                     } else {
                         Err(ProvisionError::DatabaseOwnerDiffers {
@@ -388,6 +517,7 @@ async fn probe_is_satisfied(
         Probe::Extension {
             name,
             minimum_version,
+            setup,
         } => {
             let row = bounded_call(session.client.query_opt(
                 "SELECT extversion::text FROM pg_catalog.pg_extension WHERE extname = $1",
@@ -399,15 +529,34 @@ async fn probe_is_satisfied(
                 return Ok(false);
             };
             let installed: String = row.try_get(0).map_err(|_| unreadable(step))?;
-            match minimum_version {
-                Some(minimum) if !version_at_least(&installed, *minimum) => {
-                    Err(ProvisionError::ExtensionTooOld {
+            if let Some(minimum) = minimum_version {
+                if !version_at_least(&installed, *minimum) {
+                    return Err(ProvisionError::ExtensionTooOld {
                         step,
                         extension: name.clone(),
-                    })
+                    });
                 }
-                _ => Ok(true),
             }
+            if let Some(setup) = setup {
+                let row = bounded_call(session.client.query_one(
+                    "SELECT coalesce((SELECT e.extnamespace = to_regnamespace($1::text)::oid \
+                                        FROM pg_catalog.pg_extension e WHERE e.extname = $2), \
+                                     false), \
+                            pg_catalog.pg_has_role($3::text::name, $4::text::name, 'SET')",
+                    &[&setup.schema, name, &setup.member, &setup.role],
+                ))
+                .await
+                .map_err(|failure| call_error(step, failure))?;
+                let in_schema: bool = row.try_get(0).map_err(|_| unreadable(step))?;
+                let can_set: bool = row.try_get(1).map_err(|_| unreadable(step))?;
+                if !in_schema || !can_set {
+                    return Err(ProvisionError::ExtensionIncomplete {
+                        step,
+                        extension: name.clone(),
+                    });
+                }
+            }
+            Ok(true)
         }
         Probe::Schema { name, owner } => {
             let row = bounded_call(session.client.query_opt(
@@ -465,19 +614,27 @@ pub async fn verify_logins(
         roles.push(&target.runtime);
     }
     for role in roles {
-        let failed = || ProvisionError::RoleLoginFailed {
+        let failed = |sqlstate: Option<String>| ProvisionError::RoleLoginFailed {
             role: role.name.clone(),
+            sqlstate,
         };
         let session = admin
             .connect_as(&target.database, &role.name, role.password())
             .await
-            .map_err(|_| failed())?;
+            .map_err(|failure| failed(failure.sqlstate))?;
         let row = bounded_call(session.client.query_one("SELECT current_user::text", &[]))
             .await
-            .map_err(|_| failed())?;
-        let current: String = row.try_get(0).map_err(|_| failed())?;
+            .map_err(|failure| {
+                failed(match failure {
+                    CallFailure::Server { sqlstate } => Some(sqlstate),
+                    CallFailure::Unconfirmed => None,
+                })
+            })?;
+        let current: String = row
+            .try_get(0)
+            .map_err(|_| failed(Some("XX000".to_owned())))?;
         if current != role.name {
-            return Err(failed());
+            return Err(failed(Some("XX000".to_owned())));
         }
     }
     Ok(())
@@ -512,7 +669,14 @@ mod tests {
                 step: "role.migration",
                 role: "r".to_owned(),
             },
+            ProvisionError::RoleMembershipDiffers {
+                step: "role.runtime",
+                role: "r".to_owned(),
+            },
             ProvisionError::DatabaseOwnerDiffers {
+                database: "d".to_owned(),
+            },
+            ProvisionError::DatabaseIsTemplate {
                 database: "d".to_owned(),
             },
             ProvisionError::SchemaOwnerDiffers {
@@ -524,8 +688,13 @@ mod tests {
                 step: "extension.postgis",
                 extension: "postgis".to_owned(),
             },
+            ProvisionError::ExtensionIncomplete {
+                step: "extension.postgis",
+                extension: "postgis".to_owned(),
+            },
             ProvisionError::RoleLoginFailed {
                 role: "r".to_owned(),
+                sqlstate: Some("28P01".to_owned()),
             },
             ProvisionError::EffectUnconfirmed {
                 step: "role.runtime",

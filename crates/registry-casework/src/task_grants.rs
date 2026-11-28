@@ -595,8 +595,10 @@ impl PostgresStore {
             let Some(kind) = membership_kind(actor.role) else {
                 return Err(StoreError::Forbidden(FailedCheck::Operation));
             };
-            if !template_active(&transaction, &grant.template).await?
-                || !grant.template.eligible_profiles.contains(&actor.profile_id)
+            if !template_active(&transaction, &grant.template).await? {
+                return Err(StoreError::Forbidden(FailedCheck::Operation));
+            }
+            if !grant.template.eligible_profiles.contains(&actor.profile_id)
                 || !transaction
                     .query_one(
                         "SELECT EXISTS(
@@ -853,7 +855,7 @@ impl crate::CaseworkService {
     pub(crate) fn task_jwks(&self) -> Result<Value, crate::ServiceError> {
         self.task_authority
             .as_ref()
-            .ok_or(crate::ServiceError::NotFound(FailedCheck::Visibility))?
+            .ok_or(crate::ServiceError::Absent)?
             .jwks()
             .map_err(Into::into)
     }

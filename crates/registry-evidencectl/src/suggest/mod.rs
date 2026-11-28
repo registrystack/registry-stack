@@ -404,7 +404,9 @@ fn validate_base_url(raw: &str) -> Result<String> {
                     bail!("an HTTP --base-url must use a numeric loopback address")
                 }
             };
-            if !ip.is_loopback() || parsed.port().is_none_or(|port| port == 0) {
+            if !registry_platform_loopback::loopback_address(ip)
+                || parsed.port().is_none_or(|port| port == 0)
+            {
                 bail!("an HTTP --base-url must use a numeric loopback address and non-zero port");
             }
         }
@@ -1694,6 +1696,24 @@ fn missing_flags_message(args: &SuggestArgs) -> String {
 #[cfg(test)]
 mod tests {
     use super::validate_base_url;
+
+    #[test]
+    fn http_source_origins_follow_the_shared_loopback_rule_for_numeric_hosts() {
+        for (origin, accepted) in [
+            ("http://127.0.0.1:4010", true),
+            ("http://127.0.0.2:4010", true),
+            ("http://[::1]:4010", true),
+            ("http://[::ffff:7f00:1]:4010", true),
+            ("http://localhost:4010", false),
+            ("http://LOCALHOST:4010", false),
+            ("http://a.localhost:4010", false),
+            ("http://localhost.:4010", false),
+            ("http://10.0.0.1:4010", false),
+            ("http://example.com:4010", false),
+        ] {
+            assert_eq!(validate_base_url(origin).is_ok(), accepted, "{origin}");
+        }
+    }
 
     #[test]
     fn json_runs_never_prompt() {

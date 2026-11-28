@@ -486,9 +486,6 @@ fn golden_path() -> PathBuf {
 #[tokio::test]
 async fn authentication_and_profile_refusals_match_the_checked_in_answers() {
     let idp = MockIdp::start().await;
-    let root = tempfile::tempdir().expect("temporary directory");
-    let recorder = Arc::new(RefusalRecorder::new("casework").expect("the casework recorder"));
-    let app = app(&idp, root.path(), Arc::clone(&recorder));
     let mut observed = Vec::new();
     let cases = cases(&idp);
     let tokens: Vec<String> = cases
@@ -496,26 +493,31 @@ async fn authentication_and_profile_refusals_match_the_checked_in_answers() {
         .flat_map(|case| case.headers.iter().map(|(_, value)| value.clone()))
         .collect();
     for case in &cases {
-        let before = recorder
-            .counter()
-            .get(&[case.check])
-            .expect("the check is declared");
+        // A recorder per case keeps each log line inside its check's budget
+        // of five lines a minute, however many cases share a check.
+        let root = tempfile::tempdir().expect("temporary directory");
+        let recorder = Arc::new(RefusalRecorder::new("casework").expect("the casework recorder"));
+        let app = app(&idp, root.path(), Arc::clone(&recorder));
         let logs = CapturedDiagnosticLogs::default();
         observed.push(observe(&app, case).with_subscriber(logs.subscriber()).await);
         assert_eq!(
             recorder.counter().get(&[case.check]),
-            Some(before + 1),
+            Some(1),
             "{} counts once under {}",
             case.name,
             case.check
         );
+        let counted: u64 = FailedCheck::ALL
+            .iter()
+            .map(|check| recorder.counter().get(&[check.as_str()]).unwrap_or(0))
+            .sum();
+        assert_eq!(counted, 1, "{} counts under no other check", case.name);
         assert_one_value_free_line(case, &logs, &tokens);
     }
-    let counted: u64 = FailedCheck::ALL
-        .iter()
-        .map(|check| recorder.counter().get(&[check.as_str()]).unwrap_or(0))
-        .sum();
-    assert_eq!(counted, cases.len() as u64, "no refusal counted twice");
+    let root = tempfile::tempdir().expect("temporary directory");
+    let recorder = Arc::new(RefusalRecorder::new("casework").expect("the casework recorder"));
+    let app = app(&idp, root.path(), Arc::clone(&recorder));
+    assert_absence_is_not_counted(&app, &recorder).await;
     idp.stop().await;
     let observed = Value::Array(observed);
     let rendered = format!("{}\n", serde_json::to_string_pretty(&observed).unwrap());
@@ -530,6 +532,33 @@ async fn authentication_and_profile_refusals_match_the_checked_in_answers() {
         rendered, expected,
         "a refusal answer changed; if the change is intended, rerun with REGISTRY_UPDATE_GOLDEN=1 and review the diff"
     );
+}
+
+/// A plain absence conceals nothing, so it is neither counted nor logged as a
+/// refusal. The task grant key set route is unauthenticated and answers 404
+/// when task grants are not configured.
+async fn assert_absence_is_not_counted(app: &axum::Router, recorder: &RefusalRecorder) {
+    let logs = CapturedDiagnosticLogs::default();
+    let observed = observe(
+        app,
+        &case(
+            "jwks-without-task-grants",
+            "visibility",
+            "GET",
+            "/.well-known/jwks.json",
+            vec![],
+        ),
+    )
+    .with_subscriber(logs.subscriber())
+    .await;
+    assert_eq!(observed["status"], 404);
+    assert_eq!(observed["body"]["code"], "request.not-found");
+    let counted: u64 = FailedCheck::ALL
+        .iter()
+        .map(|check| recorder.counter().get(&[check.as_str()]).unwrap_or(0))
+        .sum();
+    assert_eq!(counted, 0, "an absence records no refusal");
+    assert_eq!(logs.text(), "", "an absence writes no refusal line");
 }
 
 /// The one line a refusal wrote names the check, carries a trace id, and

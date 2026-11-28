@@ -231,6 +231,9 @@ async fn provision_then_apply_then_serve_with_split_roles() {
         admin_file.to_str().unwrap(),
     ]);
     assert_eq!(code, 0, "a second run converges: {again:#}");
+    for statement in again["statements"].as_array().unwrap() {
+        assert_ne!(statement["outcome"], "created", "{statement}");
+    }
 
     let (code, applied) = ctl(&["apply", "--runtime-config", &runtime]);
     assert_eq!(code, 0, "{applied:#}");

@@ -228,3 +228,91 @@ fn a_package_that_is_not_a_package_is_refused_before_any_connection() {
     assert_eq!(report["ok"], false, "{stdout}");
     assert_eq!(report["executed"], false, "{stdout}");
 }
+
+/// Runs `provision --print-sql --format json`, asserts the runtime file was
+/// refused with exit 1 and no password anywhere in the output, and returns the
+/// first diagnostic's code and path. The loader makes the checks `apply`
+/// makes before it resolves the URLs itself, so these are the runtime file's
+/// own codes.
+fn loader_refusal(runtime: &str) -> (String, String) {
+    let output = ctl(&[
+        "--format",
+        "json",
+        "provision",
+        "--runtime-config",
+        runtime,
+        "--print-sql",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    for secret in [MIGRATION_PASSWORD, RUNTIME_PASSWORD] {
+        assert!(
+            !stdout.contains(secret) && !stderr.contains(secret),
+            "a refusal prints no password"
+        );
+    }
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["ok"], false, "{stdout}");
+    assert_eq!(report["executed"], false, "{stdout}");
+    let diagnostic = &report["diagnostics"][0];
+    (
+        diagnostic["code"].as_str().unwrap().to_owned(),
+        diagnostic["path"].as_str().unwrap().to_owned(),
+    )
+}
+
+#[test]
+fn a_missing_runtime_url_secret_is_refused() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    std::fs::remove_file(directory.path().join("secrets/runtime-database-url")).unwrap();
+    assert_eq!(
+        loader_refusal(&runtime),
+        ("breg.runtime.secret".to_owned(), String::new())
+    );
+}
+
+#[test]
+fn a_runtime_url_that_is_not_utf8_is_refused() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let secret = directory.path().join("secrets/runtime-database-url");
+    std::fs::write(&secret, [0xff, 0xfe, 0xfd]).unwrap();
+    assert_eq!(
+        loader_refusal(&runtime),
+        ("breg.runtime.secret".to_owned(), String::new())
+    );
+}
+
+#[test]
+fn a_url_user_that_differs_from_the_runtime_role_is_refused() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let secret = directory.path().join("secrets/runtime-database-url");
+    std::fs::write(
+        &secret,
+        format!("postgresql://someone_else:{RUNTIME_PASSWORD}@db.invalid:5432/registry"),
+    )
+    .unwrap();
+    let (code, path) = loader_refusal(&runtime);
+    assert_eq!(code, "breg.runtime.invalid-database");
+    assert_eq!(path, "/database");
+}
+
+#[test]
+fn a_missing_ca_bundle_is_refused() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    let with_ca = text.replace(
+        "  pool:\n",
+        "  caBundleRef: secret:file/no-such-ca.pem\n  pool:\n",
+    );
+    assert_ne!(text, with_ca, "the runtime file gains the CA reference");
+    std::fs::write(&runtime, with_ca).unwrap();
+    assert_eq!(
+        loader_refusal(&runtime),
+        ("breg.runtime.secret".to_owned(), String::new())
+    );
+}

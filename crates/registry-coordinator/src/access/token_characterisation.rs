@@ -10,7 +10,6 @@
 //! verifier for the check that refused a token and compare it with the check
 //! the refusal carries.
 use super::*;
-use registry_platform_oidc::OidcError;
 use registry_platform_testing::{
     ClaimValue, Configuration, FixtureCase, Outcome, TokenCorpus, TokenFixture, TokenSigner,
 };
@@ -38,12 +37,6 @@ fn client_of(fixture: &TokenFixture) -> Option<String> {
 
 fn first_scope(fixture: &TokenFixture) -> Option<String> {
     fixture.read_scope("scope")
-}
-
-fn stage_of(error: &OidcError) -> Outcome {
-    format!("refused/{}", error.authentication_stage().label())
-        .parse()
-        .expect("every authentication stage label is a result value")
 }
 
 async fn authenticator_for(case: &FixtureCase, secrets: &SecretProvidersConfig) -> Authenticator {
@@ -92,7 +85,7 @@ async fn observe(authenticator: &Authenticator, token: &str) -> Outcome {
                 Some(error.failed_check()),
                 "the refusal names the verifier's check"
             );
-            stage_of(&error)
+            Outcome::refused_by(&error)
         }
         (Err(error), Ok(_)) => {
             let (outcome, checks): (_, &[FailedCheck]) = match error.code.as_str() {

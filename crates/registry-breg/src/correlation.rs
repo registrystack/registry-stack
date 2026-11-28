@@ -445,13 +445,7 @@ pub(crate) fn finish_response(
         );
     }
     correlation.apply_trace(response.headers_mut());
-    if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
-        record_refusal!(
-            crate::metrics::process_refusal_recorder(),
-            note,
-            trace_id = correlation.trace_id()
-        );
-    }
+    record_noted_refusal(&response, correlation);
 
     let status = status_class(response.status());
     let problem_code = problem.as_ref().map_or("none", |problem| problem.code);
@@ -466,6 +460,19 @@ pub(crate) fn finish_response(
         "Base Registry Engine request served"
     );
     response
+}
+
+/// Count and log the refusal a response carries, if any. A handler that folds
+/// several refused items into one answer calls this for each item, because the
+/// folded answer is not itself a refusal.
+pub(crate) fn record_noted_refusal(response: &Response, correlation: &RequestCorrelation) {
+    if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
+        record_refusal!(
+            crate::metrics::process_refusal_recorder(),
+            note,
+            trace_id = correlation.trace_id()
+        );
+    }
 }
 
 pub(crate) fn method_name(method: &axum::http::Method) -> &'static str {

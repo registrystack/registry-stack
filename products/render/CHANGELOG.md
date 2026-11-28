@@ -3,9 +3,13 @@
 ## Unreleased
 
 - Render counts every refusal of a caller in `render_request_refusals_total{check}`
-  on the metrics listener and writes one `request refused` log line with
+  (served when `metricsListener` is set) and writes one `request refused` log line with
   `failed_check` and the trace id, at most five per check per minute. The
   counter and the line carry a fixed check name only. Responses are unchanged.
+  A refusal whose audit entry cannot be written is answered as an audit
+  failure and is not counted.
+- A static key set that Render refuses at startup now names the reason in the
+  `render.runtime-invalid` detail, such as a private key member or an OKP key.
 - A test timestamp authority may use an IPv4-mapped loopback literal in plain
   `http`, such as `http://[::ffff:127.0.0.1]/tsr`, the same as `127.0.0.1`.
   An IPv4-mapped address off the host, such as `[::ffff:10.0.0.5]`, stays

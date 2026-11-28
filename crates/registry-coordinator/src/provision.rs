@@ -3,8 +3,9 @@
 //!
 //! The shared runner reads the role names, database and passwords from the
 //! two URLs this module resolves out of the runtime file, so nothing is
-//! written twice. `apply` creates the schema the runtime file's `namespace`
-//! names, so provisioning gives the migration role `CREATE` on the database
+//! written twice. When the file has a deployment block, its `runtimeRole`
+//! must be the runtime URL's user. `apply` creates the schema the runtime
+//! file's `namespace` names, so provisioning gives the migration role `CREATE` on the database
 //! and the runtime role `CONNECT`, and leaves every other grant to `apply`.
 
 use std::path::Path;
@@ -22,6 +23,9 @@ use crate::runtime::RuntimeConfig;
 
 /// The diagnostic code the runtime file's own refusals carry.
 const RUNTIME_CONFIG_REFUSED: &str = "coordinator.runtime-config.refused";
+
+/// The runtime URL logs in as a role other than `deployment.runtimeRole`.
+const RUNTIME_ROLE_MISMATCH: &str = "coordinator.runtime-config.runtime-role-mismatch";
 
 /// Runs the verb. The shared runner owns a runtime of its own, so it runs off
 /// the service's executor threads.
@@ -66,6 +70,9 @@ fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
         &database.runtime_url_ref,
         "/database/runtimeUrlRef",
     )?;
+    if let Some(deployment) = &runtime.deployment {
+        require_runtime_role(&runtime_url, &deployment.runtime_role)?;
+    }
     let ca_pem = match &database.ca_bundle_ref {
         Some(reference) => Some(
             secret_text(&resolver, reference, "/database/caBundleRef")?
@@ -85,6 +92,27 @@ fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
         runtime_url,
         ca_pem,
     })
+}
+
+/// `apply` grants to `deployment.runtimeRole` and the service requires its
+/// connection to log in as that role, so a runtime URL naming another user
+/// would provision a role neither of them uses. The diagnostic names the
+/// configured role, never the URL.
+fn require_runtime_role(runtime_url: &str, expected: &str) -> Result<(), Box<Diagnostic>> {
+    let user = runtime_url
+        .trim()
+        .parse::<tokio_postgres::Config>()
+        .ok()
+        .and_then(|config| config.get_user().map(str::to_owned));
+    if user.as_deref() == Some(expected) {
+        return Ok(());
+    }
+    Err(Box::new(Diagnostic::error(
+        RUNTIME_ROLE_MISMATCH,
+        "/database/runtimeUrlRef",
+        format!("the runtime database URL does not log in as deployment.runtimeRole ({expected})"),
+        "Use the runtimeRole as the user of the URL database.runtimeUrlRef names, or change deployment.runtimeRole to the URL's user.",
+    )))
 }
 
 fn secret_text(

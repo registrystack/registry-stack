@@ -87,6 +87,21 @@
     },
     "status": 401
   },
+  "non-ascii-authorization-header": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
   "render-scope-on-seal-route": {
     "body": {
       "code": "render.forbidden",
@@ -100,6 +115,21 @@
       "content-type": "application/problem+json"
     },
     "status": 403
+  },
+  "repeated-authorization-header": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
   },
   "scheme-not-bearer": {
     "body": {
@@ -174,7 +204,37 @@
     },
     "status": 401
   },
+  "token-client-canary": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
   "token-expired": {
+    "body": {
+      "code": "render.unauthorized",
+      "detail": "Present a valid bearer credential for this Render resource.",
+      "status": 401,
+      "title": "unauthorized",
+      "type": "https://render.registrystack.org/problems/unauthorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer"
+    },
+    "status": 401
+  },
+  "value-shorter-than-the-scheme": {
     "body": {
       "code": "render.unauthorized",
       "detail": "Present a valid bearer credential for this Render resource.",

@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.reserved-facade-path: this artifact set must be refused with
+# exactly adapter.project.reserved-facade-path. The binding's concrete path is `/health`, which the listener answers itself, so the binding would be advertised and never served.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.reserved-facade-path/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:61b726c7e21aa6d434f91bbbdbdb2ea5aa2a8c880506e82abc3e87b8b7fad14e
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:a83e595f8183464fa6c459e8bd1fab44123bcb92a619feb8b0a84ca4753517b6
+recordTypes:
+  - name: health
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: health
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - health

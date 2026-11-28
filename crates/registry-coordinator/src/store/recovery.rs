@@ -3,6 +3,7 @@
 use super::*;
 use crate::protocol::{AdapterSet, ReconciliationOutcome};
 use registry_platform_audit::AuditRequest;
+use registry_platform_authcommon::FailedCheck;
 use serde_json::json;
 use std::future::Future;
 
@@ -74,20 +75,27 @@ pub struct ProposalWaitsByTurn {
     pub unobserved: i64,
 }
 
+/// The bound the authenticator already puts on every identity it admits.
+fn bounded_identity(actor: &Actor) -> Result<()> {
+    if [&actor.issuer, &actor.subject, &actor.client_id]
+        .iter()
+        .any(|v| v.is_empty() || v.len() > 512)
+    {
+        return Err(refused(
+            "access.denied",
+            "verified bounded caller identity is required",
+        )
+        .failing(FailedCheck::TokenClaims));
+    }
+    Ok(())
+}
+
 impl Store {
     pub fn audit_writer(&self) -> AuditWriter {
         self.security.audit.clone()
     }
     pub(super) fn owner(&self, actor: &Actor) -> Result<String> {
-        if [&actor.issuer, &actor.subject, &actor.client_id]
-            .iter()
-            .any(|v| v.is_empty() || v.len() > 512)
-        {
-            return Err(refused(
-                "access.denied",
-                "verified bounded caller identity is required",
-            ));
-        }
+        bounded_identity(actor)?;
         Ok(self.security.keys.commitment(
             "owner",
             &[
@@ -127,7 +135,8 @@ impl Store {
             return Err(refused(
                 "access.denied",
                 "this operation requires the configured operator policy",
-            ));
+            )
+            .failing(FailedCheck::Operation));
         }
         Ok(())
     }
@@ -1152,5 +1161,37 @@ impl Store {
             }
             tx.commit().await.map_err(unavailable)?;Ok(erased)
         }).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn actor(subject: &str, operator: bool) -> Actor {
+        Actor {
+            issuer: "https://issuer.example.test".to_owned(),
+            subject: subject.to_owned(),
+            client_id: "client".to_owned(),
+            operator,
+        }
+    }
+
+    #[test]
+    fn a_caller_without_the_operator_policy_is_refused_under_operation() {
+        let error = Store::operator(&actor("subject", false)).unwrap_err();
+        assert_eq!(error.code, "access.denied");
+        assert_eq!(error.check, Some(FailedCheck::Operation));
+        assert!(Store::operator(&actor("subject", true)).is_ok());
+    }
+
+    #[test]
+    fn an_identity_outside_the_bound_is_refused_under_token_claims() {
+        for subject in ["", &"s".repeat(513)] {
+            let error = bounded_identity(&actor(subject, false)).unwrap_err();
+            assert_eq!(error.code, "access.denied");
+            assert_eq!(error.check, Some(FailedCheck::TokenClaims));
+        }
+        assert!(bounded_identity(&actor(&"s".repeat(512), false)).is_ok());
     }
 }

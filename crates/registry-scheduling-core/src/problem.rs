@@ -441,9 +441,6 @@ mod tests {
         }
     }
 
-    /// The request-edge family is Casework's, pinned one status per code, so
-    /// the runtime's edge and every client agree on what a rejected request
-    /// looks like.
     #[test]
     fn a_grant_with_too_much_lifetime_left_has_its_own_code_and_keeps_the_status() {
         let code = ProblemCode::GrantLifetimeTooLong;
@@ -457,6 +454,9 @@ mod tests {
         assert!(code.detail().contains("900 seconds"));
     }
 
+    /// The request-edge family is Casework's, pinned one status per code, so
+    /// the runtime's edge and every client agree on what a rejected request
+    /// looks like.
     #[test]
     fn the_request_edge_family_pins_casework_s_statuses() {
         assert_eq!(ProblemCode::RequestInvalid.http_status(), 400);

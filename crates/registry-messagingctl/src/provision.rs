@@ -13,8 +13,9 @@ use registry_platform_provision::{ProductDatabase, ProvisionInput, SchemaLayout}
 use registry_platform_yaml::Diagnostic;
 use zeroize::Zeroizing;
 
-/// Messaging keeps its tables in `public`, handed to the migration
-/// role, and needs no extension.
+/// Messaging keeps its tables in `public`. `provision` gives the migration role
+/// USAGE and CREATE on it and the runtime role USAGE, directly. It needs no
+/// extension.
 fn product() -> ProductDatabase {
     ProductDatabase {
         product: "messaging",

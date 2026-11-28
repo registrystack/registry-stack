@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -517,7 +517,9 @@ standard error from `breg-review`, so collect both.
 | Service | Level | Message |
 |---|---|---|
 | `breg-mcp` | info | `tool call`, with `request_id`, `tool`, and `outcome` |
-| `breg-mcp` | warn | `the access-token key set is unavailable` |
+| `breg-mcp` | info | `request refused`, with `failed_check` (the check that refused the request) and `suppressed`. At most five lines per check per minute |
+| `breg-mcp` | error | `the gateway could not admit a request`, at most once a minute |
+| `breg-mcp` | error | `the static key set was refused`, with the reason, at startup |
 | `breg-mcp` | error | `tool audit request refused` or `tool audit response refused` |
 | `breg-review` | warn | `a rate limit refused a request` |
 | `breg-review` | warn | `the registry declined a review request` or `the registry could not answer a review` |
@@ -528,7 +530,9 @@ Neither service logs a token, secret, cookie, or field value.
 {/* Evidence: crates/registry-breg-mcp/src/main.rs, LOG_VARIABLE, main;
     crates/registry-breg-review/src/main.rs, LOG_VARIABLE;
     crates/registry-breg-mcp/src/gateway.rs, call;
-    crates/registry-mcp-edge/src/inbound.rs, authenticate;
+    crates/registry-mcp-edge/src/inbound.rs, authenticate, refuse;
+    crates/registry-mcp-edge/src/server.rs, require_resource_host;
+    crates/registry-breg-mcp/src/runtime.rs, static_key_fetcher;
     crates/registry-breg-review/src/pages.rs, review, submit;
     crates/registry-breg-review/src/lib.rs, Problem. */}
 

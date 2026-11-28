@@ -432,6 +432,15 @@ mod readiness_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
+    #[test]
+    fn the_probe_bodies_keep_the_shared_status_member_and_name_their_own() {
+        assert_eq!(live_body().to_string(), r#"{"live":true,"status":"ok"}"#);
+        assert_eq!(
+            ready_body().to_string(),
+            r#"{"ready":true,"status":"ready"}"#
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn live_binding_readiness_refreshes_success_and_failure_at_the_fixed_deadline() {
         let cache = BindingReadiness::default();

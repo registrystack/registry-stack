@@ -209,6 +209,7 @@ def encode_ingestion_chunk(
 HookVerificationRefusalCode = Literal[
     "missing-header",
     "invalid-delivery-time",
+    "stale-delivery",
     "duplicate-header",
     "body-too-large",
     "invalid-key",

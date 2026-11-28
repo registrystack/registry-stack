@@ -109,7 +109,7 @@ Existing bounded multi-audience tokens remain accepted where the owning profile 
 A token without the target audience grants no access to that resource.
 Casework task-client profiles keep their narrower audience rules.
 
-{/* Evidence: crates/registry-platform-oidc/src/diagnostics.rs AuthenticationStage;
+{/* Evidence: crates/registry-platform-oidc/src/diagnostics.rs failed_check;
     crates/registry-messaging/src/auth.rs access_token_profile, AUDIENCE. */}
 {/* TODO[evidence]: the multi-audience acceptance rule and the Casework task-client audience rule have no single code anchor. */}
 
@@ -196,7 +196,7 @@ These logs contain no credential, claim, issuer, audience, scope, key, or subjec
 Use the selected configuration and safe local validation to identify the mismatched field, and never add token contents to runtime logs.
 Local fixture validation names the field or rule and the expected profile category without printing input values.
 
-{/* Evidence: crates/registry-platform-oidc/src/diagnostics.rs AuthenticationStage, AuthenticationDiagnostics;
+{/* Evidence: crates/registry-platform-oidc/src/diagnostics.rs failed_check;
     crates/registry-adapter-core/src/problem.rs AUTHENTICATION_REFUSED_PROBLEM. */}
 
 ## Troubleshooting

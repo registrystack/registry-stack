@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: `registry-platform-oidc` no longer has the stage-labelled
+  authentication log helpers: `AuthenticationStage`,
+  `AuthenticationDiagnostics`, `OidcError::authentication_stage`,
+  `TokenVerifier::authentication_diagnostic` and the
+  `log_authentication_refusal!` macro. Every runtime logs and counts
+  refusals by failed check. Migration: use `OidcError::failed_check`.
+
 - `registry-platform-posture`, a `std`-only crate, holds `Posture`,
   `PostureSource`, `DeclaredPosture`, `PostureError` and
   `declared_from`/`declared`, which read the `--posture` flag and the
@@ -39,6 +46,25 @@
   and the crypto stack. A service that passes its trace id to `record_refusal!`
   enables the feature.
 
+- `registry-platform-provision` is the one provisioning plan for every
+  database-backed tool, with the `provision` command behind its `cli` feature
+  (`cli::run_provision`). From the two product URLs it creates the migration
+  and runtime login roles, an isolated database closed to `PUBLIC`, the
+  product's schema layout and the optional `btree_gist` and PostGIS
+  extensions. It can run as an administrator over verified TLS, converging by
+  object, or print a `psql` script that holds no password and stops at the
+  first error. It refuses an existing role with other attributes, role-level
+  settings or a membership it did not grant, a template database, a PostGIS
+  installed outside its schema or without the bbox membership, a role name
+  that is `public`, `none` or starts with `pg_`, a name with a control
+  character or backslash, and the `postgres`, `template0` and `template1`
+  databases. It grants the runtime role `USAGE` on `public` directly, so
+  running `provision` again restores it. A run that stops part-way reports
+  the statements that ran. `registry-platform-activation` exports
+  `MINIMUM_SERVER_VERSION_NUM`, the PostgreSQL 17 floor the plan and the
+  activation ledger share. `rstack dev` provisions its databases from the
+  same plan.
+
 - A `test-support` feature in `registry-platform-provision` gives the product
   provision tests one verified-TLS superuser session, so they run against a
   TLS-only PostgreSQL server. It is enabled only by dev-dependencies.
@@ -69,6 +95,12 @@
   `*.localhost`, `localhost.` and a bracketed IPv4 literal such as
   `[127.0.0.1]` are never loopback. Sites that use it accept more literal
   spellings than before, for example `127.0.0.2` and `[::ffff:127.0.0.1]`.
+
+- `registry-thunderid-tooling` reads development identity files and task
+  connections with the same loopback rule. A development issuer, exchange
+  issuer or local app origin may be any `127.0.0.0/8` address, `[::1]`, the
+  IPv4-mapped form or `localhost`. The identity facts issuer and the local app
+  origin accepted only `127.0.0.1` before.
 
 - Every client built by `OutboundClientBuilder` resolves the name
   `localhost` to `127.0.0.1` and `::1` itself, so no resolver is asked for
@@ -117,11 +149,16 @@
 - The MCP edge counts every refusal by the check that refused it and writes
   one `request refused` line with `failed_check`, at most five lines per check
   per minute. The edge has no metrics listener, so the line is the operator's
-  signal there. Refusal statuses, headers and bodies are unchanged. Gateways
+  signal there. An unreachable key set is that line with
+  `failed_check` `key-source-unavailable`, in place of the earlier unbounded
+  warning, and a request the gateway cannot admit because of its own fault
+  writes at most one error line a minute. Refusal statuses, headers and bodies
+  are unchanged. Gateways
   built on the edge (`registry-mcp`, `registry-breg-mcp`) and the BReg review
-  page accept the loopback spellings of the shared definition under
-  `development-loopback` (for example `127.0.0.2` and `[::ffff:127.0.0.1]`),
-  and still refuse `localhost.` and `*.localhost`. A refused static key set
+  page now also accept the IPv4-mapped loopback form, for example
+  `[::ffff:127.0.0.1]`, under `development-loopback`. The rest of
+  `127.0.0.0/8`, `[::1]` and `localhost` were already accepted, and
+  `localhost.` and `*.localhost` stay refused. A refused static key set
   now says why: `registry-mcp` names the refusal in its startup message, and
   `registry-breg-mcp` logs it, with its startup code unchanged.
 

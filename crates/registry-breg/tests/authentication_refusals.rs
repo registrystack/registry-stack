@@ -218,6 +218,27 @@ impl Harness {
         Self { app, idp }
     }
 
+    /// A harness whose key source cannot be reached: the issuer's key set URL
+    /// names a loopback port nothing listens on.
+    async fn key_source_outage() -> Self {
+        let registry = compiled(PROJECT);
+        let idp = MockIdp::start().await;
+        let unreachable = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            "http://127.0.0.1:9/jwks.json".to_owned(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        ));
+        let authenticator = RegistryAuthenticator::new(
+            &registry,
+            oidc_verifier_config(idp.issuer(), vec![AUDIENCE.to_owned()]),
+            unreachable,
+            AuthorityClaimConfig::new("registry_principal", None),
+        )
+        .expect("authentication config is valid");
+        let app = authenticated_router(Arc::new(service(registry)), Arc::new(authenticator));
+        Self { app, idp }
+    }
+
     async fn contextual() -> Self {
         let registry = compiled(CONTEXTUAL_PROJECT);
         let idp = MockIdp::start().await;
@@ -502,6 +523,7 @@ async fn observe(
     let content_type = header("content-type");
     let cache_control = header("cache-control");
     let www_authenticate = header("www-authenticate");
+    let retry_after = header("retry-after");
     let bytes = to_bytes(response.into_body(), 1024 * 1024)
         .await
         .expect("response body");
@@ -534,6 +556,7 @@ async fn observe(
             "contentType": content_type,
             "cacheControl": cache_control,
             "wwwAuthenticate": www_authenticate,
+            "retryAfter": retry_after,
             "body": body,
         }),
         counted,
@@ -549,9 +572,17 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
 
     let plain = Harness::plain().await;
     let valid = plain.idp.mint_token(valid_claims());
+    // Change a character in the middle of the signature. The last character
+    // of a base64url Ed25519 signature carries padding bits, so changing it
+    // can make the token fail to decode instead of failing the signature.
     let mut tampered = valid.clone();
-    tampered.pop();
-    tampered.push(if valid.ends_with('A') { 'B' } else { 'A' });
+    let position = tampered.len() - 10;
+    let replacement = if &valid[position..=position] == "A" {
+        "B"
+    } else {
+        "A"
+    };
+    tampered.replace_range(position..=position, replacement);
     let now = unix_now();
     let mut wrong_audience = valid_claims();
     wrong_audience["aud"] = json!("urn:example:another-resource");
@@ -568,6 +599,8 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
         .remove("registry_actor_kind");
     let mut object_principal = valid_claims();
     object_principal["registry_principal"] = json!({"value": PRINCIPAL});
+    let mut malformed_actor_kind = valid_claims();
+    malformed_actor_kind["registry_actor_kind"] = json!(["service"]);
     let bearer = |token: &str| format!("Bearer {token}");
 
     for (name, check, request) in [
@@ -633,6 +666,31 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
             read_request(&record, &[&bearer(&plain.token(no_actor_kind))]),
         ),
         (
+            "actor-kind-is-not-a-string",
+            "actor-kind",
+            read_request(&record, &[&bearer(&plain.token(malformed_actor_kind))]),
+        ),
+        (
+            "token-type-is-not-admitted",
+            "token-type",
+            read_request(
+                &record,
+                &[&bearer(&sign_ed25519_compact_jwt(
+                    fixtures::ED25519_PRIVATE_JWK,
+                    "canary+type",
+                    "registry-platform-testing-ed25519-1",
+                    {
+                        let mut claims = valid_claims();
+                        claims["iss"] = json!(plain.idp.issuer());
+                        claims["iat"] = json!(now);
+                        claims["nbf"] = json!(now);
+                        claims["exp"] = json!(now + 900);
+                        claims
+                    },
+                ))],
+            ),
+        ),
+        (
             "principal-claim-is-an-object",
             "token-claims",
             read_request(&record, &[&bearer(&plain.token(object_principal))]),
@@ -666,6 +724,7 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
         .as_object_mut()
         .expect("claims are an object")
         .remove("azp");
+    let act_not_an_object = contextual.token(standing_agent_claims(json!("not-an-object")));
     let mut long_grant = delegated_grant_claims(now);
     long_grant["iat"] = json!(now);
     long_grant["exp"] = json!(now + 901);
@@ -673,11 +732,26 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
     partial_grant["iat"] = json!(now);
     partial_grant["exp"] = json!(now + 600);
     partial_grant["registry_grant_bounds"] = json!("not-an-object");
+    let mut expired_grant = delegated_grant_claims(now);
+    expired_grant["registry_grant_exp"] = json!(now - 1);
+    let mut other_client_grant = delegated_grant_claims(now);
+    other_client_grant["registry_grant_client"] = json!("other-client");
+    let mut other_resource_grant = delegated_grant_claims(now);
+    other_resource_grant["registry_grant_resource"] = json!("urn:example:other-resource");
+    let mut future_issued_grant = delegated_grant_claims(now);
+    future_issued_grant["iat"] = json!(now + 600);
+    future_issued_grant["nbf"] = json!(now);
+    future_issued_grant["exp"] = json!(now + 1200);
     for (name, check, request) in [
         (
             "actor-is-not-the-trusted-actor",
             "delegation",
             read_request(&agent_path, &[&bearer(&untrusted_actor)]),
+        ),
+        (
+            "act-claim-is-not-an-object",
+            "delegation",
+            read_request(&agent_path, &[&bearer(&act_not_an_object)]),
         ),
         (
             "actor-without-a-matched-client",
@@ -697,9 +771,50 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
             "task-grant-claims",
             read_request(&grant_path, &[&bearer(&contextual.token(partial_grant))]),
         ),
+        (
+            "task-grant-expired",
+            "task-grant-expired",
+            read_request(&grant_path, &[&bearer(&contextual.token(expired_grant))]),
+        ),
+        (
+            "task-grant-bound-to-another-client",
+            "task-grant-binding",
+            read_request(
+                &grant_path,
+                &[&bearer(&contextual.token(other_client_grant))],
+            ),
+        ),
+        (
+            "task-grant-bound-to-another-resource",
+            "task-grant-binding",
+            read_request(
+                &grant_path,
+                &[&bearer(&contextual.token(other_resource_grant))],
+            ),
+        ),
+        (
+            "task-grant-token-issued-in-the-future",
+            "task-grant-claims",
+            read_request(
+                &grant_path,
+                &[&bearer(&contextual.token(future_issued_grant))],
+            ),
+        ),
     ] {
         observed.push(observe(name, check, &contextual.app, request).await);
     }
+
+    let outage = Harness::key_source_outage().await;
+    let outage_token = outage.token(valid_claims());
+    observed.push(
+        observe(
+            "key-source-unreachable",
+            "key-source-unavailable",
+            &outage.app,
+            read_request(&record, &[&bearer(&outage_token)]),
+        )
+        .await,
+    );
 
     let completions = completion_app();
     for (name, check, request) in [
@@ -720,6 +835,11 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
                 );
                 request
             },
+        ),
+        (
+            "review-completion-with-an-unparseable-bearer",
+            "credential-malformed",
+            completion_request(Some("Bearer  completion-secret"), Some("registry-a")),
         ),
         (
             "review-completion-without-recipient",
@@ -826,4 +946,36 @@ async fn every_authentication_refusal_is_counted_logged_and_unchanged_on_the_wir
         used.len() >= 14,
         "the cases cover every authentication check"
     );
+
+    // The shared malformed-token corpus goes through the router. The counter
+    // has no budget, so every token counts once under `credential-malformed`,
+    // whatever the log line budget admits.
+    let corpus = registry_platform_testing::malformed_access_token_fixtures();
+    let captured = CapturedLogs::default();
+    let before = refusal_counts().await;
+    for token in &corpus {
+        let response = plain
+            .app
+            .clone()
+            .oneshot(read_request(&record, &[&bearer(token)]))
+            .with_subscriber(captured.subscriber())
+            .await
+            .expect("router responds");
+        assert_eq!(response.status().as_u16(), 401);
+    }
+    let after = refusal_counts().await;
+    let counted = |label: &str| {
+        after.get(label).copied().unwrap_or(0) - before.get(label).copied().unwrap_or(0)
+    };
+    assert_eq!(
+        counted("credential-malformed"),
+        u64::try_from(corpus.len()).expect("corpus length fits"),
+        "each malformed token counts once"
+    );
+    let log_text = captured
+        .events()
+        .iter()
+        .map(Value::to_string)
+        .collect::<String>();
+    assert!(!log_text.contains("canary"), "the corpus reached the log");
 }

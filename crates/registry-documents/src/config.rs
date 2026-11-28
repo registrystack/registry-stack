@@ -944,7 +944,7 @@ impl RuntimeConfig {
             .map(|client| {
                 Finding::new(
                     ASSERTION_ISSUER_CLIENT_NOT_ALLOWED_CODE,
-                    &dotted_pointer(&format!("authentication.oidc.assertionIssuers.{client}")),
+                    &format!("/authentication/oidc/assertionIssuers/{}", escape(client)),
                     format!(
                         "authentication.oidc.assertionIssuers names {client}, which no access profile of the project lists as a requester client"
                     ),
@@ -1494,6 +1494,19 @@ pub(crate) mod tests {
         assert_eq!(
             project_finding_codes(&config, &starter_project()),
             [] as [String; 0]
+        );
+    }
+
+    #[test]
+    fn an_assertion_issuer_client_with_dots_is_reported_at_its_own_pointer() {
+        let text = from_package_runtime().replace(
+            "allowedClients: from-package\n",
+            "allowedClients: from-package\n    assertionIssuers:\n      com.example.portal: [https://assertions.example.test]\n",
+        );
+        let config = parse(&text).unwrap();
+        assert_eq!(
+            project_finding_codes(&config, &starter_project()),
+            ["documents.runtime.assertion-issuer-client-not-allowed /authentication/oidc/assertionIssuers/com.example.portal"]
         );
     }
 

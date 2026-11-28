@@ -129,10 +129,12 @@ fn conceal_target_error(target: Target, error: HttpError) -> HttpError {
         (Target::Task(_) | Target::Request(_), HttpError::NotFound(check)) => {
             HttpError::NotFound(check)
         }
-        (
-            Target::Task(_) | Target::Request(_),
-            HttpError::AuthenticationRefused(_) | HttpError::SourceProfileNotApplicable,
-        ) => HttpError::NotFound(FailedCheck::Visibility),
+        (Target::Task(_) | Target::Request(_), HttpError::AuthenticationRefused(check)) => {
+            HttpError::NotFound(check)
+        }
+        (Target::Task(_) | Target::Request(_), HttpError::SourceProfileNotApplicable) => {
+            HttpError::NotFound(FailedCheck::Visibility)
+        }
         (_, error) => error,
     }
 }

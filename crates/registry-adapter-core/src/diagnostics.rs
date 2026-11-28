@@ -103,6 +103,7 @@ pub enum CheckCode {
     ProjectPinDigestMismatch,
     ProjectPinVersionMismatch,
     ProjectRequiredParameterUnbound,
+    ProjectReservedFacadePath,
     ProjectTemplateNotInstantiated,
     ProjectTransformBindingUnknown,
     ProjectTransformEntrypoint,
@@ -257,6 +258,7 @@ impl CheckCode {
         Self::ProjectPinDigestMismatch,
         Self::ProjectPinVersionMismatch,
         Self::ProjectRequiredParameterUnbound,
+        Self::ProjectReservedFacadePath,
         Self::ProjectTemplateNotInstantiated,
         Self::ProjectTransformBindingUnknown,
         Self::ProjectTransformEntrypoint,
@@ -437,6 +439,7 @@ impl CheckCode {
             Self::ProjectPinDigestMismatch => "adapter.project.pin-digest-mismatch",
             Self::ProjectPinVersionMismatch => "adapter.project.pin-version-mismatch",
             Self::ProjectRequiredParameterUnbound => "adapter.project.required-parameter-unbound",
+            Self::ProjectReservedFacadePath => "adapter.project.reserved-facade-path",
             Self::ProjectTemplateNotInstantiated => "adapter.project.template-not-instantiated",
             Self::ProjectTransformBindingUnknown => "adapter.project.transform-binding-unknown",
             Self::ProjectTransformEntrypoint => "adapter.project.transform-entrypoint",
@@ -653,6 +656,7 @@ impl CheckCode {
             | Self::ProjectPinDigestMismatch
             | Self::ProjectPinVersionMismatch
             | Self::ProjectRequiredParameterUnbound
+            | Self::ProjectReservedFacadePath
             | Self::ProjectTemplateNotInstantiated
             | Self::ProjectTransformBindingUnknown
             | Self::ProjectTransformEntrypoint

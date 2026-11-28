@@ -31,13 +31,17 @@
   loopback addresses, and `a.localhost` and `localhost.` stay named hosts. A
   plain `http://` origin named by host name now fails the runtime check with
   `adapter.runtime.insecure-origin` when `allowedPrivateCidrs` is empty.
-- The facade listener answers `GET /health` and `GET /ready` without
+- BREAKING: the facade listener answers `GET /health` and `GET /ready` without
   authentication. `/health` answers `{"status":"ok"}`. `/ready` answers
   `{"status":"ready"}` when the journal migrations match the binary and the
   runtime role holds its journal privileges, and a constant 503
   `{"status":"not-ready"}` otherwise. The bodies never vary with the
   project. A project operation whose facade path is `/health` or `/ready` is
-  unserved under `adapter.operation.reserved-facade-path`.
+  unserved under `adapter.operation.reserved-facade-path`. To migrate, rename
+  the record type or change the operation path so no binding's concrete path
+  is `/health`, `/ready` or the effective-contract path. `adapterctl check`
+  refuses such a binding with `adapter.project.reserved-facade-path` and
+  `adapterctl compile` refuses it with `adapterctl.compile.reserved-path`.
 - `adapter serve` grants the runtime database role the table privileges its
   deployment needs, after it migrates and before it listens, when the runtime
   and migration sessions run as different roles. The grantee is the role the

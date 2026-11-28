@@ -278,13 +278,36 @@ impl RefusalCode {
     }
 }
 
+/// A problem code that is not a refusal of authority. The only way to build
+/// one is [`PlainProblem::new`], which refuses a code [`RefusalCode::of`]
+/// maps, so a refusal cannot be answered without the check it failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlainProblem(ProblemCode);
+
+impl PlainProblem {
+    /// `problem` as a plain problem, or `None` when it is a refusal code.
+    #[must_use]
+    pub fn new(problem: ProblemCode) -> Option<Self> {
+        match RefusalCode::of(problem) {
+            None => Some(Self(problem)),
+            Some(_) => None,
+        }
+    }
+
+    /// The problem the caller is answered with.
+    #[must_use]
+    pub const fn problem(self) -> ProblemCode {
+        self.0
+    }
+}
+
 /// Why an operation answered a problem.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceError {
     /// A problem that is not a refusal of authority: validation, a conflict,
-    /// an idempotency answer, or an outage. A code for which
-    /// [`RefusalCode::of`] answers `Some` is built as `Refused`.
-    Problem(ProblemCode),
+    /// an idempotency answer, or an outage. A refusal code is built as
+    /// `Refused`.
+    Problem(PlainProblem),
     /// A refusal of authority, with the check it failed.
     Refused {
         code: RefusalCode,
@@ -338,7 +361,7 @@ impl ServiceError {
     #[must_use]
     pub const fn problem(&self) -> ProblemCode {
         match self {
-            Self::Problem(problem) => *problem,
+            Self::Problem(problem) => problem.problem(),
             Self::Refused { code, .. } => code.problem(),
             Self::KeySourceUnavailable => ProblemCode::ServiceUnavailable,
         }
@@ -362,16 +385,14 @@ impl From<ProblemCode> for ServiceError {
     /// it is logged and answered `service.unavailable`, never as a refusal
     /// the operator cannot account for.
     fn from(problem: ProblemCode) -> Self {
-        match RefusalCode::of(problem) {
-            None => Self::Problem(problem),
-            Some(_) => {
-                tracing::error!(
-                    code = problem.code(),
-                    "a refusal was built without the check it failed"
-                );
-                Self::Problem(ProblemCode::ServiceUnavailable)
-            }
+        if let Some(plain) = PlainProblem::new(problem) {
+            return Self::Problem(plain);
         }
+        tracing::error!(
+            code = problem.code(),
+            "a refusal was built without the check it failed"
+        );
+        Self::Problem(PlainProblem(ProblemCode::ServiceUnavailable))
     }
 }
 
@@ -388,7 +409,7 @@ fn custody_refusal(problem: ProblemCode) -> ServiceError {
 /// Log a failure the caller is answered `service.unavailable` for.
 fn unavailable(stage: &'static str, error: &dyn std::fmt::Display) -> ServiceError {
     tracing::error!(stage, error = %error, "a document operation failed");
-    ServiceError::Problem(ProblemCode::ServiceUnavailable)
+    ServiceError::Problem(PlainProblem(ProblemCode::ServiceUnavailable))
 }
 
 fn timestamp(value: DateTime<Utc>) -> String {
@@ -1859,10 +1880,13 @@ mod tests {
         for problem in ProblemCode::ALL {
             let error = ServiceError::from(*problem);
             match RefusalCode::of(*problem) {
-                None => assert_eq!(error, ServiceError::Problem(*problem)),
+                None => assert_eq!(
+                    error,
+                    ServiceError::Problem(PlainProblem::new(*problem).unwrap())
+                ),
                 Some(_) => assert_eq!(
                     error,
-                    ServiceError::Problem(ProblemCode::ServiceUnavailable),
+                    ServiceError::from(ProblemCode::ServiceUnavailable),
                     "{problem:?}"
                 ),
             }
@@ -1913,7 +1937,7 @@ mod tests {
         );
         assert_eq!(
             custody_refusal(ProblemCode::DocumentPolicyUnknown),
-            ServiceError::Problem(ProblemCode::DocumentPolicyUnknown)
+            ServiceError::from(ProblemCode::DocumentPolicyUnknown)
         );
     }
 

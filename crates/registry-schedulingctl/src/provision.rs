@@ -13,8 +13,9 @@ use registry_scheduling::config::{startup_report, RuntimeConfig};
 use registry_scheduling_core::SCHEDULING_RUNTIME_KIND;
 use zeroize::Zeroizing;
 
-/// Scheduling keeps its tables in `public`, handed to the migration
-/// role, and needs no extension.
+/// Scheduling keeps its tables in `public`. `provision` gives the migration role
+/// USAGE and CREATE on it and the runtime role USAGE, directly. It needs no
+/// extension.
 fn product() -> ProductDatabase {
     ProductDatabase {
         product: "scheduling",

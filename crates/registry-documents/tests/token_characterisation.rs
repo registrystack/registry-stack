@@ -260,7 +260,7 @@ destinations:
         Err(error @ (AuthenticationError::Refused(_) | AuthenticationError::Profile(_))) => {
             let reference = TokenVerifier::new(config.verifier_profile(&admitted), keys);
             match reference.verify(token).await {
-                Err(failure) => refusal(failure.authentication_stage().label()),
+                Err(failure) => Outcome::refused_by(&failure),
                 Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {
                     if verified.scopes.iter().any(|held| held == &scope) {
                         refusal("profile")

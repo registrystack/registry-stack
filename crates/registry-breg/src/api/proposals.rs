@@ -1321,7 +1321,12 @@ pub(super) async fn review_context_batch(
                 };
                 items.push(json!({"id":id,"status":"visible","context":context}));
             }
-            StatusCode::NOT_FOUND => items.push(json!({"id":id,"status":"concealed"})),
+            StatusCode::NOT_FOUND => {
+                // The batch answers 200, so each concealed item records its
+                // own refusal here.
+                crate::correlation::record_noted_refusal(&response, &correlation);
+                items.push(json!({"id":id,"status":"concealed"}));
+            }
             _ => return response,
         }
     }

@@ -29,8 +29,8 @@ use registry_platform_authcommon::FailedCheck;
 use serde_json::{json, Value};
 use support::{
     pdf, request, reservation, token, token_with, Answer, Api, Deployment, FakeVerifier, Principal,
-    APP, APPROVE, CITIZEN, DATABASE_STORAGE, DISABLED_VERIFIER, OTHER_APP, READER, STRANGER,
-    TEST_AUDIENCE, TEST_ISSUER,
+    APP, APPROVE, CITIZEN, DATABASE_STORAGE, DISABLED_VERIFIER, OTHER_APP, PARTNER_SERVICE, READER,
+    STRANGER, TEST_AUDIENCE, TEST_ISSUER,
 };
 use tower::ServiceExt as _;
 use tracing::instrument::WithSubscriber as _;
@@ -135,6 +135,7 @@ struct World {
     document: String,
     version: String,
     upload_path: String,
+    missing: String,
 }
 
 async fn world() -> World {
@@ -171,6 +172,7 @@ async fn world() -> World {
         document,
         version,
         upload_path,
+        missing: Uuid::new_v4().to_string(),
     }
 }
 
@@ -181,7 +183,7 @@ fn claims(name: &str, value: Value) -> Value {
 fn fixtures(world: &World) -> Vec<Fixture> {
     let document = &world.document;
     let version = &world.version;
-    let missing = Uuid::new_v4().to_string();
+    let missing = world.missing.clone();
     let reserve = |policy: &str, custodian: &str| {
         support::reservation_body(
             policy,
@@ -268,6 +270,15 @@ fn fixtures(world: &World) -> Vec<Fixture> {
             "/v1/documents",
             signed(claims("scope", json!("documents:read"))),
         ),
+        // The verifier admits this client and no access profile of the
+        // starter project lists it.
+        Fixture::as_principal(
+            "client-no-profile-lists",
+            FailedCheck::AccessProfile,
+            Method::GET,
+            "/v1/documents",
+            PARTNER_SERVICE,
+        ),
         Fixture::get(
             "another-actor-kind",
             FailedCheck::ActorKind,
@@ -337,7 +348,7 @@ fn fixtures(world: &World) -> Vec<Fixture> {
         ),
         Fixture::as_principal(
             "grants-listed-by-the-reserving-system",
-            FailedCheck::Operation,
+            FailedCheck::Ownership,
             Method::GET,
             &format!("/v1/documents/{document}/grants"),
             APP,
@@ -354,7 +365,7 @@ fn fixtures(world: &World) -> Vec<Fixture> {
         ),
         Fixture::as_principal(
             "grant-issued-by-the-reserving-system",
-            FailedCheck::Operation,
+            FailedCheck::Ownership,
             Method::POST,
             &format!("/v1/documents/{document}/grants"),
             APP,
@@ -588,16 +599,30 @@ async fn every_refusal_is_counted_and_logged_under_the_check_it_failed() {
         "reader-1",
         "someone-else",
         "not-a-token",
+        "partner-service",
+        CITIZEN.subject,
+        &world.document,
+        &world.version,
+        &world.missing,
     ] {
         assert!(!text.contains(canary), "{canary} reached the log\n{text}");
     }
     assert!(!logged.is_empty());
 }
 
+/// The sum of every series of `documents_request_refusals_total`.
+async fn counted_in_total(prepared: &Prepared) -> u64 {
+    let mut total = 0;
+    for check in FailedCheck::ALL {
+        total += counted(prepared, check).await;
+    }
+    total
+}
+
 #[tokio::test]
 async fn a_request_that_is_not_refused_is_not_counted() {
     let world = world().await;
-    let before = counted(&world.prepared, FailedCheck::Visibility).await;
+    let before = counted_in_total(&world.prepared).await;
     let read = world.api.read(CITIZEN, &world.document).await;
     assert_eq!(read.status, 200);
     let listed = world.api.get(CITIZEN, "/v1/documents").await;
@@ -613,9 +638,6 @@ async fn a_request_that_is_not_refused_is_not_counted() {
         )
         .await;
     assert!(unsupported.status >= 400);
-    assert_eq!(
-        counted(&world.prepared, FailedCheck::Visibility).await,
-        before
-    );
+    assert_eq!(counted_in_total(&world.prepared).await, before);
     drop(world.deployment);
 }

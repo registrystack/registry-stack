@@ -20,9 +20,7 @@ use axum::{
     Router,
 };
 use registry_platform_audit::AuditProfile;
-use registry_platform_oidc::{
-    parse_static_jwks, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
-};
+use registry_platform_oidc::{parse_static_jwks, JwksFetcher, JwksFetcherConfig, TokenVerifier};
 use registry_platform_testing::{
     ClaimValue, FixtureCase, Outcome, TokenCorpus, TokenFixture, TokenSigner,
 };
@@ -99,12 +97,6 @@ fn fetcher_for(case: &FixtureCase) -> Arc<JwksFetcher> {
     ))
 }
 
-fn stage_of(error: &OidcError) -> Outcome {
-    format!("refused/{}", error.authentication_stage().label())
-        .parse()
-        .expect("every authentication stage label is a result value")
-}
-
 async fn observe(case: &FixtureCase) -> Outcome {
     let options = options_for(case);
     let hasher = AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![5; 32]))
@@ -149,7 +141,7 @@ async fn observe(case: &FixtureCase) -> Outcome {
     match (response.status(), verdict) {
         (StatusCode::OK, Ok(_)) => Outcome::Admitted(None),
         (StatusCode::OK, Err(_)) => panic!("the edge admitted a token its verifier refused"),
-        (_, Err(error)) => stage_of(&error),
+        (_, Err(error)) => Outcome::refused_by(&error),
         (StatusCode::FORBIDDEN, Ok(_)) => "refused/scope".parse().expect("result value"),
         (StatusCode::UNAUTHORIZED, Ok(_)) => "refused/claims".parse().expect("result value"),
         (StatusCode::SERVICE_UNAVAILABLE, Ok(_)) => {

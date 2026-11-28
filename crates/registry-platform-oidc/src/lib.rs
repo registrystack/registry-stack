@@ -9,10 +9,7 @@ mod access_token_algorithm;
 mod authorization_claims;
 mod diagnostics;
 mod static_jwks;
-pub use diagnostics::{AuthenticationDiagnostics, AuthenticationStage};
 pub use static_jwks::{public_jwks_document, StaticJwksError};
-#[doc(hidden)]
-pub use tracing as __tracing;
 pub mod task_grant;
 
 pub use access_token_algorithm::AccessTokenAlgorithm;
@@ -1298,7 +1295,6 @@ impl VerifiedToken {
 
 #[derive(Debug)]
 pub struct TokenVerifier {
-    diagnostics: AuthenticationDiagnostics,
     config: TokenVerifierConfig,
     fetcher: Arc<JwksFetcher>,
     allowed_clients: HashSet<String>,
@@ -1322,7 +1318,6 @@ impl TokenVerifier {
         let allowed_id_typ = normalize_typ_set(&config.allowed_id_typ);
         let allowed_userinfo_typ = normalize_typ_set(&config.allowed_userinfo_typ);
         Self {
-            diagnostics: AuthenticationDiagnostics::default(),
             config,
             fetcher,
             allowed_clients,
@@ -1345,12 +1340,6 @@ impl TokenVerifier {
 
     pub async fn verify(&self, token: &str) -> Result<VerifiedToken, OidcError> {
         self.verify_access_token(token, true).await
-    }
-
-    /// One fixed category, at most once per stage per minute. No values from
-    /// the error, token, claims, or operator configuration are returned.
-    pub fn authentication_diagnostic(&self, stage: AuthenticationStage) -> Option<&'static str> {
-        self.diagnostics.admit(stage).then_some(stage.label())
     }
 
     pub async fn verify_related_token(&self, token: &str) -> Result<VerifiedToken, OidcError> {
@@ -2666,11 +2655,6 @@ mod tests {
                 "{reason}: {error:?}"
             );
             assert!(!error.is_key_source_unavailable(), "{reason}");
-            assert_eq!(
-                error.authentication_stage().label(),
-                "algorithm",
-                "{reason}"
-            );
         }
 
         let header = json!({"alg": "RS256", "typ": "at+jwt", "kid": KEYCLOAK_SIG_KID});
@@ -3628,7 +3612,7 @@ mod tests {
             .verify(&missing_iat)
             .await
             .expect_err("invalid time bounds are refused");
-        assert_eq!(error.authentication_stage().label(), "time");
+        assert_eq!(error.failed_check(), FailedCheck::TokenTime);
 
         let mut missing_exp_claims = test_claims(
             Some("https://issuer.example"),
@@ -3642,7 +3626,7 @@ mod tests {
             .verify(&missing_exp)
             .await
             .expect_err("invalid time bounds are refused");
-        assert_eq!(error.authentication_stage().label(), "time");
+        assert_eq!(error.failed_check(), FailedCheck::TokenTime);
 
         let mut non_positive_claims = test_claims(
             Some("https://issuer.example"),
@@ -3656,7 +3640,7 @@ mod tests {
             .verify(&non_positive)
             .await
             .expect_err("invalid time bounds are refused");
-        assert_eq!(error.authentication_stage().label(), "time");
+        assert_eq!(error.failed_check(), FailedCheck::TokenTime);
 
         let mut overlong_claims = test_claims(
             Some("https://issuer.example"),
@@ -3670,7 +3654,7 @@ mod tests {
             .verify(&overlong)
             .await
             .expect_err("invalid time bounds are refused");
-        assert_eq!(error.authentication_stage().label(), "time");
+        assert_eq!(error.failed_check(), FailedCheck::TokenTime);
     }
 
     fn test_claims(issuer: Option<&str>, audience: Option<&str>, subject: Option<&str>) -> Claims {

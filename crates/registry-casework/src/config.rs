@@ -1397,7 +1397,7 @@ impl RuntimeConfig {
                 findings.push(RuntimeConfigError::InvalidReviewCompletionDestination {
                     path: segments.join("."),
                     pointer: pointer_to(&segments),
-                    reason: "must be an https URL with a host, or an http URL on 127.0.0.1 or [::1], without userinfo, query, or fragment",
+                    reason: "must be an https URL with a host, or an http URL on a loopback literal (127.0.0.0/8, ::1 or ::ffff:127.0.0.0/104), without userinfo, query, or fragment",
                 });
             }
         }
@@ -3529,7 +3529,7 @@ impl RuntimeConfigError {
                 "Configure exactly one of bearerTokenRef and auth.secretRef, and name in auth.header only a header the runtime does not reserve."
             }
             Self::InvalidReviewCompletionDestination { .. } => {
-                "Give the destination a non-empty id and an https URL with a host, or an http URL on 127.0.0.1 or [::1] for local development."
+                "Give the destination a non-empty id and an https URL with a host, or an http URL on a loopback literal (127.0.0.0/8, ::1 or ::ffff:127.0.0.0/104) for local development."
             }
             Self::UnconfiguredReviewCompletionDestination => {
                 "Add a reviewCompletionDestinations entry for each destination casework.yaml trustedProducers.PRODUCER_ID.completion.destinationId names."

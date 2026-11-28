@@ -138,6 +138,7 @@ and deployment custody aligned. Each refuses with its directory's exact code.
 | `adapter.pack.async-status-route-unsafe` | The status closure contains an idempotent custody processor | checks |
 | `adapter.profile.async-status-path-collision` | An ordinary concrete GET path collides with the host status path | checks |
 | `adapter.project.async-declaration-mismatch` | The binding omits completion while profile and source declare it | checks |
+| `adapter.project.reserved-facade-path` | A binding's concrete path is `/health`, which the listener answers itself | checks |
 | `adapter.route.resume-invalid` | A safe single-send route carries a resume binding outside an admitted linear write plan | checks |
 | `adapter.runtime.async-idempotency-required` | The runtime omits exact-response custody for an asynchronous binding | checks with runtime |
 | `adapter.runtime.async-wait-exceeds-retention` | The bounded wait equals, rather than stays below, custody retention | checks with runtime |

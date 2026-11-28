@@ -7390,6 +7390,7 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
+ "registry-platform-loopback",
  "registry-platform-yaml",
  "registry-rstack-dev",
  "registry-thunderid-tooling",
@@ -8050,7 +8051,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -8590,6 +8590,7 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httputil",
+ "registry-platform-loopback",
  "registry-platform-oidc",
  "registry-platform-yaml",
  "reqwest 0.12.28",

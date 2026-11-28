@@ -123,7 +123,7 @@ impl PostgresStore {
                 &[&holiday_set, &revision],
             )
             .await?
-            .ok_or(StoreError::NotFound)?;
+            .ok_or(StoreError::Absent)?;
         serde_json::from_value(row.get(0)).map_err(StoreError::Json)
     }
 }

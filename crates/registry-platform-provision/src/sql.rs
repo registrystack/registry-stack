@@ -13,8 +13,15 @@ pub fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
+/// A string literal. A backslash makes it an escape string, so the text means
+/// the same whatever `standard_conforming_strings` is set to.
 pub fn quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+    let escaped = value.replace('\'', "''");
+    if value.contains('\\') {
+        format!("E'{}'", escaped.replace('\\', "\\\\"))
+    } else {
+        format!("'{escaped}'")
+    }
 }
 
 /// `verifier` is a SCRAM-SHA-256 verifier, never a password.
@@ -106,17 +113,33 @@ pub fn owned_schema_sql(schema: &str, owner: &str) -> String {
     )
 }
 
-pub fn public_schema_sql(migration: &str) -> String {
-    format!(
+/// `public` is closed to PUBLIC's CREATE. The migration role gets USAGE and
+/// CREATE, and the runtime role USAGE, directly from the administrator that
+/// owns the schema, so that PUBLIC's default USAGE is not what lets the
+/// runtime role resolve the product's tables. Running it again restores both.
+pub fn public_schema_sql(migration: &str, runtime: &str) -> String {
+    let mut sql = format!(
         "REVOKE CREATE ON SCHEMA public FROM PUBLIC; \
          GRANT USAGE, CREATE ON SCHEMA public TO {}",
         quote_identifier(migration)
-    )
+    );
+    if runtime != migration {
+        sql.push_str(&format!(
+            "; GRANT USAGE ON SCHEMA public TO {}",
+            quote_identifier(runtime)
+        ));
+    }
+    sql
 }
 
 /// Everything that runs inside the database apart from PostGIS: the one batch
 /// `rstack dev` configures a fresh database with. `CreatedByApply` has none.
-pub fn database_setup_sql(migration: &str, layout: &SchemaLayout, btree_gist: bool) -> String {
+pub fn database_setup_sql(
+    migration: &str,
+    runtime: &str,
+    layout: &SchemaLayout,
+    btree_gist: bool,
+) -> String {
     match layout {
         SchemaLayout::Owned(schemas) => {
             let schemas = schemas
@@ -130,7 +153,7 @@ pub fn database_setup_sql(migration: &str, layout: &SchemaLayout, btree_gist: bo
                 schemas
             }
         }
-        SchemaLayout::PublicForMigration => public_schema_sql(migration),
+        SchemaLayout::PublicForMigration => public_schema_sql(migration, runtime),
         SchemaLayout::CreatedByApply => String::new(),
     }
 }

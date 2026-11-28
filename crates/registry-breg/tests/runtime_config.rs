@@ -3567,6 +3567,23 @@ async fn a_private_member_in_a_static_key_set_is_named_in_the_startup_refusal() 
     assert!(rendered.contains("/authentication/oidc"), "{rendered}");
     assert!(rendered.contains("private-key member \"d\""), "{rendered}");
     assert!(!rendered.contains("private-canary"), "{rendered}");
+    assert_eq!(
+        rendered.matches("private-key member").count(),
+        1,
+        "the cause appears once: {rendered}"
+    );
+
+    // The startup surfaces keep the key-source class and carry the rule.
+    let startup = registry_breg::startup::map_runtime_config_error(error);
+    let registry_breg::startup::StartupError::StaticKeySet(cause) = &startup else {
+        panic!("a refused static key set is a key-source startup refusal: {startup:?}");
+    };
+    assert!(cause.to_string().contains("private-key member \"d\""));
+    let record = registry_breg::startup::OperationalEvent::StoppedWithError(startup).record();
+    assert_eq!(
+        record.error(),
+        Some("the Registry OIDC key source was refused")
+    );
 }
 
 #[tokio::test]

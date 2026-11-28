@@ -6386,7 +6386,7 @@ mod tests {
     };
 
     #[test]
-    fn fixture_authentication_diagnostics_distinguish_missing_claim_from_refused_credential() {
+    fn fixture_refusals_distinguish_missing_claim_from_refused_credential() {
         assert_eq!(
             fixture_authentication_error(crate::auth::AuthenticationError::MissingActorKind),
             FixtureError::AuthenticationActorKindMissing

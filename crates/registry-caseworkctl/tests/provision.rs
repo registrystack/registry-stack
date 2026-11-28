@@ -194,6 +194,142 @@ fn print_sql_with_a_global_json_format_reports_without_executing() {
     assert!(!text.contains(MIGRATION_PASSWORD) && !text.contains(RUNTIME_PASSWORD));
 }
 
+/// Runs `provision --print-sql` with a JSON report and returns the exit code,
+/// the report, and everything the command wrote, for a leak check.
+fn refused_print(runtime: &Path) -> (Option<i32>, Value, String) {
+    let output = ctl(&[
+        "--format",
+        "json",
+        "provision",
+        "--runtime-config",
+        runtime.to_str().unwrap(),
+        "--print-sql",
+    ]);
+    let written = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|_| panic!("a JSON report on stdout: {written}"));
+    (output.status.code(), report, written)
+}
+
+fn assert_loader_refusal(
+    (code, report, written): &(Option<i32>, Value, String),
+    diagnostic_code: &str,
+    pointer: &str,
+) {
+    assert_eq!(*code, Some(1), "{written}");
+    assert_eq!(report["ok"], false, "{written}");
+    assert_eq!(
+        report["diagnostics"][0]["code"], diagnostic_code,
+        "{written}"
+    );
+    let location = report["diagnostics"][0]["path"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(location.ends_with(pointer), "{location} in {written}");
+    for private in [MIGRATION_PASSWORD, RUNTIME_PASSWORD, "postgresql://"] {
+        assert!(!written.contains(private), "the refusal leaks {private}");
+    }
+}
+
+#[test]
+fn a_missing_runtime_url_secret_is_refused_without_printing_a_password() {
+    let (migration, runtime) = offline_urls();
+    let deployment = deployment(&DatabaseUrls {
+        migration: &migration,
+        runtime: &runtime,
+        ca_pem: None,
+        plaintext: false,
+        bind: "127.0.0.1:8100",
+    });
+    fs::remove_file(deployment.root.join("secrets/runtime-url")).unwrap();
+    assert_loader_refusal(
+        &refused_print(&deployment.runtime),
+        "casework.runtime.secret-unavailable",
+        "/database/runtimeUrlRef",
+    );
+}
+
+#[test]
+fn a_missing_migration_url_secret_is_refused_without_printing_a_password() {
+    let (migration, runtime) = offline_urls();
+    let deployment = deployment(&DatabaseUrls {
+        migration: &migration,
+        runtime: &runtime,
+        ca_pem: None,
+        plaintext: false,
+        bind: "127.0.0.1:8100",
+    });
+    fs::remove_file(deployment.root.join("secrets/migration-url")).unwrap();
+    assert_loader_refusal(
+        &refused_print(&deployment.runtime),
+        "casework.runtime.secret-unavailable",
+        "/database/migrationUrlRef",
+    );
+}
+
+#[test]
+fn a_runtime_url_secret_that_is_not_text_is_refused() {
+    let (migration, runtime) = offline_urls();
+    let deployment = deployment(&DatabaseUrls {
+        migration: &migration,
+        runtime: &runtime,
+        ca_pem: None,
+        plaintext: false,
+        bind: "127.0.0.1:8100",
+    });
+    let file = deployment.root.join("secrets/runtime-url");
+    fs::write(&file, [0xff, 0xfe, 0xfd]).unwrap();
+    assert_loader_refusal(
+        &refused_print(&deployment.runtime),
+        "casework.runtime.secret-unavailable",
+        "/database/runtimeUrlRef",
+    );
+}
+
+#[test]
+fn a_missing_ca_bundle_secret_is_refused() {
+    let (migration, runtime) = offline_urls();
+    let ca = tempfile::NamedTempFile::new().unwrap();
+    fs::write(ca.path(), "not a bundle, never parsed here").unwrap();
+    let deployment = deployment(&DatabaseUrls {
+        migration: &migration,
+        runtime: &runtime,
+        ca_pem: Some(ca.path()),
+        plaintext: false,
+        bind: "127.0.0.1:8100",
+    });
+    fs::remove_file(deployment.root.join("secrets/ca")).unwrap();
+    assert_loader_refusal(
+        &refused_print(&deployment.runtime),
+        "casework.runtime.secret-unavailable",
+        "/database/caBundleRef",
+    );
+}
+
+#[test]
+fn a_runtime_file_that_does_not_load_is_refused_with_its_own_code() {
+    let (migration, runtime) = offline_urls();
+    let deployment = deployment(&DatabaseUrls {
+        migration: &migration,
+        runtime: &runtime,
+        ca_pem: None,
+        plaintext: false,
+        bind: "127.0.0.1:8100",
+    });
+    fs::write(&deployment.runtime, "kind: NotARuntimeConfig\n").unwrap();
+    let (code, report, written) = refused_print(&deployment.runtime);
+    assert_eq!(code, Some(1), "{written}");
+    assert_eq!(report["ok"], false, "{written}");
+    assert_eq!(
+        report["diagnostics"][0]["code"], "config.missing-envelope",
+        "{written}"
+    );
+}
+
 #[test]
 fn both_administrator_flags_are_a_usage_error() {
     let output = ctl(&[
@@ -375,10 +511,22 @@ mod served {
             assert!(!text.contains(private), "the report leaks a password");
         }
 
+        // Apply records single-role mode and still succeeds, so only these
+        // fields show that provisioning left the two roles split.
         let applied = ctl_ok(&["apply", "--runtime-config", runtime_file]);
         assert_eq!(applied["ok"], true, "{applied}");
+        assert!(
+            applied["singleRoleStatement"].is_null(),
+            "apply recorded single-role mode: {applied}"
+        );
+        assert_eq!(applied["activation"]["roleMode"], "split", "{applied}");
         let status = ctl_ok(&["status", "--runtime-config", runtime_file]);
         assert_eq!(status["ok"], true, "{status}");
+        assert!(
+            status["singleRoleStatement"].is_null(),
+            "status reports single-role mode: {status}"
+        );
+        assert_eq!(status["activation"]["roleMode"], "split", "{status}");
 
         // A second provision finds everything present and creates nothing.
         let again = ctl_ok(&[

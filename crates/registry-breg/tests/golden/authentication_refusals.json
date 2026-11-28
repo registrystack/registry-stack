@@ -1,4 +1,18 @@
 {
+  "act-claim-is-not-an-object": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": null
+  },
   "actor-is-not-the-trusted-actor": {
     "body": {
       "code": "authentication.refused",
@@ -9,6 +23,21 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "actor-kind-is-not-a-string": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -22,6 +51,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -35,6 +65,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -48,6 +79,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -61,6 +93,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -74,6 +107,21 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "key-source-unreachable": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -87,6 +135,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -100,6 +149,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -113,6 +163,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -126,6 +177,21 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "review-completion-with-an-unparseable-bearer": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -139,6 +205,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -152,6 +219,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -165,6 +233,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -178,6 +247,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -191,6 +261,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -204,6 +275,35 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "task-grant-bound-to-another-client": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "task-grant-bound-to-another-resource": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -217,6 +317,21 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "task-grant-expired": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -230,6 +345,21 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "task-grant-token-issued-in-the-future": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -243,6 +373,21 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
+    "status": 401,
+    "wwwAuthenticate": null
+  },
+  "token-type-is-not-admitted": {
+    "body": {
+      "code": "authentication.refused",
+      "detail": "The bearer credential is missing or refused.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "https://id.registrystack.org/problems/registry-breg/authentication/refused"
+    },
+    "cacheControl": "no-store",
+    "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -256,6 +401,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -269,6 +415,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   },
@@ -282,6 +429,7 @@
     },
     "cacheControl": "no-store",
     "contentType": "application/problem+json",
+    "retryAfter": null,
     "status": 401,
     "wwwAuthenticate": null
   }

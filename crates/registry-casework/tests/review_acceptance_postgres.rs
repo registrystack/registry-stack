@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::{TimeDelta, Utc};
 use registry_casework::*;
 use registry_casework_core::*;
+use registry_platform_authcommon::FailedCheck;
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::{json, Value};
 use std::{
@@ -348,7 +349,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
                 "reviewer-create"
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     let accepted = f.create("notice").await;
     assert!(f.request("notice").policy.matches(&accepted.policy));
@@ -370,7 +371,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
                 accepted.request_id
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::AccessProfile))
     ));
     assert!(matches!(
         f.service
@@ -383,7 +384,7 @@ async fn exact_policy_admission_and_independent_producer_authority() {
                 "producer-claim"
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
 }
 #[tokio::test]
@@ -520,7 +521,7 @@ async fn current_policy_selection_recovers_before_updates_and_requires_live_auth
         revoked
             .create_review_request(&producer, request, "current-policy")
             .await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::AccessProfile))
     ));
     assert_eq!(
         f.db.query_one("SELECT count(*) FROM casework_review_requests", &[])
@@ -582,7 +583,7 @@ async fn concurrent_current_policy_acceptance_freezes_one_binding_and_refuses_in
         f.service
             .create_review_request(&producer, wrong_subject, "incompatible-subject")
             .await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
 }
 
@@ -632,7 +633,9 @@ async fn submitted_two_stage_review_pins_policy_receipts_and_terminal_feed() {
                 "same-reviewer"
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(
+            FailedCheck::SeparationOfDuties
+        ))
     ));
     let held = f.claim(second, "b").await;
     f.service
@@ -1204,7 +1207,7 @@ async fn source_visibility_and_directory_authority_are_both_live_at_caseload_app
                 }
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     assert_eq!(before, f.holders().await);
 }
@@ -1471,7 +1474,7 @@ async fn admission_namespace_cannot_substitute_the_pinned_provider_namespace() {
                 "wrong-namespace"
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
     assert_eq!(
         f.db.query_one("SELECT count(*) FROM casework_review_requests", &[])
@@ -1655,7 +1658,7 @@ async fn clock_recompute_uses_pinned_calendar_and_fences_changed_holiday_inputs(
                 }
             )
             .await,
-        Err(ReviewRuntimeError::Forbidden(_))
+        Err(ReviewRuntimeError::Forbidden(FailedCheck::Operation))
     ));
 }
 

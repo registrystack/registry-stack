@@ -164,10 +164,9 @@ async fn verifier_refusal(config: &OidcAuthenticationConfig, case: &FixtureCase)
         Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())),
     );
     let error = verifier.verify(case.token.expose()).await.err()?;
-    let label = error.authentication_stage().label();
-    match format!("refused/{label}").parse::<Outcome>() {
-        Ok(Outcome::Refused(stage)) => Some(stage),
-        other => panic!("the verifier stage `{label}` is not a corpus stage: {other:?}"),
+    match Outcome::refused_by(&error) {
+        Outcome::Refused(stage) => Some(stage),
+        other => panic!("the verifier error {error:?} is not a refusal: {other:?}"),
     }
 }
 

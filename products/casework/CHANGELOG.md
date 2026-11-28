@@ -8,15 +8,27 @@
   `failed_check` and the request's trace id, at most five lines per check per
   minute. That line replaces the authentication refusal line that carried a
   `stage` field. The count covers review, directory, clock and task-grant
-  refusals, each under the check its producer names. Refusal statuses, headers
-  and bodies are unchanged.
-- A static key set with a private key member or a repeated member name is
-  refused at startup under `casework.runtime.unreadable-jwks-secret`, with the
-  rule it broke and the key's position, in place of
-  `casework.runtime-dependency.unavailable`.
+  refusals, each under the check its producer names. An absence that conceals
+  nothing, such as the task grant key set route when task grants are not
+  configured, is not counted. Refusal statuses, headers and bodies are
+  unchanged.
+- A static key set with a private key member is refused at startup under
+  `casework.runtime.unreadable-jwks-secret`, with the rule it broke and the
+  key's position. Earlier releases loaded such a set, so remove private
+  members from the key set before upgrading.
+- A static key set with a repeated member name is refused at startup under
+  `casework.runtime.unreadable-jwks-secret`, without a key position, in place
+  of `casework.runtime-dependency.unavailable`.
 - A review completion destination may use any loopback literal in plain
   `http`: `127.0.0.0/8`, `::1`, or an IPv4-mapped form of `127.0.0.0/8`. The
   name `localhost` stays refused.
+- `caseworkctl provision` creates the migration role, the runtime role and the
+  database from the two URLs in the runtime file, so each credential is
+  written once. It connects with an administrator URL from
+  `--admin-url-file` or `--admin-url-env` over verified TLS, or prints the SQL
+  with `--print-sql` and connects to nothing. Run it again at any time: it
+  creates only what is missing and refuses a role that exists with different
+  attributes. It loads the whole runtime file and verifies the package first.
 
 - `GET /health` answers `{"status":"ok"}` and `GET /ready` answers
   `{"status":"ready"}` as `application/json`, in place of an empty 200. Both

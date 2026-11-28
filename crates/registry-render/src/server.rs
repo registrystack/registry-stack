@@ -1207,23 +1207,45 @@ struct SealCall {
 }
 
 impl SealCall {
-    /// Refuse the call before any render starts: one response entry naming
-    /// the seal when it is known, accepted before responding.
+    /// Refuse the call before any render starts for a reason that is not a
+    /// caller refusal: one response entry naming the seal when it is known,
+    /// accepted before responding. A 401 or 403 goes through `refuse_checked`,
+    /// so every refused caller carries the check that refused it.
     async fn refuse(&self, service: &Service, problem: RenderProblem) -> Response {
-        self.refuse_checked(service, problem, None).await
+        debug_assert!(
+            !matches!(problem.kind.http_status(), 401 | 403),
+            "a refused caller is answered by refuse_checked"
+        );
+        match self.audit_refusal(service, &problem).await {
+            Ok(()) => problem_response(&problem, self.trace.as_deref()),
+            Err(answer) => answer,
+        }
     }
 
     /// Refuse the call as `refuse` does, and record the check that refused
-    /// the caller when there is one.
+    /// the caller.
     async fn refuse_checked(
         &self,
         service: &Service,
         problem: RenderProblem,
-        check: Option<FailedCheck>,
+        check: FailedCheck,
     ) -> Response {
+        match self.audit_refusal(service, &problem).await {
+            Ok(()) => refusal_response(&problem, self.trace.as_deref(), check),
+            Err(answer) => answer,
+        }
+    }
+
+    /// Write the refusal's response entry. When the audit write fails the
+    /// answer is the audit failure.
+    async fn audit_refusal(
+        &self,
+        service: &Service,
+        problem: &RenderProblem,
+    ) -> Result<(), Response> {
         let mut event = RenderAuditEvent::refused(
             &self.document_type,
-            &problem,
+            problem,
             &self.caller,
             self.correlation.as_deref(),
             self.trace.as_deref(),
@@ -1231,13 +1253,11 @@ impl SealCall {
         if let Some(seal_id) = &self.seal_id {
             event = event.for_seal(seal_id, self.test_only);
         }
-        if let Err(audit_problem) = service.audit.response(&self.envelope, event).await {
-            return problem_response(&audit_problem, self.trace.as_deref());
-        }
-        match check {
-            Some(check) => refusal_response(&problem, self.trace.as_deref(), check),
-            None => problem_response(&problem, self.trace.as_deref()),
-        }
+        service
+            .audit
+            .response(&self.envelope, event)
+            .await
+            .map_err(|audit_problem| problem_response(&audit_problem, self.trace.as_deref()))
     }
 }
 
@@ -1314,7 +1334,7 @@ async fn seal_route(
             format!("the verified client is not in signing.seals.{seal_id}.allowedClients"),
         );
         return call
-            .refuse_checked(&service, problem, Some(FailedCheck::RequesterClient))
+            .refuse_checked(&service, problem, FailedCheck::RequesterClient)
             .await;
     }
     seal.recover_signer().await;
@@ -2702,11 +2722,20 @@ mod tests {
             "cache-control",
             "retry-after",
         ] {
-            if let Some(value) = response.headers().get(name) {
-                headers.insert(
-                    name.to_owned(),
-                    value.to_str().expect("ASCII header").into(),
-                );
+            let values: Vec<serde_json::Value> = response
+                .headers()
+                .get_all(name)
+                .iter()
+                .map(|value| value.to_str().expect("ASCII header").into())
+                .collect();
+            match values.len() {
+                0 => {}
+                1 => {
+                    headers.insert(name.to_owned(), values[0].clone());
+                }
+                _ => {
+                    headers.insert(name.to_owned(), values.into());
+                }
             }
         }
         let bytes = axum::body::to_bytes(response.into_body(), 16384)
@@ -2721,11 +2750,14 @@ mod tests {
     fn bearer_request(
         method: Method,
         uri: &str,
-        credential: Option<String>,
+        authorization: &[Vec<u8>],
     ) -> axum::extract::Request {
         let mut request = axum::http::Request::builder().method(method).uri(uri);
-        if let Some(credential) = credential {
-            request = request.header(header::AUTHORIZATION, credential);
+        for value in authorization {
+            request = request.header(
+                header::AUTHORIZATION,
+                header::HeaderValue::from_bytes(value).expect("header value"),
+            );
         }
         request
             .header(header::CONTENT_TYPE, "application/json")
@@ -2810,7 +2842,8 @@ mod tests {
         mode: Mode,
         method: Method,
         uri: &'static str,
-        credential: Option<String>,
+        /// The `Authorization` header values, in order.
+        authorization: Vec<Vec<u8>>,
         check: &'static str,
     }
 
@@ -2828,11 +2861,21 @@ mod tests {
                 mode,
                 method,
                 uri,
-                credential,
+                authorization: credential.into_iter().map(String::into_bytes).collect(),
                 check,
             }
         }
+
+        /// A case that sends the given `Authorization` header values as they
+        /// are, repeated or not ASCII included.
+        fn raw(mut self, authorization: Vec<Vec<u8>>) -> Self {
+            self.authorization = authorization;
+            self
+        }
     }
+
+    /// A client id no refusal answer or log line may repeat.
+    const CANARY_CLIENT: &str = "canary-client-0123456789";
 
     /// Every refusal the access layers and the seal handler make, with the
     /// check each one must record.
@@ -2863,6 +2906,32 @@ mod tests {
                 Some("Bearer ".to_owned()),
                 "credential-malformed",
             ),
+            RefusalCase::new(
+                "value-shorter-than-the-scheme",
+                Mode::Legacy,
+                Method::GET,
+                "/v1/documents",
+                Some("Basic".to_owned()),
+                "credential-malformed",
+            ),
+            RefusalCase::new(
+                "repeated-authorization-header",
+                Mode::Legacy,
+                Method::GET,
+                "/v1/documents",
+                None,
+                "credential-malformed",
+            )
+            .raw(vec![b"Bearer first".to_vec(), b"Bearer second".to_vec()]),
+            RefusalCase::new(
+                "non-ascii-authorization-header",
+                Mode::Legacy,
+                Method::GET,
+                "/v1/documents",
+                None,
+                "credential-malformed",
+            )
+            .raw(vec![b"Bearer caf\xe9".to_vec()]),
             RefusalCase::new(
                 "legacy-key-mismatch",
                 Mode::Legacy,
@@ -2901,6 +2970,14 @@ mod tests {
                 Method::GET,
                 "/v1/documents",
                 token_header(serde_json::json!({"client_id":"other"})),
+                "token-client",
+            ),
+            RefusalCase::new(
+                "token-client-canary",
+                Mode::Oidc,
+                Method::GET,
+                "/v1/documents",
+                token_header(serde_json::json!({"client_id":CANARY_CLIENT})),
                 "token-client",
             ),
             RefusalCase::new(
@@ -2957,13 +3034,13 @@ mod tests {
             mode,
             method,
             uri,
-            credential,
+            authorization,
             ..
         } in refusal_cases()
         {
             let service = refusal_service(mode).await;
             let response = refusal_stack(service, &Arc::new(Metrics::default()))
-                .oneshot(bearer_request(method, uri, credential))
+                .oneshot(bearer_request(method, uri, &authorization))
                 .await
                 .expect("router");
             answers.insert(name.to_owned(), frozen_answer(response).await);
@@ -3022,13 +3099,14 @@ mod tests {
             "canary-wrong-key-0123456789abcdef0123456789",
             "canary-invalid-token",
             "canary-principal",
+            CANARY_CLIENT,
         ];
         for RefusalCase {
             name,
             mode,
             method,
             uri,
-            credential,
+            authorization,
             check,
         } in refusal_cases()
         {
@@ -3042,7 +3120,7 @@ mod tests {
             let service = refusal_service(mode).await;
             let metrics = Arc::new(Metrics::default());
             let response = refusal_stack(Arc::clone(&service), &metrics)
-                .oneshot(bearer_request(method, uri, credential))
+                .oneshot(bearer_request(method, uri, &authorization))
                 .await
                 .expect("router");
             let trace = registry_platform_httpsec::response_trace_id(response.headers())
@@ -3062,6 +3140,16 @@ mod tests {
                 "{name}"
             );
             let written = String::from_utf8(logs.0.lock().expect("log").clone()).expect("UTF-8");
+            // The whole bearer value of a signed token never reaches a log line.
+            for value in &authorization {
+                if let Some(token) = value
+                    .strip_prefix(b"Bearer ")
+                    .filter(|token| token.len() > 40)
+                {
+                    let token = String::from_utf8_lossy(token);
+                    assert!(!written.contains(token.as_ref()), "{name}: {written}");
+                }
+            }
             let lines: Vec<serde_json::Value> = written
                 .lines()
                 .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON log line"))
