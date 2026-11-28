@@ -8,7 +8,6 @@
 //! sits under `auth` so it can also ask the verifier for the check that
 //! refused a token, which `AuthenticationError` does not carry.
 use super::*;
-use registry_platform_oidc::OidcError;
 use registry_platform_testing::{
     ClaimValue, Configuration, FixtureCase, Outcome, TokenCorpus, TokenFixture, TokenSigner,
 };
@@ -30,12 +29,6 @@ fn literal(fixture: &TokenFixture, claim: &str) -> Option<String> {
 /// The client the token names, read the way the verifier reads it.
 fn client_of(fixture: &TokenFixture) -> Option<String> {
     literal(fixture, "azp").or_else(|| literal(fixture, "client_id"))
-}
-
-fn stage_of(error: &OidcError) -> Outcome {
-    format!("refused/{}", error.authentication_stage().label())
-        .parse()
-        .expect("every authentication stage label is a result value")
 }
 
 /// A runtime file for one row. The recipe for a token that names no client
@@ -75,7 +68,7 @@ async fn observe(verifier: &TokenVerifier, token: &str) -> Outcome {
                 error.failed_check(),
                 "the recorded check is the verifier's"
             );
-            stage_of(&error)
+            Outcome::refused_by(&error)
         }
         (Err(AuthenticationError::Forbidden { .. }), Ok(_)) => {
             "refused/scope".parse().expect("result value")

@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashSet, fmt, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    fmt,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use axum::{
     body::Body,
@@ -28,6 +33,10 @@ use zeroize::Zeroizing;
 use crate::server::{problem, METADATA_PREFIX};
 
 const MAXIMUM_TOKEN_LIFETIME: Duration = Duration::from_secs(86_400);
+
+/// The least time between two log lines for a request the gateway could not
+/// admit because of its own fault.
+const ADMIT_FAULT_LOG_WINDOW: Duration = Duration::from_secs(60);
 
 /// Complete product-neutral inbound resource-server settings.
 #[derive(Clone, Debug)]
@@ -251,6 +260,8 @@ pub struct ResourceServer {
     scope_challenge: String,
     metadata: Value,
     refusals: Arc<RefusalRecorder>,
+    /// When the gateway last logged that it could not admit a request.
+    admit_fault_logged: Mutex<Option<Instant>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -308,6 +319,7 @@ impl ResourceServer {
             scope_challenge,
             metadata,
             refusals,
+            admit_fault_logged: Mutex::new(None),
         })
     }
 
@@ -336,10 +348,7 @@ impl ResourceServer {
         let token = bearer_token(headers)?;
         let verified = match self.verifier.verify(token).await {
             Ok(verified) => verified,
-            Err(error) if is_key_source_failure(&error) => {
-                tracing::warn!("the access-token key set is unavailable");
-                return Err(Refusal::KeySource);
-            }
+            Err(error) if is_key_source_failure(&error) => return Err(Refusal::KeySource),
             Err(error) => return Err(Refusal::InvalidToken(error.failed_check())),
         };
         let caller = self.caller(&verified, token)?;
@@ -391,17 +400,36 @@ impl ResourceServer {
     }
 
     /// Counts and logs the refusal, then builds its answer.
-    fn refuse(&self, refusal: Refusal) -> Response {
+    pub(crate) fn refuse(&self, refusal: Refusal) -> Response {
         match refusal.failed_check() {
             Some(check) => record_refusal!(self.refusals, RefusalNote::new(check)),
             // The gateway could not derive a pseudonym or run its limiter.
             // That is a fault of this service, not a check a caller failed.
-            None => tracing::error!("the gateway could not admit a request"),
+            None => {
+                if self.admit_fault_due(Instant::now()) {
+                    tracing::error!("the gateway could not admit a request");
+                }
+            }
         }
         self.refusal_response(refusal)
     }
 
-    pub(crate) fn refusal_response(&self, refusal: Refusal) -> Response {
+    /// True at most once per `ADMIT_FAULT_LOG_WINDOW`, so a limiter that has
+    /// reached its capacity cannot write a line for every request.
+    fn admit_fault_due(&self, now: Instant) -> bool {
+        let mut last = self
+            .admit_fault_logged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if last.is_some_and(|logged| now.saturating_duration_since(logged) < ADMIT_FAULT_LOG_WINDOW)
+        {
+            return false;
+        }
+        *last = Some(now);
+        true
+    }
+
+    fn refusal_response(&self, refusal: Refusal) -> Response {
         let (status, challenge) = match refusal {
             Refusal::Missing(_) => (StatusCode::UNAUTHORIZED, Some(self.challenge.clone())),
             Refusal::InvalidToken(_) => (
@@ -489,6 +517,7 @@ fn limiter(options: TokenBucketOptions) -> Result<TokenBucketLimiter, TokenBucke
 
 impl Refusal {
     /// The check a caller failed, or `None` for a fault of this service.
+    #[deny(clippy::wildcard_enum_match_arm)]
     const fn failed_check(self) -> Option<FailedCheck> {
         match self {
             Self::Missing(check) | Self::InvalidToken(check) => Some(check),

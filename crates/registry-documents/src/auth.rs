@@ -106,18 +106,19 @@ impl DocumentsAuthenticator {
     /// that wants another actor kind: when no kind reaches past the profile
     /// lookup, the client has no profile.
     fn profile_check(&self, facts: &VerifiedTokenFacts<'_>) -> FailedCheck {
+        if facts.client_id.is_none() {
+            return FailedCheck::TokenClient;
+        }
         if self.profiles.missing_scope(facts).is_some() {
             return FailedCheck::Scope;
         }
-        let profile_exists = [ActorKind::Human, ActorKind::Service]
-            .into_iter()
-            .any(|kind| {
-                let probe = VerifiedTokenFacts {
-                    actor_kind: ActorKindClaim::Present(kind),
-                    ..*facts
-                };
-                !matches!(self.profiles.resolve(&probe), Err(AccessRefusal::Profile))
-            });
+        let profile_exists = ActorKind::ALL.into_iter().any(|kind| {
+            let probe = VerifiedTokenFacts {
+                actor_kind: ActorKindClaim::Present(kind),
+                ..*facts
+            };
+            !matches!(self.profiles.resolve(&probe), Err(AccessRefusal::Profile))
+        });
         if profile_exists {
             FailedCheck::ActorKind
         } else {
@@ -384,6 +385,23 @@ pub(crate) mod tests {
             .unwrap()
             .remove("registry_actor_kind");
         assert_eq!(refused_check(absent).await, FailedCheck::ActorKind);
+    }
+
+    #[test]
+    fn a_token_with_no_client_id_is_a_token_client_refusal() {
+        let claims = serde_json::Map::new();
+        let facts = VerifiedTokenFacts {
+            issuer: Some(ISSUER),
+            subject: Some("citizen-1"),
+            client_id: None,
+            scopes: &[],
+            actor_kind: ActorKindClaim::Absent,
+            claims: &claims,
+        };
+        assert_eq!(
+            authenticator().profile_check(&facts),
+            FailedCheck::TokenClient
+        );
     }
 
     #[tokio::test]

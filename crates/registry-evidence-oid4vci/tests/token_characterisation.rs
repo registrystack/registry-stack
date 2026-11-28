@@ -129,13 +129,10 @@ async fn refusal_stage(config: &OfferAuthorizationConfig, case: &FixtureCase) ->
         Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())),
     );
     match verifier.verify(case.token.expose()).await {
-        Err(error) => {
-            let label = error.authentication_stage().label();
-            match format!("refused/{label}").parse::<Outcome>() {
-                Ok(Outcome::Refused(stage)) => stage,
-                other => panic!("the verifier stage `{label}` is not a corpus stage: {other:?}"),
-            }
-        }
+        Err(error) => match Outcome::refused_by(&error) {
+            Outcome::Refused(stage) => stage,
+            other => panic!("the verifier error {error:?} is not a refusal: {other:?}"),
+        },
         Ok(verified) => {
             let present: Vec<&str> = verified.scopes.iter().map(String::as_str).collect();
             let scope_missing = config

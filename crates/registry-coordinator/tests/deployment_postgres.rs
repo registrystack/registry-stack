@@ -4835,6 +4835,14 @@ async fn the_metrics_listener_counts_closed_series_and_leaves_the_gauge_stale_in
         .await
         .unwrap();
     assert_eq!(unadmitted.status(), 403);
+    // A verified client whose subject its policy does not list.
+    let unlisted = http
+        .get(format!("{origin}/v1/runs?limit=10"))
+        .bearer_auth(f.token("producer-a", "unlisted-subject", "coordinator:start"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unlisted.status(), 403);
     let application = "00000000-0000-4000-8000-0000000000aa";
     let (status, run) = start_run(
         &http,
@@ -4855,11 +4863,21 @@ async fn the_metrics_listener_counts_closed_series_and_leaves_the_gauge_stale_in
         ),
         (
             "coordinator_authentication_refusals_total{reason=\"policy\"}",
-            1,
+            2,
         ),
         (
             "coordinator_authentication_refusals_total{reason=\"unavailable\"}",
             0,
+        ),
+        // The request counter names the failed check of each refusal.
+        (
+            "coordinator_request_refusals_total{check=\"credential-malformed\"}",
+            1,
+        ),
+        ("coordinator_request_refusals_total{check=\"scope\"}", 1),
+        (
+            "coordinator_request_refusals_total{check=\"access-profile\"}",
+            1,
         ),
         ("coordinator_runs_admitted_total", 1),
         ("coordinator_dispatch_jobs{state=\"pending\"}", 1),
@@ -4872,6 +4890,7 @@ async fn the_metrics_listener_counts_closed_series_and_leaves_the_gauge_stale_in
         application,
         "owner-a",
         "producer-a",
+        "unlisted-subject",
     ] {
         assert!(
             !body.contains(caller_text),

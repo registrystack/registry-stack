@@ -48,7 +48,10 @@ function input(overrides = {}) {
 function signedHeaders(deliveryTime) {
   const values = {
     ...headers(),
-    'x-registry-delivery-time': deliveryTime.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    // Rounded to the nearest second so a one-second window is not crossed by the fraction.
+    'x-registry-delivery-time': new Date(Math.round(deliveryTime.getTime() / 1000) * 1000)
+      .toISOString()
+      .replace(/\.\d{3}Z$/, 'Z'),
   };
   const parts = [
     values['Ce-Specversion'], values['CE-ID'], values['ce-source'], values['ce-type'],

@@ -2260,7 +2260,10 @@ mod tests {
             .expect("a reviewed SQLite extract route opens no production channel");
     }
 
-    fn assert_authentication_diagnostic(bundle: &Value, artifacts: &BTreeMap<String, Vec<u8>>) {
+    fn assert_authentication_mismatch_refused(
+        bundle: &Value,
+        artifacts: &BTreeMap<String, Vec<u8>>,
+    ) {
         let error = validate_source_authentication(bundle, artifacts)
             .expect_err("a pack and target that name different authentication must be refused");
         let diagnostic = error
@@ -2291,7 +2294,7 @@ mod tests {
         );
         let artifacts = direct_http_pack(json!({"type": "static-authorization"}));
 
-        assert_authentication_diagnostic(&bundle, &artifacts);
+        assert_authentication_mismatch_refused(&bundle, &artifacts);
     }
 
     #[test]

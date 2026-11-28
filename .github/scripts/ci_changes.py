@@ -619,11 +619,32 @@ PROVISION_JOURNEY_PACKAGES = (
 )
 PROVISION_JOURNEY_INPUTS = (
     *(f"crates/{package}/src/provision.rs" for package in PROVISION_JOURNEY_PACKAGES),
-    *(f"crates/{package}/tests/provision*.rs" for package in PROVISION_JOURNEY_PACKAGES),
+    # Each journey's test file. The database-free `provision_cli.rs` stays out.
+    *(
+        f"crates/{package}/tests/provision_postgres.rs"
+        for package in PROVISION_JOURNEY_PACKAGES
+        if package != "registry-caseworkctl"
+    ),
+    "crates/registry-caseworkctl/tests/provision.rs",
     "crates/registry-casework/migrations/**",
     "crates/registry-documents/migrations/**",
     "crates/registry-messaging/migrations/**",
     "crates/registry-scheduling/migrations/**",
+    # What `apply` grants and what the start check reads, per product.
+    "crates/registry-casework/src/activation.rs",
+    "crates/registry-documents/src/activation.rs",
+    "crates/registry-messaging/src/activation.rs",
+    "crates/registry-scheduling/src/store/activation.rs",
+    # The Coordinator keeps its DDL in code, and dispatches its tool from cli.rs.
+    "crates/registry-coordinator/src/deployment.rs",
+    "crates/registry-coordinator/src/store.rs",
+    "crates/registry-coordinator/src/cli.rs",
+    # The tool dispatch of every other product.
+    *(
+        f"crates/{package}/src/lib.rs"
+        for package in PROVISION_JOURNEY_PACKAGES
+        if package != "registry-coordinator"
+    ),
 )
 
 BREG_CONTRACTS_LANES = (
@@ -1691,8 +1712,8 @@ def classify(
     # casework_postgres read the selection above, so the provisioning crate
     # on its own does not select them.
     # Each product's provisioning journey runs in the same lane after the
-    # suite, so a product's provision command, its journey or its migrations
-    # select the lane too.
+    # suite, so a product's provision command, its journey, its migrations, its
+    # apply and start check or its tool's dispatch select the lane too.
     provision_postgres = "registry-platform-provision" in affected or any(
         matches(path, *PROVISION_JOURNEY_INPUTS) for path in paths
     )

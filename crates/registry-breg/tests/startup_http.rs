@@ -35,7 +35,9 @@ use registry_breg::startup::{
 };
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use registry_platform_oidc::{
+    JwksFetcher, JwksFetcherConfig, StaticJwksError, TokenVerifierConfig,
+};
 use registry_platform_testing::{fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
@@ -507,7 +509,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 40] {
+fn startup_errors() -> [StartupError; 41] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -553,6 +555,10 @@ fn startup_errors() -> [StartupError; 40] {
         StartupError::ExternalSources,
         StartupError::ExternalProjectionRoleMode,
         StartupError::Oidc,
+        StartupError::StaticKeySet(StaticJwksError::PrivateKeyMember {
+            key: 0,
+            member: "d",
+        }),
         StartupError::Authentication,
         StartupError::AuthenticationClientsUnlisted,
         StartupError::EventDestinations,
@@ -833,7 +839,9 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::ExternalProjectionRoleMode => {
             "indexed external projections require separate migration and runtime PostgreSQL roles"
         }
-        StartupError::Oidc => "the Registry OIDC key source was refused",
+        StartupError::Oidc | StartupError::StaticKeySet(_) => {
+            "the Registry OIDC key source was refused"
+        }
         StartupError::Authentication => "the Registry authentication profile was refused",
         StartupError::AuthenticationClientsUnlisted => {
             "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
@@ -1053,6 +1061,14 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
         let reason = match &event {
             OperationalEvent::StoppedWithError(StartupError::AuditDestination(reason)) => {
                 Some(reason.clone())
+            }
+            OperationalEvent::StoppedWithError(StartupError::StaticKeySet(cause)) => {
+                let reason = cause.to_string();
+                assert!(
+                    reason.contains("private-key member \"d\""),
+                    "the reason names the rule: {reason}"
+                );
+                Some(reason)
             }
             _ => None,
         };

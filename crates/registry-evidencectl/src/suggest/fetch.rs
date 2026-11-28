@@ -114,8 +114,10 @@ pub fn check_url(value: &str) -> Result<Url> {
     match url.scheme() {
         "https" => {}
         "http" => match url.host() {
-            Some(Host::Ipv4(address)) if address.is_loopback() => {}
-            Some(Host::Ipv6(address)) if address.is_loopback() => {}
+            Some(Host::Ipv4(address))
+                if registry_platform_loopback::loopback_address(address.into()) => {}
+            Some(Host::Ipv6(address))
+                if registry_platform_loopback::loopback_address(address.into()) => {}
             _ => {
                 return Err(safe_url_refusal(
                     "evidence.openapi.url-insecure",
@@ -210,4 +212,31 @@ pub fn get(url: &Url, max_bytes: u64) -> Result<String> {
     }
 
     String::from_utf8(body).with_context(|| format!("decoding the document at {url} as UTF-8"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_url;
+
+    #[test]
+    fn plain_http_follows_the_shared_loopback_rule_for_numeric_hosts() {
+        for (host, accepted) in [
+            ("127.0.0.1", true),
+            ("127.0.0.2", true),
+            ("[::1]", true),
+            ("[::ffff:127.0.0.1]", true),
+            ("localhost", false),
+            ("LOCALHOST", false),
+            ("a.localhost", false),
+            ("localhost.", false),
+            ("10.0.0.1", false),
+            ("example.com", false),
+        ] {
+            assert_eq!(
+                check_url(&format!("http://{host}:4010/openapi.json")).is_ok(),
+                accepted,
+                "{host}"
+            );
+        }
+    }
 }

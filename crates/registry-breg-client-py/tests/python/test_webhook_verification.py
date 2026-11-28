@@ -70,7 +70,9 @@ def verify(**overrides):
 
 def signed_headers(delivery_time: datetime) -> list[tuple[str, str]]:
     """The fixed headers re-signed for `delivery_time` with the vector's key."""
-    stamp = delivery_time.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Rounded to the nearest second so a one-second window is not crossed by the fraction.
+    rounded = datetime.fromtimestamp(round(delivery_time.timestamp()), tz=timezone.utc)
+    stamp = rounded.strftime("%Y-%m-%dT%H:%M:%SZ")
     values = replace_header(headers(), "x-registry-delivery-time", stamp)
     by_name = {name.lower(): value for name, value in values}
     signed = bytearray(b"breg-webhook-signature-v1")
@@ -190,6 +192,8 @@ class HookVerificationTests(unittest.TestCase):
             {"max_skew_seconds": True},
             {"max_skew_seconds": "10"},
             {"max_skew_seconds": 10, "caller_enforced_freshness": True},
+            {"caller_enforced_freshness": "yes"},
+            {"caller_enforced_freshness": 1},
         ):
             with self.subTest(overrides=overrides):
                 with self.assertRaises(BaseRegistryClientError) as raised:

@@ -117,9 +117,10 @@ fn print_sql_writes_the_script_and_no_password() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
     assert!(stderr.is_empty(), "{stderr}");
-    for name in ["messaging_migration", "messaging_runtime", "messaging"] {
+    for name in ["messaging_migration", "messaging_runtime"] {
         assert!(stdout.contains(name), "the script names {name}: {stdout}");
     }
+    assert!(stdout.contains("CREATE DATABASE \"messaging\""), "{stdout}");
     assert!(stdout.contains("CREATE ROLE"), "{stdout}");
     assert!(stdout.contains("\\password"), "{stdout}");
     for secret in [MIGRATION_PASSWORD, RUNTIME_PASSWORD] {
@@ -192,11 +193,95 @@ fn both_administrator_flags_are_refused() {
         vec!["provision", "--runtime-config", &runtime],
     ] {
         let output = ctl(&arguments);
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{arguments:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        // clap also answers 2 for an unknown verb, so the text names the flags.
+        assert!(
+            stderr.contains("--admin-url") || stderr.contains("--print-sql"),
+            "{arguments:?}: {stderr}"
         );
     }
+}
+
+/// The refusal `provision --print-sql --format json` reports, with the exit
+/// code. The reports carry no password, so neither does their text.
+fn refusal(runtime: &str) -> (Option<i32>, serde_json::Value) {
+    let output = ctl(&[
+        "--format",
+        "json",
+        "provision",
+        "--runtime-config",
+        runtime,
+        "--print-sql",
+    ]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for secret in [MIGRATION_PASSWORD, RUNTIME_PASSWORD] {
+        assert!(
+            !stdout.contains(secret),
+            "stdout holds no password: {stdout}"
+        );
+        assert!(
+            !stderr.contains(secret),
+            "stderr holds no password: {stderr}"
+        );
+    }
+    let report = serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("a JSON report: {error}: {stdout}{stderr}"));
+    (output.status.code(), report)
+}
+
+fn first_diagnostic(report: &serde_json::Value) -> &serde_json::Value {
+    &report["diagnostics"][0]
+}
+
+#[test]
+fn a_missing_runtime_url_secret_is_refused_at_its_member() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    std::fs::remove_file(directory.path().join("secrets/runtime-database-url")).unwrap();
+    let (code, report) = refusal(&runtime);
+    assert_eq!(code, Some(1), "{report:#}");
+    let diagnostic = first_diagnostic(&report);
+    assert_eq!(diagnostic["code"], "config.refused", "{report:#}");
+    assert_eq!(diagnostic["path"], "/database/runtimeUrlRef", "{report:#}");
+}
+
+#[test]
+fn a_migration_url_secret_that_is_not_text_is_refused_at_its_member() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let secret = directory.path().join("secrets/migration-database-url");
+    std::fs::write(&secret, [0xff, 0xfe, 0xfd]).unwrap();
+    let (code, report) = refusal(&runtime);
+    assert_eq!(code, Some(1), "{report:#}");
+    let diagnostic = first_diagnostic(&report);
+    assert_eq!(diagnostic["code"], "config.refused", "{report:#}");
+    assert_eq!(
+        diagnostic["path"], "/database/migrationUrlRef",
+        "{report:#}"
+    );
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("not UTF-8"),
+        "{report:#}"
+    );
+}
+
+#[test]
+fn a_runtime_file_that_does_not_load_is_refused_before_any_database_work() {
+    let directory = scratch();
+    let missing = directory.path().join("no-such-runtime.yaml");
+    let (code, report) = refusal(missing.to_str().unwrap());
+    assert_eq!(code, Some(1), "{report:#}");
+    assert_eq!(report["executed"], false, "{report:#}");
+    assert!(
+        !first_diagnostic(&report)["code"]
+            .as_str()
+            .unwrap()
+            .is_empty(),
+        "{report:#}"
+    );
 }

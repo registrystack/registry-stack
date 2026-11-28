@@ -397,6 +397,9 @@ async fn prepare_with(
         )),
         None => None,
     };
+    let admitted = config
+        .admitted_clients(&project)
+        .map_err(|finding| RuntimeConfigError::Refused(vec![finding]))?;
     // The sweep changes what the instances already serving release, so it
     // runs only once every step that could refuse this start has succeeded.
     let suspended = sweep_bindings(&store, verifier.binding_digest())
@@ -411,9 +414,6 @@ async fn prepare_with(
             "versions verified under another verifier binding were suspended for verification again"
         );
     }
-    let admitted = config
-        .admitted_clients(&project)
-        .map_err(|finding| RuntimeConfigError::Refused(vec![finding]))?;
     let authenticator = Arc::new(DocumentsAuthenticator::new(
         config.verifier_profile(&admitted),
         keys,

@@ -13,6 +13,19 @@
   host, an IPv4-mapped loopback literal such as `[::ffff:127.0.0.1]` counts as
   loopback, the same as `127.0.0.1`. A database host of `localhost` is matched
   in any letter case. Host names other than `localhost` stay refused.
+- A signed event delivery that Coordinator cannot verify because its own
+  signing key is unreadable, missing or too short counts under
+  `key-source-unavailable` in `coordinator_request_refusals_total`. The 401 and
+  503 answers are unchanged.
+- A static key set that startup refuses now names the key position and member
+  in the `access.configuration` message instead of pointing at the issuer and
+  policy configuration.
+- `coordinatorctl provision` creates the database, the migration and runtime
+  roles and the grants `apply` expects, from the two database URLs in the
+  runtime file, as a PostgreSQL administrator. `--print-sql` prints the plan
+  and connects to nothing. When the runtime file has a `deployment` block, a
+  runtime URL whose user is not `deployment.runtimeRole` is refused before any
+  connection with `coordinator.runtime-config.runtime-role-mismatch`.
 
 - `GET /health` and `GET /ready` carry the `status` member the other
   services answer: `{"live":true,"status":"ok"}` and

@@ -284,6 +284,10 @@ async fn run(superuser_url: String, ca_pem: Vec<u8>, owner_password: String, nam
     let workflows =
         Arc::new(deployment::load_workflows(deployment::config(&runtime).unwrap()).unwrap());
     let store = deployment::open(&runtime, false).await.unwrap();
+    // The serving check the service runs at startup and on every `/ready`.
+    deployment::check_serving(&store, &runtime, workflows.digest())
+        .await
+        .unwrap();
     let authenticator = Arc::new(
         deployment::config(&runtime)
             .unwrap()

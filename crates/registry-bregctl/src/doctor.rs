@@ -246,6 +246,15 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     if let StartupError::PackageEnvelopeRefused(cause) = error {
         return diagnostic("startup.package.refused", "package", &cause);
     }
+    // The shared key set rule names the rule and the key's position, never a
+    // key value.
+    if let StartupError::StaticKeySet(cause) = error {
+        return diagnostic(
+            "startup.oidc.refused",
+            "authentication.oidc",
+            &format!("the OIDC key set was refused: {cause}"),
+        );
+    }
     // The writer's own refusal names the rule and the recovery step, and
     // never a path or a secret.
     if let StartupError::AuditDestination(reason) = error {
@@ -261,6 +270,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         }
         StartupError::PackageRefused(_)
         | StartupError::PackageEnvelopeRefused(_)
+        | StartupError::StaticKeySet(_)
         | StartupError::AuditDestination(_) => {
             unreachable!("handled above")
         }
@@ -1028,6 +1038,25 @@ mod tests {
             .diagnostics
             .iter()
             .all(|diagnostic| diagnostic.message.contains("; next: ")));
+    }
+
+    #[test]
+    fn a_refused_static_key_set_keeps_the_key_source_code_and_names_the_rule() {
+        let diagnostic = startup_diagnostic(StartupError::StaticKeySet(
+            registry_breg::startup::StaticJwksError::PrivateKeyMember {
+                key: 0,
+                member: "d",
+            },
+        ));
+        assert_eq!(diagnostic.code, "startup.oidc.refused");
+        assert_eq!(diagnostic.path, "authentication.oidc");
+        assert!(
+            diagnostic
+                .message
+                .contains("key 0 carries the private-key member \"d\""),
+            "{}",
+            diagnostic.message
+        );
     }
 
     #[test]

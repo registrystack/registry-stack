@@ -528,3 +528,22 @@ fn every_set_list_refuses_a_repeat_at_the_repeat() {
         );
     }
 }
+
+#[test]
+fn an_http_issuer_follows_the_shared_loopback_rule() {
+    for (host, loopback) in [
+        ("127.0.0.1", true),
+        ("127.0.0.2", true),
+        ("[::1]", true),
+        ("[::ffff:127.0.0.1]", true),
+        ("localhost", true),
+        ("LOCALHOST", true),
+        ("a.localhost", false),
+        ("localhost.", false),
+        ("10.0.0.1", false),
+        ("example.com", false),
+    ] {
+        assert_eq!(issuer_url(&format!("http://{host}:8091")), loopback, "{host}");
+    }
+    assert!(issuer_url("https://id.registry.example"));
+}

@@ -42,6 +42,20 @@
     },
     "status": 401
   },
+  "client-no-profile-lists": {
+    "body": {
+      "code": "profile.not-authorized",
+      "detail": "The caller's access profile does not permit this operation.",
+      "status": 403,
+      "title": "Profile not authorized",
+      "type": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json"
+    },
+    "status": 403
+  },
   "download-by-a-stranger": {
     "body": {
       "code": "resource.not-found",

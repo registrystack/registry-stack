@@ -4747,6 +4747,29 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 "Name a record type the project declares.",
             ));
         }
+        // The listener answers the effective-contract, health and ready routes
+        // itself, so a binding whose concrete path is one of them would be
+        // advertised and never served.
+        if let Some(operation) = operation {
+            let concrete = operation.path.replace(
+                &format!("{{{}}}", operation.record_type_parameter.as_str()),
+                binding.record_type.as_str(),
+            );
+            if [
+                WELL_KNOWN_PATH,
+                registry_platform_httputil::probe::HEALTH_PATH,
+                registry_platform_httputil::probe::READY_PATH,
+            ]
+            .contains(&concrete.as_str())
+            {
+                findings.push(finding(
+                    CheckCode::ProjectReservedFacadePath,
+                    &format!("{prefix}/recordType"),
+                    "the binding's concrete facade path is reserved for the effective-contract, health or ready route",
+                    "Rename the record type, or change the operation path, so the concrete path is not the effective-contract, health or ready path.",
+                ));
+            }
+        }
         // A search binding filters on declared fields of its bound record
         // type: the facade
         // offers exactly the declared list as typed equality query
@@ -5869,8 +5892,10 @@ fn direct_route_closure<'a>(
     (closure, unresolved)
 }
 
+/// The effective-contract route the Adapter serves on the facade listener.
+const WELL_KNOWN_PATH: &str = "/.well-known/registry-adapter/effective-contract";
+
 fn async_status_path_collision_checks(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
-    const WELL_KNOWN_PATH: &str = "/.well-known/registry-adapter/effective-contract";
     let mut findings = Vec::new();
     let statuses: Vec<(usize, &str, String)> = workspace
         .profile
@@ -9245,6 +9270,67 @@ mod tests {
             &check_project(&workspace(&profile, &pack, &project)),
             CheckCode::ProfileAsyncStatusPathCollision,
         );
+    }
+
+    /// A binding whose concrete path is the effective-contract, health or
+    /// ready route is refused, because the listener answers those routes
+    /// itself and never serves the binding.
+    #[test]
+    fn a_binding_on_a_reserved_facade_path_is_refused() {
+        for (path, record_type, reserved) in [
+            ("/{type}", "health", true),
+            ("/{type}", "ready", true),
+            (
+                "/.well-known/registry-adapter/{type}",
+                "effective-contract",
+                true,
+            ),
+            ("/{type}", "cases", false),
+            ("/health/{type}", "health", false),
+        ] {
+            let (mut profile, mut pack, mut project) = async_workspace_parts();
+            let mut read = operation("cases-find", HttpMethod::Get);
+            read.path = path.to_string();
+            read.path_parameters = UniqueList::new(vec![local("type")]).expect("parameters");
+            read.record_type_parameter = local("type");
+            read.record_id_parameter = None;
+            profile.operations =
+                UniqueIdList::new(vec![profile.operations[0].clone(), read]).expect("operations");
+            let mut routes = pack.routes.into_vec();
+            routes.push(RouteDefinition {
+                id: local("find-case"),
+                from: RouteFrom {
+                    uri: direct("find-case"),
+                },
+                steps: vec![to_get("case-api")],
+            });
+            pack.routes = UniqueIdList::new(routes).expect("routes");
+            let mut record_types = project.record_types.into_vec();
+            record_types.push(RecordType {
+                name: local(record_type),
+                fields: record_types[0].fields.clone(),
+            });
+            project.record_types = UniqueIdList::new(record_types).expect("record types");
+            let mut bindings = project.bindings.into_vec();
+            bindings.push(Binding {
+                async_completion: None,
+                id: local("find-case"),
+                operation: id("cases-find"),
+                record_type: local(record_type),
+                route: id("find-case"),
+                filters: UniqueList::new(Vec::new()).expect("empty"),
+                maximum_upstream_calls: BoundedU64::new(1).expect("budget"),
+            });
+            project.bindings = UniqueIdList::new(bindings).expect("bindings");
+            let findings = check_project(&workspace(&profile, &pack, &project));
+            let reported = findings
+                .iter()
+                .any(|finding| finding.code == CheckCode::ProjectReservedFacadePath.code());
+            assert_eq!(
+                reported, reserved,
+                "{path} with {record_type}: {findings:?}"
+            );
+        }
     }
 
     /// A write operation needs a request envelope naming the record slot;

@@ -31,6 +31,7 @@ use registry_platform_crypto::{
     generate_private_jwk, verify as verify_with_public_jwk, GeneratedKeyAlgorithm, LocalJwkSigner,
     PrivateJwk, PublicJwk,
 };
+use registry_platform_oidc::OidcError;
 use registry_platform_yaml::{EnvelopeRule, Expect, FormatSpec, Reader};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -146,6 +147,47 @@ pub enum Outcome {
     NotApplicable,
     /// `unknown`: not determined.
     Unknown,
+}
+
+impl Outcome {
+    /// The characterisation result value for a verifier error, `refused/<stage>`.
+    /// It names the stage a corpus row records, so the expected table stays
+    /// comparable across products. Runtimes log and count the same refusal by
+    /// `FailedCheck`, not by this value.
+    ///
+    /// # Panics
+    ///
+    /// On an `OidcError` variant added without a stage here.
+    #[must_use]
+    pub fn refused_by(error: &OidcError) -> Self {
+        use OidcError as E;
+        let stage = match error {
+            E::MalformedToken | E::InvalidToken | E::SubjectMismatch => Stage::Header,
+            E::AlgorithmNotAllowed => Stage::Algorithm,
+            E::TokenTypeNotAllowed => Stage::TokenType,
+            E::MissingKid | E::KidTooLong | E::UnknownKid => Stage::Key,
+            E::SignatureInvalid => Stage::Signature,
+            E::IssuerMismatch { .. } => Stage::Issuer,
+            E::AudienceMismatch => Stage::Audience,
+            E::TokenExpired | E::TokenNotYetValid | E::InvalidTimeClaims => Stage::Time,
+            E::ClientNotAllowed | E::AssertionIssuerNotAllowed => Stage::Client,
+            E::Transport(_)
+            | E::BoundedRead(_)
+            | E::FetchUrl(_)
+            | E::HttpStatus(_)
+            | E::InvalidUrl
+            | E::Parse
+            | E::InvalidJwk
+            | E::EmptyKeySet
+            | E::StaticKeySet(_)
+            | E::MissingIssuer
+            | E::ConflictingEndpointConfiguration
+            | E::InsecureHttpRequiresOptIn
+            | E::EndpointRefused { .. } => Stage::Unavailable,
+            other => panic!("no characterisation stage is recorded for {other:?}"),
+        };
+        Self::Refused(stage)
+    }
 }
 
 impl fmt::Display for Outcome {

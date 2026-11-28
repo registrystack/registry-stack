@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -54,8 +54,10 @@ The `admin-url` file holds one PostgreSQL URL for that administrator, for exampl
 `postgresql://admin:PASSWORD@db.example.org:5432/postgres`. The administrator needs `CREATEROLE` and
 `CREATEDB` and does not need to be a superuser. To pass the URL in an environment variable instead,
 use `--admin-url-env NAME`. The connection requires TLS and verifies the server certificate. Set
-`database.caBundleRef` in the runtime file to trust a private CA. The command never prints the
-administrator URL or a password.
+`database.caBundleRef` in the runtime file to trust a private CA. The administrator URL must name the
+same host and port as the two product URLs, and a database other than the product database, such
+as `postgres`. The command refuses it otherwise. It never prints the administrator URL or a
+password.
 
 The command:
 
@@ -83,7 +85,7 @@ REVOKE ALL ON DATABASE "documents" FROM PUBLIC;
 GRANT CONNECT ON DATABASE "documents" TO "documents_migration", "documents_runtime";
 ALTER DATABASE "documents" ALLOW_CONNECTIONS true;
 \connect "documents"
-REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "documents_migration";
+REVOKE CREATE ON SCHEMA public FROM PUBLIC; GRANT USAGE, CREATE ON SCHEMA public TO "documents_migration"; GRANT USAGE ON SCHEMA public TO "documents_runtime";
 ```
 
 The names come from your URLs. Add `--format json` for a report of each statement and its outcome.
@@ -94,11 +96,13 @@ backup space above the database size.
 
 {/* Evidence: crates/registry-documents/migrations/0100_documents.sql, content bytea. */}
 
-`provision` grants the runtime role nothing beyond `CONNECT`. `apply` grants it what serving needs,
-and `serve` refuses a runtime role that holds authority over the schema. If the runtime role later loses `USAGE` on the
-schema or read access to the activation ledger, `serve` refuses to start and the operator commands
-answer `documentsctl.activation.ledger-unreadable` at `database.runtimeUrlRef`. Run `apply` again
-with the migration credential to restore its grants.
+`provision` grants the runtime role `CONNECT` on the database and `USAGE` on the `public` schema.
+`apply` grants it the rest of what serving needs, and `serve` refuses a runtime role that holds
+authority over the schema. If the runtime role later loses `USAGE` on the schema, run `provision`
+again: it restores that grant, and `apply` does not. If the runtime role loses read access to the
+activation ledger, `serve` refuses to start and the operator commands answer
+`documentsctl.activation.ledger-unreadable` at `database.runtimeUrlRef`. Run `apply` again with the
+migration credential to restore those grants.
 
 {/* Evidence: crates/registry-documents/src/activation.rs, apply (grant_runtime_role and
     stray_authority) and check_runtime;
@@ -118,7 +122,7 @@ matter most:
 | `identity.databaseId` | A name for the one database this deployment owns. The service refuses a database recorded for another. |
 | `package.root` and `package.expectedDigest` | The package directory, and the digest `documentsctl package` printed. |
 | `database.caBundleRef` | The PEM bundle of the CA that signs the database certificate, when a private CA does. It replaces the system roots. |
-| `authentication.oidc` | The `issuer`, the `audience` your tokens carry, every client in `allowedClients`, and `jwksSource` when the runtime should not fetch the issuer's keys itself. See [Access tokens](#access-tokens). |
+| `authentication.oidc` | The `issuer`, the `audience` your tokens carry, `allowedClients` (a list that covers every client an access profile names, or `from-package`), and `jwksSource` when the runtime should not fetch the issuer's keys itself. See [Access tokens](#access-tokens). |
 | `storage.type` | `database` or `s3`. The first upload pins the choice: a later start under another backend or bucket is refused. |
 | `storage.maximumDocumentBytes` | The largest version the deployment takes: 16 MiB by default on both backends. On `s3` you may raise it up to 64 MiB. |
 | `contentVerification` | `type: http` with the verifier's `url`, `authorizationRef`, and `policyId`. `type: disabled` approves everything and is accepted only on a development loopback listener. |
@@ -182,7 +186,8 @@ authentication:
 The secret holds a JSON Web Key Set of RSA or EC public keys, and every key needs its own non-empty
 `kid`: startup refuses a key without one, a repeated `kid`, and a symmetric key. It also refuses a
 key that carries a private member (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth` or `k`) or a repeated
-member name, and the startup error names the rule and the key's position, never a key value. Members
+member name. The startup error names the rule it broke, and the key's position for a rule about one key,
+never a key value. Members
 the runtime does not know, such as `x5c`, `x5t` or `ext`, are ignored. The set is read once at
 startup and never rotates, so to change keys, replace the secret and restart `serve`.
 
@@ -286,10 +291,14 @@ documents --runtime-config /etc/registry-documents/runtime.yaml serve
 
 It logs JSON lines on standard error, starting with `the Document Store is serving` and the
 address. `DOCUMENTS_LOG` sets the level to `error`, `warn`, or `info`, the default; any other value
-stops `documents serve` with exit status 2. The log has no line per request: a request is logged only when
-something fails behind it, such as the database or the token verifier, or when its token lacks a
-scope its profile requires. A refused request is explained by its problem response, and every
-audited operation, such as an upload, a download, or a grant, is in the audit journal.
+stops `documents serve` with exit status 2. A request that succeeds writes no log line. A refused request writes one
+`request refused` line that names `failed_check`, at most five per check per minute, with `suppressed`
+counting the rest, and `documents_request_refusals_total` counts every one (see
+[Metrics](#watch-the-metrics)). A token verifier that cannot reach its key source answers 503 and is logged
+the same way, as `request refused` with `failed_check` `key-source-unavailable`, not as a warning, so
+`DOCUMENTS_LOG=warn` shows no line for it and the counter is the signal to alert on. A failure behind
+a request, such as the database, is logged where it happens. Every audited operation, such as an
+upload, a download, or a grant, is in the audit journal.
 
 `serve` never applies the schema. Before it connects to the database, it refuses a runtime file
 that `documentsctl check --project` refuses against the package's project, such as a hook

@@ -386,11 +386,12 @@ async fn apply_refuses_a_package_that_is_not_the_pinned_one() {
 }
 
 /// A database provisioned as the Document Store operate page provisions
-/// one: split migration and runtime login roles, `PUBLIC` stripped of every
-/// privilege on the database and on the `public` schema, and the schema
-/// handed to the migration role. The runtime role holds only `CONNECT`, so
-/// before the first apply it has no usage on any schema and its
-/// `current_schema()` is null. Roles are cluster-wide, so each is named
+/// one, as `documentsctl provision` leaves it: split migration and runtime
+/// login roles, `PUBLIC` stripped of every privilege on the database and of
+/// `CREATE` on the `public` schema, the migration role holding `USAGE` and
+/// `CREATE` on `public`, and the runtime role holding `CONNECT` on the
+/// database and `USAGE` on `public`. Before the first apply the runtime
+/// role has no table privilege. Roles are cluster-wide, so each is named
 /// after the suite's own database, which makes a leftover from a failed run
 /// attributable, and [`ProvisionedDatabase::drop`] removes them with the
 /// database.
@@ -445,8 +446,9 @@ impl ProvisionedDatabase {
             .batch_execute(&format!(
                 "REVOKE ALL ON DATABASE {name} FROM PUBLIC;
                  GRANT CONNECT ON DATABASE {name} TO {migration_role}, {runtime_role};
-                 ALTER SCHEMA public OWNER TO {migration_role};
-                 REVOKE ALL ON SCHEMA public FROM PUBLIC;"
+                 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+                 GRANT USAGE, CREATE ON SCHEMA public TO {migration_role};
+                 GRANT USAGE ON SCHEMA public TO {runtime_role};"
             ))
             .await
             .unwrap();
@@ -506,8 +508,8 @@ fn base_config() -> tokio_postgres::Config {
 }
 
 /// The operate page's journey on a database provisioned as it says: `plan`
-/// over the runtime credential, which holds nothing but `CONNECT` before
-/// the first apply, reports the initial activation; `apply` over the
+/// over the runtime credential, which holds no table privilege before the
+/// first apply, reports the initial activation; `apply` over the
 /// migration credential splits the roles; and `plan` then reports nothing
 /// to change.
 #[tokio::test]
@@ -566,7 +568,9 @@ async fn plan_reports_the_initial_activation_on_a_database_provisioned_as_the_op
 
     // After apply, a runtime role that lost its schema usage resolves no
     // schema again. That is a misconfiguration, refused by name rather
-    // than read as a database nobody applied a package to.
+    // than read as a database nobody applied a package to. `provision`
+    // leaves `PUBLIC` its default `USAGE` on `public`, so the revoke names
+    // `PUBLIC` as well, as an operator who hardened the schema would.
     let (database, connection) =
         tokio_postgres::connect(&provisioned.admin_url(), tokio_postgres::NoTls)
             .await
@@ -574,7 +578,7 @@ async fn plan_reports_the_initial_activation_on_a_database_provisioned_as_the_op
     let connection = tokio::spawn(connection);
     database
         .batch_execute(&format!(
-            "REVOKE USAGE ON SCHEMA public FROM {}",
+            "REVOKE USAGE ON SCHEMA public FROM PUBLIC, {}",
             provisioned.runtime_role
         ))
         .await

@@ -290,6 +290,12 @@ async fn drive() -> Run {
     )
     .await;
     run.observe(
+        "empty-subject",
+        &fresh(),
+        bearer(&auth.issue_access_token(CLIENT, "", RESOURCE, SCOPE, now() + 300)),
+    )
+    .await;
+    run.observe(
         "expired",
         &fresh(),
         bearer(&issue(CLIENT, RESOURCE, SCOPE, now() - 120)),
@@ -362,13 +368,10 @@ async fn summarise(response: axum::response::Response) -> Value {
         header::RETRY_AFTER,
     ] {
         if let Some(value) = response.headers().get(&name) {
-            // The delay depends on the clock, so only its presence is frozen.
-            let text = if name == header::RETRY_AFTER {
-                "present".to_owned()
-            } else {
-                value.to_str().expect("ASCII header").to_owned()
-            };
-            readable.insert(name.as_str().to_owned(), text);
+            readable.insert(
+                name.as_str().to_owned(),
+                value.to_str().expect("ASCII header").to_owned(),
+            );
         }
     }
     let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
@@ -391,7 +394,7 @@ async fn every_refusal_answers_exactly_as_the_golden_file_records() {
 }
 
 /// The check each refusal counts, one request each.
-const COUNTED: [(&str, &str); 15] = [
+const COUNTED: [(&str, &str); 16] = [
     ("no-authorization-header", "credential-missing"),
     ("non-bearer-scheme", "credential-missing"),
     ("bearer-without-token", "credential-malformed"),
@@ -401,6 +404,7 @@ const COUNTED: [(&str, &str); 15] = [
     ("not-a-jwt", "credential-malformed"),
     ("wrong-audience", "token-audience"),
     ("client-not-allowed", "token-client"),
+    ("empty-subject", "token-claims"),
     ("expired", "token-time"),
     ("scope-missing", "scope"),
     ("host-not-admitted", "host-origin"),
@@ -416,6 +420,37 @@ async fn each_refusal_counts_once_under_its_check() {
     for (name, check) in COUNTED {
         assert_eq!(run.counted[name], BTreeMap::from([(check, 1)]), "{name}");
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_refused_host_writes_one_line_with_its_check() {
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use tracing::instrument::WithSubscriber;
+
+    let logs = CapturedDiagnosticLogs::default();
+    let auth = authorization().await;
+    let (app, _) = application(&auth, auth.jwks_uri(), 100);
+    let response = app
+        .oneshot(
+            Request::post("/mcp")
+                .header(header::HOST, "attacker.example.test")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .with_subscriber(logs.subscriber())
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let text = logs.text();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("request refused"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{text}");
+    assert!(
+        lines[0].contains("\"failed_check\":\"host-origin\""),
+        "{text}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -443,4 +478,14 @@ async fn a_refusal_writes_one_line_with_its_check_and_no_caller_value() {
     for canary in [token.as_str(), "citizen-canary", CLIENT, "openid"] {
         assert!(!text.contains(canary), "{canary} reached the log: {text}");
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn the_admit_fault_line_is_due_once_per_window() {
+    let auth = authorization().await;
+    let (_, server) = application(&auth, auth.jwks_uri(), 100);
+    let start = std::time::Instant::now();
+    assert!(server.admit_fault_due(start));
+    assert!(!server.admit_fault_due(start + Duration::from_secs(59)));
+    assert!(server.admit_fault_due(start + Duration::from_secs(61)));
 }

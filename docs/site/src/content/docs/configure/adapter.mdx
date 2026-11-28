@@ -671,9 +671,10 @@ Response custody and terminal audit remain one PostgreSQL transaction.
 {/* Evidence: crates/registry-adapter/tests/oauth_served_route.rs */}
 {/* TODO[evidence]: allowedClients admission and the required non-empty list have no test located by symbol in the files searched */}
 
-Every facade call is authenticated with an OIDC bearer token through the platform block, as in every Registry Stack product.
+Every facade operation call is authenticated with an OIDC bearer token through the platform block, as in every Registry Stack product.
 It is authorised by the Adapter's own access profiles: named bindings of scopes to concrete facade operations and record types, declared in the project.
-The facade accepts no API keys, no Basic authentication and no anonymous calls.
+The facade accepts no API keys, no Basic authentication and no anonymous operation calls.
+The one exception is the two listener probes, `GET /health` and `GET /ready`, which answer anyone with a fixed body and read nothing the caller names. [Probe health and readiness](../../operate/adapter/#probe-health-and-readiness) describes them.
 The Adapter inherits no authorisation from any product and grants none to any source.
 
 The caller's token is never forwarded upstream.

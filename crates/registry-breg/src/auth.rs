@@ -17,8 +17,8 @@ use registry_platform_authcommon::{
     parse_bearer_token, validate_compact_access_token, BearerParseError, FailedCheck,
 };
 use registry_platform_oidc::{
-    actor_kind, grant_claims, is_access_token_typ_pair, Audience, ClaimNames, JwksFetcher,
-    OidcError, TokenVerifier, TokenVerifierConfig,
+    actor_kind, grant_claims, is_access_token_typ_pair, Audience, ClaimError, ClaimNames,
+    GrantContextError, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -364,20 +364,26 @@ impl RegistryAuthenticator {
             .duration_since(UNIX_EPOCH)
             .map_err(|_| invalid_claims(FailedCheck::TokenTime))?
             .as_secs();
-        let grant = grant_claims(&verified.claims, &self.contextual_claims, now)
-            .map_err(|_| invalid_claims(FailedCheck::TaskGrantClaims))?;
+        let grant =
+            grant_claims(&verified.claims, &self.contextual_claims, now).map_err(|error| {
+                invalid_claims(match error {
+                    ClaimError::Expired => FailedCheck::TaskGrantExpired,
+                    _ => FailedCheck::TaskGrantClaims,
+                })
+            })?;
         if let Some(grant) = &grant {
             grant
                 .verify_context(&verified, &self.audience)
-                .map_err(|_| invalid_claims(FailedCheck::TaskGrantClaims))?;
-            if !task_grant_token_lifetime_is_short(
-                verified.claims.iat,
-                verified.claims.exp,
-                now,
-                self.leeway,
-            ) {
-                return Err(invalid_claims(FailedCheck::TaskGrantLifetime));
-            }
+                .map_err(|error| {
+                    invalid_claims(match error {
+                        GrantContextError::ClientMismatch | GrantContextError::ResourceMismatch => {
+                            FailedCheck::TaskGrantBinding
+                        }
+                        _ => FailedCheck::TaskGrantClaims,
+                    })
+                })?;
+            task_grant_token_lifetime(verified.claims.iat, verified.claims.exp, now, self.leeway)
+                .map_err(invalid_claims)?;
         }
         let grant_subjects = if grant.is_some() {
             bounded_identity(claims.get("identity"))
@@ -432,25 +438,34 @@ impl RegistryAuthenticator {
     }
 }
 
-/// A task-grant token must carry `iat` and `exp`, be issued for between 1 and
-/// [`MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS`], and carry an `iat` no later than
-/// `now` plus the verifier's clock leeway, so its issued lifetime also bounds
-/// the time it is honoured from this clock.
-fn task_grant_token_lifetime_is_short(
+/// A task-grant token must carry `iat` and `exp`, with `exp` after `iat` and
+/// `iat` no later than `now` plus the verifier's clock leeway. A token that
+/// fails any of those is a malformed grant token (`TaskGrantClaims`). One that
+/// is well formed but issued for more than
+/// [`MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS`] is refused as `TaskGrantLifetime`,
+/// so its issued lifetime also bounds the time it is honoured from this clock.
+fn task_grant_token_lifetime(
     issued_at: Option<i64>,
     expires_at: Option<i64>,
     now: u64,
     leeway: Duration,
-) -> bool {
+) -> Result<(), FailedCheck> {
     let latest_issued_at = now
         .checked_add(leeway.as_secs())
         .and_then(|latest| i64::try_from(latest).ok());
-    issued_at
-        .zip(expires_at)
-        .zip(latest_issued_at)
-        .filter(|((issued_at, _), latest_issued_at)| issued_at <= latest_issued_at)
-        .and_then(|((issued_at, expires_at), _)| expires_at.checked_sub(issued_at))
-        .is_some_and(|lifetime| (1..=MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS).contains(&lifetime))
+    let (Some(issued_at), Some(expires_at), Some(latest_issued_at)) =
+        (issued_at, expires_at, latest_issued_at)
+    else {
+        return Err(FailedCheck::TaskGrantClaims);
+    };
+    let lifetime = expires_at.saturating_sub(issued_at);
+    if issued_at > latest_issued_at || lifetime < 1 {
+        return Err(FailedCheck::TaskGrantClaims);
+    }
+    if lifetime > MAX_TASK_GRANT_TOKEN_LIFETIME_SECONDS {
+        return Err(FailedCheck::TaskGrantLifetime);
+    }
+    Ok(())
 }
 
 fn admit_refusal_warning(last_warning: &Mutex<Option<Instant>>, now: Instant) -> bool {
@@ -1086,35 +1101,94 @@ mod tests {
         ));
     }
 
+    /// Every 401 the service answers carries the failed check. The two
+    /// constructors that note one are the only non-test sites that build a 401
+    /// or name `ProblemCode::AuthenticationRefused`, so a new site cannot
+    /// answer 401 without a check unless it is added to this list on purpose.
+    #[test]
+    fn only_the_noting_constructors_build_a_401() {
+        fn visit(dir: &std::path::Path, found: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).expect("source directory is readable") {
+                let path = entry.expect("directory entry is readable").path();
+                if path.is_dir() {
+                    visit(&path, found);
+                    continue;
+                }
+                let name = path.to_string_lossy().into_owned();
+                if !name.ends_with(".rs")
+                    || name.contains("tests")
+                    || name.ends_with("/problem.rs")
+                    || name.ends_with("/compiler.rs")
+                {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("source file is readable");
+                let production = text
+                    .split("#[cfg(test)]\nmod tests {")
+                    .next()
+                    .unwrap_or_default();
+                for needle in [
+                    "StatusCode::UNAUTHORIZED",
+                    "ProblemCode::AuthenticationRefused",
+                ] {
+                    for _ in production.matches(needle) {
+                        found.push(format!(
+                            "{needle} in {}",
+                            path.file_name().expect("file name").to_string_lossy()
+                        ));
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        visit(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut found,
+        );
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                "ProblemCode::AuthenticationRefused in mod.rs",
+                "StatusCode::UNAUTHORIZED in auth.rs",
+            ]
+        );
+    }
+
     #[test]
     fn task_grant_tokens_must_be_issued_for_at_most_fifteen_minutes() {
         let issued = 1_800_000_000;
         let now = 1_800_000_000;
         let leeway = Duration::from_secs(60);
-        assert!(task_grant_token_lifetime_is_short(
-            Some(issued),
-            Some(issued + 900),
-            now,
-            leeway
-        ));
-        assert!(task_grant_token_lifetime_is_short(
-            Some(issued),
-            Some(issued + 1),
-            now,
-            leeway
-        ));
+        assert_eq!(
+            task_grant_token_lifetime(Some(issued), Some(issued + 900), now, leeway),
+            Ok(())
+        );
+        assert_eq!(
+            task_grant_token_lifetime(Some(issued), Some(issued + 1), now, leeway),
+            Ok(())
+        );
         for (issued_at, expires_at) in [
             (Some(issued), Some(issued + 901)),
             (Some(issued - 604_200), Some(issued + 600)),
+            (Some(i64::MIN), Some(i64::MAX)),
+        ] {
+            assert_eq!(
+                task_grant_token_lifetime(issued_at, expires_at, now, leeway),
+                Err(FailedCheck::TaskGrantLifetime),
+                "iat {issued_at:?} and exp {expires_at:?} are too long"
+            );
+        }
+        for (issued_at, expires_at) in [
             (None, Some(issued + 600)),
             (Some(issued), None),
             (Some(issued), Some(issued)),
             (Some(issued + 1), Some(issued)),
-            (Some(i64::MIN), Some(i64::MAX)),
         ] {
-            assert!(
-                !task_grant_token_lifetime_is_short(issued_at, expires_at, now, leeway),
-                "iat {issued_at:?} and exp {expires_at:?} are refused"
+            assert_eq!(
+                task_grant_token_lifetime(issued_at, expires_at, now, leeway),
+                Err(FailedCheck::TaskGrantClaims),
+                "iat {issued_at:?} and exp {expires_at:?} are malformed"
             );
         }
     }
@@ -1125,29 +1199,22 @@ mod tests {
         let leeway = Duration::from_secs(60);
         let at = |offset: i64| i64::try_from(now).expect("test clock fits i64") + offset;
         for issued_at in [at(86_400), at(61)] {
-            assert!(
-                !task_grant_token_lifetime_is_short(
-                    Some(issued_at),
-                    Some(issued_at + 900),
-                    now,
-                    leeway
-                ),
+            assert_eq!(
+                task_grant_token_lifetime(Some(issued_at), Some(issued_at + 900), now, leeway),
+                Err(FailedCheck::TaskGrantClaims),
                 "iat {issued_at} later than now plus leeway is refused"
             );
         }
         for issued_at in [at(59), at(60)] {
-            assert!(
-                task_grant_token_lifetime_is_short(
-                    Some(issued_at),
-                    Some(issued_at + 900),
-                    now,
-                    leeway
-                ),
+            assert_eq!(
+                task_grant_token_lifetime(Some(issued_at), Some(issued_at + 900), now, leeway),
+                Ok(()),
                 "iat {issued_at} within the leeway is accepted"
             );
         }
-        assert!(
-            !task_grant_token_lifetime_is_short(Some(at(0)), Some(at(900)), u64::MAX, leeway),
+        assert_eq!(
+            task_grant_token_lifetime(Some(at(0)), Some(at(900)), u64::MAX, leeway),
+            Err(FailedCheck::TaskGrantClaims),
             "a clock that cannot bound iat refuses the token"
         );
     }

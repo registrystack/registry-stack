@@ -162,7 +162,8 @@
           "$ref": "#/$defs/ReportNeeds"
         },
         "outcome": {
-          "$ref": "#/$defs/ReportOutcome"
+          "$ref": "#/$defs/ReportOutcome",
+          "description": "`not-run` for a statement the run did not reach, the one that failed\nincluded."
         },
         "scope": {
           "$ref": "#/$defs/ReportScope"
@@ -264,6 +265,7 @@
       "type": "array"
     },
     "executed": {
+      "description": "Whether a statement could have been sent to the server: false for a\nprint-mode run and for a run that stopped before the first statement.",
       "type": "boolean"
     },
     "kind": {

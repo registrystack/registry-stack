@@ -44,6 +44,21 @@
     },
     "status": 401
   },
+  "empty-subject": {
+    "body": {
+      "code": "invalid-token",
+      "detail": "The access token is not valid for this resource.",
+      "status": 401,
+      "title": "Unauthorized",
+      "type": "about:blank"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/problem+json",
+      "www-authenticate": "Bearer error=\"invalid_token\", resource_metadata=\"https://gateway.example.test/.well-known/oauth-protected-resource/mcp\""
+    },
+    "status": 401
+  },
   "expired": {
     "body": {
       "code": "invalid-token",
@@ -157,7 +172,7 @@
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/problem+json",
-      "retry-after": "present"
+      "retry-after": "60"
     },
     "status": 429
   },

@@ -26,6 +26,9 @@
   startup message, still under `evidence.oid4vp.issuer-unavailable`. A request
   whose `Authorization` header is present but unreadable as text counts under
   `credential-malformed`. The answer is unchanged.
+- `evidencectl suggest` accepts an IPv4-mapped IPv6 loopback address, for
+  example `[::ffff:127.0.0.1]`, for a plain-HTTP base URL or OpenAPI URL, as
+  the shared loopback rule does. The name `localhost` is still refused there.
 
 - BREAKING (experimental surface): `evidencectl check` and `evidencectl package`
   refuse a `publicCheck` definition whose Source facts schema states more than

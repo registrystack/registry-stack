@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Startup ordering gate for one verified Registry package.
 
+pub use registry_platform_oidc::StaticJwksError;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -150,6 +151,10 @@ pub enum StartupError {
     ExternalProjectionRoleMode,
     #[error("the Registry OIDC key source was refused")]
     Oidc,
+    /// The shared static key set rule refused the pinned key set. The cause
+    /// names the rule and the key's position, never a key value.
+    #[error("the Registry OIDC key source was refused")]
+    StaticKeySet(StaticJwksError),
     #[error("the Registry authentication profile was refused")]
     Authentication,
     /// The project names clients that `authentication.oidc.allowedClients`
@@ -737,6 +742,18 @@ impl OperationalEvent {
                     message = record.message
                 );
             }
+            Self::StoppedWithError(StartupError::StaticKeySet(cause)) => {
+                let error = record
+                    .error
+                    .expect("stopped-with-error records have a closed error");
+                let reason = cause.to_string();
+                tracing::error!(
+                    target: "registry_breg::startup",
+                    error,
+                    reason = reason.as_str(),
+                    message = record.message
+                );
+            }
             Self::StoppedWithError(StartupError::DatabaseConnection(_)) => {
                 let error = record
                     .error
@@ -870,7 +887,7 @@ impl StartupError {
             Self::Cursor => "the Registry cursor profile was refused",
             Self::ExternalSources => "the external source binding list or the external projection store was refused",
             Self::ExternalProjectionRoleMode => "indexed external projections require separate migration and runtime PostgreSQL roles",
-            Self::Oidc => "the Registry OIDC key source was refused",
+            Self::Oidc | Self::StaticKeySet(_) => "the Registry OIDC key source was refused",
             Self::Authentication => "the Registry authentication profile was refused",
             Self::AuthenticationClientsUnlisted => {
                 "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
@@ -2288,6 +2305,7 @@ pub fn map_runtime_config_error(error: RuntimeConfigError) -> StartupError {
         RuntimeConfigError::InvalidAudit => StartupError::Audit,
         RuntimeConfigError::InvalidCursor => StartupError::Cursor,
         RuntimeConfigError::InvalidOidc => StartupError::Oidc,
+        RuntimeConfigError::InvalidStaticJwks(cause) => StartupError::StaticKeySet(cause),
         other => StartupError::RuntimeConfig(other),
     }
 }

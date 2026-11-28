@@ -110,15 +110,18 @@ These products differ:
 
 - BReg answers 503 with a problem body (`runtime.not_ready`).
 - OID4VCI answers 503 with `{"status":"not_ready"}`.
-- Coordinator answers `{"ready":true}`.
-- Scheduling serves `/readyz` under its deployment health contract.
-- Casework, Messaging, and Documents answer without a body.
+- Casework and Scheduling answer 200 with the shared body `{"status":"ready"}`, and `/health` with `{"status":"ok"}`.
+- Coordinator answers 200 with `{"ready":true,"status":"ready"}` and 503 with `{"ready":false}`.
+- Scheduling also serves `/readyz`, a bodyless probe on the same readiness test, under its deployment health contract.
+- Messaging and Documents answer without a body.
 
 {/* Evidence: crates/registry-breg/src/problem.rs RuntimeNotReady;
     crates/registry-evidence-oid4vci/src/service.rs not_ready;
+    crates/registry-platform-httputil/src/probe.rs READY_BODY;
+    crates/registry-casework/src/http.rs ready;
     crates/registry-coordinator/src/http.rs ready;
-    crates/registry-scheduling/src/http.rs readyz. */}
-{/* TODO[evidence]: the generic `{"status":"ready"}` / `{"status":"not-ready"}` body and the bodyless Casework, Messaging, and Documents readiness answers have no single code anchor. */}
+    crates/registry-scheduling/src/http.rs ready, readyz. */}
+{/* TODO[evidence]: the generic `{"status":"not-ready"}` body and the bodyless Messaging and Documents readiness answers have no single code anchor. */}
 
 ## Idempotency and retries
 

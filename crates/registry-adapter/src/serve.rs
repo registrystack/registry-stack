@@ -209,8 +209,16 @@ pub(crate) async fn authenticator(
             let document = resolver
                 .resolve(document_ref)
                 .map_err(|_| invalid("the static key document could not be resolved"))?;
-            let jwks = parse_static_jwks(document.expose_secret())
-                .map_err(|_| invalid("the static key document was refused"))?;
+            let jwks = parse_static_jwks(document.expose_secret()).map_err(|error| {
+                match error {
+                    // The document is the operator's own file, so its text names the
+                    // rule it breaks and never a key value.
+                    OidcError::StaticKeySet(refused) => invalid(&format!(
+                        "the static key document is not a usable key set: {refused}"
+                    )),
+                    _ => invalid("the static key document was refused"),
+                }
+            })?;
             JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
         }
     };
@@ -1335,6 +1343,72 @@ mod token_characterisation;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn static_key_runtime() -> AdapterRuntimeConfig {
+        serde_json::from_value(serde_json::json!({
+            "id": "static-key-set",
+            "endpoints": [{"endpoint": "tracker", "baseUrl": "https://tracker.example.invalid"}],
+            "listener": {"bind": "127.0.0.1:8080"},
+            "database": {
+                "runtimeUrlRef": "secret:file/database-runtime",
+                "migrationUrlRef": "secret:file/database-migration"
+            },
+            "oidc": {
+                "issuer": "https://issuer.example.test",
+                "audience": "registry-adapter-test",
+                "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-keys.json"}
+            },
+            "allowedClients": ["coordinator"],
+            "allowedPrivateCidrs": ["10.0.0.0/8"],
+            "audit": {"retentionDays": 90}
+        }))
+        .expect("the runtime configuration parses")
+    }
+
+    async fn authenticator_over(keys: &serde_json::Value) -> Result<Authenticator, ServeError> {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let root = directory.path().canonicalize().expect("physical directory");
+        let file = root.join("issuer-keys.json");
+        std::fs::write(&file, keys.to_string()).expect("write the key set");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))
+            .expect("owner-only key file");
+        let resolver = SecretResolver::new([registry_platform_config::SecretProvider::File], root)
+            .expect("resolver");
+        authenticator(&static_key_runtime(), &resolver).await
+    }
+
+    #[tokio::test]
+    async fn a_static_key_set_with_a_private_member_is_refused_with_the_rule_text() {
+        let private =
+            registry_platform_testing::access_token_test_key(jsonwebtoken::Algorithm::ES256);
+        let mut keys = registry_platform_testing::jwks_from_private_jwk(&private);
+        keys["keys"][0]["d"] = serde_json::json!("AQAB");
+        let Err(ServeError::Configuration(text)) = authenticator_over(&keys).await else {
+            panic!("a key set holding a private member is refused");
+        };
+        assert!(
+            text.contains("not a usable key set"),
+            "the refusal names the key set: {text}"
+        );
+        assert!(
+            text.len() > "oidc: the static key document is not a usable key set: ".len(),
+            "the rule text follows: {text}"
+        );
+        assert!(!text.contains("AQAB"), "no key value in the text: {text}");
+    }
+
+    #[tokio::test]
+    async fn a_static_key_set_with_a_public_ext_member_loads() {
+        let private =
+            registry_platform_testing::access_token_test_key(jsonwebtoken::Algorithm::ES256);
+        let mut keys = registry_platform_testing::jwks_from_private_jwk(&private);
+        keys["keys"][0]["ext"] = serde_json::json!(true);
+        authenticator_over(&keys)
+            .await
+            .map(|_| ())
+            .expect("a public key set with ext loads");
+    }
 
     #[test]
     fn runtime_requirements_follow_the_deployment_feature_set() {

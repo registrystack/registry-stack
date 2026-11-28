@@ -303,7 +303,10 @@ async fn grant_approval_and_decision_lock_request_before_task_without_deadlock()
     );
     assert_eq!(decision_status, StatusCode::NO_CONTENT);
     assert!(
-        matches!(approval_result, Err(StoreError::Forbidden(_))),
+        matches!(
+            approval_result,
+            Err(StoreError::Forbidden(FailedCheck::AccessProfile))
+        ),
         "the queued approval must recheck and refuse the terminal task"
     );
 }

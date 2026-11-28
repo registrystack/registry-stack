@@ -170,7 +170,7 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
                         ),
                         "{error:?} does not carry the verifier check"
                     );
-                    refusal(failure.authentication_stage().label())
+                    Outcome::refused_by(&failure)
                 }
                 Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {
                     if verified.scopes.iter().any(|held| held == &scope) {

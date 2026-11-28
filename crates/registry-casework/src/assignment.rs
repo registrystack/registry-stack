@@ -573,7 +573,7 @@ impl PostgresStore {
                     &[&id],
                 )
                 .await?
-                .ok_or(StoreError::NotFound)?;
+                .ok_or(StoreError::Absent)?;
             let record = absence_from_row(row)?;
             if record.person != input.person {
                 return Err(StoreError::Invalid);
@@ -619,7 +619,7 @@ impl PostgresStore {
         if absence_id.is_some() {
             let changed=transaction.execute("UPDATE casework_absences SET person_issuer=$2,person_subject=$3,starts_at=$4,ends_at=$5,cover_issuer=$6,cover_subject=$7,revision=$8 WHERE absence_id=$1",&[&id,&input.person.issuer,&input.person.subject,&input.from,&input.until,&input.cover.issuer,&input.cover.subject,&next]).await?;
             if changed != 1 {
-                return Err(StoreError::NotFound);
+                return Err(StoreError::Absent);
             }
         } else {
             transaction.execute("INSERT INTO casework_absences(absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",&[&id,&input.person.issuer,&input.person.subject,&input.from,&input.until,&input.cover.issuer,&input.cover.subject,&next]).await?;
@@ -714,7 +714,7 @@ impl PostgresStore {
         if actual != expected_directory_revision {
             return Err(StoreError::Conflict);
         }
-        let row=transaction.query_opt("SELECT absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision FROM casework_absences WHERE absence_id=$1 FOR UPDATE",&[&absence_id]).await?.ok_or(StoreError::NotFound)?;
+        let row=transaction.query_opt("SELECT absence_id,person_issuer,person_subject,starts_at,ends_at,cover_issuer,cover_subject,revision FROM casework_absences WHERE absence_id=$1 FOR UPDATE",&[&absence_id]).await?.ok_or(StoreError::Absent)?;
         let record = absence_from_row(row)?;
         if !can_manage_person(&transaction, actor, &record.person).await? {
             return Err(StoreError::Forbidden(FailedCheck::Operation));

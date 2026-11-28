@@ -39,7 +39,7 @@ and the restore drill is in
   A static key set (`jwksSource: static`) holds public keys only.
   The runtime refuses to start on a set that carries a private member (`d`, `p`, `q`, `dp`, `dq`,
   `qi`, `oth` or `k`), a symmetric key, a repeated member name, or a key without a unique `kid`.
-  The startup error names the rule and the key's position, never a key value.
+  The startup error names the rule it broke, and the key's position for a rule about one key, never a key value.
   Members it does not know, such as `x5c` or `ext`, are ignored.
 - The operator's view of a refusal: the answer to the caller names a problem code and no cause, so
   an operator tells the causes apart from the private metrics listener and the log.

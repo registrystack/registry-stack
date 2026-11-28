@@ -14,9 +14,9 @@
 //! a non-superuser holds only the attributes the test names.
 
 use registry_platform_provision::{
-    admin_config, execute, plan, render_script, verify_logins, AdminConfig, AdminConfigError, Mode,
-    Needs, Outcome, ProductDatabase, ProvisionError, ProvisionTarget, RoleCredential, SchemaLayout,
-    Scope, Spatial, StatementOutcome,
+    admin_config, execute, execute_recording, plan, render_script, verify_logins, AdminConfig,
+    AdminConfigError, Mode, Needs, Outcome, ProductDatabase, ProvisionError, ProvisionTarget,
+    RoleCredential, SchemaLayout, Scope, Spatial, StatementOutcome,
 };
 use rustls::pki_types::{pem::PemObject as _, CertificateDer};
 use tokio_postgres::{config::SslMode, Client, Config};
@@ -42,6 +42,10 @@ fn random_hex(bytes: usize) -> String {
 
 fn quote(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn tls(ca: &[u8]) -> MakeRustlsConnect {
@@ -908,6 +912,8 @@ async fn existing_role_with_other_attributes_is_refused() {
         ("LOGIN INHERIT", "role.migration", true),
         ("NOLOGIN", "role.migration", true),
         ("LOGIN CREATEDB", "role.runtime", false),
+        ("LOGIN SUPERUSER", "role.runtime", false),
+        ("LOGIN BYPASSRLS", "role.runtime", false),
     ];
     for (attributes, step, migration) in differing {
         let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
@@ -962,6 +968,355 @@ async fn existing_role_with_other_attributes_is_refused() {
             .await;
         fixture.cleanup().await;
     }
+}
+
+async fn memberships(fixture: &Fixture, role: &str) -> String {
+    fixture
+        .server
+        .superuser
+        .text(&format!(
+            "SELECT string_agg(concat_ws('|', g.rolname, a.admin_option, a.inherit_option, \
+                    a.set_option), ',' ORDER BY g.rolname) \
+               FROM pg_catalog.pg_auth_members a \
+               JOIN pg_catalog.pg_roles g ON g.oid = a.roleid \
+               JOIN pg_catalog.pg_roles m ON m.oid = a.member \
+              WHERE m.rolname = '{role}' AND m.rolname = '{role}'"
+        ))
+        .await
+}
+
+#[tokio::test]
+async fn an_existing_role_that_is_a_member_of_another_role_is_refused_and_left_alone() {
+    let _serial = lock().await;
+    let cases = [
+        ("pg_read_all_data", "role.runtime", false),
+        ("pg_execute_server_program", "role.migration", true),
+    ];
+    for (granted, step, migration) in cases {
+        let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
+        let role = if migration {
+            fixture.migration_name()
+        } else {
+            fixture.runtime_name()
+        };
+        fixture
+            .server
+            .superuser
+            .exec(&format!(
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; \
+                 GRANT {granted} TO {} WITH INHERIT TRUE",
+                quote(&role),
+                quote(&role)
+            ))
+            .await;
+        let before = memberships(&fixture, &role).await;
+        assert!(before.contains(granted), "{before}");
+        let error = fixture
+            .provision(&Fixture::public_product())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            "platform.provision.role-membership-differs",
+            "{granted}"
+        );
+        assert_eq!(error.step(), Some(step));
+        assert!(error.to_string().contains(&role));
+        assert!(!error.to_string().contains(granted));
+        assert_eq!(memberships(&fixture, &role).await, before, "left alone");
+        assert!(!fixture.database_exists().await, "nothing runs after it");
+        fixture
+            .server
+            .superuser
+            .exec(&format!("DROP ROLE IF EXISTS {}", quote(&role)))
+            .await;
+        fixture.cleanup().await;
+    }
+}
+
+#[tokio::test]
+async fn an_existing_role_with_members_or_the_plans_own_grants_is_accepted() {
+    let _serial = lock().await;
+    let fixture = Fixture::new(SUPERUSER_ADMIN).await;
+    let product = fixture.spatial_product((3, 5));
+    fixture.provision(&product).await.unwrap();
+    // The runtime role gains a member, and the migration role is already in
+    // the bbox role: neither is a refusal.
+    let member = format!("s2_member_{}", fixture.suffix);
+    fixture
+        .server
+        .superuser
+        .exec(&format!(
+            "CREATE ROLE {} NOLOGIN; GRANT {} TO {}",
+            quote(&member),
+            quote(&fixture.runtime_name()),
+            quote(&member)
+        ))
+        .await;
+    let again = fixture.provision(&product).await.unwrap();
+    assert_eq!(created(&again), Vec::<&str>::new());
+    fixture
+        .server
+        .superuser
+        .exec(&format!("DROP ROLE {}", quote(&member)))
+        .await;
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_existing_role_with_role_level_settings_is_refused() {
+    let _serial = lock().await;
+    let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
+    let role = fixture.runtime_name();
+    fixture
+        .server
+        .superuser
+        .exec(&format!(
+            "CREATE ROLE {} LOGIN; ALTER ROLE {} SET search_path = pg_catalog",
+            quote(&role),
+            quote(&role)
+        ))
+        .await;
+    let error = fixture
+        .provision(&Fixture::public_product())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "platform.provision.role-attributes-differ");
+    assert_eq!(error.step(), Some("role.runtime"));
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn an_existing_bbox_role_with_login_or_membership_is_refused() {
+    let _serial = lock().await;
+    let plain = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS";
+    for (attributes, grant) in [("LOGIN", false), ("NOLOGIN", true)] {
+        let fixture = Fixture::new(SUPERUSER_ADMIN).await;
+        let bbox = fixture.bbox_name();
+        fixture
+            .server
+            .superuser
+            .exec(&format!(
+                "CREATE ROLE {} {attributes} {plain}",
+                quote(&bbox)
+            ))
+            .await;
+        if grant {
+            fixture
+                .server
+                .superuser
+                .exec(&format!("GRANT pg_read_all_data TO {}", quote(&bbox)))
+                .await;
+        }
+        let error = fixture
+            .provision(&fixture.spatial_product((3, 5)))
+            .await
+            .unwrap_err();
+        let expected = if grant {
+            "platform.provision.role-membership-differs"
+        } else {
+            "platform.provision.role-attributes-differ"
+        };
+        assert_eq!(error.code(), expected, "{attributes}");
+        assert_eq!(error.step(), Some("role.spatial-bbox"));
+        fixture.cleanup().await;
+    }
+}
+
+#[tokio::test]
+async fn an_existing_template_database_is_not_adopted() {
+    let _serial = lock().await;
+    let fixture = Fixture::new(SUPERUSER_ADMIN).await;
+    fixture
+        .server
+        .superuser
+        .exec(&format!(
+            "CREATE DATABASE {} IS_TEMPLATE true",
+            quote(&fixture.database())
+        ))
+        .await;
+    let error = fixture
+        .provision(&Fixture::public_product())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "platform.provision.database-is-template");
+    assert_eq!(error.step(), Some("database.create"));
+    assert_eq!(
+        fixture
+            .server
+            .superuser
+            .text(&format!(
+                "SELECT coalesce(datacl::text, '') FROM pg_catalog.pg_database \
+                  WHERE datname = '{}'",
+                fixture.database()
+            ))
+            .await,
+        "",
+        "the template database is untouched"
+    );
+    fixture
+        .server
+        .superuser
+        .exec(&format!(
+            "ALTER DATABASE {} IS_TEMPLATE false",
+            quote(&fixture.database())
+        ))
+        .await;
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_failure_part_way_returns_the_statements_that_ran() {
+    let _serial = lock().await;
+    let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
+    let product = fixture.spatial_product((3, 5));
+    let plan = plan(&product, &fixture.target()).unwrap();
+    let failure = execute_recording(&fixture.admin(), &plan, Mode::Converge)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error.step(), Some("extension.postgis"));
+    let ran: Vec<_> = failure.reached.iter().map(|(step, _)| *step).collect();
+    let before_postgis: Vec<_> = plan
+        .statements()
+        .iter()
+        .map(|statement| statement.step)
+        .take_while(|step| *step != "extension.postgis")
+        .collect();
+    assert_eq!(ran, before_postgis);
+    assert!(failure
+        .reached
+        .iter()
+        .any(|(step, outcome)| *step == "role.migration" && *outcome == StatementOutcome::Created));
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn postgis_installed_outside_the_plan_is_named_until_the_whole_block_has_run() {
+    let _serial = lock().await;
+    let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
+    let product = fixture.spatial_product((3, 5));
+    let error = fixture.provision(&product).await.unwrap_err();
+    assert_eq!(error.code(), "platform.provision.statement-needs-privilege");
+
+    // A superuser installs only the extension, without the grants and the
+    // bbox membership the rest of the block sets up.
+    let session = fixture
+        .server
+        .session(
+            fixture.server.url.username(),
+            fixture.server.url.password().unwrap(),
+            &fixture.database(),
+        )
+        .await;
+    session
+        .exec(
+            "CREATE SCHEMA registry_spatial_ext; \
+             CREATE EXTENSION postgis WITH SCHEMA registry_spatial_ext",
+        )
+        .await;
+    let error = fixture.provision(&product).await.unwrap_err();
+    assert_eq!(error.code(), "platform.provision.extension-incomplete");
+    assert_eq!(error.step(), Some("extension.postgis"));
+
+    // The whole printed block, then provision again.
+    let plan = plan(&product, &fixture.target()).unwrap();
+    let block = plan
+        .statements()
+        .iter()
+        .find(|statement| statement.step == "extension.postgis")
+        .unwrap();
+    session.exec(&block.printable).await;
+    let outcome = fixture.provision(&product).await.unwrap();
+    assert_eq!(
+        outcome_of(&outcome, "extension.postgis"),
+        StatementOutcome::Present
+    );
+    assert!(
+        session
+            .flag(&format!(
+                "SELECT pg_catalog.pg_has_role({}::name, {}::name, 'SET')",
+                quote_literal(&fixture.migration_name()),
+                quote_literal(&fixture.bbox_name())
+            ))
+            .await
+    );
+    drop(session);
+    fixture.cleanup().await;
+
+    // PostGIS in the default schema is no better.
+    let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
+    let error = fixture.provision(&product_for(&fixture)).await.unwrap_err();
+    assert_eq!(error.code(), "platform.provision.statement-needs-privilege");
+    let session = fixture
+        .server
+        .session(
+            fixture.server.url.username(),
+            fixture.server.url.password().unwrap(),
+            &fixture.database(),
+        )
+        .await;
+    session.exec("CREATE EXTENSION postgis").await;
+    let error = fixture.provision(&product_for(&fixture)).await.unwrap_err();
+    assert_eq!(error.code(), "platform.provision.extension-incomplete");
+    drop(session);
+    fixture.cleanup().await;
+}
+
+fn product_for(fixture: &Fixture) -> ProductDatabase {
+    fixture.spatial_product((3, 5))
+}
+
+#[tokio::test]
+async fn provision_gives_the_runtime_role_usage_on_public_and_restores_it() {
+    let _serial = lock().await;
+    let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
+    let product = Fixture::public_product();
+    fixture.provision(&product).await.unwrap();
+    let session = fixture
+        .server
+        .session(
+            fixture.server.url.username(),
+            fixture.server.url.password().unwrap(),
+            &fixture.database(),
+        )
+        .await;
+    let usage = |role: String| {
+        format!(
+            "SELECT pg_catalog.has_schema_privilege({}, 'public', 'USAGE')",
+            quote_literal(&role)
+        )
+    };
+    // A server whose PUBLIC lost USAGE on `public`, and a runtime role that
+    // lost its own.
+    session
+        .exec(&format!(
+            "REVOKE USAGE ON SCHEMA public FROM PUBLIC; \
+             REVOKE USAGE ON SCHEMA public FROM {}",
+            quote(&fixture.runtime_name())
+        ))
+        .await;
+    assert!(!session.flag(&usage(fixture.runtime_name())).await);
+
+    fixture.provision(&product).await.unwrap();
+    assert!(session.flag(&usage(fixture.runtime_name())).await);
+    assert!(session.flag(&usage(fixture.migration_name())).await);
+    assert!(
+        !session.flag(&usage("public".to_owned())).await,
+        "the runtime role holds USAGE directly, not through PUBLIC"
+    );
+    let grant_option = session
+        .flag(&format!(
+            "SELECT EXISTS (SELECT 1 FROM pg_catalog.aclexplode(nspacl) a \
+                              JOIN pg_catalog.pg_roles g ON g.oid = a.grantee \
+                             WHERE a.is_grantable AND g.rolname IN ({}, {})) \
+               FROM pg_catalog.pg_namespace WHERE nspname = 'public'",
+            quote_literal(&fixture.migration_name()),
+            quote_literal(&fixture.runtime_name())
+        ))
+        .await;
+    assert!(!grant_option, "no role holds a grant option on public");
+    drop(session);
+    fixture.cleanup().await;
 }
 
 #[tokio::test]
@@ -1058,8 +1413,40 @@ async fn a_changed_password_fails_the_login_check_for_that_role() {
         .await
         .unwrap_err();
     assert_eq!(error.code(), "platform.provision.role-login-failed");
+    assert!(matches!(
+        &error,
+        ProvisionError::RoleLoginFailed { sqlstate: Some(state), .. } if state == "28P01"
+    ));
     assert!(error.to_string().contains(&fixture.runtime_name()));
     assert!(!error.to_string().contains(&fixture.migration_name()));
+    fixture.cleanup().await;
+}
+
+#[tokio::test]
+async fn a_login_refused_for_another_reason_carries_that_sqlstate() {
+    let _serial = lock().await;
+    let fixture = Fixture::new(NON_SUPERUSER_ADMIN).await;
+    fixture.provision(&Fixture::public_product()).await.unwrap();
+    for (alter, sqlstate) in [("NOLOGIN", "28000"), ("LOGIN CONNECTION LIMIT 0", "53300")] {
+        fixture
+            .server
+            .superuser
+            .exec(&format!(
+                "ALTER ROLE {} {alter}",
+                quote(&fixture.runtime_name())
+            ))
+            .await;
+        let error = verify_logins(&fixture.admin(), &fixture.target())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                ProvisionError::RoleLoginFailed { sqlstate: Some(state), .. } if state == sqlstate
+            ),
+            "{alter}: {error:?}"
+        );
+    }
     fixture.cleanup().await;
 }
 
@@ -1084,6 +1471,9 @@ async fn run_script(fixture: &Fixture, script: &str) {
     let mut pending = String::new();
     for line in script.lines() {
         if pending.is_empty() && line.starts_with("--") {
+            continue;
+        }
+        if line.starts_with("\\set ") {
             continue;
         }
         if let Some(database) = line.strip_prefix("\\connect ") {

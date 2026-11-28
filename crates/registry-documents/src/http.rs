@@ -861,7 +861,7 @@ mod tests {
                 "only a scope refusal carries a remedy"
             );
         }
-        let plain = refusal_response(ServiceError::Problem(ProblemCode::RequestInvalid));
+        let plain = refusal_response(ServiceError::from(ProblemCode::RequestInvalid));
         assert!(plain.extensions().get::<RefusalNote>().is_none());
     }
 

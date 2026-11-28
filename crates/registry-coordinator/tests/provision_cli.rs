@@ -7,6 +7,11 @@ const RUNTIME: &str =
     include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml");
 const MIGRATION_PASSWORD: &str = "migration-password-canary";
 const RUNTIME_PASSWORD: &str = "runtime-password-canary";
+const ADMIN_URL_VARIABLE: &str = "COORDINATOR_TEST_ADMIN_URL";
+/// Nothing listens here, so a command that reached the connection step would
+/// fail with a connection error instead of the loader's refusal.
+const ADMIN_URL: &str =
+    "postgres://admin:admin-password-canary@127.0.0.1:1/postgres?sslmode=verify-full";
 
 /// A runtime file the loader accepts, whose database references resolve from
 /// the environment the command is given.
@@ -31,22 +36,62 @@ fn runtime_file(directory: &Path) -> std::path::PathBuf {
     path
 }
 
-fn provision(runtime: &Path, extra: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+fn database_url(user: &str, password: &str) -> String {
+    format!("postgres://{user}:{password}@db.example.org:5432/coordinator")
+}
+
+/// Runs `provision` with the given database URLs in the environment. `None`
+/// leaves the variable unset, so its secret reference cannot resolve.
+fn provision_with(
+    runtime: &Path,
+    extra: &[&str],
+    migration_url: Option<String>,
+    runtime_url: Option<String>,
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"));
+    command
         .arg("provision")
         .arg("--runtime-config")
         .arg(runtime)
         .args(extra)
-        .env(
-            "COORDINATOR_MIGRATION_URL",
-            format!("postgres://coordinator_migration:{MIGRATION_PASSWORD}@db.example.org:5432/coordinator"),
-        )
-        .env(
-            "COORDINATOR_DATABASE_URL",
-            format!("postgres://coordinator_runtime:{RUNTIME_PASSWORD}@db.example.org:5432/coordinator"),
-        )
-        .output()
-        .unwrap()
+        .env_remove("COORDINATOR_MIGRATION_URL")
+        .env_remove("COORDINATOR_DATABASE_URL")
+        .env(ADMIN_URL_VARIABLE, ADMIN_URL);
+    if let Some(url) = migration_url {
+        command.env("COORDINATOR_MIGRATION_URL", url);
+    }
+    if let Some(url) = runtime_url {
+        command.env("COORDINATOR_DATABASE_URL", url);
+    }
+    command.output().unwrap()
+}
+
+fn provision(runtime: &Path, extra: &[&str]) -> std::process::Output {
+    provision_with(
+        runtime,
+        extra,
+        Some(database_url("coordinator_migration", MIGRATION_PASSWORD)),
+        Some(database_url("coordinator_runtime", RUNTIME_PASSWORD)),
+    )
+}
+
+/// Asserts a loader refusal: exit 1, nothing on stdout, the code and the
+/// pointer on stderr, and no password or URL anywhere.
+fn assert_refused(output: &std::process::Output, code: &str, pointer: &str) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "a refusal prints no plan: {stdout}");
+    assert!(stderr.contains(code), "{stderr}");
+    assert!(stderr.contains(pointer), "{stderr}");
+    for secret in [
+        MIGRATION_PASSWORD,
+        RUNTIME_PASSWORD,
+        "admin-password-canary",
+        "postgres://",
+    ] {
+        assert!(!stderr.contains(secret), "stderr leaked a secret");
+    }
 }
 
 #[test]
@@ -109,4 +154,119 @@ fn an_administrator_source_is_required_unless_printing() {
         stderr.contains("--admin-url"),
         "the refusal names the flags: {stderr}"
     );
+}
+
+#[test]
+fn a_runtime_url_user_that_is_not_the_deployment_runtime_role_is_refused_before_connecting() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    // With an administrator URL that could not connect, only the loader's
+    // refusal explains exit 1 with this code.
+    let output = provision_with(
+        &runtime,
+        &["--admin-url-env", ADMIN_URL_VARIABLE],
+        Some(database_url("coordinator_migration", MIGRATION_PASSWORD)),
+        Some(database_url("coord_rt", RUNTIME_PASSWORD)),
+    );
+    assert_refused(
+        &output,
+        "coordinator.runtime-config.runtime-role-mismatch",
+        "/database/runtimeUrlRef",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("coordinator_runtime"),
+        "the refusal names the configured role: {stderr}"
+    );
+    assert!(
+        !stderr.contains("coord_rt:") && !stderr.contains("@db.example.org"),
+        "the refusal does not echo the URL: {stderr}"
+    );
+
+    let printed = provision_with(
+        &runtime,
+        &["--print-sql"],
+        Some(database_url("coordinator_migration", MIGRATION_PASSWORD)),
+        Some(database_url("coord_rt", RUNTIME_PASSWORD)),
+    );
+    assert_refused(
+        &printed,
+        "coordinator.runtime-config.runtime-role-mismatch",
+        "/database/runtimeUrlRef",
+    );
+}
+
+#[test]
+fn an_unreadable_runtime_url_secret_is_refused_without_a_password() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    let output = provision_with(
+        &runtime,
+        &["--print-sql"],
+        Some(database_url("coordinator_migration", MIGRATION_PASSWORD)),
+        None,
+    );
+    assert_refused(
+        &output,
+        "coordinator.runtime-config.refused",
+        "/database/runtimeUrlRef",
+    );
+}
+
+#[test]
+fn an_unreadable_migration_url_secret_is_refused_without_a_password() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    let output = provision_with(
+        &runtime,
+        &["--print-sql"],
+        None,
+        Some(database_url("coordinator_runtime", RUNTIME_PASSWORD)),
+    );
+    assert_refused(
+        &output,
+        "coordinator.runtime-config.refused",
+        "/database/migrationUrlRef",
+    );
+}
+
+#[test]
+fn a_certificate_authority_file_that_is_not_text_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    let root_pem = directory.path().join("secrets/postgres-root.pem");
+    fs::write(&root_pem, [0xff, 0xfe, 0xfd]).unwrap();
+    let output = provision(&runtime, &["--print-sql"]);
+    assert_refused(
+        &output,
+        "coordinator.runtime-config.refused",
+        "/database/caBundleRef",
+    );
+}
+
+#[test]
+fn a_missing_certificate_authority_file_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    fs::remove_file(directory.path().join("secrets/postgres-root.pem")).unwrap();
+    let output = provision(&runtime, &["--print-sql"]);
+    assert_refused(
+        &output,
+        "coordinator.runtime-config.refused",
+        "/database/caBundleRef",
+    );
+}
+
+#[test]
+fn a_runtime_file_the_service_would_refuse_is_refused_with_its_own_diagnostic() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    fs::write(&runtime, "kind: NotARuntimeFile\n").unwrap();
+    let output = provision(&runtime, &["--print-sql"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(!stderr.is_empty());
+    assert!(!stderr.contains("postgres://"));
 }

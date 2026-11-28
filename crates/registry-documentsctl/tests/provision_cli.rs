@@ -114,9 +114,10 @@ fn print_sql_writes_the_script_and_no_password() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
     assert!(stderr.is_empty(), "{stderr}");
-    for name in ["documents_migration", "documents_runtime", "documents"] {
+    for name in ["documents_migration", "documents_runtime"] {
         assert!(stdout.contains(name), "the script names {name}: {stdout}");
     }
+    assert!(stdout.contains("CREATE DATABASE \"documents\""), "{stdout}");
     assert!(stdout.contains("CREATE ROLE"), "{stdout}");
     assert!(stdout.contains("\\password"), "{stdout}");
     for secret in [MIGRATION_PASSWORD, RUNTIME_PASSWORD] {
@@ -197,4 +198,111 @@ fn both_administrator_flags_are_refused() {
         );
         assert!(output.stdout.is_empty(), "{arguments:?}");
     }
+    // A missing administrator flag is a usage error of the provision verb,
+    // not clap's answer to an unknown verb.
+    let stderr =
+        String::from_utf8(ctl(&["provision", "--runtime-config", &runtime]).stderr).unwrap();
+    assert!(stderr.contains("--admin-url"), "{stderr}");
+    assert!(!stderr.contains("unrecognized subcommand"), "{stderr}");
+    let stderr = String::from_utf8(
+        ctl(&[
+            "provision",
+            "--runtime-config",
+            &runtime,
+            "--admin-url-file",
+            "/nonexistent/admin-url",
+            "--admin-url-env",
+            "DOCUMENTS_ADMIN_URL",
+        ])
+        .stderr,
+    )
+    .unwrap();
+    assert!(
+        stderr.contains("conflicting use of --admin-url-file"),
+        "{stderr}"
+    );
+}
+
+/// The first diagnostic of a refused `provision --print-sql` over `runtime`,
+/// after checking the exit status and that no password reached either stream.
+fn loader_refusal(runtime: &str) -> serde_json::Value {
+    let output = ctl(&[
+        "--format",
+        "json",
+        "provision",
+        "--runtime-config",
+        runtime,
+        "--print-sql",
+    ]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    for secret in [MIGRATION_PASSWORD, RUNTIME_PASSWORD] {
+        assert!(
+            !stdout.contains(secret) && !stderr.contains(secret),
+            "a refusal holds no password"
+        );
+    }
+    let report: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|error| panic!("{error}: {stdout}{stderr}"));
+    report["diagnostics"][0].clone()
+}
+
+#[test]
+fn a_missing_database_secret_is_refused_at_its_member() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    std::fs::remove_file(directory.path().join("secrets/runtime-database-url")).unwrap();
+    let diagnostic = loader_refusal(&runtime);
+    assert_eq!(diagnostic["code"], "config.refused", "{diagnostic}");
+    assert_eq!(
+        diagnostic["path"], "/database/runtimeUrlRef",
+        "{diagnostic}"
+    );
+}
+
+#[test]
+fn a_database_secret_that_is_not_text_is_refused_at_its_member() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let secret = directory.path().join("secrets/migration-database-url");
+    std::fs::write(&secret, [0xff, 0xfe, 0xfd]).unwrap();
+    let diagnostic = loader_refusal(&runtime);
+    assert_eq!(diagnostic["code"], "config.refused", "{diagnostic}");
+    assert_eq!(
+        diagnostic["path"], "/database/migrationUrlRef",
+        "{diagnostic}"
+    );
+}
+
+#[test]
+fn a_missing_ca_bundle_secret_is_refused_at_its_member() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let text = std::fs::read_to_string(&runtime)
+        .unwrap()
+        .replace(
+            "  migrationUrlRef: secret:file/migration-database-url\n",
+            "  migrationUrlRef: secret:file/migration-database-url\n  caBundleRef: secret:file/database-ca\n",
+        );
+    std::fs::write(&runtime, text).unwrap();
+    let diagnostic = loader_refusal(&runtime);
+    assert_eq!(diagnostic["code"], "config.refused", "{diagnostic}");
+    assert_eq!(diagnostic["path"], "/database/caBundleRef", "{diagnostic}");
+}
+
+#[test]
+fn a_runtime_file_the_runtime_refuses_is_refused_with_its_diagnostic() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let text = std::fs::read_to_string(&runtime).unwrap().replace(
+        "allowedClients: [civil-registry-app]",
+        "allowedClients: unrestricted",
+    );
+    std::fs::write(&runtime, text).unwrap();
+    let diagnostic = loader_refusal(&runtime);
+    assert_eq!(
+        diagnostic["code"], "documents.runtime.allowed-clients-required",
+        "{diagnostic}"
+    );
 }

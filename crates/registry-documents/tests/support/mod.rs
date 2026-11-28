@@ -67,6 +67,7 @@ pub struct Deployment {
     extra: String,
     hooks_url: String,
     allowed_clients: String,
+    jwks_source: String,
 }
 
 impl Deployment {
@@ -126,6 +127,7 @@ impl Deployment {
             allowed_clients:
                 "[civil-registry-app, citizen-portal, case-portal, partner-portal, partner-service]"
                     .to_owned(),
+            jwks_source: "type: static\n      documentRef: secret:file/jwks.json".to_owned(),
         };
         deployment.secret("runtime-database-url", runtime_url.unwrap_or(&scoped_url));
         deployment.secret("migration-database-url", &scoped_url);
@@ -191,6 +193,13 @@ impl Deployment {
         self.write_runtime();
     }
 
+    /// Name the issuer's key set by `uri` in place of the static key set, so a
+    /// refusal to verify can be driven by a key source that does not answer.
+    pub fn fetch_keys_from(&mut self, uri: &str) {
+        self.jwks_source = format!("type: uri\n      uri: {uri}");
+        self.write_runtime();
+    }
+
     /// Append `block`, top-level runtime keys, to the runtime document.
     pub fn configure(&mut self, block: &str) {
         self.extra = block.to_owned();
@@ -224,8 +233,7 @@ authentication:
     scopeClaim: scope
     allowedClients: {allowed_clients}
     jwksSource:
-      type: static
-      documentRef: secret:file/jwks.json
+      {jwks_source}
 audit:
   destination: file
   path: {audit}
@@ -249,6 +257,7 @@ destinations:
             extra = self.extra,
             hooks_url = self.hooks_url,
             allowed_clients = self.allowed_clients,
+            jwks_source = self.jwks_source,
         );
         std::fs::write(&self.runtime, document).unwrap();
     }

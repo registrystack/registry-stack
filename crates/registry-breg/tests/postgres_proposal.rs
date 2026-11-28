@@ -70,6 +70,32 @@ async fn application_queue_age(fixture: &client_http::ClientFixture) -> f64 {
         .parse()
         .unwrap()
 }
+/// The refusal counter, read the way an operator reads it: from the metrics
+/// listener. The recorder is process-wide, so a test that shares its process
+/// with others asserts a rise of at least what it caused.
+async fn refusal_count(check: &str) -> u64 {
+    use tower::util::ServiceExt;
+    let response = registry_breg::metrics::metrics_app(std::sync::Arc::new(
+        registry_breg::metrics::Metrics::without_pool_for_test(),
+    ))
+    .oneshot(
+        axum::http::Request::builder()
+            .uri("/metrics")
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let prefix = format!("breg_request_refusals_total{{check=\"{check}\"}} ");
+    std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix.as_str()))
+        .map_or(0, |value| value.parse().unwrap())
+}
 fn registry_source(automatic: bool) -> Value {
     let source = json!({"apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1","kind":"BRegProject",
         "project":{"id":"proposal-test","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://proposal.example.test"},
@@ -6372,6 +6398,33 @@ async fn review_context_projects_an_omitted_optional_input_as_null() {
     assert_eq!(
         batch["items"][1],
         json!({"id": missing, "status":"concealed"})
+    );
+    // Each concealed item counts once under its own check, though the batch
+    // answers 200. Other tests share the recorder, so the rise is a lower
+    // bound that one note per response could not reach.
+    let before = refusal_count("visibility").await;
+    let unknown = (0..3)
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect::<Vec<_>>();
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/proposals/review-context",
+            fixture.http.base_url
+        ))
+        .query(&[("accessProfile", "clerk"), ("ids", &unknown.join(","))])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let batch: Value = response.json().await.unwrap();
+    assert!(batch["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item["status"] == "concealed"));
+    assert!(
+        refusal_count("visibility").await - before >= 3,
+        "each concealed batch item counts under visibility"
     );
     let before = fixture.audit_capture.entries().len();
     let excessive = (0..101)

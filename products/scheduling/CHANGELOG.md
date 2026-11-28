@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add `schedulingctl provision`. From the two database URLs in the runtime file
+  and an administrator URL (`--admin-url-file` or `--admin-url-env`, a role
+  with `CREATEROLE` and `CREATEDB` on the same host and port, over verified
+  TLS), it creates the migration role and the runtime role, each with `LOGIN`
+  and no other privilege, and the database, closed to `PUBLIC`. Both roles get
+  `CONNECT` on the database. The migration role gets `USAGE` and `CREATE` on
+  the `public` schema, `CREATE` on it is taken from `PUBLIC`, and the runtime
+  role gets `USAGE` on it. Running it again creates only what is missing and
+  refuses a role that exists with a different password than its URL holds.
+  `--print-sql` connects to nothing and prints a `psql` script that prompts for
+  each password. `--format json` reports each statement and its outcome.
 - Scheduling counts every refused request by the check that refused it, in
   `scheduling_request_refusals_total{check}` on the metrics listener,
   published at zero for every check. Each refusal writes one
