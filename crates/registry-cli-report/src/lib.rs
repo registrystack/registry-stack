@@ -3,7 +3,10 @@
 
 use std::io::{self, Write};
 
-use registry_platform_posture::{DeclaredPosture, PostureSource};
+#[doc(hidden)]
+pub use registry_platform_posture::declared_from;
+/// The declaration used by CLI report producers.
+pub use registry_platform_posture::DeclaredPosture;
 use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::{json, Map, Value};
 
@@ -252,16 +255,8 @@ impl Serialize for PostureMember {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(Some(2))?;
         map.serialize_entry("value", self.0.posture.as_str())?;
-        map.serialize_entry("source", source_word(self.0.source))?;
+        map.serialize_entry("source", self.0.source.as_str())?;
         map.end()
-    }
-}
-
-fn source_word(source: PostureSource) -> &'static str {
-    match source {
-        PostureSource::Flag => "flag",
-        PostureSource::Environment => "environment",
-        PostureSource::Default => "default",
     }
 }
 

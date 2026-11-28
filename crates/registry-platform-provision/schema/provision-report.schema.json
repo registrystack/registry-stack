@@ -90,6 +90,32 @@
       ],
       "type": "object"
     },
+    "ProvisionPosture": {
+      "additionalProperties": false,
+      "description": "The declaration under which the provision runner reads the runtime file.",
+      "properties": {
+        "source": {
+          "enum": [
+            "flag",
+            "environment",
+            "default"
+          ],
+          "type": "string"
+        },
+        "value": {
+          "enum": [
+            "development",
+            "production"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "type": "object"
+    },
     "Related": {
       "additionalProperties": false,
       "description": "A second place that explains a diagnostic, such as the first occurrence\nof a duplicate. Human output prints it as a `note:` line.",
@@ -280,6 +306,9 @@
     "ok": {
       "type": "boolean"
     },
+    "posture": {
+      "$ref": "#/$defs/ProvisionPosture"
+    },
     "product": {
       "type": [
         "string",
@@ -322,6 +351,7 @@
     "apiVersion",
     "kind",
     "version",
+    "posture",
     "executed",
     "statements",
     "diagnostics"

@@ -30,6 +30,7 @@ pub(crate) fn run(args: ProvisionArgs, json: bool, declared: DeclaredPosture) ->
         registry_platform_buildinfo::DISPLAY_VERSION,
         &args,
         format,
+        declared,
         |path| load(path, declared),
     )
 }

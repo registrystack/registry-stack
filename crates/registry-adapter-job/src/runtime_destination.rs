@@ -116,7 +116,14 @@ pub async fn activate_destination<'a>(
             #[cfg(feature = "direct-breg")]
             {
                 drop(keys);
-                activate_direct(program, configured, &runtime.core, resolver).await
+                activate_direct(
+                    program,
+                    configured,
+                    &runtime.core,
+                    resolver,
+                    runtime.posture.posture(),
+                )
+                .await
             }
             #[cfg(not(feature = "direct-breg"))]
             {
@@ -262,14 +269,16 @@ async fn activate_direct<'a>(
     configured: &RuntimeDestinationBinding,
     core: &AdapterEndpointBindings,
     resolver: &SecretResolver,
+    posture: registry_platform_config::Posture,
 ) -> Result<Box<dyn DestinationSeam + 'a>, String> {
     use crate::direct_breg::{
         DirectBregDestination, DirectBregMappingRefused, DirectBregOperation,
     };
     use registry_adapter_connectors::breg::{BregConnector, BregConnectorConfig};
+    use registry_platform_config::Posture;
     use registry_platform_crypto::PrivateJwk;
     use registry_platform_httputil::client::{PrivateKeyJwt, PrivateKeyJwtConfig};
-    use registry_platform_httputil::FetchUrlPolicy;
+    use registry_platform_httputil::{FetchUrlPolicy, PeerPolicy};
 
     let JobDestination::DirectBreg {
         binding,
@@ -326,6 +335,10 @@ async fn activate_direct<'a>(
     let mut connector_config =
         BregConnectorConfig::for_action(base_url.as_str(), tokens, access_profile, action)
             .with_attempt_timeout(Duration::from_millis(attempt_timeout_milliseconds.get()));
+    connector_config.peer_policy = match posture {
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    };
     if let Some(profile) = data_tls_trust_profile {
         let roots = registry_adapter_engine::auth::capture_ca_bundle(core, profile.as_str())
             .map_err(|_| "the direct BReg data TLS material was refused".to_string())?;

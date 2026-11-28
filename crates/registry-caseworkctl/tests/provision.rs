@@ -187,6 +187,10 @@ fn print_sql_with_a_global_json_format_reports_without_executing() {
     assert_eq!(output.status.code(), Some(0));
     let text = String::from_utf8(output.stdout).unwrap();
     let report: Value = serde_json::from_str(&text).expect("a JSON report on stdout");
+    assert_eq!(
+        report["posture"],
+        serde_json::json!({"value": "production", "source": "default"})
+    );
     assert_eq!(report["command"], "provision");
     assert_eq!(report["product"], "casework");
     assert_eq!(report["executed"], false);
@@ -608,6 +612,28 @@ fn print_sql_requires_development_for_unrestricted_clients() {
         serde_norway::to_string(&contents).unwrap(),
     )
     .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args(["--format", "json", "check"])
+        .arg(deployment.root.join("project"))
+        .arg("--runtime-config")
+        .arg(&deployment.runtime)
+        .args(["--posture", "development", "--deny-warnings"])
+        .output()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| {
+                finding["code"] == "casework.posture.unrestricted-clients"
+                    && finding["severity"] == "warning"
+            }),
+        "{report}"
+    );
     let (exit, report, _) = refused_print(&deployment.runtime);
     assert_eq!(exit, Some(1));
     assert_eq!(

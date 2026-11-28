@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitCode};
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use registry_platform_config::{declared_from, PostureReport, POSTURE_ENV};
+use registry_platform_config::{
+    declared_from, declared_from_with_production_alias, PostureReport, POSTURE_ENV,
+};
 pub use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
 use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
@@ -121,6 +123,7 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
         /// Exit 1 when the check reports a warning.
+        /// Development posture listings do not count.
         #[arg(long)]
         deny_warnings: bool,
     },
@@ -246,8 +249,9 @@ where
                     stderr,
                 );
             }
-            Some(declared_from(
-                posture.as_deref().or(production.then_some("production")),
+            Some(declared_from_with_production_alias(
+                posture.as_deref(),
+                *production,
                 posture_environment,
             ))
         }
@@ -434,7 +438,10 @@ fn check(
     }
     let exit = if unavailable {
         report::OPERATIONAL_FAILURE_EXIT
-    } else if report.has_errors() || (request.deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (request.deny_warnings
+            && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         DOMAIN_REFUSAL_EXIT
     } else {
         0
@@ -1102,6 +1109,7 @@ mod tests {
                 runtime.to_str().unwrap(),
                 "--posture",
                 posture,
+                "--deny-warnings",
                 "--format",
                 "json",
             ]);

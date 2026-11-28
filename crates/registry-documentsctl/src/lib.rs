@@ -43,7 +43,7 @@ use registry_documents::verification::MAXIMUM_DEAD_LETTER_LISTING;
 use registry_documents_core::{
     DocumentsProject, DOCUMENTS_PROJECT_KIND, DOCUMENTS_RUNTIME_KIND, PROJECT_FILE,
 };
-use registry_platform_config::{declared, DeclaredPosture, PostureSource};
+use registry_platform_config::{declared_with_production_alias, DeclaredPosture};
 use registry_platform_config::{plan_package, write_package, PackageErrorKind};
 use registry_platform_yaml::{Diagnostic, Report, Source};
 use serde_json::{json, Value};
@@ -215,6 +215,7 @@ struct CheckArgs {
     environment: bool,
 
     /// Refuse the check when it finds a warning.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
 }
@@ -617,12 +618,7 @@ where
             "Use one of them.",
         );
     }
-    let posture_flag = if production {
-        posture_flag.or(Some("production"))
-    } else {
-        posture_flag
-    };
-    let declared = match declared(posture_flag) {
+    let declared = match declared_with_production_alias(posture_flag, production) {
         Ok(declared) => declared,
         Err(error) => {
             return refusal(
@@ -681,11 +677,7 @@ where
     };
     outcome.report["posture"] = json!({
         "value": declared.posture.as_str(),
-        "source": match declared.source {
-            PostureSource::Flag => "flag",
-            PostureSource::Environment => "environment",
-            PostureSource::Default => "default",
-        },
+        "source": declared.source.as_str(),
     });
     finish(&outcome, command, cli.format, stdout, stderr)
 }
@@ -727,6 +719,7 @@ fn provision(
         registry_platform_buildinfo::DISPLAY_VERSION,
         args,
         shared,
+        declared,
         |path| provision::load(path, declared),
     )
 }
@@ -992,7 +985,9 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
 fn check_exit(report: &Report, deny_warnings: bool, unavailable: bool) -> u8 {
     if unavailable {
         OPERATIONAL_FAILURE_EXIT
-    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (deny_warnings && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         DOMAIN_REFUSAL_EXIT
     } else {
         0

@@ -45,6 +45,7 @@ pub struct CheckArgs {
     #[arg(long)]
     pub environment: bool,
     /// Exit 1 when a warning is reported.
+    /// Development posture listings do not count.
     #[arg(long)]
     pub deny_warnings: bool,
 }

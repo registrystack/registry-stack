@@ -631,11 +631,7 @@ pub fn load_with_target(
 
 /// The declaration in Adapter command reports.
 pub fn posture_member(declared: DeclaredPosture) -> Value {
-    let source = match declared.source {
-        registry_platform_config::PostureSource::Flag => "flag",
-        registry_platform_config::PostureSource::Environment => "environment",
-        registry_platform_config::PostureSource::Default => "default",
-    };
+    let source = declared.source.as_str();
     serde_json::json!({"value": declared.posture.as_str(), "source": source})
 }
 

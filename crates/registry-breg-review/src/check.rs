@@ -73,7 +73,10 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
     report.set_files_checked(1);
     let exit = if unavailable {
         OPERATIONAL_FAILURE_EXIT
-    } else if report.has_errors() || (request.deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (request.deny_warnings
+            && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         DOMAIN_REFUSAL_EXIT
     } else {
         0
@@ -96,11 +99,7 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
                 diagnostics: report.to_json_value(),
                 posture: serde_json::json!({
                     "value": request.posture.posture.as_str(),
-                    "source": match request.posture.source {
-                        registry_platform_config::PostureSource::Flag => "flag",
-                        registry_platform_config::PostureSource::Environment => "environment",
-                        registry_platform_config::PostureSource::Default => "default",
-                    },
+                    "source": request.posture.source.as_str(),
                 }),
             };
             let written = serde_json::to_writer_pretty(&mut *stdout, &document)

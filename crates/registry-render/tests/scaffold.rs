@@ -1771,3 +1771,57 @@ fn copy_dir(from: &Path, to: &Path) {
         }
     }
 }
+
+#[test]
+fn deny_warnings_keeps_the_local_assurance_listing() {
+    let (_home, runtime, _) = serve_deployment();
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    std::fs::write(&runtime, format!("{text}assuranceProfile: local\n")).unwrap();
+    let output = render_bin()
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--posture",
+            "development",
+            "--deny-warnings",
+            "--runtime-config",
+        ])
+        .arg(runtime)
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| {
+                finding["code"] == "render.posture.local-assurance"
+                    && finding["severity"] == "warning"
+            }),
+        "{report}"
+    );
+}
+
+#[test]
+fn conflict_with_environment_names_the_production_flag() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .args(["check", "--format", "json", "--production"])
+        .env("REGISTRY_STACK_POSTURE", "development")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["diagnostics"][0]["code"], "platform.posture.conflict",
+        "{report}"
+    );
+    assert_eq!(
+        report["diagnostics"][0]["message"],
+        "--production and REGISTRY_STACK_POSTURE declare different postures",
+        "{report}"
+    );
+}

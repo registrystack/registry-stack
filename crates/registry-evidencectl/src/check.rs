@@ -226,13 +226,7 @@ fn target_document_diagnostic(refusal: &crate::build::TargetDocumentDiagnostic) 
 }
 
 pub(crate) fn refuses_warnings(diagnostics: &Report, deny_warnings: bool) -> bool {
-    deny_warnings
-        && diagnostics.diagnostics().iter().any(|diagnostic| {
-            diagnostic.severity == registry_platform_yaml::Severity::Warning
-                && diagnostic.accepted_reason.is_none()
-                && !diagnostic.code.starts_with("platform.posture.")
-                && !diagnostic.code.starts_with("evidence.posture.")
-        })
+    deny_warnings && registry_platform_config::has_denied_warnings(diagnostics.diagnostics())
 }
 pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Checked> {
     crate::normalized::inspect(project, target, "explain")

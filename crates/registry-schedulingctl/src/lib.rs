@@ -132,6 +132,7 @@ struct CheckArgs {
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
     /// Exit 1 when a warning is reported.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
     /// Runtime configuration file.
@@ -576,6 +577,7 @@ fn provision(
         registry_platform_buildinfo::DISPLAY_VERSION,
         args,
         shared,
+        declared,
         |path| provision::load(path, declared),
     )
 }
@@ -2548,6 +2550,36 @@ mod tests {
         assert_eq!(report["filesChecked"], 6);
         assert_eq!(report["runtimeConfig"], runtime);
         assert_eq!(report["diagnostics"], json!([]));
+
+        std::fs::write(
+            runtime,
+            runtime_text.replace(
+                "database:\n",
+                "database:\n  transport: private-network-plaintext\n",
+            ),
+        )
+        .unwrap();
+        let (exit, report, _) = run_json(&[
+            "check",
+            project,
+            "--runtime-config",
+            runtime,
+            "--deny-warnings",
+            "--posture",
+            "development",
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| {
+                    finding["code"] == "platform.posture.database-private-plaintext"
+                        && finding["severity"] == "warning"
+                }),
+            "{report}"
+        );
 
         std::fs::write(
             runtime,

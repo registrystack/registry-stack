@@ -252,6 +252,7 @@ struct TestArgs {
     /// Existing authored Casework project and its offline fixtures.
     project: PathBuf,
     /// Refuse authored warnings as well as errors.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
 }
@@ -273,6 +274,7 @@ struct CheckArgs {
     #[arg(long)]
     production: bool,
     /// Refuse authored warnings as well as errors.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
     /// Compare imported provider contracts with this native Base Registry Engine (BReg) deployment package.

@@ -74,10 +74,11 @@ pub use package::{
 };
 pub use posture::{
     collect_development_settings, collect_posture_settings, declared, declared_from,
+    declared_from_with_production_alias, declared_with_production_alias, has_denied_warnings,
     CollectedSettings, DeclaredPosture, DevelopmentClass, DevelopmentOnlyRefused,
     DevelopmentSetting, DevelopmentWitness, ExplicitClass, ExplicitProductionSetting,
-    FoundExplicitSetting, FoundSetting, Gated, Posture, PostureError, PostureReport, PostureSource,
-    SettingOrigin, Stated, DEVELOPMENT, POSTURE_ENV,
+    FoundExplicitSetting, FoundSetting, Gated, Posture, PostureError, PostureReport,
+    PostureSource, SettingOrigin, Stated, DEVELOPMENT, POSTURE_ENV,
 };
 pub use secrets::{
     ProtectedSecret, SecretError, SecretFileCheck, SecretProvider, SecretReference, SecretResolver,

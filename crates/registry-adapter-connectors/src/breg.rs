@@ -49,7 +49,7 @@ use registry_breg_client::{
     BRegActionBinding, BRegActionMode, BRegBatchBinding, BRegCreateBinding, BRegDirectWrite,
     BRegPatchBinding, BRegProblemCode, BRegProposalCollection, BRegProposalGetBinding,
     BRegTombstoneBinding, BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
-    TokenProvider, DEFAULT_ATTEMPT_TIMEOUT,
+    PeerPolicy, TokenProvider, DEFAULT_ATTEMPT_TIMEOUT,
 };
 
 use crate::operation::{ConnectorFault, OperationDescriptor, OutcomeCategory, SendOutcome};
@@ -78,6 +78,8 @@ pub struct BregConnectorConfig {
     /// `https://breg.example/institution-a`. Loopback HTTP is accepted the
     /// way the client accepts it.
     pub origin: String,
+    /// Whether the destination accepts responses from a development BReg.
+    pub peer_policy: PeerPolicy,
     /// The host-owned credential provider the client consults per call.
     pub token_provider: Arc<dyn TokenProvider>,
     /// The access profile every binding and call selects under.
@@ -120,6 +122,7 @@ impl BregConnectorConfig {
     ) -> Self {
         Self {
             origin: origin.into(),
+            peer_policy: PeerPolicy::RefuseDevelopmentPeer,
             token_provider,
             access_profile: access_profile.into(),
             action_identifier: action_identifier.into(),
@@ -144,6 +147,7 @@ impl BregConnectorConfig {
     ) -> Self {
         Self {
             origin: origin.into(),
+            peer_policy: PeerPolicy::RefuseDevelopmentPeer,
             token_provider,
             access_profile: access_profile.into(),
             action_identifier: action_identifier.into(),
@@ -218,11 +222,12 @@ impl BregConnector {
     pub async fn connect(config: BregConnectorConfig) -> Result<Self, ConnectorFault> {
         // The base URL type is the client configuration's own; parsing stays
         // through it, so this crate carries no URL dependency of its own.
-        let mut client_config = BaseRegistryClientConfig::new_without_peer_policy(
+        let mut client_config = BaseRegistryClientConfig::new(
             config
                 .origin
                 .parse()
                 .map_err(|_| ConnectorFault::InvalidInput)?,
+            config.peer_policy,
         )
         .with_token_provider(config.token_provider)
         .with_user_agent("registry-adapter-connector")
@@ -547,6 +552,9 @@ pub(crate) fn fault(error: &BaseRegistryClientError) -> ConnectorFault {
         // current binding with an invalid-request refusal.
         BaseRegistryClientError::InvalidRequest { .. } => ConnectorFault::BindingChanged,
         BaseRegistryClientError::Token(_) => ConnectorFault::AuthorityAbsent,
+        BaseRegistryClientError::DevelopmentPeer => ConnectorFault::Native {
+            code: Some("development-peer".to_owned()),
+        },
         BaseRegistryClientError::Configuration { .. }
         | BaseRegistryClientError::Protocol { .. } => ConnectorFault::Native { code: None },
         // The client's error set is non-exhaustive; an unseen variant is a

@@ -114,8 +114,8 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 pub use registry_platform_posture::{
-    declared, declared_from, DeclaredPosture, Posture, PostureError, PostureSource, DEVELOPMENT,
-    POSTURE_ENV,
+    declared, declared_from, declared_from_with_production_alias, declared_with_production_alias,
+    DeclaredPosture, Posture, PostureError, PostureSource, DEVELOPMENT, POSTURE_ENV,
 };
 
 use crate::RuntimeConfigError;
@@ -658,35 +658,73 @@ impl PostureReport {
 
     /// Log the declared posture and what is in use.
     pub fn log_startup(&self) {
-        let source = match self.declared.source {
-            PostureSource::Flag => "flag",
-            PostureSource::Environment => "environment",
-            PostureSource::Default => "default",
-        };
+        self.log_startup_from(std::iter::once((self, None)));
+    }
+
+    /// Log the settings from this file and any other files loaded under the
+    /// same declaration, recording the originating file on each setting.
+    pub fn log_startup_with_files(&self, file: &Path, additional: &[(&Self, &Path)]) {
+        self.log_startup_from(
+            std::iter::once((self, Some(file))).chain(
+                additional
+                    .iter()
+                    .map(|&(report, file)| (report, Some(file))),
+            ),
+        );
+    }
+
+    fn log_startup_from<'a>(
+        &'a self,
+        reports: impl Iterator<Item = (&'a Self, Option<&'a Path>)> + Clone,
+    ) {
+        let (development_settings, explicit_production_settings) =
+            reports
+                .clone()
+                .fold((0, 0), |(development, explicit), (report, _)| {
+                    (
+                        development + report.settings.len(),
+                        explicit + report.explicit.len(),
+                    )
+                });
         tracing::info!(
             posture = self.posture().as_str(),
-            posture_source = source,
-            development_settings = self.settings.len(),
-            explicit_production_settings = self.explicit.len(),
+            posture_source = self.declared.source.as_str(),
+            development_settings,
+            explicit_production_settings,
             "posture declared"
         );
-        if self.posture() == Posture::Development {
-            for found in &self.settings {
-                tracing::warn!(
-                    error_code = found.setting.code,
+        for (report, file) in reports {
+            let file = file.map(|file| tracing::field::display(file.display()));
+            if self.posture() == Posture::Development {
+                for found in &report.settings {
+                    tracing::warn!(
+                        error_code = found.setting.code,
+                        pointer = found.pointer.as_deref().unwrap_or(""),
+                        file = file.as_ref(),
+                        "development-only setting in use; production refuses it"
+                    );
+                }
+            }
+            for found in &report.explicit {
+                tracing::info!(
+                    setting_code = found.setting.code,
                     pointer = found.pointer.as_deref().unwrap_or(""),
-                    "development-only setting in use; production refuses it"
+                    file = file.as_ref(),
+                    "explicit production setting in use"
                 );
             }
         }
-        for found in &self.explicit {
-            tracing::info!(
-                setting_code = found.setting.code,
-                pointer = found.pointer.as_deref().unwrap_or(""),
-                "explicit production setting in use"
-            );
-        }
     }
+}
+
+/// Whether any warning would make a check with `--deny-warnings` refuse.
+#[must_use]
+pub fn has_denied_warnings(diagnostics: &[Diagnostic]) -> bool {
+    diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == Severity::Warning
+            && diagnostic.accepted_reason.is_none()
+            && !is_posture_code(&diagnostic.code)
+    })
 }
 
 /// Whether `code` is a posture code: `<owner>.posture.<setting>`.

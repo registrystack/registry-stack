@@ -102,6 +102,7 @@ destinations:
 fn ctl(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_documentsctl"))
         .args(arguments)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .unwrap()
 }
@@ -214,6 +215,10 @@ fn print_sql_as_json_reports_nothing_executed() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        report["posture"],
+        serde_json::json!({"value": "production", "source": "default"})
+    );
     assert_eq!(report["command"], "provision");
     assert_eq!(report["product"], "documents");
     assert_eq!(report["executed"], false);
@@ -389,6 +394,29 @@ fn check_production_refuses_development_settings_and_conflicting_declarations() 
         include_str!("../../../products/documents/examples/starter/runtime.example.yaml");
     let contents = contents.replace("  type: http\n  url: https://scanner.example.test/v1/verify\n  authorizationRef: secret:file/content-verifier-authorization\n  policyId: documents-default\n  attemptTimeoutMilliseconds: 10000", "  type: disabled");
     std::fs::write(&config, contents).unwrap();
+    let development = ctl(&[
+        "--format",
+        "json",
+        "check",
+        "--runtime-config",
+        config.to_str().unwrap(),
+        "--deny-warnings",
+        "--posture",
+        "development",
+    ]);
+    let report: serde_json::Value = serde_json::from_slice(&development.stdout).unwrap();
+    assert_eq!(development.status.code(), Some(0), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| {
+                finding["code"] == "documents.posture.content-verification-disabled"
+                    && finding["severity"] == "warning"
+            }),
+        "{report}"
+    );
     for (flags, environment, exit, code) in [
         (
             &["--posture", "development"][..],
@@ -432,4 +460,31 @@ fn check_production_refuses_development_settings_and_conflicting_declarations() 
             "{report}"
         );
     }
+}
+
+#[test]
+fn conflict_with_environment_names_the_production_flag() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_documentsctl"))
+        .args([
+            "--format",
+            "json",
+            "check",
+            "--production",
+            "--runtime-config",
+            "/nonexistent/runtime.yaml",
+        ])
+        .env("REGISTRY_STACK_POSTURE", "development")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["diagnostics"][0]["code"], "platform.posture.conflict",
+        "{report}"
+    );
+    assert_eq!(
+        report["diagnostics"][0]["message"],
+        "--production and REGISTRY_STACK_POSTURE declare different postures",
+        "{report}"
+    );
 }

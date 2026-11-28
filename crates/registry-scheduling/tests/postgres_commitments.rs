@@ -2268,7 +2268,26 @@ async fn hook_delivery_requires_the_workers_posture_to_match() {
         .await;
     let url = format!("{}/scheduling-hooks", destination.uri());
     for worker in [Posture::Development, Posture::Production] {
-        let fx = hook_fixture_postures(&url, Posture::Development, worker).await;
+        let mut fx = hook_fixture_postures(&url, Posture::Development, worker).await;
+        let transaction = fx.admin.transaction().await.unwrap();
+        let verified = registry_platform_hooks::delivery::verify_active_package(
+            &transaction,
+            &activation_layout(),
+            DATABASE_ID,
+            PACKAGE_DIGEST,
+            worker,
+            1000,
+        )
+        .await;
+        transaction.rollback().await.unwrap();
+        if worker == Posture::Development {
+            verified.unwrap();
+        } else {
+            assert!(matches!(
+                verified,
+                Err(registry_platform_hooks::delivery::DeliveryError::Unavailable)
+            ));
+        }
         booked(&fx, 300, 440, "hook-posture").await;
         let result = fx
             .hooks

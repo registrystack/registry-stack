@@ -24,6 +24,7 @@ NAMES = {
     "cli-api": "registry-cli-api",
     "cli-report": "registry-cli-report",
     "identity-tooling": "registry-thunderid-tooling",
+    "rstack-dev": "registry-rstack-dev",
     "breg": "registry-breg",
     "breg-client": "registry-breg-client",
     "bregctl": "registry-bregctl",
@@ -71,6 +72,7 @@ INTENDED = {
     "cli-docs": ["runtime", "breg", "bregctl", "messaging", "scheduling", "schedulingctl"],
     "cli-api": ["platform"],
     "cli-report": ["serde"],
+    "rstack-dev": ["platform", "cli-report"],
     "breg": ["record", "platform"],
     "breg-client": ["record", "platform"],
     "bregctl": ["breg"],
@@ -126,6 +128,17 @@ def failures(**changes: list) -> str:
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_runtime_can_link_the_development_run_host(self):
+        self.assertEqual(failures(runtime=[*INTENDED["runtime"], "rstack-dev"]), "")
+
+    def test_runtime_cannot_reach_a_product_through_the_development_run_host(self):
+        found = failures(
+            runtime=[*INTENDED["runtime"], "rstack-dev"],
+            rstack_dev=[*INTENDED["rstack-dev"], "breg"],
+        )
+        self.assertIn("registry-breg", found)
+        self.assertNotIn("registry-rstack-dev", found)
+
     def test_shared_cli_support_is_accepted_without_product_authority(self):
         self.assertEqual(failures(runtime=[*INTENDED["runtime"], "cli-api"]), "")
         found = failures(

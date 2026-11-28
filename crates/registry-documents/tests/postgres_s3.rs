@@ -607,6 +607,7 @@ async fn a_stale_erasure_worker_neither_deletes_objects_nor_records_a_leased_era
         &config.storage,
         "registry-documents-test",
         Arc::new(config.secret_resolver().unwrap()),
+        config.peer_policy(),
     )
     .await
     .unwrap();

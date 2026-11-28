@@ -341,9 +341,14 @@ async fn prepare_with(
     let audit = open_audit(&config, &secrets, None).await?;
     let ceiling = config.storage.maximum_document_bytes();
     let storage = Arc::new(
-        ContentStorage::activate(&config.storage, &database_id, Arc::clone(&secrets))
-            .await
-            .map_err(RuntimeError::Storage)?,
+        ContentStorage::activate(
+            &config.storage,
+            &database_id,
+            Arc::clone(&secrets),
+            config.peer_policy(),
+        )
+        .await
+        .map_err(RuntimeError::Storage)?,
     );
     check_storage_pin(&store, &storage).await?;
     let verifier = match verifier {
@@ -353,6 +358,7 @@ async fn prepare_with(
             config.development.as_ref(),
             ceiling,
             &secrets,
+            config.peer_policy(),
         )
         .map_err(|error| RuntimeError::Verifier(error.to_string()))?,
     };
@@ -1262,6 +1268,108 @@ fn activation_message(error: &ActivationError) -> String {
     match error.code() {
         Some(code) => format!("the Document Store database was refused ({code}): {error}"),
         None => error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod peer_policy_tests {
+    use super::*;
+    use registry_platform_config::{Posture, PostureSource};
+    use registry_platform_objectstore::{ObjectStoreError, Verdict, VerifierError};
+    use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn storage_and_verifier_follow_the_runtime_posture() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let app = axum::Router::new()
+                .route(
+                    "/v1/verify",
+                    axum::routing::post(|| async {
+                        (
+                            [("registry-posture", "development")],
+                            axum::Json(serde_json::json!({"verdict":"approved"})),
+                        )
+                    }),
+                )
+                .fallback(|| async {
+                    (
+                        [("registry-posture", "development")],
+                        "<VersioningConfiguration></VersioningConfiguration>",
+                    )
+                });
+            axum::serve(listener, app).await.unwrap();
+        });
+        let root = tempfile::tempdir().unwrap();
+        for name in ["s3-access", "s3-key", "content-verifier-authorization"] {
+            let path = root.path().join(name);
+            std::fs::write(&path, "synthetic-credential").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
+        let runtime = include_str!("../../../products/documents/examples/starter/runtime.example.yaml")
+            .replace("/run/secrets/registry-documents", root.path().to_str().unwrap())
+            .replace("https://scanner.example.test", &endpoint)
+            .replace("  type: database\n  maximumDocumentBytes:", &format!(
+                "  type: s3\n  url: {endpoint}\n  bucket: synthetic-documents\n  region: us-east-1\n  accessKeyIdRef: secret:file/s3-access\n  secretAccessKeyRef: secret:file/s3-key\n  maximumDocumentBytes:"
+            ));
+        let file = root.path().join("runtime.yaml");
+        std::fs::write(&file, runtime).unwrap();
+        let bytes = b"synthetic document".to_vec();
+        let digest = hex::encode(Sha256::digest(&bytes));
+        for posture in [Posture::Production, Posture::Development] {
+            let config = RuntimeConfig::load_with_posture(
+                &file,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let secrets = Arc::new(config.secret_resolver().unwrap());
+            let storage = ContentStorage::activate(
+                &config.storage,
+                "synthetic-documents",
+                secrets.clone(),
+                config.peer_policy(),
+            )
+            .await;
+            let verifier = activate_verifier(
+                &config.content_verification,
+                config.development.as_ref(),
+                config.storage.maximum_document_bytes(),
+                &secrets,
+                config.peer_policy(),
+            )
+            .unwrap();
+            let verdict = verifier
+                .verdict(&digest, "application/pdf", bytes.clone())
+                .await;
+            match posture {
+                Posture::Production => {
+                    assert!(
+                        matches!(
+                            storage,
+                            Err(StorageError::Object(ObjectStoreError::DevelopmentPeer))
+                        ),
+                        "{storage:?}"
+                    );
+                    assert_eq!(verdict, Err(VerifierError::DevelopmentPeer));
+                }
+                Posture::Development => {
+                    assert!(
+                        matches!(storage, Ok(ContentStorage::S3 { .. })),
+                        "{storage:?}"
+                    );
+                    assert_eq!(verdict, Ok(Verdict::Approved));
+                }
+            }
+        }
+        server.abort();
     }
 }
 

@@ -1190,9 +1190,14 @@ async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict()
         .key_hasher(),
     );
     let storage = Arc::new(
-        ContentStorage::activate(&config.storage, "registry-documents-test", secrets)
-            .await
-            .unwrap(),
+        ContentStorage::activate(
+            &config.storage,
+            "registry-documents-test",
+            secrets,
+            config.peer_policy(),
+        )
+        .await
+        .unwrap(),
     );
     let failing = dispatcher(VerificationStore::new(
         store.clone(),
@@ -2933,9 +2938,14 @@ async fn a_verification_attempt_waits_for_transfer_budget_only_within_its_attemp
         .await
         .unwrap();
     let storage = Arc::new(
-        ContentStorage::activate(&config.storage, "registry-documents-test", secrets)
-            .await
-            .unwrap(),
+        ContentStorage::activate(
+            &config.storage,
+            "registry-documents-test",
+            secrets,
+            config.peer_policy(),
+        )
+        .await
+        .unwrap(),
     );
     let budget = TransferBudget::new(1_048_576);
     let held = budget

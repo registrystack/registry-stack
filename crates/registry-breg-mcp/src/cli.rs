@@ -48,6 +48,7 @@ pub struct CheckArgs {
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
     /// Exit 1 when a warning is reported.
+    /// Development posture listings do not count.
     #[arg(long)]
     pub deny_warnings: bool,
     /// Fill `${NAME}` expressions in the runtime file from the process

@@ -1141,7 +1141,10 @@ async fn production_refuses_a_signed_development_task_assertion() {
     let development = harness.signed_token(claims, "JWT");
     let response = harness.send(&path, &[bearer(&development)], None).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(body_json(response).await["code"], "authentication.refused");
+    assert_eq!(
+        body_json(response).await["code"],
+        "platform.task-grant.development-assertion"
+    );
     assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
 }
 

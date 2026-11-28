@@ -92,6 +92,7 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = crate::check::OutputFormat::Human)]
         format: crate::check::OutputFormat,
         /// Exit 1 when a warning is reported.
+        /// Development posture listings do not count.
         #[arg(long)]
         deny_warnings: bool,
     },
@@ -508,7 +509,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                     "platform.posture.conflict", "", "--production and --posture development contradict each other", "Use one of them."
                 ))
             } else {
-                registry_platform_config::declared(posture.as_deref().or(production.then_some("production")))
+                registry_platform_config::declared_with_production_alias(posture.as_deref(), production)
                     .map_err(posture_diagnostic)
             };
             let declared = match declaration {

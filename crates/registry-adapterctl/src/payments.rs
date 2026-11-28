@@ -44,6 +44,7 @@ pub enum PaymentsCommand {
         #[arg(long, value_name = "FILE")]
         fixtures: Vec<PathBuf>,
         /// Refuse warnings as well as errors.
+        /// Development posture listings do not count.
         #[arg(long)]
         deny_warnings: bool,
     },

@@ -184,7 +184,7 @@ fn check_command(name: &'static str, about: &'static str, path: Arg) -> Command 
         .arg(
             Arg::new("deny-warnings")
                 .long("deny-warnings")
-                .help("Treat warnings as a domain refusal")
+                .help("Treat warnings as a domain refusal. Development posture listings do not count.")
                 .action(ArgAction::SetTrue),
         )
 }

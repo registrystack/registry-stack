@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
 
-use registry_cli_report::Report;
+use registry_cli_report::{DeclaredPosture, Report};
 use registry_platform_yaml::Diagnostic;
 use serde::Serialize;
 use tokio_postgres::config::Host;
@@ -30,8 +30,6 @@ pub const REPORT_API_VERSION: &str =
     "id.registrystack.org/formats/platform/cli-database-provision-report/v1alpha1";
 pub const REPORT_KIND: &str = "PlatformCliDatabaseProvisionReport";
 
-type ReportDecorator = dyn for<'a> Fn(Report<'a>) -> Report<'a> + Send;
-
 /// How the command writes its result. A tool maps its own global `--format`
 /// (`human | json`) onto this.
 #[derive(Default)]
@@ -39,8 +37,6 @@ pub enum OutputFormat {
     #[default]
     Human,
     Json,
-    /// JSON with additional members supplied by the tool through the shared report.
-    JsonWithReport(Box<ReportDecorator>),
 }
 
 /// The flags of `<tool> provision`. The output format is the tool's own global
@@ -149,6 +145,16 @@ pub struct ReportStatement {
     pub sql: String,
 }
 
+/// The declaration under which the provision runner reads the runtime file.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProvisionPosture {
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = ["development", "production"])))]
+    value: &'static str,
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = ["flag", "environment", "default"])))]
+    source: &'static str,
+}
+
 /// Machine-readable result of `provision` for every database-backed tool.
 /// The identity members are absent when the run stopped before the product's
 /// runtime file could name them.
@@ -162,6 +168,7 @@ pub struct PlatformCliDatabaseProvisionReport {
     pub api_version: String,
     pub kind: String,
     pub version: String,
+    pub posture: ProvisionPosture,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub product: Option<String>,
     /// Whether a statement could have been sent to the server: false for a
@@ -620,6 +627,7 @@ fn report_statements(
 struct Output<'a> {
     format: OutputFormat,
     version: &'static str,
+    declared: DeclaredPosture,
     stdout: &'a mut dyn Write,
     stderr: &'a mut dyn Write,
 }
@@ -642,10 +650,7 @@ impl Output<'_> {
         let Ok(envelope) = Report::new(&value, self.version) else {
             return false;
         };
-        let envelope = match &self.format {
-            OutputFormat::JsonWithReport(decorate) => decorate(envelope),
-            _ => envelope,
-        };
+        let envelope = envelope.with_posture(self.declared);
         serde_json::to_writer_pretty(&mut *self.stdout, &envelope).is_ok()
             && writeln!(self.stdout).is_ok()
     }
@@ -653,7 +658,7 @@ impl Output<'_> {
     /// A refusal: the JSON report on stdout, or the diagnostics on stderr.
     fn refusal(&mut self, report: &PlatformCliDatabaseProvisionReport) -> u8 {
         let written = match self.format {
-            OutputFormat::Json | OutputFormat::JsonWithReport(_) => self.json(report),
+            OutputFormat::Json => self.json(report),
             OutputFormat::Human => {
                 // A run that stopped part-way shows what it had already done.
                 let ran = report
@@ -691,6 +696,7 @@ fn run_with(
     version: &'static str,
     args: &ProvisionArgs,
     format: OutputFormat,
+    declared: DeclaredPosture,
     load: impl FnOnce(&Path) -> Result<ProvisionInput, Vec<Diagnostic>>,
     backend: Backend<'_>,
     stdout: &mut dyn Write,
@@ -699,6 +705,7 @@ fn run_with(
     let mut output = Output {
         format,
         version,
+        declared,
         stdout,
         stderr,
     };
@@ -709,6 +716,10 @@ fn run_with(
         api_version: REPORT_API_VERSION.to_owned(),
         kind: REPORT_KIND.to_owned(),
         version: version.to_owned(),
+        posture: ProvisionPosture {
+            value: declared.posture.as_str(),
+            source: declared.source.as_str(),
+        },
         product: None,
         executed: false,
         role_mode: None,
@@ -790,7 +801,7 @@ fn run_with(
                 .stdout
                 .write_all(render_script(&plan).as_bytes())
                 .is_ok(),
-            OutputFormat::Json | OutputFormat::JsonWithReport(_) => output.json(&report),
+            OutputFormat::Json => output.json(&report),
         };
         return output.write_failed(written);
     }
@@ -845,7 +856,7 @@ fn run_with(
             report.status = ReportStatus::Complete;
             report.statements = report_statements(&plan, &outcome.statements);
             let written = match output.format {
-                OutputFormat::Json | OutputFormat::JsonWithReport(_) => output.json(&report),
+                OutputFormat::Json => output.json(&report),
                 OutputFormat::Human => write_summary(output.stdout, &report, outcome.single_role),
             };
             output.write_failed(written)
@@ -916,6 +927,7 @@ pub fn run_provision(
     version: &'static str,
     args: &ProvisionArgs,
     format: OutputFormat,
+    declared: DeclaredPosture,
     load: impl FnOnce(&Path) -> Result<ProvisionInput, Vec<Diagnostic>>,
 ) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -933,6 +945,7 @@ pub fn run_provision(
         version,
         args,
         format,
+        declared,
         load,
         &server_backend(&runtime),
         &mut std::io::stdout().lock(),
@@ -1106,6 +1119,22 @@ mod tests {
         input: Result<ProvisionInput, Vec<Diagnostic>>,
         backend: Backend<'_>,
     ) -> Run {
+        execute_run_with_posture(
+            arguments,
+            admin_file,
+            input,
+            backend,
+            registry_cli_report::declared_from(None, None).unwrap(),
+        )
+    }
+
+    fn execute_run_with_posture(
+        arguments: &[&str],
+        admin_file: Option<&str>,
+        input: Result<ProvisionInput, Vec<Diagnostic>>,
+        backend: Backend<'_>,
+        declared: DeclaredPosture,
+    ) -> Run {
         let directory = tempfile::tempdir().expect("scratch directory");
         let (arguments, format) = split_format(arguments);
         let mut full: Vec<String> = arguments.iter().map(|s| (*s).to_owned()).collect();
@@ -1125,6 +1154,7 @@ mod tests {
             "1.2.3-test",
             &args,
             format,
+            declared,
             |_| input,
             backend,
             &mut stdout,
@@ -1299,6 +1329,57 @@ mod tests {
     }
 
     #[test]
+    fn report_carries_each_posture_source_on_success_and_refusal() {
+        for (flag, environment, value, source) in [
+            (None, None, "production", "default"),
+            (Some("development"), None, "development", "flag"),
+            (None, Some("development"), "development", "environment"),
+        ] {
+            let declared =
+                registry_cli_report::declared_from(flag, environment.map(std::ffi::OsStr::new))
+                    .unwrap();
+            let admin = admin_url("db.example", 5432);
+            for print in [true, false] {
+                for success in [true, false] {
+                    let input = if success {
+                        Ok(split_input())
+                    } else {
+                        Err(vec![Diagnostic::error(
+                            "test.refused",
+                            "",
+                            "runtime was refused",
+                            "Correct the runtime.",
+                        )])
+                    };
+                    let arguments: &[&str] = if print {
+                        &["--print-sql", "--format", "json"]
+                    } else {
+                        &["--format", "json"]
+                    };
+                    let run = execute_run_with_posture(
+                        arguments,
+                        (!print).then_some(admin.as_str()),
+                        input,
+                        &created_everything,
+                        declared,
+                    );
+                    assert_eq!(
+                        run.exit,
+                        if success { 0 } else { 1 },
+                        "{}",
+                        run.all_output()
+                    );
+                    assert_eq!(run.stdout.matches("\"posture\"").count(), 1);
+                    assert_eq!(
+                        run.json()["posture"],
+                        serde_json::json!({"value": value, "source": source})
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn print_mode_json_reports_every_statement_as_not_run() {
         let run = execute_run(
             &["--print-sql", "--format", "json"],
@@ -1308,6 +1389,10 @@ mod tests {
         );
         assert_eq!(run.exit, 0, "{}", run.all_output());
         let report = run.json();
+        assert_eq!(
+            report["posture"],
+            serde_json::json!({"value": "production", "source": "default"})
+        );
         assert_eq!(report["ok"], true);
         assert_eq!(report["command"], "provision");
         assert_eq!(report["status"], "complete");
@@ -1985,6 +2070,7 @@ mod tests {
             "1",
             &args,
             OutputFormat::Json,
+            registry_cli_report::declared_from(None, None).unwrap(),
             |_| Ok(split_input()),
             &must_not_run,
             &mut stdout,
@@ -2017,6 +2103,7 @@ mod tests {
             "1",
             &args,
             OutputFormat::Json,
+            registry_cli_report::declared_from(None, None).unwrap(),
             |_| Ok(split_input()),
             &must_not_run,
             &mut stdout,
@@ -2045,6 +2132,7 @@ mod tests {
             "1",
             &args,
             OutputFormat::Json,
+            registry_cli_report::declared_from(None, None).unwrap(),
             |_| Ok(split_input()),
             &must_not_run,
             &mut stdout,
@@ -2386,6 +2474,7 @@ mod tests {
             "1",
             &args,
             OutputFormat::Json,
+            registry_cli_report::declared_from(None, None).unwrap(),
             |_| Ok(split_input()),
             &must_not_run,
             &mut stdout,
@@ -2429,6 +2518,7 @@ mod tests {
             "1",
             &args,
             OutputFormat::Json,
+            registry_cli_report::declared_from(None, None).unwrap(),
             |_| Ok(split_input()),
             &must_not_run,
             &mut stdout,
@@ -2553,6 +2643,7 @@ mod postgres_tests {
             "1.2.3-test",
             &args,
             format,
+            registry_cli_report::declared_from(None, None).unwrap(),
             |_| Ok(input),
             backend,
             &mut stdout,

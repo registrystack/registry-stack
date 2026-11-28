@@ -154,6 +154,7 @@ impl ContentStorage {
         config: &StorageConfig,
         database_id: &str,
         resolver: Arc<SecretResolver>,
+        peer_policy: registry_platform_httputil::PeerPolicy,
     ) -> Result<Self, StorageError> {
         match config {
             StorageConfig::Database { .. } => Ok(Self::Database {
@@ -161,7 +162,7 @@ impl ContentStorage {
             }),
             StorageConfig::S3 { settings, .. } => {
                 let ceiling = config.maximum_document_bytes();
-                let settings = S3Settings::from_config_without_peer_policy(settings)?;
+                let settings = S3Settings::from_config(settings, peer_policy)?;
                 let deployment = settings
                     .activate(s3_namespace(ceiling), database_id, &resolver)
                     .await?;

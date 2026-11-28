@@ -1169,6 +1169,7 @@ async fn a_verification_leased_before_activation_cannot_send_or_record_an_old_ve
         &config.storage,
         "registry-documents-test",
         Arc::new(config.secret_resolver().unwrap()),
+        config.peer_policy(),
     )
     .await
     .unwrap();

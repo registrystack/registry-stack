@@ -11,7 +11,8 @@ use registry_adapter_core::{
     ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
-    describe_secret_failure, RuntimeConfigLoader, RuntimeEnvelope, SecretProvider, SecretResolver,
+    describe_secret_failure, DeclaredPosture, RuntimeConfigLoader, RuntimeEnvelope, SecretProvider,
+    SecretResolver,
 };
 use registry_platform_provision::{ProductDatabase, ProvisionInput, SchemaLayout};
 use registry_platform_yaml::Diagnostic;
@@ -36,7 +37,10 @@ fn refused(code: &str, path: &str, message: String, action: &str) -> Box<Diagnos
 
 /// Reads the runtime file exactly as `adapter serve` does and resolves the
 /// two database URLs and the CA behind `database.caBundleRef`.
-pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Vec<Diagnostic>> {
+pub(crate) fn load(
+    path: &Path,
+    declared: DeclaredPosture,
+) -> Result<ProvisionInput, Vec<Diagnostic>> {
     let refuse = |code: &str, path: &str, message: String, action: &str| {
         vec![*refused(code, path, message, action)]
     };
@@ -48,10 +52,13 @@ pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Vec<Diagnostic>> {
             "Pass --runtime-config as a path to the runtime file.",
         )
     })?;
-    let config = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
-        api_version: ADAPTER_RUNTIME_API_VERSION,
-        kind: ADAPTER_RUNTIME_KIND,
-    })
+    let config = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: ADAPTER_RUNTIME_API_VERSION,
+            kind: ADAPTER_RUNTIME_KIND,
+        },
+        declared,
+    )
     .removed_keys(ADAPTER_FACADE_REMOVED_KEYS)
     .load::<AdapterRuntimeConfig>(&absolute)
     .map_err(|error| error.diagnostics().to_vec())?
