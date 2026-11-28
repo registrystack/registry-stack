@@ -1070,18 +1070,17 @@ def database_ca_bundle_key(release: tuple[int, int, int] | None) -> str:
     return "caBundleRef"
 
 
-# The first release whose Messaging runtime holds its OIDC issuers under
-# `authentication.oidc.issuers`. Earlier releases write the issuer members
-# directly under `authentication.oidc`, and an operator moves them into an
-# entry before upgrading, as the Messaging CHANGELOG says.
-MESSAGING_ISSUER_SET_INTRODUCED = (0, 49, 0)
+# Earlier Messaging releases write issuer members directly under
+# `authentication.oidc`; from `release_roster.MESSAGING_ISSUER_SET_INTRODUCED`
+# onward they live under `authentication.oidc.issuers`, and an operator moves
+# them into an entry before upgrading, as the Messaging CHANGELOG says.
 MESSAGING_ISSUER_ID = "main"
 
 
 def messaging_uses_issuer_set(release: tuple[int, int, int] | None) -> bool:
     """Whether the binaries of `release` read the issuer set; None is a build
     of this source."""
-    return release is None or release >= MESSAGING_ISSUER_SET_INTRODUCED
+    return release is None or release >= release_roster.MESSAGING_ISSUER_SET_INTRODUCED
 
 
 MESSAGING_ISSUER = "https://issuer.upgrade-rehearsal.invalid"

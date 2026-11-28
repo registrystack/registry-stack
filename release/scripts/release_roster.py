@@ -25,6 +25,8 @@ first ships the Registry Messaging binaries, image, rehearsal leg, and
 security evidence. The unified Node and Python client facades add Messaging in
 the same release. Those packaging surfaces join in v0.38.0, together with
 Messaging's shared package activation contract.
+``MESSAGING_ISSUER_SET_INTRODUCED`` names the first release whose Messaging
+runtime holds its OIDC issuers under ``authentication.oidc.issuers``.
 
 ``SCHEDULING_CLIENT_FIRST_RELEASE`` is the single place that decides which
 release first adds the Registry Scheduling namespace and native bindings to the
@@ -82,6 +84,10 @@ import sys
 BREG_SERVICES_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
 MESSAGING_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
+
+# The first release whose Messaging runtime holds its OIDC issuers under
+# `authentication.oidc.issuers`.
+MESSAGING_ISSUER_SET_INTRODUCED: tuple[int, int, int] = (0, 49, 0)
 
 DISCOVERYCTL_FIRST_RELEASE: tuple[int, int, int] | None = (0, 38, 0)
 
