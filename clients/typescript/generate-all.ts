@@ -1,11 +1,13 @@
 import { fileURLToPath } from 'node:url'
 import { generateFile } from './generate.ts'
+import { generateServiceFile, type ServiceDescription } from './generate-service.ts'
 
 const inputs = {
   casework: 'casework/generated/registry-casework.openapi.json',
   coordinator: 'coordinator/generated/openapi/coordinator.openapi.json',
   documents: 'documents/generated/registry-documents.openapi.json',
   evidence: 'evidence/generated/registry-evidence.openapi.json',
+  'evidence-oid4vci': 'evidence/generated/registry-evidence-oid4vci.openapi.json',
   messaging: 'messaging/generated/registry-messaging.openapi.json',
   scheduling: 'scheduling/generated/registry-scheduling.openapi.json',
   'breg-minimal': 'breg/generated/minimal/generated/openapi.json',
@@ -15,6 +17,18 @@ const inputs = {
 // Test documents for shapes no product document carries yet. Their clients sit beside them.
 const fixtures = {
   'breg-list': 'tests/fixtures/breg-list.openapi.json',
+}
+
+// One generated example per service shape: a register and the products installed beside it.
+const services: Record<string, ServiceDescription> = {
+  'breg-facility-documents-casework-evidence': {
+    register: 'breg-facility', products: ['documents', 'casework', 'evidence'],
+    authorProfile: 'facility-registrar',
+  },
+  'breg-facility-all-products': {
+    register: 'breg-facility',
+    products: ['casework', 'coordinator', 'documents', 'evidence', 'evidence-oid4vci', 'messaging', 'scheduling'],
+  },
 }
 
 const sources = [
@@ -31,6 +45,16 @@ for (const [name, source, output] of sources) {
       fileURLToPath(new URL(output, import.meta.url)),
       process.argv.includes('--check'), name.startsWith('breg-'),
     )
+  } catch (error) {
+    console.error(name + ': ' + (error instanceof Error ? error.message : String(error)))
+    process.exitCode = 1
+  }
+}
+
+for (const [name, description] of Object.entries(services)) {
+  try {
+    generateServiceFile(description, fileURLToPath(new URL('./generated/services/' + name + '.ts', import.meta.url)),
+      process.argv.includes('--check'))
   } catch (error) {
     console.error(name + ': ' + (error instanceof Error ? error.message : String(error)))
     process.exitCode = 1

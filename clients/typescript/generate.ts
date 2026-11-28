@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { dirname, relative, resolve } from 'node:path'
+import { basename, dirname, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 type Node = Record<string, any>
@@ -171,8 +171,37 @@ const isJson = (media: string) => /(?:\/json|\+json)(?:;|$)/u.test(media)
 const members = (value: Node | undefined): [string, any][] => Object.entries(value ?? {})
 const identifier = (value: string) => value.replace(/[^a-zA-Z0-9_]/gu, '_')
 
+// This server module uses the back-office bearer. Wallet exchanges use their own
+// credentials, and discovery documents include tuple schemas this generator cannot validate.
+const oid4vciOperations = new Set(['createCredentialOffer', 'createDraft13CredentialOffer', 'health', 'readiness'])
+
+function selectOid4vciOperations(doc: Node): void {
+  doc.paths = Object.fromEntries(members(doc.paths).flatMap(([path, item]) => {
+    const operations = members(item).filter(([method, operation]) =>
+      methods.has(method) && oid4vciOperations.has(operation.operationId))
+    return operations.length ? [[path, { parameters: item.parameters, ...Object.fromEntries(operations) }]] : []
+  }))
+  const schemas = doc.components.schemas
+  const used = new Set<string>()
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return
+    const ref = '$ref' in node ? node.$ref : undefined
+    if (typeof ref === 'string' && ref.startsWith('#/components/schemas/')) {
+      const name = unescape(ref.slice('#/components/schemas/'.length))
+      if (!used.has(name)) {
+        used.add(name)
+        visit(schemas[name])
+      }
+    }
+    for (const value of Object.values(node)) visit(value)
+  }
+  visit(doc.paths)
+  doc.components.schemas = Object.fromEntries(members(schemas).filter(([name]) => used.has(name)))
+}
+
 interface Settings {
   breg?: boolean
+  product?: string
   coreImport?: string
   schemaImport?: string
   allowUnconstrained?: readonly string[]
@@ -184,7 +213,9 @@ export function generate(source: string, settings: Settings = {}): string {
   if (!doc.paths || typeof doc.paths !== 'object') fail('/paths', 'expected paths')
   const breg = settings.breg ?? members(doc.paths).some(([, item]) =>
     members(item).some(([, operation]) => operation?.['x-registry-recordType'] || operation?.['x-registry-action']))
+  const product = breg ? 'breg' : settings.product
   const title = doc.info?.title
+  if (title === 'Registry Evidence OID4VCI delivery API') selectOid4vciOperations(doc)
   const allowed = new Set([
     ...(Object.hasOwn(unconstrained, title) ? unconstrained[title]! : []),
     ...settings.allowUnconstrained ?? [],
@@ -404,10 +435,14 @@ export function generate(source: string, settings: Settings = {}): string {
   const pageNames = new Set<string>()
   const listTypes: string[] = []
   const listRowTypes: string[] = []
-  const listRules: Node = {}
-  const invoke: { id: string; operation: string; body: string; keys: string[]; profile: string; profileRequired: boolean; attachments: boolean }[] = []
+  const listRules: Node = Object.create(null)
+  const readTypes: string[] = []
+  const readRows: string[] = []
+  const readRoutes: Node = Object.create(null)
+  const reviewedActions = new Set<string>()
+  const invoke: { id: string; operation: string; body: string; keys: string[]; profile: string; attachments: boolean }[] = []
   const actionInputs: Record<string, Node> = {}
-  const conditions: { id: string; operation: string; body: string; profile: string; result: string; profileRequired: boolean }[] = []
+  const conditions: { id: string; operation: string; body: string; profile: string; result: string }[] = []
   const seen = new Set<string>()
   function deref(value: Node, pointer: string): Node {
     if (!value.$ref) return value
@@ -521,8 +556,9 @@ export function generate(source: string, settings: Settings = {}): string {
           }
           const declaredType = describe(value.schema, child(at, 'schema'))
           const profileType = breg && value.name === 'accessProfile' && profiles?.length ? profile : undefined
-          fields.push(quote(value.name) + (value.required ? '' : '?') + ': ' + (profileType ?? declaredType))
-          required ||= value.required === true
+          const requiredParameter = value.required === true && !(location === 'query' && value.name === 'accessProfile')
+          fields.push(quote(value.name) + (requiredParameter ? '' : '?') + ': ' + (profileType ?? declaredType))
+          required ||= requiredParameter
         }
         if (fields.length) {
           args[group] = '{ ' + fields.join('; ') + ' }'
@@ -531,6 +567,8 @@ export function generate(source: string, settings: Settings = {}): string {
         }
       }
       const definition: Node = { method: method.toUpperCase(), path, responses: {} }
+      if (parameterMap.has('query:accessProfile')) definition.accessProfileParameter = true
+      if (parameterMap.get('query:accessProfile')?.value.required === true) definition.accessProfileRequired = true
       const commaQuery = [...parameterMap.values()].filter(({ value }) =>
         value.in === 'query' && value.explode === false && value.schema?.type === 'array').map(({ value }) => value.name)
       if (commaQuery.length) definition.commaQuery = commaQuery
@@ -669,7 +707,9 @@ export function generate(source: string, settings: Settings = {}): string {
           '    const { data } = await this.call(' + quote(id) + ', { ...options, query: cursor === undefined ? options.query : ' + query + ' })\n' +
           '    return { items: data.' + page.items + ', nextCursor: data.' + page.cursor + ' ?? null }\n  }')
       }
-      const listProfiles = breg && operation['x-registry-operation'] === 'list'
+      const recordType = operation['x-registry-recordType']
+      const listProfiles = breg && typeof recordType === 'string' && id === 'records.' + recordType + '.list'
+        && operation['x-registry-operation'] === 'list'
         && (operation['x-registry-queryKind'] ?? 'list') === 'list' ? queryProfiles(operation, pointer) : undefined
       if (listProfiles) {
         const listShape = page && page.items === 'items' && page.cursor === 'pageInfo.nextCursor'
@@ -677,8 +717,8 @@ export function generate(source: string, settings: Settings = {}): string {
           ? page : fail(pointer, 'query profiles on an operation without a BReg list page')
         const profileParameter = parameterMap.get('query:accessProfile')?.value
         if (!profileParameter && listProfiles.length > 1) fail(pointer, 'several query profiles need an accessProfile parameter')
-        const profileRequired = listProfiles.length > 1 || profileParameter?.required === true
-        const row = 'ListRows[' + quote(id) + ']'
+        const requiresAccessProfile = profileParameter?.required === true
+        const row = 'ListRows[' + quote(recordType) + ']'
         const value = (property: string) => 'FieldValue<' + row + ', ' + quote(property) + '>'
         const alternatives = listProfiles.map(entry => {
           const filters = entry.filterable.map(filter => quote(filter.property) + '?: Filter<' + value(filter.property) + ', ' +
@@ -691,19 +731,25 @@ export function generate(source: string, settings: Settings = {}): string {
           const order = entry.sortable.flatMap(sort => sort.directions.map(direction =>
             quote(direction === 'asc' ? sort.property : sort.property + ' desc')))
           const fields = [
-            profileParameter ? 'accessProfile' + (profileRequired ? '' : '?') + ': ' + quote(entry.profile) : 'accessProfile?: never',
+            profileParameter ? 'accessProfile?: ' + quote(entry.profile) : 'accessProfile?: never',
             where,
             'orderBy?: ' + (order.length ? order.join(' | ') : 'never'),
             'select?: ' + (entry.selectable.length ? 'ReadonlyArray<' + entry.selectable.map(name => quote(name)).join(' | ') + '>' : 'never'),
             'count?: ' + (entry.allowCount ? 'boolean' : 'never'),
             'top?: number',
           ]
-          return '(CallOptions & { ' + fields.join('; ') + ' })'
+          const first = fields.join('; ') + '; after?: never'
+          const next = fields[0] + '; after: string; where?: never; orderBy?: never; select?: never; count?: never; top?: number'
+          return '(CallOptions & { ' + first + ' }) | (CallOptions & { ' + next + ' })'
         })
-        listTypes.push('  ' + quote(id) + ': ' + alternatives.join(' | '))
-        listRowTypes.push('  ' + quote(id) + ': ' + listShape.itemType)
-        listRules[id] = {
+        listTypes.push('  ' + quote(recordType) + ': ' + alternatives.join(' | '))
+        listRowTypes.push('  ' + quote(recordType) + ': ' + listShape.itemType)
+        listRules[recordType] = {
+          operation: id, requiresAccessProfile,
           accessProfileParameter: Boolean(profileParameter),
+          recordProperties: [...new Set(listProfiles.flatMap(entry => [
+            ...entry.selectable, ...entry.filterable.map(filter => filter.property), ...entry.sortable.map(sort => sort.property),
+          ]))].sort(),
           profiles: Object.fromEntries(listProfiles.map(entry => [entry.profile, {
             maximumPageSize: entry.maximumPageSize, allowCount: entry.allowCount, selectable: entry.selectable,
             filterable: Object.fromEntries(entry.filterable.map(filter => [filter.property, filter.operators])),
@@ -712,18 +758,28 @@ export function generate(source: string, settings: Settings = {}): string {
           }])),
         }
       }
+      if (breg && typeof recordType === 'string' && id === 'records.' + recordType + '.get'
+          && operation['x-registry-operation'] === 'get'
+          && operation['x-registry-responseShape'] === 'RegistryRecordSingleV1') {
+        const profileParameter = parameterMap.get('query:accessProfile')?.value
+        const required = profileParameter?.required === true
+        const profileType = !profileParameter ? 'never' : profiles?.length ? profile : 'string'
+        readTypes.push('  ' + quote(recordType) + ': CallOptions & { accessProfile?: ' + profileType + ' }')
+        readRows.push('  ' + quote(recordType) + ': Operations[' + quote(id) + ']["output"]["data"]')
+        readRoutes[recordType] = { operation: id, takesProfile: Boolean(profileParameter), required, profiles }
+      }
       const action = operation['x-registry-action']
       const routeKind = operation['x-registry-routeKind']
       if (breg && action && typeof action === 'object') {
         if (typeof action.id === 'string' && Array.isArray(action.inputs)) {
           actionInputs[action.id] = { display: action.display, inputMode: action.inputMode, inputs: action.inputs }
         }
-        const profileRequired = parameterMap.get('query:accessProfile')?.value.required === true
-        if (routeKind === 'invoke') {
-          invoke.push({ id: action.id, operation: id, body: requestType, keys: action.requiredConditionKeys, profile, profileRequired, attachments: hasAttachments })
+        if (routeKind === 'invoke' && operation['x-registry-operation'] === 'start') reviewedActions.add(action.id)
+        if (routeKind === 'invoke' && operation['x-registry-operation'] === 'invoke') {
+          invoke.push({ id: action.id, operation: id, body: requestType, keys: action.requiredConditionKeys, profile, attachments: hasAttachments })
         }
         if (routeKind === 'target-conditions') {
-          conditions.push({ id: action.id, operation: id, body: requestType, profile, result, profileRequired })
+          conditions.push({ id: action.id, operation: id, body: requestType, profile, result })
         }
       }
     }
@@ -735,23 +791,26 @@ export function generate(source: string, settings: Settings = {}): string {
   if (breg) {
     for (const action of invoke) {
       const body = '(' + action.body + ')'
-      const fields = ['accessProfile' + (action.profileRequired ? '' : '?') + ': ' + action.profile,
+      const fields = ['accessProfile?: ' + action.profile,
         action.keys?.length ? 'preconditions: NonNullable<' + body + '["preconditions"]>' : 'preconditions?: never']
       if (action.attachments) fields.push('attachments: ' + body + '["attachments"]')
       const options = ['CallOptions', '{ ' + fields.join('; ') + ' }']
-      const required = Boolean(action.keys?.length || action.profileRequired || action.attachments)
+      const required = Boolean(action.keys?.length || action.attachments)
       actionMethods.push('  invoke(action: ' + quote(action.id) + ', input: ' + body + '["input"], options' +
         (required ? '' : '?') + ': ' + options.join(' & ') + '): Promise<Answer<Operations[' + quote(action.operation) + ']["output"]>>')
     }
-    if (invoke.length) {
+    if (invoke.length || reviewedActions.size) {
+      if (!invoke.length) actionMethods.push('  invoke(action: never, input: never): Promise<never>')
       actionMethods.push('  async invoke(action: string, input: object, options: CallOptions & { accessProfile?: string; preconditions?: object; attachments?: object } = {}): Promise<Answer<unknown>> {\n' +
         '    switch (action) {\n' + invoke.map(action => '      case ' + quote(action.id) + ': return this.#call(' + quote(action.operation) +
           ', { ...options, query: { accessProfile: options.accessProfile }, body: { input, preconditions: options.preconditions, attachments: options.attachments } })').join('\n') +
+        '\n' + [...reviewedActions].map(id => '      case ' + quote(id) + ':').join('\n') +
+        (reviewedActions.size ? '\n        throw new TypeError("This Action starts a proposal. Use proposals to start it.")' : '') +
         '\n      default: throw new TypeError("Unknown Action")\n    }\n  }')
     }
     for (const action of conditions) {
       actionMethods.push('  targetConditions(action: ' + quote(action.id) + ', input: (' + action.body + ')["input"], options' +
-        (action.profileRequired ? '' : '?') + ': CallOptions & { accessProfile' + (action.profileRequired ? '' : '?') + ': ' + action.profile + ' }): Promise<(' + action.result + ')["preconditions"]>')
+        '?: CallOptions & { accessProfile?: ' + action.profile + ' }): Promise<(' + action.result + ')["preconditions"]>')
     }
     if (conditions.length) {
       actionMethods.push('  async targetConditions(action: string, input: object, options: CallOptions & { accessProfile?: string } = {}): Promise<unknown> {\n' +
@@ -786,7 +845,7 @@ export function generate(source: string, settings: Settings = {}): string {
   return [
     '// Source SHA-256 ' + sourceHash,
     ...[...used].sort().map(pointer => '// Unconstrained JSON ' + pointer),
-    'import { Transport, type Answer, type CallOptions, type ClientOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from ' + quote(settings.coreImport ?? '../core.ts'),
+    'import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from ' + quote(settings.coreImport ?? '../core.ts'),
     'import { validator } from ' + quote(settings.schemaImport ?? '../schema.ts'),
     ...(listTypes.length ? [
       'import { listPage, listQuery, type FieldValue, type Filter, type ListPage, type ListRequest, type ListRules } from ' +
@@ -801,7 +860,22 @@ export function generate(source: string, settings: Settings = {}): string {
       '// The row each list returns, and the list options its query profiles allow.',
       'export interface ListRows {', ...listRowTypes, '}',
       'export interface ListOptions {', ...listTypes, '}',
-      'const listRules: Record<string, ListRules> = JSON.parse(' + quote(quote(listRules)) + ')',
+      'const listRules: Record<string, ListRules & { operation: string }> = JSON.parse(' + quote(quote(listRules)) + ')',
+    ] : []),
+    ...(readTypes.length ? [
+      '',
+      'interface ReadRows {', ...readRows, '}',
+      'export interface ReadOptions {', ...readTypes, '}',
+      'const readRoutes: Record<string, { operation: string; takesProfile: boolean; required: boolean; profiles?: string[] }> = JSON.parse(' +
+        quote(quote(readRoutes)) + ')',
+    ] : []),
+    ...(listTypes.length || readTypes.length ? [
+      '',
+      'type RecordEnvelope = { recordIdentifier: string; revisionIdentifier: string; domainData: unknown }',
+      'export interface RecordRow<Data> { id: string; revision: string; data: Data }',
+      'function recordRow<Data>(record: RecordEnvelope & { domainData: Data }): RecordRow<Data> {',
+      '  return { id: record.recordIdentifier, revision: record.revisionIdentifier, data: record.domainData }',
+      '}',
     ] : []),
     ...(conditionalAnswers.length ? [
       'interface ConditionalAnswers {', ...conditionalAnswers, '}',
@@ -821,12 +895,12 @@ export function generate(source: string, settings: Settings = {}): string {
     '  for (const [status, variants] of Object.entries(definition.responses)) {',
     '    responses[Number(status)] = variants.map(variant => ({ ...variant, validate: variant.rule === undefined ? undefined : validator(rules, rules[variant.rule]) }))',
     '  }',
-    '  routes[id] = { ...definition, responses, problemValidators: Object.fromEntries(Object.entries(definition.problems ?? {}).map(([status, rule]) => [status, validator(rules, rules[rule])])) }',
+    '  routes[id] = { ...definition, ' + (product ? 'product: ' + quote(product) + ', ' : '') + 'responses, problemValidators: Object.fromEntries(Object.entries(definition.problems ?? {}).map(([status, rule]) => [status, validator(rules, rules[rule])])) }',
     '}',
     '',
     'export class Client {',
     '  readonly #transport: Transport',
-    '  constructor(options: ClientOptions) { this.#transport = new Transport(options) }',
+    '  constructor(transport: Transport) { this.#transport = transport }',
     '  async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<' +
       (conditionalAnswers.length ? 'OperationAnswer<K>' : 'Answer<Operations[K]["output"]>') + '> {',
     '    return this.#call(operation, args[0])' + (conditionalAnswers.length ? ' as Promise<OperationAnswer<K>>' : ''),
@@ -838,23 +912,40 @@ export function generate(source: string, settings: Settings = {}): string {
     '  }',
     ...pageMethods,
     ...(listTypes.length ? [
-      '  list<K extends keyof ListOptions>(operation: K, ...args: {} extends ListOptions[K] ? [options?: ListOptions[K], cursor?: string] : [options: ListOptions[K], cursor?: string]): Promise<ListPage<ListRows[K]>>',
-      '  async list(operation: string, options: ListRequest = {}, cursor?: string): Promise<ListPage<unknown>> {',
-      '    const rules = Object.hasOwn(listRules, operation) ? listRules[operation] : undefined',
-      '    if (!rules) throw new TypeError("Unknown list operation")',
-      '    const query = listQuery(rules, options, cursor)',
-      '    const { accessProfile, where, orderBy, select, count, top, ...call } = options',
-      '    const { data } = await this.#call<{ items: unknown[]; pageInfo: { nextCursor?: string | null }; count?: number }>(operation, { ...call, query })',
-      '    return listPage(data)',
+      '  list<K extends keyof ListOptions>(recordType: K, ...args: {} extends ListOptions[K] ? [options?: ListOptions[K]] : [options: ListOptions[K]]): Promise<ListPage<RecordRow<ListRows[K]["domainData"]>>>',
+      '  async list(recordType: string, options: ListRequest & { after?: string } = {}): Promise<ListPage<RecordRow<unknown>>> {',
+      '    const rules = Object.hasOwn(listRules, recordType) ? listRules[recordType] : undefined',
+      '    if (!rules) throw new TypeError("Unknown record type for list")',
+      '    const { accessProfile, where, orderBy, select, count, top, after, ...call } = options',
+      '    if (after !== undefined && [where, orderBy, select, count].some(value => value !== undefined)) {',
+      '      throw new TypeError("Use after without where, orderBy, select or count.")',
+      '    }',
+      '    if (after !== undefined && (typeof after !== "string" || !after)) throw new TypeError("Use a nonempty cursor for after.")',
+      '    const query = listQuery(rules, options, after, this.#transport.profile)',
+      '    const { data } = await this.#call<{ items: RecordEnvelope[]; pageInfo: { nextCursor?: string | null }; count?: number }>(rules.operation, { ...call, query })',
+      '    const page = listPage(data)',
+      '    return { ...page, items: page.items.map(recordRow) }',
+      '  }',
+    ] : []),
+    ...(readTypes.length ? [
+      '  read<K extends keyof ReadOptions>(recordType: K, id: string, ...args: {} extends ReadOptions[K] ? [options?: ReadOptions[K]] : [options: ReadOptions[K]]): Promise<RecordRow<ReadRows[K]["domainData"]>>',
+      '  async read(recordType: string, id: string, options: CallOptions & { accessProfile?: string } = {}): Promise<RecordRow<unknown>> {',
+      '    const route = Object.hasOwn(readRoutes, recordType) ? readRoutes[recordType] : undefined',
+      '    if (!route) throw new TypeError("Unknown record type for read")',
+      '    const { accessProfile: explicitProfile, ...call } = options',
+      '    const accessProfile = route.takesProfile && explicitProfile === undefined ? this.#transport.profile : explicitProfile',
+      '    if (route.required && accessProfile === undefined) throw new TypeError("Reading " + recordType + " needs an access profile.")',
+      '    if (accessProfile !== undefined) {',
+      '      if (!route.takesProfile) throw new TypeError("Reading " + recordType + " takes no access profile.")',
+      '      if (typeof accessProfile !== "string" || (route.profiles && !route.profiles.includes(accessProfile))) {',
+      '        throw new TypeError("Unknown access profile for reading " + recordType + ".")',
+      '      }',
+      '    }',
+      '    const { data } = await this.#call<{ data: RecordEnvelope }>(route.operation, { ...call, path: { record_id: id }, query: { accessProfile } })',
+      '    return recordRow(data.data)',
       '  }',
     ] : []),
     ...actionMethods, '}',
-    '',
-    '// Every generated module exports this one factory name. The client it returns is typed to this',
-    '// registry\'s operations.',
-    'export function createRegistryClient(options: ClientOptions): Client {',
-    '  return new Client(options)',
-    '}',
     '',
     ...(breg ? [
       '// Each Action\'s display text and inputs exactly as the source document declares them.',
@@ -875,7 +966,9 @@ export function generateFile(
     const path = relative(dirname(resolve(output)), fileURLToPath(new URL(name, import.meta.url))).split('\\').join('/')
     return path.startsWith('.') ? path : './' + path
   }
-  const result = generate(readFileSync(input, 'utf8'), { breg, coreImport: local('core.ts'), schemaImport: local('schema.ts'), allowUnconstrained })
+  const result = generate(readFileSync(input, 'utf8'), {
+    breg, product: basename(output, '.ts'), coreImport: local('core.ts'), schemaImport: local('schema.ts'), allowUnconstrained,
+  })
   if (check) checkOutput(result, readFileSync(output, 'utf8'), output)
   else writeFileSync(output, result)
 }

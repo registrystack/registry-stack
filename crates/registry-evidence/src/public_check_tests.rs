@@ -1567,7 +1567,10 @@ async fn only_the_check_route_is_readable_cross_origin() {
     for (name, value) in [
         ("access-control-allow-origin", "*"),
         ("access-control-allow-methods", "POST"),
-        ("access-control-allow-headers", "content-type"),
+        (
+            "access-control-allow-headers",
+            "content-type,registry-client",
+        ),
         ("access-control-max-age", "600"),
         ("cross-origin-resource-policy", "cross-origin"),
         ("cache-control", "no-store"),
@@ -1615,6 +1618,50 @@ async fn only_the_check_route_is_readable_cross_origin() {
     );
 }
 
+/// The client library sends `Registry-Client` from a page, so the preflight
+/// for the check route allows it beside `Content-Type`, and no other
+/// request header. A preflight to any other route carries no CORS header.
+#[tokio::test]
+async fn the_check_preflight_allows_the_client_header_and_no_other() {
+    let fixture = public_check_runtime(Authority::RelyingAndCheck).await;
+    let server = fixture.http();
+    let preflight = |path: &'static str, headers: &'static str| {
+        server
+            .method(Method::OPTIONS, path)
+            .add_header("origin", BROWSER_ORIGIN)
+            .add_header("access-control-request-method", "POST")
+            .add_header("access-control-request-headers", headers)
+    };
+
+    let allowed = preflight(PUBLIC_CHECK_ROUTE, "content-type, registry-client").await;
+    assert_eq!(allowed.status_code(), StatusCode::OK);
+    assert_eq!(header(&allowed, "access-control-allow-origin"), Some("*"));
+    assert_eq!(
+        header(&allowed, "access-control-allow-headers"),
+        Some("content-type,registry-client")
+    );
+    assert_eq!(header(&allowed, "access-control-allow-credentials"), None);
+
+    let refused = preflight(PUBLIC_CHECK_ROUTE, "content-type, authorization").await;
+    let permitted = header(&refused, "access-control-allow-headers")
+        .expect("the preflight names the headers it allows");
+    assert!(
+        !permitted.to_ascii_lowercase().contains("authorization"),
+        "a browser sends no request that asks for authorization: {permitted}"
+    );
+
+    for path in ["/health", "/v1/evidence", "/openapi.json"] {
+        let other = preflight(path, "content-type, registry-client").await;
+        for name in [
+            "access-control-allow-origin",
+            "access-control-allow-headers",
+            "access-control-allow-methods",
+        ] {
+            assert_eq!(header(&other, name), None, "{path} {name}");
+        }
+    }
+}
+
 /// A credentialed cross-origin request is answered as the same request
 /// without credentials, and neither it nor its preflight is ever told that
 /// credentials are allowed.
@@ -1660,7 +1707,7 @@ async fn a_credentialed_cross_origin_request_is_answered_without_credentials_all
     assert_eq!(header(&preflight, "access-control-allow-credentials"), None);
     assert_eq!(
         header(&preflight, "access-control-allow-headers"),
-        Some("content-type")
+        Some("content-type,registry-client")
     );
 }
 

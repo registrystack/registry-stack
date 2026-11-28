@@ -6,9 +6,7 @@
   in `clients/typescript/`. They use Fetch and WebCrypto and have no runtime
   dependencies. Their tests run on Node 24 and Deno, and the browser build has
   a manual smoke page. Every
-  generated module exports `createRegistryClient(options)`, and the client it
-  returns is typed to that registry's operations. Code that talks to two
-  registries renames one import. A base URL is HTTPS, or plain HTTP to a
+  generated module exports a `Client` typed to that registry's operations. A base URL is HTTPS, or plain HTTP to a
   loopback host. With `allowInsecureHttp` it may also be plain HTTP to a
   private or link-local address or to a host name without a dot. Operations
   that declare `Idempotency-Key` send the caller's key or a generated one.
@@ -29,12 +27,24 @@
   it a client sends no `Authorization` and sends cookies with
   `credentials: 'same-origin'`. With a token it sends `'omit'`. The client
   sends `Registry-Client: page` on every call, from the exported
-  `registryClientHeader` constant. Page mode works only on the page's own
-  origin, because no registry answers a cross-origin page call. In page mode
+  `registryClientHeader` constant. A client with a token does not send it. Page mode works only on the
+  page's own origin, because no registry answers a cross-origin page call. In page mode
   any 401 is reason `sign-in-expired` with `outcomeUnknown: false`. A 412 is
   reason `stale` in
   both modes. Every call, page method, Action and byte transfer takes
   `{ signal }`.
+
+- TypeScript clients have one factory pair for each service, in a generated
+  file under `clients/typescript/generated/services/`. `createRegistryClient`
+  is for a page and takes no `token`. It sends no `Authorization`, uses
+  `credentials: 'same-origin'`, sends `Registry-Client: page`, and offers no
+  Coordinator and no Messaging. `createRegistryServerClient` requires a
+  `token`, omits cookies, does not send `Registry-Client`, offers every
+  installed product, and refuses to construct where `globalThis.document`
+  exists. The register's methods are at the top level and each installed
+  product's client is at `registry.<product>`, all over one transport. Product
+  modules export their `Client` class, built from a `Transport`, and no
+  factory. `node generate-service.ts` generates a service file.
 
 - TypeScript client uploads accept a `Blob` or `File` and send it as given.
   A byte transfer, an upload or a download, treats `timeoutMs` as an idle

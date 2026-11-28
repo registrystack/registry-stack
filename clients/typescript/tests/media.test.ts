@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { make } from './helpers.ts'
 import assert from 'node:assert/strict'
 import { Client as Evidence } from '../generated/evidence.ts'
 import { Client as Documents } from '../generated/documents.ts'
@@ -16,7 +17,7 @@ const fixture = (fetch: typeof globalThis.fetch) => ({
 const bytes = Uint8Array.of(0, 255, 7)
 
 test('Documents download accepts its declared wildcard and returns exact bytes and media', async () => {
-  const documents = new Documents(fixture(async () =>
+  const documents = make(Documents, fixture(async () =>
     new Response(bytes, { headers: { 'Content-Type': 'application/pdf' } })))
   const result = await documents.call('downloadDocumentVersion', {
     path: { documentId: 'fixture', versionId: 'fixture' },
@@ -26,7 +27,7 @@ test('Documents download accepts its declared wildcard and returns exact bytes a
 
 test('BReg attachment has a fixed media type', async () => {
   let media = 'application/octet-stream'
-  const facility = new Facility(fixture(async () =>
+  const facility = make(Facility, fixture(async () =>
     new Response(bytes, { headers: { 'Content-Type': media } })))
   const result = await facility.call('proposals.attachments.supporting-document.get', {
     path: { proposal_id: 'fixture' },
@@ -43,7 +44,7 @@ test('BReg attachment has a fixed media type', async () => {
 test('Evidence supports declared compact credentials and typed Accept negotiation', async () => {
   const credential = 'header.payload.signature~'
   let media = 'application/dc+sd-jwt'
-  const evidence = new Evidence(fixture(async (_url, init) => {
+  const evidence = make(Evidence, fixture(async (_url, init) => {
     assert.equal(new Headers(init?.headers).get('accept'), 'application/dc+sd-jwt')
     return new Response(credential, { headers: { 'Content-Type': media } })
   }))
@@ -54,7 +55,7 @@ test('Evidence supports declared compact credentials and typed Accept negotiatio
 })
 
 test('bodyless response retains status and rejects a transmitted body', async () => {
-  const scheduling = new Scheduling(fixture(async (_url, init) => {
+  const scheduling = make(Scheduling, fixture(async (_url, init) => {
     assert.equal(new Headers(init?.headers).has('idempotency-key'), false)
     return new Response(null, { status: 204 })
   }))
@@ -79,7 +80,7 @@ test('response byte cap cancels a streaming answer', async () => {
 })
 
 test('Evidence conditional GET accepts its declared 304 and retains ETag', async () => {
-  const evidence = new Evidence(fixture(async (_url, init) => {
+  const evidence = make(Evidence, fixture(async (_url, init) => {
     assert.equal(new Headers(init?.headers).get('if-none-match'), '"current"')
     return new Response(null, { status: 304, headers: { ETag: '"current"' } })
   }))
@@ -109,7 +110,7 @@ test('response objects tolerate later fields while known members remain validate
 
 test('wildcard uploads require a concrete media type and a binary or string body', async () => {
   let requests = 0
-  const documents = new Documents(fixture(async (_url, init) => {
+  const documents = make(Documents, fixture(async (_url, init) => {
     requests++
     assert.equal(new Headers(init?.headers).get('content-type'), 'application/octet-stream')
     assert.equal(init?.body, 'fixture')
@@ -128,7 +129,7 @@ test('wildcard uploads require a concrete media type and a binary or string body
 })
 
 test('unknown generated names reject asynchronously', async () => {
-  const facility = new Facility(fixture(async () => { throw new Error('unexpected fetch') }))
+  const facility = make(Facility, fixture(async () => { throw new Error('unexpected fetch') }))
   await assert.rejects(facility.call('unknown' as never, {} as never), TypeError)
   await assert.rejects(facility.invoke('unknown' as never, {} as never), TypeError)
 })
@@ -136,7 +137,7 @@ test('unknown generated names reject asynchronously', async () => {
 test('Messaging only exposes retry delay on a declared, correlated refusal', async () => {
   const traceId = '1'.repeat(32)
   let type = 'https://id.registrystack.org/problems/registry-messaging/rate-limit/exceeded'
-  const messaging = new Messaging(fixture(async () => new Response(JSON.stringify({
+  const messaging = make(Messaging, fixture(async () => new Response(JSON.stringify({
     type, status: 429, title: 'Too Many Requests', code: 'rate-limit.exceeded', detail: 'Try again later', traceId,
   }), { status: 429, headers: { 'Content-Type': 'application/problem+json', 'Retry-After': '30',
     traceparent: '00-' + traceId + '-' + '2'.repeat(16) + '-01' } })))
@@ -148,7 +149,7 @@ test('Messaging only exposes retry delay on a declared, correlated refusal', asy
 
 test('receipt lookup refuses a missing original key before dispatch', async () => {
   let requests = 0
-  const messaging = new Messaging(fixture(async () => {
+  const messaging = make(Messaging, fixture(async () => {
     requests++
     return new Response(null, { status: 500 })
   }))
@@ -159,7 +160,7 @@ test('receipt lookup refuses a missing original key before dispatch', async () =
 
 test('Scheduling receipt lookup needs the original key and sends exactly it as a read', async () => {
   const keys: Array<string | null> = []
-  const scheduling = new Scheduling(fixture(async (_url, init) => {
+  const scheduling = make(Scheduling, fixture(async (_url, init) => {
     keys.push(new Headers(init?.headers).get('idempotency-key'))
     return new Response(null, { status: 503 })
   }))
@@ -176,7 +177,7 @@ test('a signed Coordinator event sends the signed bytes unchanged and no bearer 
   const signed = new TextEncoder().encode('{ "id" : "evt-1",\n  "type": "fixture" }\n')
   let asked = 0
   let seen: { body: unknown; authorization: string | null; credentials: unknown } | undefined
-  const coordinator = new Coordinator({ baseUrl: 'https://registry.example', token: () => { asked++; return 'bearer' },
+  const coordinator = make(Coordinator, { baseUrl: 'https://registry.example', token: () => { asked++; return 'bearer' },
     fetch: async (_url, init) => {
       seen = { body: init?.body, authorization: new Headers(init?.headers).get('authorization'), credentials: init?.credentials }
       return new Response(null, { status: 204 })

@@ -26,7 +26,7 @@ use axum::{
             ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, ETAG,
             IF_NONE_MATCH, RETRY_AFTER, VARY,
         },
-        HeaderMap, HeaderValue, Method, Request, StatusCode,
+        HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode,
     },
     middleware::{from_fn, from_fn_with_state, Next},
     response::{IntoResponse, Response},
@@ -835,13 +835,14 @@ async fn public_check(State(state): State<Arc<ServerState>>, request: Request<Bo
 ///
 /// Any origin may read every response of the route, including its problems,
 /// so a static verification page on another origin can show a miss as well as
-/// a hit. A preflight allows exactly `POST` with `Content-Type`, and
+/// a hit. A preflight allows exactly `POST` with `Content-Type` and
+/// `Registry-Client` (the header the client library sends from a page), and
 /// credentials are never allowed. No other route carries a CORS header.
 fn public_check_cors() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Method::POST)
-        .allow_headers([CONTENT_TYPE])
+        .allow_headers([CONTENT_TYPE, HeaderName::from_static("registry-client")])
         .max_age(Duration::from_secs(PUBLIC_CHECK_PREFLIGHT_MAX_AGE_SECONDS))
 }
 

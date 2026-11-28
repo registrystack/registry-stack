@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { make } from './helpers.ts'
 import assert from 'node:assert/strict'
 import { allPages } from '../core.ts'
 import { Client } from '../generated/breg-minimal.ts'
@@ -11,7 +12,7 @@ const json = (body: unknown) => Response.json(body)
 
 test('BReg continuation keeps the same route and just the profile and skiptoken', async () => {
   let count = 0
-  const client = new Client({
+  const client = make(Client, {
     baseUrl: 'http://localhost', token: () => 'fixture',
     fetch: async url => {
       const parsed = new URL(String(url))
@@ -39,7 +40,7 @@ test('BReg resends the exact key, input and target conditions', async () => {
   }
   let writes = 0
   const ledger = new Map<string, string>()
-  const client = new Client({
+  const client = make(Client, {
     baseUrl: 'https://registry.example.org', token: () => 'fixture',
     fetch: async (url, request) => {
       const headers = new Headers(request?.headers)
@@ -79,7 +80,7 @@ test('invoke never reads target conditions itself', async () => {
   const routes: string[] = []
   const bodies: unknown[] = []
   const refusal = { title: 'Precondition Required', code: 'precondition.required', status: 428 }
-  const client = new Client({
+  const client = make(Client, {
     baseUrl: 'https://registry.example.org', token: () => 'fixture',
     fetch: async (url, request) => {
       routes.push(new URL(String(url)).pathname)
@@ -117,3 +118,13 @@ function typeChecks(client: Client, facility: FacilityClient) {
   })
 }
 void typeChecks
+
+test('invoke refuses a reviewed Action before dispatch and points to proposals', async () => {
+  const client = make(FacilityClient, { baseUrl: 'https://registry.example.org', token: () => 'fixture',
+    fetch: async () => assert.fail('a reviewed Action must not dispatch from invoke'),
+  })
+  // @ts-expect-error reviewed Actions start a proposal
+  await assert.rejects(client.invoke('correct-address', {}), {
+    name: 'TypeError', message: 'This Action starts a proposal. Use proposals to start it.',
+  })
+})

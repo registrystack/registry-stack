@@ -21,6 +21,10 @@
 - Doctor checks the configured audit path after any runtime posture refusal.
 - Production Evidence refuses development-marked signed-source and wallet-presentation responses.
 - Supervised OID4VCI accepts loopback HTTP credential issuer origins with an explicit port matching the listener.
+- The public check route's CORS preflight allows the `Registry-Client` request
+  header beside `Content-Type`, so a page on another origin can call the route
+  through the TypeScript client. The allowed origins and methods, the refusal of
+  credentials, and every other route are unchanged.
 
 - `evidence doctor` judges secret files with the runtime's rule. It no
   longer demands exactly `0400` or `0600`, and it accepts a link chain that

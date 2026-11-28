@@ -1194,7 +1194,10 @@ fn public_check_preflight_headers() -> Value {
         .expect("response headers are an object");
     for (name, value) in [
         ("Access-Control-Allow-Methods", "POST"),
-        ("Access-Control-Allow-Headers", "content-type"),
+        (
+            "Access-Control-Allow-Headers",
+            "content-type,registry-client",
+        ),
         ("Access-Control-Max-Age", "600"),
     ] {
         object.insert(
@@ -2278,7 +2281,10 @@ mod tests {
         for (name, value) in [
             ("Access-Control-Allow-Origin", "*"),
             ("Access-Control-Allow-Methods", "POST"),
-            ("Access-Control-Allow-Headers", "content-type"),
+            (
+                "Access-Control-Allow-Headers",
+                "content-type,registry-client",
+            ),
             ("Access-Control-Max-Age", "600"),
             ("Cache-Control", "no-store"),
         ] {

@@ -4,30 +4,30 @@
 <title>Registry TypeScript client smoke test</title>
 <p id="status" role="status">Running browser smoke test</p>
 <script type="module">
-  import { bregMinimal, allPages } from './dist/browser.js'
+  import { bregFacilityDocumentsCaseworkEvidence, allPages } from './dist/browser.js'
   const status = document.querySelector('#status')
   try {
-    const client = bregMinimal.createRegistryClient({
+    const client = bregFacilityDocumentsCaseworkEvidence.createRegistryClient({
       baseUrl: location.origin,
-      token: () => 'browser-fixture',
       fetch: async (url, options) => {
-        if (url.pathname !== '/v1/records/contacts' ||
-            options.redirect !== 'manual' || options.credentials !== 'omit' ||
-            options.headers.get('authorization') !== 'Bearer browser-fixture') {
+        if (url.pathname !== '/v1/records/facilities' ||
+            options.redirect !== 'manual' || options.credentials !== 'same-origin' ||
+            options.headers.get('authorization') !== null ||
+            options.headers.get('registry-client') !== 'page') {
           throw new Error('Unexpected request')
         }
         return Response.json({
           items: [],
           meta: {
-            registryIdentifier: 'local-directory',
-            datasetIdentifier: 'directory',
-            recordTypeIdentifier: 'contact',
+            registryIdentifier: 'local-facilities',
+            datasetIdentifier: 'facilities',
+            recordTypeIdentifier: 'facility',
           },
           pageInfo: { nextCursor: null },
         })
       },
     })
-    const contacts = await allPages(cursor => client.records_contact_listPage({}, cursor))
+    const contacts = await allPages(cursor => client.records_facility_listPage({}, cursor))
     if (contacts.length !== 0) throw new Error('Unexpected page')
     status.textContent = 'Passed'
   } catch (error) {

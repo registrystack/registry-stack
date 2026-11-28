@@ -118,6 +118,7 @@ entries:
   - id: DOCUMENTS-SEC-21
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_own}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_person_omitting_the_custodian_holds_the_document_and_a_service_may_not_omit_it}
   - id: DOCUMENTS-SEC-22
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_issuing_institution_comes_from_the_profile_and_a_differing_body_is_refused}

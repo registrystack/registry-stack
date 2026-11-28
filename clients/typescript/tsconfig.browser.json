@@ -8,5 +8,5 @@
     "outDir": "dist",
     "declaration": true
   },
-  "include": ["browser.ts", "core.ts", "webhook.ts", "schema.ts", "generated/*.ts"]
+  "include": ["browser.ts", "core.ts", "webhook.ts", "schema.ts", "generated/**/*.ts"]
 }

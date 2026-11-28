@@ -28,9 +28,9 @@ fn config(url: &url::Url) -> DocumentsClientConfig {
 fn reservation_request() -> ReserveDocumentRequest {
     ReserveDocumentRequest {
         policy_id: "birth-certificate".to_owned(),
-        custodian: CustodianRef {
+        custodian: Some(CustodianRef {
             subject: ExternalId::new("citizen-0001").expect("fixture subject"),
-        },
+        }),
         expected_digest: Digest::new(content_digest()).expect("fixture digest"),
         length: CONTENT.len() as u64,
         media_type: MEDIA_TYPE.to_owned(),

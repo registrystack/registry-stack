@@ -4689,7 +4689,7 @@
               "Access-Control-Allow-Headers": {
                 "schema": {
                   "enum": [
-                    "content-type"
+                    "content-type,registry-client"
                   ],
                   "type": "string"
                 }

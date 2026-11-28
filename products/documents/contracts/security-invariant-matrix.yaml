@@ -361,10 +361,12 @@ invariants:
       reserves into another person's custody.
     enforcementPoint: >-
       Reservation requires the caller's access profile among the policy's
-      custodyProfiles. A service may name any custodian; a human caller may name
-      only itself, compared by issuer, subject, and kind.
+      custodyProfiles. A service must name a custodian and may name any; a
+      human caller may name only itself, compared by issuer, subject, and kind,
+      and a human body that omits the custodian places custody in the caller.
     refusal: >-
-      Answer 403 custody.not-permitted and reserve nothing.
+      Answer 403 custody.not-permitted, or 422 request.unprocessable when a
+      service names no custodian, and reserve nothing.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_own

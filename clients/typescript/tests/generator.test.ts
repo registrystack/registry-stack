@@ -21,13 +21,11 @@ test('BReg refuses paths outside the route scheme', () => {
   const input = { ...document({ type: 'string' }), paths: { '/v1/foreign': {} } }
   assert.throws(() => generate(JSON.stringify(input), { breg: true }), /\/paths\/~1v1~1foreign/)
 })
-test('every generated module exports the same factory name, typed to its own client', () => {
-  const factory = /^export function createRegistryClient\(options: ClientOptions\): Client \{$/mu
-  for (const title of ['licence-registry', 'facility-registry']) {
-    const output = generate(JSON.stringify({ ...document({ type: 'string' }), info: { title } }))
-    assert.match(output, factory)
-    assert.doesNotMatch(output, /export function create(?!RegistryClient\b)\w*Client\b/u)
-  }
+test('a generated module exports its Client over a Transport and no factory', () => {
+  const output = generate(JSON.stringify({ ...document({ type: 'string' }), info: { title: 'licence-registry' } }))
+  assert.match(output, /^export class Client \{$/mu)
+  assert.match(output, /^  constructor\(transport: Transport\) \{ this\.#transport = transport \}$/mu)
+  assert.doesNotMatch(output, /export function create\w*Client\b/u)
 })
 test('determinism and drift', () => {
   const source = JSON.stringify(document({ type: 'string' }))
