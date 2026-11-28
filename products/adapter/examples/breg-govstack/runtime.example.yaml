@@ -19,9 +19,11 @@ database:
   runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
   migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
 oidc:
-  issuer: https://issuer.example.invalid
-  audience: registry-adapter-example
-allowedClients: [registry-adapter-example-client]
+  issuers:
+    primary:
+      issuer: https://issuer.example.invalid
+      audience: registry-adapter-example
+      allowedClients: [registry-adapter-example-client]
 allowedPrivateCidrs: [10.0.0.0/8]
 audit:
   retentionDays: 90

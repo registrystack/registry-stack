@@ -14,9 +14,11 @@ database:
   runtimeUrlRef: secret:env/ADAPTER_FIXTURE_DATABASE
   migrationUrlRef: secret:env/ADAPTER_FIXTURE_DATABASE
 oidc:
-  issuer: https://issuer.example.invalid
-  audience: adapter-native-proof
-allowedClients: [synthetic-adapter-machine]
+  issuers:
+    primary:
+      issuer: https://issuer.example.invalid
+      audience: adapter-native-proof
+      allowedClients: [synthetic-adapter-machine]
 allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90

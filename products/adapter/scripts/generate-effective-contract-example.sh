@@ -23,7 +23,7 @@ if [[ ! -x "$adapter_bin" ]]; then
 	exit 2
 fi
 
-example_scratch=$(mktemp -d "${CARGO_TARGET_DIR}/effective-contract-example.XXXXXX")
+example_scratch=$(mktemp -d "${TMPDIR:-/tmp}/effective-contract-example.XXXXXX")
 cleanup() {
 	rm -f -- "$example_scratch/runtime.yaml" "$example_scratch/effective-contract.json"
 	rmdir -- "$example_scratch"
@@ -46,9 +46,11 @@ database:
   runtimeUrlRef: secret:env/ADAPTER_EXAMPLE_DATABASE
   migrationUrlRef: secret:env/ADAPTER_EXAMPLE_DATABASE
 oidc:
-  issuer: https://issuer.example.invalid
-  audience: adapter-example
-allowedClients: [adapter-example-client]
+  issuers:
+    primary:
+      issuer: https://issuer.example.invalid
+      audience: adapter-example
+      allowedClients: [adapter-example-client]
 allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90

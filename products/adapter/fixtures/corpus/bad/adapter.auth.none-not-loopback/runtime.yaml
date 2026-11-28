@@ -22,9 +22,11 @@ database:
   runtimeUrlRef: secret:env/DB_RUNTIME
   migrationUrlRef: secret:env/DB_MIGRATION
 oidc:
-  issuer: https://issuer.example.invalid
-  audience: case-api
-allowedClients:
-  - registry-adapter-example-client
+  issuers:
+    primary:
+      issuer: https://issuer.example.invalid
+      audience: case-api
+      allowedClients:
+        - registry-adapter-example-client
 audit:
   retentionDays: 90

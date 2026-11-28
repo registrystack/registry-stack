@@ -59,6 +59,7 @@ fn caller() -> Caller {
         issuer: "https://issuer.example.test".into(),
         client_id: "coordinator".into(),
         scopes: vec!["payments:collections".into()],
+        scope_claim: "scope".into(),
     }
 }
 fn bill() -> BillView {

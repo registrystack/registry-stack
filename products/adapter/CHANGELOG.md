@@ -3,6 +3,18 @@
 ## Unreleased
 
 - Start a local development run from the starter with `rstack dev start`.
+- BREAKING: the facade and payment runtime read the issuer map under
+  `oidc.issuers`. Each entry has its own signing keys and client list, and
+  all entries share the audience published by the effective contract.
+  Migration: Move the issuer settings and top-level `allowedClients` into a named issuer entry.
+- BREAKING: ID tokens are refused under `accessTokenType: JWT`.
+  Migration: Send an access token issued for the Adapter audience.
+- BREAKING: identity-only tokens without a declared caller kind are refused.
+  Migration: Request the access profile's scope or declare the caller kind for the issuer or client.
+- Every 401 carries a Bearer challenge.
+- `adapterctl generate identity-facts` writes the caller requirements for one issuer.
+- Development refusal bodies include `failedCheck`.
+- `adapterctl check` lists each explicit production setting with its file and position.
 
 - BREAKING: an Adapter job sends each Coordinator event with Standard
   Webhooks. The POST carries `accept`, `content-type`, `webhook-id`,

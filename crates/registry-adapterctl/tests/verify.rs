@@ -126,8 +126,6 @@ fn workspace(base_url: &str, user_var: &str, pass_var: &str) -> (tempfile::TempD
                type: basic\n      \
                usernameRef: secret:env/{user}\n      \
                passwordRef: secret:env/{pass}\n\
-         allowedClients:\n  \
-           - verify-client\n\
          allowedPrivateCidrs:\n  \
            - 10.0.0.0/8\n\
          listener:\n  \
@@ -136,8 +134,11 @@ fn workspace(base_url: &str, user_var: &str, pass_var: &str) -> (tempfile::TempD
            runtimeUrlRef: secret:env/VERIFY_LIVE_DB_RUNTIME\n  \
            migrationUrlRef: secret:env/VERIFY_LIVE_DB_MIGRATION\n\
          oidc:\n  \
-           issuer: https://issuer.example.invalid\n  \
-           audience: verify-demo\n\
+           issuers:\n    \
+             primary:\n      \
+               issuer: https://issuer.example.invalid\n      \
+               audience: verify-demo\n      \
+               allowedClients: [verify-client]\n\
          audit:\n  \
            retentionDays: 90\n"
     );
@@ -336,9 +337,9 @@ fn tls_workspace(
         1,
     );
     let runtime = runtime.replacen(
-        "allowedClients:\n",
+        "allowedPrivateCidrs:\n",
         &format!(
-            "outboundTls:\n  trustProfiles:\n    verify-ca:\n      caBundleFile: {}\nallowedClients:\n",
+            "outboundTls:\n  trustProfiles:\n    verify-ca:\n      caBundleFile: {}\nallowedPrivateCidrs:\n",
             ca_path.display()
         ),
         1,
@@ -830,8 +831,8 @@ fn verify_accepts_and_lists_insecure_issuer_http_only_in_development() {
     );
     let runtime = Path::new(&project).parent().unwrap().join("runtime.yaml");
     let text = std::fs::read_to_string(&runtime).unwrap().replace(
-        "  issuer: https://issuer.example.invalid\n",
-        "  issuer: http://issuer.example.invalid\n  allowInsecureHttp: true\n",
+        "      issuer: https://issuer.example.invalid\n",
+        "      issuer: http://issuer.example.invalid\n      allowInsecureHttp: true\n",
     );
     std::fs::write(&runtime, text).unwrap();
     for (flags, expected_exit, severity) in [
@@ -862,7 +863,10 @@ fn verify_accepts_and_lists_insecure_issuer_http_only_in_development() {
             .iter()
             .find(|finding| finding["code"] == "platform.posture.insecure-issuer-http")
             .unwrap_or_else(|| panic!("{report}"));
-        assert_eq!(finding["path"], "/oidc/allowInsecureHttp", "{report}");
+        assert_eq!(
+            finding["path"], "/oidc/issuers/primary/allowInsecureHttp",
+            "{report}"
+        );
         assert_eq!(finding["severity"], severity, "{report}");
         if expected_exit != 0 {
             let action = finding["suggestedAction"].as_str().unwrap();

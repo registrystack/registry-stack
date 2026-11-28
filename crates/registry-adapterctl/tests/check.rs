@@ -1428,10 +1428,12 @@ database:
   runtimeUrlRef: secret:env/CASE_DB_RUNTIME
   migrationUrlRef: secret:env/CASE_DB_MIGRATION
 oidc:
-  issuer: https://issuer.example.invalid
-  audience: ${{ADAPTERCTL_TEST_AUDIENCE:-case-api}}
-allowedClients:
-  - case-portal
+  issuers:
+    primary:
+      issuer: https://issuer.example.invalid
+      audience: ${{ADAPTERCTL_TEST_AUDIENCE:-case-api}}
+      allowedClients:
+      - case-portal
 allowedPrivateCidrs:
   - 10.0.0.0/8
 audit:
@@ -1630,7 +1632,10 @@ fn the_runtime_file_with_environment_refuses_an_unset_variable() {
         .iter()
         .find(|diagnostic| diagnostic["code"] == "config.substitution")
         .unwrap();
-    assert_eq!(substitution["path"], "/oidc/audience", "{report}");
+    assert_eq!(
+        substitution["path"], "/oidc/issuers/primary/audience",
+        "{report}"
+    );
     assert_eq!(
         substitution["message"],
         "the environment variable ADAPTERCTL_TEST_UNSET is unset or empty"
@@ -2006,6 +2011,26 @@ fn a_job_runtime_the_loader_refuses_reports_the_located_finding() {
     );
 }
 
+#[test]
+fn the_job_runtime_refuses_facade_caller_members() {
+    let base = base_job_text("job-runtime.yaml");
+    for (member, value) in [("oidc", "{}"), ("allowedClients", "[case-portal]")] {
+        let text = format!("{base}{member}: {value}\n");
+        let (exit, report, _) = job_check_with("job-runtime.yaml", &text, &[]);
+        assert_eq!(exit, ExitCode::from(1), "{report}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| {
+                    item["code"] == "config.unknown-key" && item["path"] == format!("/{member}")
+                }),
+            "{report}"
+        );
+    }
+}
+
 /// `job check` takes `--deny-warnings` like every checking command, and a
 /// job with no warning still passes with it.
 #[test]
@@ -2069,8 +2094,8 @@ fn check_reports_default_explicit_and_invalid_postures() {
 fn check_reports_insecure_issuer_http_in_both_postures() {
     let (root, project) = mutated_project(|root| {
         let runtime = runtime_with_expressions("90").replace(
-            "  issuer: https://issuer.example.invalid\n",
-            "  issuer: http://issuer.example.invalid\n  allowInsecureHttp: true\n",
+            "      issuer: https://issuer.example.invalid\n",
+            "      issuer: http://issuer.example.invalid\n      allowInsecureHttp: true\n",
         );
         std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
     });
@@ -2094,7 +2119,7 @@ fn check_reports_insecure_issuer_http_in_both_postures() {
                 .iter()
                 .any(|finding| {
                     finding["code"] == "platform.posture.insecure-issuer-http"
-                        && finding["path"] == "/oidc/allowInsecureHttp"
+                        && finding["path"] == "/oidc/issuers/primary/allowInsecureHttp"
                         && finding["severity"] == severity
                 }),
             "{report}"
@@ -2150,13 +2175,12 @@ fn check_reports_explicit_anonymous_https() {
         "--deny-warnings",
     ]);
     assert_eq!(exit, ExitCode::SUCCESS, "{report}");
-    assert_eq!(
-        report["explicitProductionSettings"],
-        serde_json::json!([{
-            "code": "adapter.posture.anonymous-https",
-            "pointer": "/endpoints/0/anonymousHttps"
-        }])
-    );
+    let settings = report["explicitProductionSettings"].as_array().unwrap();
+    assert_eq!(settings.len(), 1, "{report}");
+    let setting = &settings[0];
+    assert_eq!(setting["code"], "adapter.posture.anonymous-https");
+    assert_eq!(setting["pointer"], "/endpoints/0/anonymousHttps");
+    assert_eq!(setting["file"], runtime.to_str().unwrap());
     assert!(
         report["diagnostics"]
             .as_array()
@@ -2247,4 +2271,315 @@ fn job_check_refuses_a_non_loopback_plaintext_postgres_source() {
             );
         }
     }
+}
+
+#[test]
+fn a_refused_check_keeps_the_position_of_the_explicit_jwt_setting() {
+    let (root, project) = mutated_project(|root| {
+        let text = runtime_with_expressions("90").replace(
+            "      allowedClients:",
+            "      accessTokenType: JWT\n      allowedClients:",
+        ).replace(
+            "  migrationUrlRef: secret:env/CASE_DB_MIGRATION",
+            "  migrationUrlRef: secret:env/CASE_DB_MIGRATION\n  testOnlyPlaintext: true\n  transport: loopback-plaintext",
+        );
+        std::fs::write(root.join("runtime.yaml"), text).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    let settings = report["explicitProductionSettings"]
+        .as_array()
+        .expect("settings");
+    assert_eq!(settings.len(), 1, "{report}");
+    let setting = &settings[0];
+    assert_eq!(
+        setting["pointer"], "/oidc/issuers/primary/accessTokenType",
+        "{report}"
+    );
+    assert_eq!(setting["file"], runtime.to_str().unwrap(), "{report}");
+    assert!(
+        setting["line"].is_number() && setting["column"].is_number(),
+        "{report}"
+    );
+}
+
+#[test]
+fn issuer_entries_with_different_audiences_are_refused_offline() {
+    let (root, project) = mutated_project(|root| {
+        let text = runtime_with_expressions("90")
+            .replace("${ADAPTERCTL_TEST_AUDIENCE:-case-api}", "case-api")
+            .replace(
+                "allowedPrivateCidrs:\n",
+                "    partner: {issuer: 'https://partner.example.invalid', audience: partner-api, allowedClients: [partner-client]}\nallowedPrivateCidrs:\n",
+            );
+        std::fs::write(root.join("runtime.yaml"), text).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| {
+                diagnostic["code"] == "platform.oidc.audiences-differ"
+                    && diagnostic["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("published effective contract")
+            }),
+        "{report}"
+    );
+}
+
+#[test]
+fn deferred_issuer_does_not_hide_a_client_conflict() {
+    let (root, project) = mutated_project(|root| {
+        let text = runtime_with_expressions("90").replace(
+            "allowedPrivateCidrs:\n",
+            "    partner: {issuer: '${ADAPTERCTL_TEST_UNSET_ISSUER}', audience: case-api, allowedClients: [case-portal]}\nallowedPrivateCidrs:\n",
+        );
+        std::fs::write(root.join("runtime.yaml"), text).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| {
+                diagnostic["code"] == "platform.oidc.client-in-two-issuers"
+                    && diagnostic["path"] == "/oidc/issuers/primary/allowedClients/0"
+            }),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_deferred_client_keeps_other_issuer_rules_enabled() {
+    let (root, project) = mutated_project(|root| {
+        let text = runtime_with_expressions("90")
+            .replace("${ADAPTERCTL_TEST_AUDIENCE:-case-api}", "case-api")
+            .replace(
+                "allowedPrivateCidrs:\n",
+                "    partner: {issuer: 'https://partner.example.invalid', audience: partner-api, allowedClients: ['${ADAPTERCTL_TEST_UNSET_CLIENT}']}\n    third: {issuer: 'https://third.example.invalid', audience: case-api, allowedClients: [case-portal]}\nallowedPrivateCidrs:\n",
+            );
+        std::fs::write(root.join("runtime.yaml"), text).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "platform.oidc.audiences-differ"),
+        "{report}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "platform.oidc.client-in-two-issuers"),
+        "{report}"
+    );
+}
+
+#[test]
+fn check_writes_explicit_production_settings_after_posture() {
+    let (root, project) = mutated_project(|root| {
+        let text = runtime_with_expressions("90").replace(
+            "      allowedClients:",
+            "      accessTokenType: JWT\n      allowedClients:",
+        );
+        std::fs::write(root.join("runtime.yaml"), text).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_adapterctl"))
+        .args([
+            "--format=json",
+            "check",
+            &project,
+            "--runtime",
+            runtime.to_str().unwrap(),
+        ])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.find("\"posture\":").unwrap() < text.find("\"explicitProductionSettings\":").unwrap(),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_refused_scope_claim_is_absent_from_explicit_production_settings() {
+    let (root, project) = mutated_project(|root| {
+        let text = runtime_with_expressions("90").replace(
+            "      allowedClients:",
+            "      scopeClaim: sub\n      allowedClients:",
+        );
+        std::fs::write(root.join("runtime.yaml"), text).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::from(1), "{report}");
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| { diagnostic["code"] == "platform.oidc.scope-claim-reserved" }),
+        "{report}"
+    );
+    assert_eq!(report["explicitProductionSettings"], json!([]), "{report}");
+}
+
+#[test]
+fn check_requires_development_for_a_test_issuer_key_source() {
+    let (root, project) = mutated_project(|root| {
+        let text = runtime_with_expressions("90").replace(
+            "      allowedClients:",
+            "      jwksSource: {type: test-issuer, documentRef: 'secret:env/TEST_JWKS'}\n      allowedClients:",
+        );
+        std::fs::write(root.join("runtime.yaml"), text).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    for posture in ["production", "development"] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_adapterctl"))
+            .args([
+                "--format=json",
+                "check",
+                &project,
+                "--runtime",
+                runtime.to_str().unwrap(),
+            ])
+            .env("REGISTRY_STACK_POSTURE", posture)
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            output.status.success(),
+            posture == "development",
+            "{report}"
+        );
+        if posture == "production" {
+            assert!(
+                report["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|finding| finding["code"] == "platform.posture.test-issuer"
+                        && finding["path"] == "/oidc/issuers/primary/jwksSource"),
+                "{report}"
+            );
+        }
+    }
+}
+
+#[test]
+fn check_names_the_destination_of_every_moved_facade_key() {
+    assert_moved_facade_key_reports(false);
+}
+
+#[test]
+fn provision_names_the_destination_of_every_moved_facade_key() {
+    assert_moved_facade_key_reports(true);
+}
+
+fn assert_moved_facade_key_reports(provision: bool) {
+    let (root, project) = mutated_project(|_| {});
+    let runtime = root.path().join("minimal/runtime.yaml");
+    for removed in registry_adapter_core::ADAPTER_FACADE_REMOVED_KEYS {
+        let text = runtime_with_expressions("90");
+        let (text, pointer) = if removed.path == "endpoints.*.caBundleRef" {
+            (
+                text.replace(
+                    "    baseUrl: https://cases.example.invalid\n",
+                    "    baseUrl: https://cases.example.invalid\n    caBundleRef: secret:file/legacy-ca.pem\n",
+                ),
+                "/endpoints/0/caBundleRef".to_owned(),
+            )
+        } else {
+            let (prefix, member) = removed.path.rsplit_once('.').unwrap_or(("", removed.path));
+            let fragment = if prefix.is_empty() {
+                format!("{member}: legacy\n")
+            } else {
+                format!("{prefix}:\n  {member}: legacy\n")
+            };
+            let start = text.find("oidc:\n").unwrap();
+            let end = text.find("allowedPrivateCidrs:\n").unwrap();
+            (
+                format!("{}{fragment}{}", &text[..start], &text[end..]),
+                format!("/{}", removed.path.replace('.', "/")),
+            )
+        };
+        std::fs::write(&runtime, text).unwrap();
+        let runtime = runtime.to_str().unwrap();
+        let args = if provision {
+            vec!["provision", "--runtime-config", runtime, "--print-sql"]
+        } else {
+            vec!["check", &project, "--runtime", runtime]
+        };
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_adapterctl"))
+            .arg("--format=json")
+            .args(args)
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{report}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| finding["path"] == pointer
+                    && finding.to_string().contains(removed.replacement)),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn check_reports_an_operational_error_when_its_report_cannot_be_written() {
+    struct FailedOutput;
+    impl std::io::Write for FailedOutput {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("synthetic output failure"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let (root, project) = mutated_project(|root| {
+        std::fs::write(root.join("runtime.yaml"), runtime_with_expressions("90")).unwrap();
+    });
+    let mut stderr = Vec::new();
+    let args = [
+        OsString::from("adapterctl"),
+        OsString::from("--format=json"),
+        OsString::from("check"),
+        OsString::from(project),
+        OsString::from("--runtime"),
+        root.path().join("minimal/runtime.yaml").into_os_string(),
+    ];
+    let exit = registry_adapterctl::main_entry_from(args, &mut FailedOutput, &mut stderr);
+    assert_eq!(
+        exit,
+        ExitCode::from(3),
+        "{}",
+        String::from_utf8_lossy(&stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&stderr).contains("output"),
+        "{stderr:?}"
+    );
 }

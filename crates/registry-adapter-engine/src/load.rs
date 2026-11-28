@@ -16,9 +16,10 @@ use std::sync::Arc;
 use registry_adapter_core::{
     check_project_pins, check_workspace, AdapterPack, AdapterProfile, AdapterProject,
     AdapterRuntimeConfig, AggregationStrategy, ComponentKind, Endpoint, SendComponent,
-    ServedFilter, Step, ToParameters, Workspace, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
-    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
-    ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    ServedFilter, Step, ToParameters, Workspace, ADAPTER_FACADE_REMOVED_KEYS,
+    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
+    ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_API_VERSION,
+    ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
     sha256_uri, AuthoredExpressions, DeclaredPosture, DevelopmentWitness, Posture, PostureReport,
@@ -698,9 +699,19 @@ fn read_runtime(
         },
         declared,
     )
-    .removed_keys(ADAPTER_REMOVED_KEYS)
+    .removed_keys(ADAPTER_FACADE_REMOVED_KEYS)
     .load::<AdapterRuntimeConfig>(&absolute)
     .map_err(|error| LoadError::Runtime(format!("the runtime config was refused: {error}")))?;
+    let issuers = &loaded.config.oidc.set;
+    let diagnostics = issuers
+        .check("/oidc/issuers")
+        .into_iter()
+        .chain(issuers.check_one_audience("/oidc/issuers", "published effective contract"))
+        .map(|diagnostic| diagnostic.render_human())
+        .collect::<String>();
+    if !diagnostics.is_empty() {
+        return Err(LoadError::Runtime(diagnostics));
+    }
     registry_adapter_core::record_endpoint_posture(&loaded.config.endpoints, &mut loaded.posture);
     loaded
         .posture
@@ -1967,6 +1978,65 @@ pub(crate) fn two_record_types_inputs() -> (AdapterProfile, AdapterPack, Adapter
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const RUNTIME_PREFIX: &str = "\
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: engine-load-test
+endpoints: []
+listener: {bind: '127.0.0.1:8080'}
+database: {runtimeUrlRef: 'secret:env/DB', migrationUrlRef: 'secret:env/DB'}
+allowedPrivateCidrs: [10.0.0.0/8]
+audit: {retentionDays: 90}
+";
+
+    #[test]
+    fn engine_load_refuses_issuers_with_different_audiences() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = directory.path().join("runtime.yaml");
+        std::fs::write(&runtime, format!("{RUNTIME_PREFIX}oidc:\n  issuers:\n    first: {{issuer: 'https://first.example.test', audience: first-api, allowedClients: [first-client]}}\n    second: {{issuer: 'https://second.example.test', audience: second-api, allowedClients: [second-client]}}\n")).unwrap();
+        let Err(LoadError::Runtime(message)) = read_runtime(&runtime, default_posture()) else {
+            panic!("expected runtime refusal");
+        };
+        assert!(
+            message.contains("platform.oidc.audiences-differ"),
+            "{message}"
+        );
+        assert!(
+            message.contains("published effective contract"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn engine_load_names_the_destination_of_every_moved_facade_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = directory.path().join("runtime.yaml");
+        for removed in ADAPTER_FACADE_REMOVED_KEYS {
+            let (text, pointer) = if removed.path == "endpoints.*.caBundleRef" {
+                (RUNTIME_PREFIX.replace("endpoints: []\n", "endpoints:\n  - endpoint: tracker\n    baseUrl: https://tracker.example.test\n    caBundleRef: secret:file/legacy-ca.pem\n"),
+                 "/endpoints/0/caBundleRef".to_owned())
+            } else {
+                let (prefix, member) = removed.path.rsplit_once('.').unwrap_or(("", removed.path));
+                let fragment = if prefix.is_empty() {
+                    format!("{member}: legacy\n")
+                } else {
+                    format!("{prefix}:\n  {member}: legacy\n")
+                };
+                (
+                    format!("{RUNTIME_PREFIX}{fragment}"),
+                    format!("/{}", removed.path.replace('.', "/")),
+                )
+            };
+            std::fs::write(&runtime, text).unwrap();
+            let Err(LoadError::Runtime(message)) = read_runtime(&runtime, default_posture()) else {
+                panic!("expected runtime refusal");
+            };
+            assert!(message.contains("config.removed-key"), "{message}");
+            assert!(message.contains(&pointer), "{message}");
+            assert!(message.contains(removed.replacement), "{message}");
+        }
+    }
 
     #[cfg(unix)]
     #[test]

@@ -249,7 +249,7 @@ async fn development_readiness_and_startup_name_the_selected_setting() {
     assert_eq!(
         body["developmentSettings"],
         serde_json::json!([{
-            "code": "platform.posture.insecure-issuer-http", "pointer": "/oidc/allowInsecureHttp"
+            "code": "platform.posture.insecure-issuer-http", "pointer": "/oidc/issuers/primary/allowInsecureHttp"
         }])
     );
     let log = served.stop_and_read_stderr();

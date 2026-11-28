@@ -666,6 +666,7 @@ async fn answer_async_status(
             &state.loaded.project,
             metadata.profile_operation(),
             metadata.record_type(),
+            &caller.scope_claim,
         );
     }
     let event = |kind: &'static str, detail: Option<Value>, at: SystemTime| {
@@ -674,7 +675,7 @@ async fn answer_async_status(
                 event_kind: kind,
                 exchange_id: physical_request_id.clone(),
                 operation: operation.operation.clone(),
-                caller_ref: caller.reference.clone(),
+                caller_ref: state.authenticator.journal_reference(&caller),
                 route_id: operation
                     .async_completion
                     .as_ref()
@@ -1115,7 +1116,7 @@ async fn caller_capabilities(
                     event_kind,
                     exchange_id: request_id.clone(),
                     operation: "getCallerCapabilities".to_owned(),
-                    caller_ref: caller.reference.clone(),
+                    caller_ref: state.authenticator.journal_reference(&caller),
                     route_id: "consultation-capabilities".to_owned(),
                     detail: None,
                 },
@@ -1165,7 +1166,7 @@ async fn journal_capability_refusal(
         event_kind: "callRefused",
         exchange_id: request_id.to_owned(),
         operation: "getCallerCapabilities".to_owned(),
-        caller_ref: caller.reference.clone(),
+        caller_ref: state.authenticator.journal_reference(caller),
         route_id: "consultation-capabilities".to_owned(),
         detail: Some(json!({"class": class.class(), "status": status.as_u16()}).to_string()),
     };
@@ -1272,6 +1273,7 @@ async fn answer(
             &state.loaded.project,
             operation.operation.as_str(),
             operation.record_type.as_str(),
+            &caller.scope_claim,
         );
     }
     if !effective_contract_matches(headers, &state.effective_contract.digest) {
@@ -1841,7 +1843,7 @@ async fn answer(
         event_kind: kind,
         exchange_id: request_id.clone(),
         operation: operation.operation.clone(),
-        caller_ref: caller.reference.clone(),
+        caller_ref: state.authenticator.journal_reference(&caller),
         route_id: operation.route_id.clone(),
         detail: detail.map(|value| value.to_string()),
     };
@@ -2905,7 +2907,7 @@ async fn run_bounded_wait(
                 event_kind: kind,
                 exchange_id: request_id.clone(),
                 operation: operation.operation.clone(),
-                caller_ref: caller.reference.clone(),
+                caller_ref: state.authenticator.journal_reference(caller),
                 route_id: operation
                     .async_completion
                     .as_ref()
@@ -3146,7 +3148,7 @@ async fn run_uncertainty_recovery(
                 event_kind: kind,
                 exchange_id: physical_request_id.to_owned(),
                 operation: operation.operation.clone(),
-                caller_ref: caller.reference.clone(),
+                caller_ref: state.authenticator.journal_reference(caller),
                 route_id: operation
                     .async_completion
                     .as_ref()
@@ -3166,7 +3168,7 @@ async fn run_uncertainty_recovery(
                 event_kind: "exchangeFailed",
                 exchange_id: physical_request_id.to_owned(),
                 operation: operation.operation.clone(),
-                caller_ref: caller.reference.clone(),
+                caller_ref: state.authenticator.journal_reference(caller),
                 route_id: operation.route_id.clone(),
                 detail: Some(
                     exchange_failure_detail(profile, ErrorClass::FacadeConflict).to_string(),
@@ -3489,7 +3491,7 @@ fn journal_fault(error: &tokio_postgres::Error) -> String {
 }
 
 async fn authenticate(state: &FacadeState, headers: &HeaderMap) -> Result<Caller, CallerRefusal> {
-    let token = bearer_token(headers).map_err(CallerRefusal::Unauthenticated)?;
+    let token = bearer_token(headers).map_err(CallerRefusal::unauthenticated)?;
     state.authenticator.authenticate(token).await
 }
 
@@ -3532,15 +3534,17 @@ pub(crate) fn require_refusal_check(status: StatusCode, check: Option<FailedChec
     }
 }
 
-/// The claim the verifier reads a caller's scopes from.
-pub(crate) const SCOPE_CLAIM: &str = "scope";
-
 /// The values the operator declared for a scope refusal of the operation on
 /// the record type: the scope claim, and the access profile that names the
 /// operation and record type with the scopes it requires. When no profile or
 /// more than one names them, only the claim is declared. Nothing here comes
 /// from the caller's token.
-fn declared_scope(project: &AdapterProject, operation: &str, record_type: &str) -> DeclaredScope {
+fn declared_scope(
+    project: &AdapterProject,
+    operation: &str,
+    record_type: &str,
+    scope_claim: &str,
+) -> DeclaredScope {
     let mut naming = project.access_profiles.iter().filter(|profile| {
         profile.operations.iter().any(|id| id.as_str() == operation)
             && profile
@@ -3548,7 +3552,7 @@ fn declared_scope(project: &AdapterProject, operation: &str, record_type: &str) 
                 .iter()
                 .any(|name| name.as_str() == record_type)
     });
-    let declared = DeclaredScope::new(SCOPE_CLAIM);
+    let declared = DeclaredScope::new(scope_claim);
     match (naming.next(), naming.next()) {
         (Some(profile), None) => {
             let declared = declared.with_access_profile(profile.id.as_str());
@@ -3577,11 +3581,15 @@ fn with_declared_scope(
     project: &AdapterProject,
     operation: &str,
     record_type: &str,
+    scope_claim: &str,
 ) -> Response {
     if check == FailedCheck::Scope {
-        response
-            .extensions_mut()
-            .insert(declared_scope(project, operation, record_type));
+        response.extensions_mut().insert(declared_scope(
+            project,
+            operation,
+            record_type,
+            scope_claim,
+        ));
     }
     response
 }
@@ -3656,11 +3664,13 @@ fn refusal_response(profile: Problems<'_>, refusal: CallerRefusal, request_id: &
     };
     let mut response = facade_problem(profile, class, status, "", request_id);
     if status == StatusCode::UNAUTHORIZED {
-        response
-            .headers_mut()
-            .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        response.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            registry_platform_httpsec::bearer_challenge(),
+        );
     }
-    noted(response, refusal.failed_check())
+    response.extensions_mut().insert(refusal.note());
+    response
 }
 
 /// The members of a record a route may wrap its domain fields in, beside the
@@ -4714,7 +4724,7 @@ fn cursor_binding<'a>(
     CursorBinding {
         operation: &operation.operation,
         binding_id: &operation.binding,
-        issuer: state.loaded.runtime.oidc.issuer.as_str(),
+        issuer: &caller.issuer,
         subject: &caller.reference,
         client: &caller.client_id,
         deployment: &state.loaded.deployment,
@@ -4774,7 +4784,7 @@ async fn refuse_call(
         event_kind: "callRefused",
         exchange_id: request_id.to_owned(),
         operation: operation.operation.clone(),
-        caller_ref: caller.reference.clone(),
+        caller_ref: state.authenticator.journal_reference(caller),
         route_id: operation.route_id.clone(),
         detail: Some(json!({ "class": class.class(), "status": status.as_u16() }).to_string()),
     };
@@ -4814,7 +4824,7 @@ async fn refuse_contract_pin(
         event_kind: "callRefused",
         exchange_id: request_id.to_owned(),
         operation: operation.operation.clone(),
-        caller_ref: caller.reference.clone(),
+        caller_ref: state.authenticator.journal_reference(caller),
         route_id: operation.route_id.clone(),
         detail: Some(
             json!({
@@ -4929,7 +4939,7 @@ async fn answer_stale_condition(
                 event_kind: kind,
                 exchange_id: request_id.to_owned(),
                 operation: operation.operation.clone(),
-                caller_ref: caller.reference.clone(),
+                caller_ref: state.authenticator.journal_reference(caller),
                 route_id: operation.route_id.clone(),
                 detail: detail.map(|value| value.to_string()),
             },
@@ -4985,7 +4995,7 @@ async fn refuse_request(
                 event_kind: kind,
                 exchange_id: request_id.to_owned(),
                 operation: operation.operation.clone(),
-                caller_ref: caller.reference.clone(),
+                caller_ref: state.authenticator.journal_reference(caller),
                 route_id: operation.route_id.clone(),
                 detail: detail.map(|value| value.to_string()),
             },
@@ -5442,12 +5452,12 @@ mod tests {
     #[test]
     fn a_scope_refusal_declares_the_claim_and_the_profile_that_names_the_operation() {
         let project = example_project(json!(["records.read"]));
-        let named = declared_scope(&project, "records-get", "person");
-        assert_eq!(named.scope_claim(), "scope");
+        let named = declared_scope(&project, "records-get", "person", "scp");
+        assert_eq!(named.scope_claim(), "scp");
         assert_eq!(named.required_scope(), Some("records.read"));
         assert_eq!(named.access_profile(), Some("records-reader"));
         // No profile names the operation, so only the claim is declared.
-        let unnamed = declared_scope(&project, "records-purge", "person");
+        let unnamed = declared_scope(&project, "records-purge", "person", "scope");
         assert_eq!(unnamed.scope_claim(), "scope");
         assert_eq!(unnamed.required_scope(), None);
         assert_eq!(unnamed.access_profile(), None);
@@ -5463,6 +5473,7 @@ mod tests {
             &project,
             "records-get",
             "person",
+            "scope",
         );
         assert!(scope.extensions().get::<DeclaredScope>().is_some());
         let operation = with_declared_scope(
@@ -5471,6 +5482,7 @@ mod tests {
             &project,
             "records-get",
             "person",
+            "scope",
         );
         assert!(operation.extensions().get::<DeclaredScope>().is_none());
     }
@@ -5875,6 +5887,7 @@ mod tests {
             issuer: "https://issuer.example".to_owned(),
             client_id: "registry-client".to_owned(),
             scopes: vec!["records.read".to_owned()],
+            scope_claim: "scope".into(),
         };
         let document = crate::govstack::consultation::caller_capabilities(
             &project,
@@ -6010,6 +6023,7 @@ mod tests {
             issuer: "https://issuer.example.invalid".to_owned(),
             client_id: "case-portal".to_owned(),
             scopes: vec!["records.read".to_owned()],
+            scope_claim: "scope".into(),
         };
         let operation = served("records-get", "person");
         assert!(admits(
@@ -6027,6 +6041,7 @@ mod tests {
             issuer: "https://issuer.example.invalid".to_owned(),
             client_id: "case-portal".to_owned(),
             scopes: vec!["records.read".to_owned()],
+            scope_claim: "scope".into(),
         };
         let project = example_project(json!(["records.read"]));
         assert_eq!(admitted(&project, &caller, "records-get", "person"), Ok(()));

@@ -19,21 +19,23 @@ use registry_platform_provision::{ProductDatabase, ProvisionInput, SchemaLayout,
 use registry_platform_yaml::Diagnostic;
 use zeroize::Zeroizing;
 
-fn refused(code: &str, path: &str, message: String, action: &str) -> Box<Diagnostic> {
+fn refused(code: &str, path: &str, message: String, action: &str) -> Vec<Diagnostic> {
     let mut diagnostic = Diagnostic::error(code, path, message, action);
     diagnostic.artifact = Some(RUNTIME_CONFIG_KIND.to_owned());
-    Box::new(diagnostic)
+    vec![diagnostic]
 }
 
-fn runtime_file_refused(file: &Path, error: &RuntimeConfigError) -> Box<Diagnostic> {
-    match error.diagnostics(Some(file)).into_iter().next() {
-        Some(diagnostic) => Box::new(diagnostic),
-        None => refused(
+fn runtime_file_refused(file: &Path, error: &RuntimeConfigError) -> Vec<Diagnostic> {
+    let diagnostics = error.diagnostics(Some(file));
+    if diagnostics.is_empty() {
+        refused(
             "config.refused",
             "",
             error.to_string(),
             "Correct the runtime file, then run provision again.",
-        ),
+        )
+    } else {
+        diagnostics
     }
 }
 
@@ -41,7 +43,7 @@ fn runtime_file_refused(file: &Path, error: &RuntimeConfigError) -> Box<Diagnost
 /// PostGIS and the bounding-box role when the package stores polygons or
 /// answers bounding-box queries. The role is named after the runtime role, as
 /// the Registry runtime and `rstack dev` name it.
-fn spatial(config: &RuntimeConfig, package: &Path) -> Result<Option<Spatial>, Box<Diagnostic>> {
+fn spatial(config: &RuntimeConfig, package: &Path) -> Result<Option<Spatial>, Vec<Diagnostic>> {
     let verified = load_package(package, &config.package_load_context()).map_err(|error| {
         refused(
             "config.refused",
@@ -65,7 +67,7 @@ pub(crate) fn load(
     posture: registry_platform_config::DeclaredPosture,
     path: &Path,
     package: Option<&Path>,
-) -> Result<ProvisionInput, Box<Diagnostic>> {
+) -> Result<ProvisionInput, Vec<Diagnostic>> {
     let absolute = std::path::absolute(path).map_err(|_| {
         refused(
             "config.unresolvable",

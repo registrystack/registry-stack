@@ -45,6 +45,8 @@ NAMES = {
     "stack-client": "registry-stack-client",
     "cli-docs": "registry-cli-docs",
     "cli-report": "registry-cli-report",
+    "platform-config": "registry-platform-config",
+    "thunderid-tooling": "registry-thunderid-tooling",
     "evidence": "registry-evidence",
     "casework": "registry-casework",
     "caseworkctl": "registry-caseworkctl",
@@ -91,6 +93,8 @@ INTENDED = {
     "stack-client": ["breg-client", "coordinator-client"],
     "cli-docs": ["engine", "ctl", "job"],
     "cli-report": ["serde"],
+    "platform-config": ["serde"],
+    "thunderid-tooling": ["platform-config"],
     "evidence": ["shared-engine", "core", "platform"],
     "casework": ["platform", "breg"],
     "caseworkctl": ["casework"],
@@ -179,6 +183,35 @@ class EngineTests(unittest.TestCase):
             NAMES["breg-client"],
             failures(ctl=[*INTENDED["ctl"], "breg-client"]),
         )
+
+    def test_platform_config_can_use_the_cli_report_type(self):
+        graph = metadata(
+            core=[*INTENDED["core"], "platform-config"],
+            **{"platform-config": ["cli-report"]},
+        )
+        self.assertEqual(MODULE.violations(graph), [])
+
+    def test_only_adapterctl_has_a_direct_identity_tooling_edge(self):
+        graph = metadata(ctl=[*INTENDED["ctl"], "thunderid-tooling"])
+        self.assertEqual(MODULE.violations(graph), [])
+        self.assertIn(NAMES["thunderid-tooling"],
+                      failures(core=[*INTENDED["core"], "thunderid-tooling"]))
+
+    def test_identity_tooling_and_cli_report_dependencies_are_still_checked(self):
+        graph = metadata(
+            core=[*INTENDED["core"], "platform-config", "cli-report"],
+            ctl=[*INTENDED["ctl"], "thunderid-tooling"],
+            **{
+                "platform-config": ["cli-report"],
+                "cli-report": ["coordinator"],
+                "thunderid-tooling": ["bregctl"],
+            },
+        )
+        refused = "\n".join(MODULE.violations(graph))
+        self.assertIn("registry-adapter-core reaches package(s)", refused)
+        self.assertIn(NAMES["cli-report"], refused)
+        self.assertIn(NAMES["coordinator"], refused)
+        self.assertIn(NAMES["bregctl"], refused)
 
     def test_authoring_reports_through_the_shared_cli_report_crate_only(self):
         graph = metadata(ctl=[*INTENDED["ctl"], "cli-report"])

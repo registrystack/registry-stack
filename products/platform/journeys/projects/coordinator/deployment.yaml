@@ -16,11 +16,14 @@ deployment:
     bind: 127.0.0.1:@PORT@
     tlsTermination: development-loopback
   authentication:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:coordinator
-    scopeClaim: scope
-    jwksSource:
-      type: discovery
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:coordinator
+        scopeClaim: scope
+        jwksSource:
+          type: discovery
+        allowedClients: from-policies
     policies:
       coordinator-producer:
         subjects: [@SUBJECT@]

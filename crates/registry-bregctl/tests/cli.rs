@@ -5182,6 +5182,49 @@ fn startup_operators_report_runtime_and_selected_package_posture_together() {
 }
 
 #[test]
+fn posture_refusal_points_to_the_explicit_package_argument() {
+    let project = packaging_project();
+    let scratch = tempfile::tempdir().unwrap();
+    let active = scratch.path().join("active");
+    prepare_packaging_candidate(&project, &format!("sha256:{}", "2".repeat(64)))
+        .publish_to_directory(&active)
+        .unwrap();
+    let candidate = scratch.path().join("candidate");
+    fs::create_dir(&candidate).unwrap();
+    let runtime = write_runtime_config(scratch.path(), &active, "127.0.0.1:1".parse().unwrap());
+    let content = fs::read_to_string(&runtime).unwrap().replace(
+        "audit:\n",
+        "audit:\n  hashKeyCustody: development-generated\n",
+    );
+    fs::write(&runtime, content).unwrap();
+    let result = bregctl(&[
+        "--format",
+        "json",
+        "plan",
+        "--runtime-config",
+        path(&runtime),
+        "--package",
+        path(&candidate),
+    ]);
+    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let report = json_stdout(&result);
+    let diagnostics = report["diagnostics"].as_array().unwrap();
+    assert!(
+        diagnostics.iter().any(|item| {
+            item["code"] == "startup.package.refused" && item["path"] == "arguments"
+        }),
+        "{report}"
+    );
+    assert!(
+        diagnostics.iter().any(|item| {
+            item["code"] == "platform.posture.generated-audit-key"
+                && item["path"] == "/audit/hashKeyCustody"
+        }),
+        "{report}"
+    );
+}
+
+#[test]
 fn package_refuses_the_removed_local_flag() {
     let output = bregctl(&["package", ".", "--local"]);
     assert_eq!(output.status.code(), Some(2));

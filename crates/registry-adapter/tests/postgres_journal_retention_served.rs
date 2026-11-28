@@ -254,13 +254,15 @@ database:
   migrationUrlRef: secret:env/TEST_DB_MIGRATION_URL
   transport: loopback-plaintext
 oidc:
-  issuer: {ISSUER}
-  audience: {AUDIENCE}
-  jwksSource:
-    type: static
-    documentRef: secret:env/TEST_JWKS
-allowedClients:
-  - synthetic-client
+  issuers:
+    primary:
+      issuer: {ISSUER}
+      audience: {AUDIENCE}
+      jwksSource:
+        type: static
+        documentRef: secret:env/TEST_JWKS
+      allowedClients:
+      - synthetic-client
 allowedPrivateCidrs:
   - 192.168.0.0/16
 audit:
@@ -1358,6 +1360,30 @@ async fn the_payments_only_host_grants_the_g2p_tables_when_disbursements_are_dec
     assert_payments_grants_exactly(PaymentHost::Alone, true, "grants-g2p-alone").await;
 }
 
+#[tokio::test]
+async fn the_payments_only_host_names_the_development_refusal_check() {
+    let upstream = UpstreamDouble::start();
+    let database = migrated_schema(
+        &upstream,
+        &Served::govstack_project(),
+        "payments-refusal-check",
+    )
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let (payments, packs) = payments_fixture(directory.path(), false);
+    let packs: Vec<&Path> = packs.iter().map(std::path::PathBuf::as_path).collect();
+    let mut serving = SplitRoles::spawn_payments(&database, &database, None, &payments, &packs);
+    serving.wait_until_listening();
+    let (status, body) = served_get(
+        serving.port,
+        "/v1/payments/licence-fees/collections/synthetic",
+        None,
+    )
+    .await;
+    assert_eq!(status, 401, "{body}");
+    assert_eq!(body["failedCheck"], "credential-missing", "{body}");
+}
+
 /// One role on both sessions owns the payment tables and issues no grant.
 #[tokio::test]
 async fn a_single_role_payments_host_issues_no_grant() {
@@ -1585,7 +1611,7 @@ async fn served_journal_rows_include_the_declared_posture() {
         (Served::start(&url).await, "production"),
         (Served::start_development(&url).await, "development"),
     ] {
-        let token = served.token("");
+        let token = served.token("other.scope");
         let (status, _, _) = served.request("GET", "/v1/records/person", Some(&token), &[], b"");
         assert_ne!(status, 500);
         let rows = connect(&served.database)

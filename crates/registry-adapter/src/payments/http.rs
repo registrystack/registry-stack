@@ -546,6 +546,7 @@ pub async fn run_only(
     let router = prepared
         .into_router(pool)
         .await?
+        .layer(registry_platform_httpsec::refusal_detail::name_failed_check(declared.posture))
         .layer(registry_platform_httpsec::posture_mark(declared.posture));
     let shutdown = crate::serve::shutdown_signal()?;
     let listener = tokio::net::TcpListener::bind(runtime.listener.bind.0)
@@ -582,13 +583,13 @@ async fn caller(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpEr
         .authenticator
         .authenticate(bearer)
         .await
-        .map_err(|error| match error {
-            CallerRefusal::Unauthenticated(_) => {
-                HttpError::refused(Error::Unauthenticated, error.failed_check())
-            }
-            CallerRefusal::Unavailable => {
-                HttpError::refused(Error::Unavailable, FailedCheck::KeySourceUnavailable)
-            }
+        .map_err(|error| HttpError {
+            code: match error {
+                CallerRefusal::Unauthenticated(_) => Error::Unauthenticated,
+                CallerRefusal::Unavailable => Error::Unavailable,
+            },
+            check: Some(error.note()),
+            declared: None,
         })
 }
 
@@ -752,6 +753,7 @@ async fn g2p_connection<'a>(
                 Err(PaymentFailure::scope_refused(
                     &connection.id,
                     &connection.required_scope,
+                    &caller.scope_claim,
                 ))
             } else {
                 Ok(connection)
@@ -1069,7 +1071,7 @@ fn audited_attempt<T: AuditedAttempt, E>(result: &Result<T, E>) -> Option<Uuid> 
 /// A payment error with, for a refused caller, the check it failed.
 struct HttpError {
     code: Error,
-    check: Option<FailedCheck>,
+    check: Option<RefusalNote>,
     declared: Option<DeclaredScope>,
 }
 impl HttpError {
@@ -1083,7 +1085,7 @@ impl HttpError {
     fn refused(code: Error, check: FailedCheck) -> Self {
         Self {
             code,
-            check: Some(check),
+            check: Some(RefusalNote::new(check)),
             declared: None,
         }
     }
@@ -1092,7 +1094,7 @@ impl From<PaymentFailure> for HttpError {
     fn from(failure: PaymentFailure) -> Self {
         Self {
             code: failure.code,
-            check: failure.check,
+            check: failure.check.map(RefusalNote::new),
             declared: failure.declared,
         }
     }
@@ -1102,14 +1104,20 @@ impl IntoResponse for HttpError {
         let problem = PaymentProblem::from(self.code);
         let status =
             StatusCode::from_u16(problem.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        crate::facade::require_refusal_check(status, self.check);
+        crate::facade::require_refusal_check(status, self.check.map(|note| note.check));
         let mut response = (status, Json(problem)).into_response();
         response.headers_mut().insert(
             "content-type",
             HeaderValue::from_static("application/problem+json"),
         );
-        if let Some(check) = self.check {
-            response.extensions_mut().insert(RefusalNote::new(check));
+        if status == StatusCode::UNAUTHORIZED {
+            response.headers_mut().insert(
+                axum::http::header::WWW_AUTHENTICATE,
+                registry_platform_httpsec::bearer_challenge(),
+            );
+        }
+        if let Some(note) = self.check {
+            response.extensions_mut().insert(note);
         }
         if let Some(declared) = self.declared {
             response.extensions_mut().insert(declared);
@@ -1148,6 +1156,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_401_carries_a_bearer_challenge() {
+        let response = HttpError::refused(Error::Unauthenticated, FailedCheck::CredentialMissing)
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers().get(axum::http::header::WWW_AUTHENTICATE),
+            Some(&registry_platform_httpsec::bearer_challenge())
+        );
+    }
+
+    #[test]
     #[cfg(debug_assertions)]
     #[should_panic(expected = "a refusal was built without its failed check")]
     fn a_forbidden_payment_answer_without_its_check_is_not_built() {
@@ -1159,6 +1178,7 @@ mod tests {
         let response = HttpError::from(PaymentFailure::scope_refused(
             "mifos-main",
             "payments.write",
+            "scp",
         ))
         .into_response();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -1166,7 +1186,7 @@ mod tests {
             .extensions()
             .get::<DeclaredScope>()
             .expect("the declared scope values");
-        assert_eq!(declared.scope_claim(), "scope");
+        assert_eq!(declared.scope_claim(), "scp");
         assert_eq!(declared.required_scope(), Some("payments.write"));
         assert_eq!(declared.access_profile(), Some("mifos-main"));
     }

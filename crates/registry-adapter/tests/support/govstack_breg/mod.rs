@@ -460,12 +460,14 @@ database:
   migrationUrlRef: secret:env/TEST_ADAPTER_DB_URL
   testOnlyPlaintext: true
 oidc:
-  issuer: {ISSUER}
-  audience: {AUDIENCE}
-  jwksSource:
-    type: static
-    documentRef: secret:env/TEST_ADAPTER_JWKS
-allowedClients: [{CLIENT_ID}]
+  issuers:
+    primary:
+      issuer: {ISSUER}
+      audience: {AUDIENCE}
+      jwksSource:
+        type: static
+        documentRef: secret:env/TEST_ADAPTER_JWKS
+      allowedClients: [{CLIENT_ID}]
 allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90

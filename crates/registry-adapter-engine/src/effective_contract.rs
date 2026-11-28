@@ -50,6 +50,8 @@ pub enum ContractError {
     MissingOperation(String),
     #[error("the effective operation schema could not be derived: {0}")]
     Schema(String),
+    #[error("oidc.issuers does not declare an audience")]
+    MissingAudience,
     #[error("the effective contract could not be serialized")]
     Serialize,
     #[error("the effective contract could not be canonicalized")]
@@ -255,7 +257,18 @@ impl EffectiveContract {
             artifact_deployment_digest: loaded.deployment.clone(),
             authentication: AuthenticationRequirement {
                 scheme: "bearer",
-                audience: loaded.runtime.oidc.audience.clone(),
+                audience: loaded
+                    .runtime
+                    .oidc
+                    .set
+                    .iter()
+                    .next()
+                    .ok_or(ContractError::MissingAudience)?
+                    .1
+                    .core
+                    .provider
+                    .audience
+                    .clone(),
                 client_admission: "allowlist",
             },
             authority: AuthorityBoundary {

@@ -191,9 +191,18 @@ impl Serialize for Ordered<'_> {
         for (key, value) in FORMAT {
             map.serialize_entry(key, value)?;
         }
+        let settings_after_posture = members.get("command").and_then(Value::as_str)
+            == Some("check")
+            && members.contains_key("posture");
         for (key, value) in members {
-            if !named(key) {
-                map.serialize_entry(key, value)?;
+            if named(key) || (settings_after_posture && key == "explicitProductionSettings") {
+                continue;
+            }
+            map.serialize_entry(key, value)?;
+            if settings_after_posture && key == "posture" {
+                if let Some(settings) = members.get("explicitProductionSettings") {
+                    map.serialize_entry("explicitProductionSettings", settings)?;
+                }
             }
         }
         map.end()

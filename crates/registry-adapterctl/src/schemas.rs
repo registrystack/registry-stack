@@ -677,11 +677,24 @@ mod tests {
         let runtime: Value =
             serde_json::from_str(&documents().unwrap()["runtime.v1alpha1.schema.json"]).unwrap();
         let definitions = runtime["$defs"].as_object().unwrap();
-        for embedded in ["DatabaseConfig", "ListenerConfig", "OidcIssuerConfig"] {
+        for embedded in [
+            "DatabaseConfig",
+            "ListenerConfig",
+            "AccessTokenType",
+            "ScopeClaimName",
+        ] {
             assert!(
                 definitions.contains_key(embedded),
                 "the runtime schema must carry {embedded}"
             );
+        }
+        let entry = &definitions["AdapterCallerIssuer"];
+        let provider = &shared["OidcIssuerConfig"];
+        for (name, schema) in provider["properties"].as_object().unwrap() {
+            assert_eq!(&entry["properties"][name], schema);
+        }
+        for member in provider["required"].as_array().unwrap() {
+            assert!(entry["required"].as_array().unwrap().contains(member));
         }
         for (name, definition) in shared {
             if let Some(carried) = definitions.get(name) {

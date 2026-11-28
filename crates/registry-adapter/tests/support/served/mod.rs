@@ -596,16 +596,46 @@ impl Served {
             runtime_id,
             database,
             None,
+            access_token_test_key(jsonwebtoken::Algorithm::ES256),
+            None,
         )
         .await
     }
 
     pub async fn start_development(upstream_url: &str) -> Self {
+        Self::start_in_posture_with_key(
+            upstream_url,
+            Some("development"),
+            access_token_test_key(jsonwebtoken::Algorithm::ES256),
+        )
+        .await
+    }
+
+    pub async fn start_in_posture_with_key(
+        upstream_url: &str,
+        posture: Option<&str>,
+        key: registry_platform_crypto::PrivateJwk,
+    ) -> Self {
+        let mut served = Self::spawn_in_posture(
+            upstream_url, &Self::example_project(), None, "tracker", CURSOR_KEY, &[],
+            "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
+            "      type: basic\n      usernameRef: secret:env/TEST_UPSTREAM_USERNAME\n      passwordRef: secret:env/TEST_UPSTREAM_PASSWORD\n",
+            86_400, DEFAULT_RUNTIME_ID, None, posture, key, None,
+        ).await;
+        served.wait_until_listening();
+        served
+    }
+
+    pub async fn start_with_partner(
+        upstream_url: &str,
+        partner: &registry_platform_crypto::PrivateJwk,
+    ) -> Self {
         let mut served = Self::spawn_in_posture(
             upstream_url, &Self::example_project(), None, "tracker", CURSOR_KEY, &[],
             "cursorKeyRef: secret:env/TEST_CURSOR_KEY\n",
             "      type: basic\n      usernameRef: secret:env/TEST_UPSTREAM_USERNAME\n      passwordRef: secret:env/TEST_UPSTREAM_PASSWORD\n",
             86_400, DEFAULT_RUNTIME_ID, None, Some("development"),
+            access_token_test_key(jsonwebtoken::Algorithm::ES256), Some(partner),
         ).await;
         served.wait_until_listening();
         served
@@ -625,18 +655,22 @@ impl Served {
         runtime_id: &str,
         database: Option<&str>,
         posture: Option<&str>,
+        key: registry_platform_crypto::PrivateJwk,
+        partner: Option<&registry_platform_crypto::PrivateJwk>,
     ) -> Self {
         let database = match database {
             Some(database) => database.to_owned(),
             None => schema_url().await,
         };
-        let key = access_token_test_key(jsonwebtoken::Algorithm::ES256);
         let jwks = jwks_from_private_jwk(&key).to_string();
         let insecure_issuer = if posture == Some("development") {
-            "  allowInsecureHttp: true\n"
+            "      allowInsecureHttp: true\n"
         } else {
             ""
         };
+        let partner_entry = partner.map_or_else(String::new, |_| format!(
+            "    partner:\n      issuer: https://partner.example.test\n      audience: {AUDIENCE}\n      jwksSource: {{type: static, documentRef: 'secret:env/TEST_PARTNER_JWKS'}}\n      allowedClients: [partner-client]\n      scopeClaim: scp\n"
+        ));
         let directory = tempfile::tempdir().expect("a scratch directory");
         let runtime = directory.path().join("runtime.yaml");
         std::fs::write(
@@ -656,15 +690,17 @@ database:
   migrationUrlRef: secret:env/TEST_DB_URL
   transport: loopback-plaintext
 oidc:
-  issuer: {ISSUER}
-  audience: {AUDIENCE}
-{insecure_issuer}  jwksSource:
-    type: static
-    documentRef: secret:env/TEST_JWKS
-allowedClients:
-  - synthetic-client
-  - {SECOND_CLIENT}
-allowedPrivateCidrs:
+  issuers:
+    primary:
+      issuer: {ISSUER}
+      audience: {AUDIENCE}
+{insecure_issuer}      jwksSource:
+        type: static
+        documentRef: secret:env/TEST_JWKS
+      allowedClients:
+      - synthetic-client
+      - {SECOND_CLIENT}
+{partner_entry}allowedPrivateCidrs:
   - 192.168.0.0/16
 audit:
   retentionDays: 90
@@ -683,6 +719,12 @@ idempotency:
             .env_remove("REGISTRY_STACK_POSTURE");
         if let Some(posture) = posture {
             command.args(["--posture", posture]);
+        }
+        if let Some(partner) = partner {
+            command.env(
+                "TEST_PARTNER_JWKS",
+                jwks_from_private_jwk(partner).to_string(),
+            );
         }
         // The example folder holds only the project; its profile and pack
         // are the maintained artifacts, passed by flag. A project directory
@@ -884,6 +926,16 @@ idempotency:
     /// A token for `subject` holding `scope`, with `extra` claims written
     /// over the standard ones (a client, an assertion issuer, a long `sub`).
     pub fn token_with(&self, subject: &str, scope: &str, extra: Value) -> String {
+        self.token_with_key(subject, scope, extra, &self.key)
+    }
+
+    pub fn token_with_key(
+        &self,
+        subject: &str,
+        scope: &str,
+        extra: Value,
+        key: &registry_platform_crypto::PrivateJwk,
+    ) -> String {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("epoch")
@@ -902,7 +954,7 @@ idempotency:
         for (name, value) in extra.as_object().expect("extra claims are an object") {
             claims[name] = value.clone();
         }
-        sign_compact_jwt_with_key(&self.key, "at+jwt", "canary-resource-key", claims)
+        sign_compact_jwt_with_key(key, "at+jwt", "canary-resource-key", claims)
     }
 
     /// One GET over a fresh connection: status, headers, JSON body.

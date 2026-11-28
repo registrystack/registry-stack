@@ -384,9 +384,11 @@ database:
   runtimeUrlRef: secret:env/CLOSURE_TEST_DB_URL
   migrationUrlRef: secret:env/CLOSURE_TEST_DB_URL
 oidc:
-  issuer: {issuer}
-  audience: breg-govstack-closure-test
-allowedClients: [{allowed_clients}]
+  issuers:
+    primary:
+      issuer: {issuer}
+      audience: breg-govstack-closure-test
+      allowedClients: [{allowed_clients}]
 allowedPrivateCidrs: [10.0.0.0/8]
 audit:
   retentionDays: 90

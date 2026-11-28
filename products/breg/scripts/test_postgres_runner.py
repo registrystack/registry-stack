@@ -419,7 +419,7 @@ class PostgresRunnerTests(unittest.TestCase):
                 '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n',
                 '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n' * 2,
             ),
-            source.replace("posture_tests::opposite_activation_posture_", "posture_tests::other_posture_"),
+            source.replace("      posture_tests::\n", "      posture_tests::other_posture -- --exact\n"),
             source.replace(' -- --test-threads=2\n', '\n'),
         )):
             with self.subTest(mutation=index), tempfile.TemporaryDirectory() as directory:
