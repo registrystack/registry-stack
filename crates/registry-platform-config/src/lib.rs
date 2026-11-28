@@ -9,6 +9,7 @@
 //! validates the rest of its configuration contract.
 
 pub mod blocks;
+mod caller_issuers;
 mod check_acceptances;
 mod loader;
 mod metrics_bind;
@@ -43,6 +44,11 @@ pub use blocks::{
     MAX_OIDC_AUDIENCE_CHARACTERS, MIN_ATTEMPT_TIMEOUT_MILLISECONDS,
     MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
+pub use caller_issuers::{
+    AccessTokenType, Admitted, AllowedClients, CallerIssuerCore, CallerIssuerEntry, CallerIssuers,
+    ClientActorKinds, ClientList, ClientRule, DeclaredActorKind, IssuerActorKind, PolicyClients,
+    ScopeClaimName,
+};
 pub use check_acceptances::{apply_check_acceptances, read_project_check_acceptances};
 pub use loader::{
     contains_environment_expression, reject_environment_expressions_in_authored_yaml,
@@ -60,10 +66,11 @@ pub use package::{
     PackageLimits, VerifiedPackage, REVISION_FILE, SUM_FILE,
 };
 pub use posture::{
-    collect_development_settings, declared, declared_from, DeclaredPosture, DevelopmentClass,
-    DevelopmentOnlyRefused, DevelopmentSetting, DevelopmentWitness, ExplicitProductionSetting,
+    collect_development_settings, collect_posture_settings, declared, declared_from,
+    CollectedSettings, DeclaredPosture, DevelopmentClass, DevelopmentOnlyRefused,
+    DevelopmentSetting, DevelopmentWitness, ExplicitClass, ExplicitProductionSetting,
     FoundExplicitSetting, FoundSetting, Gated, Posture, PostureError, PostureReport, PostureSource,
-    SettingOrigin, DEVELOPMENT, POSTURE_ENV,
+    SettingOrigin, Stated, DEVELOPMENT, POSTURE_ENV,
 };
 pub use secrets::{
     ProtectedSecret, SecretError, SecretFileCheck, SecretProvider, SecretReference, SecretResolver,

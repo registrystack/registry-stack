@@ -590,3 +590,196 @@ fn the_schema_is_the_inner_schema_with_the_development_codes() {
         serde_json::json!(["platform.posture.example-plaintext"])
     );
 }
+
+// Stated
+
+static LENIENT: ExplicitProductionSetting = ExplicitProductionSetting {
+    code: "platform.posture.example-lenient",
+    key: "format",
+    summary: "The format is lenient, which the operator states deliberately",
+};
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+enum Format {
+    Strict,
+    Lenient,
+}
+
+impl ExplicitClass for Format {
+    const SETTINGS: &'static [&'static ExplicitProductionSetting] = &[&LENIENT];
+
+    fn explicit_setting(&self) -> Option<&'static ExplicitProductionSetting> {
+        match self {
+            Format::Strict => None,
+            Format::Lenient => Some(&LENIENT),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct Tokens {
+    format: Stated<Format>,
+    #[serde(default)]
+    allow: Option<Gated<Insecure>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct FlatTokens {
+    #[serde(flatten)]
+    tokens: Tokens,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct StatedExample {
+    direct: Tokens,
+    #[serde(default)]
+    flat: Option<FlatTokens>,
+}
+
+fn load_stated(body: &str) -> (Result<StatedExample, String>, CollectedSettings) {
+    let text = format!("{HEAD}{body}");
+    let (result, collected) = collect_posture_settings(|| {
+        RuntimeConfigLoader::new_without_posture(ENVELOPE)
+            .parse_str::<StatedExample>(&text, |_| None)
+    });
+    (
+        result
+            .map(|loaded| loaded.config)
+            .map_err(|e| e.to_string()),
+        collected,
+    )
+}
+
+#[test]
+fn stated_records_an_explicit_value_with_its_pointer_and_position_and_never_refuses() {
+    let (result, collected) = load_stated("direct:\n  format: lenient\n");
+    let config = result.expect("an explicit setting never refuses");
+    assert_eq!(config.direct.format.get(), &Format::Lenient);
+    assert_eq!(collected.explicit.len(), 1);
+    let found = &collected.explicit[0];
+    assert_eq!(found.setting.code, "platform.posture.example-lenient");
+    assert_eq!(found.pointer.as_deref(), Some("/direct/format"));
+    assert_eq!(found.position.map(|position| position.line), Some(4));
+    assert_eq!(found.origin, SettingOrigin::RuntimeFile);
+    assert!(collected.development.is_empty());
+}
+
+#[test]
+fn an_explicit_setting_becomes_the_report_line_for_its_file() {
+    let (_, collected) = load_stated("direct:\n  format: lenient\n");
+    let found = &collected.explicit[0];
+    let line = found.report_line(Some("runtime.yaml"));
+    assert_eq!(line.code, "platform.posture.example-lenient");
+    assert_eq!(line.file.as_deref(), Some("runtime.yaml"));
+    assert_eq!(line.pointer.as_deref(), Some("/direct/format"));
+    assert_eq!(line.line, Some(4));
+    assert_eq!(line.column, found.position.map(|position| position.column));
+    assert!(line.column.is_some());
+    assert_eq!(line.summary, found.setting.summary);
+    let unplaced = FoundExplicitSetting {
+        pointer: None,
+        position: None,
+        ..found.clone()
+    };
+    let line = unplaced.report_line(None);
+    assert_eq!(
+        (line.file, line.pointer, line.line, line.column),
+        (None, None, None, None)
+    );
+}
+
+#[test]
+fn stated_records_nothing_for_the_value_every_posture_treats_as_the_default() {
+    let (result, collected) = load_stated("direct:\n  format: strict\n");
+    assert!(result.is_ok());
+    assert!(collected.explicit.is_empty());
+}
+
+#[test]
+fn stated_in_a_flattened_member_points_at_the_holding_mapping_key() {
+    let (result, collected) = load_stated("direct:\n  format: strict\nflat:\n  format: lenient\n");
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(collected.explicit.len(), 1);
+    assert_eq!(
+        collected.explicit[0].pointer.as_deref(),
+        Some("/flat/format")
+    );
+}
+
+#[test]
+fn the_two_collectors_record_a_gated_and_a_stated_value_of_one_decode_apart() {
+    let (result, collected) = load_stated("direct:\n  format: lenient\n  allow: true\n");
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(collected.explicit.len(), 1);
+    assert_eq!(collected.development.len(), 1);
+    assert_eq!(
+        collected.development[0].setting.code,
+        "platform.posture.example-insecure"
+    );
+}
+
+#[test]
+fn collect_development_settings_still_returns_the_development_findings_of_a_decode_with_stated_values(
+) {
+    let text = format!("{HEAD}direct:\n  format: lenient\n  allow: true\n");
+    let (result, found) = collect_development_settings(|| {
+        RuntimeConfigLoader::new_without_posture(ENVELOPE)
+            .parse_str::<StatedExample>(&text, |_| None)
+    });
+    assert!(result.is_ok());
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].setting.code, "platform.posture.example-insecure");
+}
+
+#[test]
+fn nested_posture_collectors_keep_their_own_explicit_findings() {
+    let ((inner, after), outer) = collect_posture_settings(|| {
+        let (_, inner) = collect_posture_settings(|| {
+            let text = format!("{HEAD}direct:\n  format: lenient\n");
+            let _ = RuntimeConfigLoader::new_without_posture(ENVELOPE)
+                .parse_str::<StatedExample>(&text, |_| None);
+        });
+        let (_, after) = collect_posture_settings(|| ());
+        (inner.explicit.len(), after.explicit.len())
+    });
+    assert_eq!((inner, after, outer.explicit.len()), (1, 0, 0));
+}
+
+#[test]
+fn the_loader_hands_every_explicit_setting_to_the_posture_report() {
+    let text = format!("{HEAD}direct:\n  format: lenient\n");
+    for posture in [Posture::Production, Posture::Development] {
+        let loader = RuntimeConfigLoader::new(ENVELOPE, declared(posture));
+        let loaded = loader
+            .parse_str::<StatedExample>(&text, |_| None)
+            .expect("an explicit setting is valid in every posture");
+        let listed = loaded.posture.explicit_settings();
+        assert_eq!(listed.len(), 1, "{posture:?}");
+        assert_eq!(listed[0].setting.code, "platform.posture.example-lenient");
+        assert_eq!(listed[0].pointer.as_deref(), Some("/direct/format"));
+        assert_eq!(listed[0].position.map(|position| position.line), Some(4));
+        assert!(loaded.posture.settings().is_empty());
+        assert!(loaded
+            .posture
+            .diagnostics(Path::new("runtime.yaml"))
+            .is_empty());
+    }
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn the_stated_schema_is_the_inner_schema_with_the_explicit_codes() {
+    let mut generator = schemars::generate::SchemaSettings::draft2020_12().into_generator();
+    let schema = generator.subschema_for::<Stated<Format>>();
+    let schema = serde_json::to_value(&schema).unwrap();
+    assert_eq!(
+        schema["x-registry-explicit-production"],
+        serde_json::json!(["platform.posture.example-lenient"])
+    );
+    assert!(schema.get("x-registry-development-only").is_none());
+}

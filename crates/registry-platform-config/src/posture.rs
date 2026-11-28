@@ -103,9 +103,11 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::path::Path;
 
+use registry_cli_report::ExplicitSettingLine;
 use registry_platform_posture::POSTURE_FLAG;
 use registry_platform_yaml::{
-    escape_pointer_segment, gated_site, Diagnostic, Position, Severity, Source, DEVELOPMENT_ONLY,
+    escape_pointer_segment, gated_site, Diagnostic, GatedSite, Position, Severity, Source,
+    DEVELOPMENT_ONLY,
 };
 use serde::de::{Deserializer, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
@@ -249,19 +251,7 @@ impl<'de, T: DevelopmentClass + Deserialize<'de>> Deserialize<'de> for Gated<T> 
                 let site = gated_site();
                 let value = T::deserialize(inner)?;
                 if let Some(setting) = value.development_setting() {
-                    let (pointer, position) = match site {
-                        Some(site) if site.exact => (Some(site.pointer), site.position),
-                        // A flattened member is one of the holding mapping's own keys.
-                        Some(site) => (
-                            Some(format!(
-                                "{}/{}",
-                                site.pointer,
-                                escape_pointer_segment(setting.key)
-                            )),
-                            site.position,
-                        ),
-                        None => (None, None),
-                    };
+                    let (pointer, position) = setting_site(site, setting.key);
                     record(FoundSetting {
                         setting,
                         pointer,
@@ -273,6 +263,21 @@ impl<'de, T: DevelopmentClass + Deserialize<'de>> Deserialize<'de> for Gated<T> 
             }
         }
         deserializer.deserialize_newtype_struct(DEVELOPMENT_ONLY, Reads(PhantomData))
+    }
+}
+
+/// The pointer and position of a value a [`Gated`] or [`Stated`] read, from
+/// the site the YAML reader supplies. `None` when the value was decoded
+/// without the reader.
+fn setting_site(site: Option<GatedSite>, key: &str) -> (Option<String>, Option<Position>) {
+    match site {
+        Some(site) if site.exact => (Some(site.pointer), site.position),
+        // A flattened member is one of the holding mapping's own keys.
+        Some(site) => (
+            Some(format!("{}/{}", site.pointer, escape_pointer_segment(key))),
+            site.position,
+        ),
+        None => (None, None),
     }
 }
 
@@ -290,6 +295,118 @@ impl<T: DevelopmentClass + schemars::JsonSchema> schemars::JsonSchema for Gated<
         let mut schema = generator.subschema_for::<T>();
         let codes: Vec<&str> = T::SETTINGS.iter().map(|setting| setting.code).collect();
         schema.insert("x-registry-development-only".to_owned(), codes.into());
+        schema
+    }
+}
+
+/// A configuration type that has explicit production values: values valid in
+/// every posture that an operator states deliberately and that relax
+/// something.
+pub trait ExplicitClass {
+    /// Every setting a value of this type can select. Docs, schemas and tests
+    /// read it.
+    const SETTINGS: &'static [&'static ExplicitProductionSetting];
+
+    /// The setting this value selects, or `None` when it is the strict value
+    /// or the default. Implement it with an exhaustive `match`, so a new
+    /// variant forces a decision.
+    fn explicit_setting(&self) -> Option<&'static ExplicitProductionSetting>;
+}
+
+/// A value that may select an explicit production setting, the twin of
+/// [`Gated`]. Decoding it never fails because of the posture and never
+/// refuses: it records what it found with the pointer and position the YAML
+/// reader supplies, and the loader hands the findings to the
+/// [`PostureReport`], which the startup log and `check` print.
+///
+/// Unlike a gated value, a stated value is readable in every posture.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Stated<T>(T);
+
+impl<T> Stated<T> {
+    /// Hold `value`, whatever it selects. Shared blocks use it for the value
+    /// an omitted member stands for.
+    pub(crate) const fn wrap(value: T) -> Self {
+        Self(value)
+    }
+
+    /// The value.
+    pub const fn get(&self) -> &T {
+        &self.0
+    }
+
+    /// The value, taken out, for a block that holds it in another form.
+    pub(crate) fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T: ExplicitClass> Stated<T> {
+    /// The setting the value selects, or `None` when it is the strict value or
+    /// the default.
+    pub fn explicit_setting(&self) -> Option<&'static ExplicitProductionSetting> {
+        self.0.explicit_setting()
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Stated<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, formatter)
+    }
+}
+
+impl<T: Serialize> Serialize for Stated<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de, T: ExplicitClass + Deserialize<'de>> Deserialize<'de> for Stated<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Reads<T>(PhantomData<T>);
+        impl<'de, T: ExplicitClass + Deserialize<'de>> Visitor<'de> for Reads<T> {
+            type Value = Stated<T>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a configuration value")
+            }
+
+            fn visit_newtype_struct<D: Deserializer<'de>>(
+                self,
+                inner: D,
+            ) -> Result<Stated<T>, D::Error> {
+                let site = gated_site();
+                let value = T::deserialize(inner)?;
+                if let Some(setting) = value.explicit_setting() {
+                    let (pointer, position) = setting_site(site, setting.key);
+                    record_explicit(FoundExplicitSetting {
+                        setting,
+                        pointer,
+                        position,
+                        origin: SettingOrigin::RuntimeFile,
+                    });
+                }
+                Ok(Stated(value))
+            }
+        }
+        deserializer.deserialize_newtype_struct(DEVELOPMENT_ONLY, Reads(PhantomData))
+    }
+}
+
+#[cfg(feature = "schema")]
+impl<T: ExplicitClass + schemars::JsonSchema> schemars::JsonSchema for Stated<T> {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        T::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = generator.subschema_for::<T>();
+        let codes: Vec<&str> = T::SETTINGS.iter().map(|setting| setting.code).collect();
+        schema.insert("x-registry-explicit-production".to_owned(), codes.into());
         schema
     }
 }
@@ -335,12 +452,39 @@ pub struct FoundExplicitSetting {
     pub origin: SettingOrigin,
 }
 
-/// Run `decode` and return what it returned with every development-only
-/// setting a [`Gated`] recorded while it ran. Calls nest: an inner call keeps
-/// its own findings and restores the outer collector, also on a panic.
-pub fn collect_development_settings<R>(decode: impl FnOnce() -> R) -> (R, Vec<FoundSetting>) {
+impl FoundExplicitSetting {
+    /// The line a `check` report lists for this setting. `file` names the
+    /// document the pointer refers to: the runtime file, or the package for a
+    /// setting found there.
+    #[must_use]
+    pub fn report_line(&self, file: Option<&str>) -> ExplicitSettingLine {
+        ExplicitSettingLine {
+            code: self.setting.code.to_owned(),
+            file: file.map(ToOwned::to_owned),
+            pointer: self.pointer.clone(),
+            line: self.position.map(|position| position.line),
+            column: self.position.map(|position| position.column),
+            summary: self.setting.summary.to_owned(),
+        }
+    }
+}
+
+/// What one decode found: the development-only settings a [`Gated`] recorded
+/// and the explicit production settings a [`Stated`] recorded.
+#[derive(Clone, Debug, Default)]
+pub struct CollectedSettings {
+    pub development: Vec<FoundSetting>,
+    pub explicit: Vec<FoundExplicitSetting>,
+}
+
+/// Run `decode` and return what it returned with every development-only and
+/// explicit production setting a [`Gated`] or a [`Stated`] recorded while it
+/// ran. Calls nest: an inner call keeps its own findings and restores the
+/// outer collector, also on a panic.
+pub fn collect_posture_settings<R>(decode: impl FnOnce() -> R) -> (R, CollectedSettings) {
     let guard = CollectorGuard {
-        previous: COLLECTOR.with(|collector| collector.borrow_mut().replace(Vec::new())),
+        previous: COLLECTOR
+            .with(|collector| collector.borrow_mut().replace(CollectedSettings::default())),
     };
     let result = decode();
     let found = COLLECTOR
@@ -350,13 +494,20 @@ pub fn collect_development_settings<R>(decode: impl FnOnce() -> R) -> (R, Vec<Fo
     (result, found)
 }
 
+/// [`collect_posture_settings`] for a caller that reads only the
+/// development-only settings.
+pub fn collect_development_settings<R>(decode: impl FnOnce() -> R) -> (R, Vec<FoundSetting>) {
+    let (result, collected) = collect_posture_settings(decode);
+    (result, collected.development)
+}
+
 thread_local! {
-    static COLLECTOR: RefCell<Option<Vec<FoundSetting>>> = const { RefCell::new(None) };
+    static COLLECTOR: RefCell<Option<CollectedSettings>> = const { RefCell::new(None) };
 }
 
 /// Restores the collector that was installed before this one, also on a panic.
 struct CollectorGuard {
-    previous: Option<Vec<FoundSetting>>,
+    previous: Option<CollectedSettings>,
 }
 
 impl Drop for CollectorGuard {
@@ -370,7 +521,17 @@ impl Drop for CollectorGuard {
 fn record(found: FoundSetting) {
     COLLECTOR.with(|collector| {
         if let Some(found_so_far) = collector.borrow_mut().as_mut() {
-            found_so_far.push(found);
+            found_so_far.development.push(found);
+        }
+    });
+}
+
+/// Add `found` to the active collector. Outside a collector nothing is
+/// recorded.
+fn record_explicit(found: FoundExplicitSetting) {
+    COLLECTOR.with(|collector| {
+        if let Some(found_so_far) = collector.borrow_mut().as_mut() {
+            found_so_far.explicit.push(found);
         }
     });
 }

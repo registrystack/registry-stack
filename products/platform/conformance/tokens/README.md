@@ -99,7 +99,7 @@ A cell holds:
 - `basis`: `inferred` while `main` is a reading of the code, `observed` once a test has run the fixture through the product.
 - `reason` and `targetReason`: why a `main` or a `target` is `unknown`, `n-a` or `none`, or why a product cannot follow one of the driver's choices listed at the head of `expected.yaml`.
 
-A result is `admitted`, `admitted/<actor kind>`, `admitted/unspecified`, `refused/<stage>`, `none`, `n-a` or `unknown`. A stage is one of the verifier's labels (`header`, `algorithm`, `token-type`, `key`, `signature`, `issuer`, `audience`, `time`, `client`, `scope`, `profile`, `unavailable`) or `claims`, which a product uses for its own claim checks.
+A result is `admitted`, `admitted/<actor kind>`, `admitted/unspecified`, `refused/<stage>`, `none`, `n-a` or `unknown`. A stage is one of the verifier's labels (`header`, `algorithm`, `token-type`, `key`, `signature`, `issuer`, `audience`, `time`, `client`, `scope`, `profile`, `unavailable`), `claims`, which a product uses for its own claim checks, or `actor-kind`. A token is refused at `actor-kind` when its kind claim cannot be read, when the claim contradicts the kind the operator declares, or when it grants no scope and no kind is declared for it.
 
 The test asserts `target` where `landed` is `true` and `main` everywhere else. Work on a change goes row by row. Set `landed: true`, watch the test fail, make the change, watch it pass.
 

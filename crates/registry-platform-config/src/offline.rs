@@ -151,11 +151,7 @@ impl<T> RuntimeFileCheck<T> {
     ) -> Diagnostic {
         let mut diagnostic = Diagnostic::error(code, pointer, message, suggested_action);
         diagnostic.artifact = Some(artifact.to_owned());
-        let position = self
-            .tree
-            .as_ref()
-            .and_then(|root| root.pointer(pointer))
-            .map(|node| node.span.start);
+        let position = self.value_position(pointer);
         diagnostic.source = Some(Source {
             file: self.file.clone(),
             line: position.map(|position| position.line),
@@ -200,6 +196,31 @@ impl<T> RuntimeFileCheck<T> {
             path: pointer.to_owned(),
             message: message.into(),
         });
+    }
+
+    /// Attach a related note at the value of another member in this runtime
+    /// file, such as one element of a list.
+    pub fn add_related_at(
+        &self,
+        diagnostic: &mut Diagnostic,
+        pointer: &str,
+        message: impl Into<String>,
+    ) {
+        let position = self.value_position(pointer);
+        diagnostic.related.push(Related {
+            file: self.file.clone(),
+            line: position.map(|position| position.line),
+            column: position.map(|position| position.column),
+            path: pointer.to_owned(),
+            message: message.into(),
+        });
+    }
+
+    fn value_position(&self, pointer: &str) -> Option<registry_platform_yaml::Position> {
+        self.tree
+            .as_ref()
+            .and_then(|root| root.pointer(pointer))
+            .map(|node| node.span.start)
     }
 
     fn key_position(&self, pointer: &str) -> Option<registry_platform_yaml::Position> {

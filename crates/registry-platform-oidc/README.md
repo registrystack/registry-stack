@@ -13,6 +13,13 @@ OIDC discovery, JWKS caching, and JWT verification for registry services.
 - Scope mapping for translating provider scopes into platform permissions.
 - Strict extraction and client/resource binding for the shared contextual
   authorization claims.
+- `IssuerSet`, a set of issuers. A token is matched to one `IssuerEntry` by its
+  exact `iss` and verified only with that entry's verifier. `caller_kind`
+  settles the kind of caller from the kind the operator declared for the client
+  or issuer, else the kind claim, else `Unspecified`, and refuses a claim that
+  contradicts the declaration. `refuse_identity_only` refuses a token that has
+  no kind and no scope. A verifier whose access-token type set holds `JWT`
+  refuses a token that carries an ID-token marker.
 - Typed exact task-grant status bindings and operator-pinned status clients
   for any task authority; the consuming product supplies each authority's
   status route, scope, and resource. `TaskGrantStatusRegistry::validate_configuration`

@@ -46,7 +46,7 @@ use registry_platform_yaml::{
 use serde::de::DeserializeOwned;
 
 use crate::posture::{
-    collect_development_settings, DeclaredPosture, DevelopmentWitness, Posture, PostureReport,
+    collect_posture_settings, DeclaredPosture, DevelopmentWitness, Posture, PostureReport,
     PostureSource,
 };
 use crate::{resolve_config_env_expression, sha256_uri};
@@ -503,7 +503,7 @@ impl RuntimeConfigLoader {
     }
 
     /// Decode the document, then settle the posture: collect the
-    /// development-only settings the decode finds, and under
+    /// development-only and explicit production settings the decode finds, and under
     /// [`Decision::Refuse`] refuse them in production.
     fn parse<T: DeserializeOwned>(
         &self,
@@ -524,10 +524,13 @@ impl RuntimeConfigLoader {
                 development: None,
             });
         };
-        let (decoded, found) = collect_development_settings(|| self.decode::<T>(file, bytes, fill));
+        let (decoded, found) = collect_posture_settings(|| self.decode::<T>(file, bytes, fill));
         let mut posture = PostureReport::new(declared);
-        for setting in found {
+        for setting in found.development {
             posture.record(setting);
+        }
+        for setting in found.explicit {
+            posture.record_explicit(setting);
         }
         let named = Path::new(file);
         match decoded {

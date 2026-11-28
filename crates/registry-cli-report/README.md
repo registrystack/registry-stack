@@ -10,6 +10,11 @@ dependency.
 `production`) and `source` (`flag`, `environment` or `default`) after the
 command members. Without it the body is unchanged.
 
+`Report::explicit_settings` adds an `explicitProductionSettings` list after
+`posture`. Each line has `code`, `pointer`, an optional `line` and `column`,
+and a value-free `summary`. It lists settings valid in every posture that
+relax something, and it is not a diagnostic.
+
 `status` is `complete`, `domain-refusal`, `usage-error`, or
 `operational-failure`, corresponding to exit codes 0 through 3. A command's
 more specific result, such as `declined`, is an `outcome`. An invalid envelope

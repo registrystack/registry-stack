@@ -31,7 +31,7 @@ use registry_platform_crypto::{
     generate_private_jwk, verify as verify_with_public_jwk, GeneratedKeyAlgorithm, LocalJwkSigner,
     PrivateJwk, PublicJwk,
 };
-use registry_platform_oidc::OidcError;
+use registry_platform_oidc::{ActorKind, OidcError, OPENID_CONNECT_SCOPES};
 use registry_platform_yaml::{EnvelopeRule, Expect, FormatSpec, Reader};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -82,7 +82,8 @@ fn invalid(fixture: &str, reason: impl Into<String>) -> TokenFixtureError {
 // ---------------------------------------------------------------------------
 
 /// The check at which a product refused a token: the shared verifier's labels,
-/// and `claims` for a product's own claim extraction.
+/// `claims` for a product's own claim extraction, and `actor-kind` for the
+/// caller's actor kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Stage {
     Header,
@@ -98,9 +99,10 @@ pub enum Stage {
     Profile,
     Unavailable,
     Claims,
+    ActorKind,
 }
 
-const STAGES: [(Stage, &str); 13] = [
+const STAGES: [(Stage, &str); 14] = [
     (Stage::Header, "header"),
     (Stage::Algorithm, "algorithm"),
     (Stage::TokenType, "token-type"),
@@ -114,6 +116,7 @@ const STAGES: [(Stage, &str); 13] = [
     (Stage::Profile, "profile"),
     (Stage::Unavailable, "unavailable"),
     (Stage::Claims, "claims"),
+    (Stage::ActorKind, "actor-kind"),
 ];
 
 impl Stage {
@@ -164,13 +167,14 @@ impl Outcome {
         let stage = match error {
             E::MalformedToken | E::InvalidToken | E::SubjectMismatch => Stage::Header,
             E::AlgorithmNotAllowed => Stage::Algorithm,
-            E::TokenTypeNotAllowed => Stage::TokenType,
+            E::TokenTypeNotAllowed | E::IdTokenPresented => Stage::TokenType,
             E::MissingKid | E::KidTooLong | E::UnknownKid => Stage::Key,
             E::SignatureInvalid => Stage::Signature,
-            E::IssuerMismatch { .. } => Stage::Issuer,
+            E::IssuerMismatch { .. } | E::IssuerNotConfigured => Stage::Issuer,
             E::AudienceMismatch => Stage::Audience,
             E::TokenExpired | E::TokenNotYetValid | E::InvalidTimeClaims => Stage::Time,
             E::ClientNotAllowed | E::AssertionIssuerNotAllowed => Stage::Client,
+            E::ActorKindConflict | E::ActorKindMalformed | E::IdentityOnly => Stage::ActorKind,
             E::Transport(_)
             | E::BoundedRead(_)
             | E::FetchUrl(_)
@@ -323,17 +327,6 @@ struct RawHeader {
     typ: Option<String>,
     kid: Value,
 }
-
-/// OpenID Connect scopes. They select a claim set for the person. No product
-/// profile requires one of them as a permission.
-const OPENID_CONNECT_SCOPES: [&str; 6] = [
-    "openid",
-    "profile",
-    "email",
-    "address",
-    "phone",
-    "offline_access",
-];
 
 impl TokenFixture {
     /// The first value of the claim `claim` that is not an OpenID Connect
@@ -544,12 +537,55 @@ pub enum Against {
     HumanOnlyProfile,
 }
 
+/// The issuer block a product is configured with for a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Configuration {
     Default,
     Recipe,
     JwtAccepted,
+}
+
+/// The configuration a row of `expected.yaml` names: an issuer block, and for
+/// `recipe-declared-kind` an actor kind the operator declares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RowConfiguration {
+    Default,
+    Recipe,
+    JwtAccepted,
+    /// The `recipe` block plus an actor kind the operator declares for the
+    /// fixture's client, or for the whole issuer where the token names no
+    /// client.
+    RecipeDeclaredKind,
+}
+
+impl RowConfiguration {
+    /// The issuer block the product is configured with.
+    #[must_use]
+    pub fn block(self) -> Configuration {
+        match self {
+            Self::Default => Configuration::Default,
+            Self::Recipe | Self::RecipeDeclaredKind => Configuration::Recipe,
+            Self::JwtAccepted => Configuration::JwtAccepted,
+        }
+    }
+
+    /// The actor kind the operator declares for `fixture` under this
+    /// configuration: none outside `recipe-declared-kind`, and there the
+    /// fixture's subject kind, human for a user and service for a service.
+    /// `None` too for a fixture whose subject kind is unspecified.
+    #[must_use]
+    pub fn declared_kind(self, fixture: &TokenFixture) -> Option<ActorKind> {
+        if self != Self::RecipeDeclaredKind {
+            return None;
+        }
+        match fixture.subject_kind.as_str() {
+            "user" => Some(ActorKind::Human),
+            "service" => Some(ActorKind::Service),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -623,7 +659,7 @@ fn change_or_none<'de, D: serde::Deserializer<'de>>(
 pub struct ExpectedRow {
     pub fixture: String,
     pub against: Against,
-    pub configuration: Configuration,
+    pub configuration: RowConfiguration,
     pub products: BTreeMap<String, ExpectedCell>,
 }
 
@@ -919,7 +955,13 @@ fn random_hex() -> String {
 pub struct FixtureCase {
     pub fixture: TokenFixture,
     pub against: Against,
+    /// The issuer block. A `recipe-declared-kind` row is the `recipe` block
+    /// with [`Self::declared_kind`] set.
     pub configuration: Configuration,
+    /// The actor kind the operator declares for the fixture's client, or for
+    /// the whole issuer where the token names no client. Set only for a
+    /// `recipe-declared-kind` row.
+    pub declared_kind: Option<ActorKind>,
     /// The product's issuer.
     pub issuer: String,
     /// The audience the product is configured with for this row. It is the
@@ -949,7 +991,7 @@ pub enum Comparison {
 pub struct RowReport {
     pub fixture: String,
     pub against: Against,
-    pub configuration: Configuration,
+    pub configuration: RowConfiguration,
     pub expected: Outcome,
     pub observed: Option<Outcome>,
     pub comparison: Comparison,
@@ -1189,7 +1231,15 @@ impl TokenCorpus {
             let fixture = self
                 .fixture(&row.fixture)
                 .ok_or_else(|| invalid(&row.fixture, "no such fixture"))?;
-            let audience = configured_audience(fixture, row.configuration, audience);
+            let declared_kind = row.configuration.declared_kind(fixture);
+            if row.configuration == RowConfiguration::RecipeDeclaredKind && declared_kind.is_none()
+            {
+                return Err(invalid(
+                    &row.fixture,
+                    "a recipe-declared-kind row needs a fixture whose subject kind is user or service",
+                ));
+            }
+            let audience = configured_audience(fixture, row.configuration.block(), audience);
             let token = signer.sign(
                 fixture,
                 &Binding {
@@ -1203,7 +1253,8 @@ impl TokenCorpus {
                 case: Some(FixtureCase {
                     fixture: fixture.clone(),
                     against: row.against,
-                    configuration: row.configuration,
+                    configuration: row.configuration.block(),
+                    declared_kind,
                     issuer: issuer.to_owned(),
                     audience,
                     token,

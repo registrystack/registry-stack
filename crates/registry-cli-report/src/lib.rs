@@ -7,6 +7,8 @@ use registry_platform_posture::{DeclaredPosture, PostureSource};
 use serde::ser::{Serialize, SerializeMap as _, Serializer};
 use serde_json::{json, Map, Value};
 
+const EXPLICIT_SETTINGS_MEMBER: &str = "explicitProductionSettings";
+
 const HEAD: [&str; 5] = ["ok", "command", "status", "apiVersion", "kind"];
 
 /// The four process result classes shared by operator CLIs.
@@ -70,6 +72,46 @@ pub struct Report<'a> {
     status: Status,
     outcome: Option<&'a Value>,
     posture: Option<DeclaredPosture>,
+    explicit_settings: Option<Vec<ExplicitSettingLine>>,
+}
+
+/// One explicit production setting an operator stated, as a `check` report
+/// lists it: a setting valid in every posture that relaxes something and is
+/// worth a reviewer's attention. It is a list of facts, not a diagnostic, so
+/// `--deny-warnings` is unaffected. The summary is value-free.
+///
+/// `file` names the document `pointer` refers to, such as the runtime file or
+/// the package, and is left out when absent. `pointer`, `line` and `column`
+/// are left out when unknown.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExplicitSettingLine {
+    pub code: String,
+    pub file: Option<String>,
+    pub pointer: Option<String>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub summary: String,
+}
+
+impl Serialize for ExplicitSettingLine {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("code", &self.code)?;
+        if let Some(file) = &self.file {
+            map.serialize_entry("file", file)?;
+        }
+        if let Some(pointer) = &self.pointer {
+            map.serialize_entry("pointer", pointer)?;
+        }
+        if let Some(line) = self.line {
+            map.serialize_entry("line", &line)?;
+        }
+        if let Some(column) = self.column {
+            map.serialize_entry("column", &column)?;
+        }
+        map.serialize_entry("summary", &self.summary)?;
+        map.end()
+    }
 }
 
 impl<'a> Report<'a> {
@@ -135,6 +177,7 @@ impl<'a> Report<'a> {
             status,
             outcome,
             posture: None,
+            explicit_settings: None,
         })
     }
 
@@ -146,6 +189,19 @@ impl<'a> Report<'a> {
     pub fn with_posture(self, declared: DeclaredPosture) -> Self {
         Self {
             posture: Some(declared),
+            ..self
+        }
+    }
+
+    /// Report the explicit production settings as an `explicitProductionSettings`
+    /// list placed after `posture`. An empty list is written, so a reader can
+    /// tell "none stated" from "not reported". A command member of that name
+    /// is not written, so the key appears once. Without this call the body is
+    /// unchanged.
+    #[must_use]
+    pub fn explicit_settings(self, settings: Vec<ExplicitSettingLine>) -> Self {
+        Self {
+            explicit_settings: Some(settings),
             ..self
         }
     }
@@ -163,7 +219,8 @@ impl Serialize for Report<'_> {
         }
         map.serialize_entry("version", self.version)?;
         for (key, value) in self.members {
-            let replaced = self.posture.is_some() && key == "posture";
+            let replaced = (self.posture.is_some() && key == "posture")
+                || (self.explicit_settings.is_some() && key == EXPLICIT_SETTINGS_MEMBER);
             if !HEAD.contains(&key.as_str())
                 && !matches!(key.as_str(), "version" | "diagnostics" | "outcome")
                 && !replaced
@@ -173,6 +230,9 @@ impl Serialize for Report<'_> {
         }
         if let Some(declared) = self.posture {
             map.serialize_entry("posture", &PostureMember(declared))?;
+        }
+        if let Some(settings) = &self.explicit_settings {
+            map.serialize_entry(EXPLICIT_SETTINGS_MEMBER, settings)?;
         }
         if let Some(outcome) = self.outcome {
             map.serialize_entry("outcome", outcome)?;

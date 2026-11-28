@@ -7,7 +7,10 @@
 
 mod access_token_algorithm;
 mod authorization_claims;
+mod caller_issuer;
+mod caller_kind;
 mod diagnostics;
+mod issuer_set;
 mod static_jwks;
 pub use static_jwks::{public_jwks_document, StaticJwksError};
 pub mod task_grant;
@@ -18,6 +21,12 @@ pub use authorization_claims::{
     GrantBounds, GrantClaims, GrantContextError, MatchedClientError, SchedulingPermission,
     ASSERTION_ISSUER_CLAIM, DEVELOPMENT_ASSERTION_CODE, POSTURE_CLAIM,
 };
+pub use caller_issuer::{access_token_types, ActorKindTwice, UnresolvedClients};
+pub use caller_kind::{
+    caller_kind, refuse_identity_only, CallerKind, CallerKindError, DeclaredKinds,
+    OPENID_CONNECT_SCOPES,
+};
+pub use issuer_set::{CallerRefusal, IssuerEntry, IssuerSet, IssuerSetError, VerifiedCaller};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -1155,6 +1164,17 @@ impl TokenVerifierConfig {
         }
     }
 
+    /// True when the access-token type set holds `JWT`, in any casing. Then
+    /// the verifier refuses a token that carries an ID-token marker: a `nonce`,
+    /// `at_hash`, `c_hash` or `s_hash` claim, or a `typ` claim equal to `ID`.
+    /// There is no setting to turn it off.
+    #[must_use]
+    pub fn refuses_id_token_markers(&self) -> bool {
+        self.allowed_typ
+            .iter()
+            .any(|typ| typ.eq_ignore_ascii_case("jwt"))
+    }
+
     #[must_use]
     pub fn with_scope_claim(mut self, scope_claim: impl Into<String>) -> Self {
         self.scope_claim = scope_claim.into();
@@ -1302,6 +1322,7 @@ pub struct TokenVerifier {
     allowed_access_typ: HashSet<String>,
     allowed_id_typ: HashSet<String>,
     allowed_userinfo_typ: HashSet<String>,
+    refuse_id_token_markers: bool,
 }
 
 impl TokenVerifier {
@@ -1317,6 +1338,7 @@ impl TokenVerifier {
         let allowed_access_typ = normalize_typ_set(&config.allowed_typ);
         let allowed_id_typ = normalize_typ_set(&config.allowed_id_typ);
         let allowed_userinfo_typ = normalize_typ_set(&config.allowed_userinfo_typ);
+        let refuse_id_token_markers = config.refuses_id_token_markers();
         Self {
             config,
             fetcher,
@@ -1325,7 +1347,20 @@ impl TokenVerifier {
             allowed_access_typ,
             allowed_id_typ,
             allowed_userinfo_typ,
+            refuse_id_token_markers,
         }
+    }
+
+    /// The issuer this verifier accepts tokens from.
+    #[must_use]
+    pub fn issuer(&self) -> &str {
+        &self.config.issuer
+    }
+
+    /// True when the verifier admits access tokens typed `JWT`, and so refuses
+    /// a token that carries an ID-token claim.
+    pub(crate) fn admits_jwt_type(&self) -> bool {
+        self.refuse_id_token_markers
     }
 
     /// The key source this verifier resolves signing keys through.
@@ -1374,6 +1409,9 @@ impl TokenVerifier {
             .collect();
         let data = decode::<Claims>(token, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, token))?;
+        if self.refuse_id_token_markers && carries_id_token_marker(&data.claims) {
+            return Err(OidcError::IdTokenPresented);
+        }
         self.enforce_max_token_lifetime(&data.claims)?;
         self.enforce_assertion_issuer(&data.claims)?;
         let matched_client = if enforce_client {
@@ -1698,6 +1736,19 @@ fn audience_intersects(audience: &Audience, accepted: &[String]) -> bool {
     }
 }
 
+/// Claims only an ID token carries: a nonce, a hash of the access token,
+/// authorization code or state, or a `typ` claim naming an ID token.
+fn carries_id_token_marker(claims: &Claims) -> bool {
+    ["nonce", "at_hash", "c_hash", "s_hash"]
+        .iter()
+        .any(|name| claims.extra.contains_key(*name))
+        || claims
+            .extra
+            .get("typ")
+            .and_then(Value::as_str)
+            .is_some_and(|typ| typ.eq_ignore_ascii_case("ID"))
+}
+
 fn normalize_typ_set(values: &[String]) -> HashSet<String> {
     values.iter().map(|typ| typ.to_ascii_lowercase()).collect()
 }
@@ -1786,11 +1837,27 @@ fn time_claim_is_malformed(token: &str) -> bool {
     })
 }
 
-fn issuer_from_untrusted_payload(token: &str) -> Option<String> {
+/// The claims of a token, read without verifying it. `None` when the second
+/// segment is not a base64url JSON object.
+fn untrusted_payload(token: &str) -> Option<Map<String, Value>> {
     let payload = token.split('.').nth(1)?;
     let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
-    let claims: Claims = serde_json::from_slice(&decoded).ok()?;
-    claims.iss.filter(|issuer| !issuer.is_empty())
+    serde_json::from_slice(&decoded).ok()
+}
+
+/// The `iss` of a token, read without verifying it. Only `iss` is read, so a
+/// wrongly typed claim elsewhere does not hide the issuer.
+fn issuer_from_untrusted_payload(token: &str) -> Option<String> {
+    issuer_claim(&untrusted_payload(token)?)
+}
+
+/// The `iss` claim when it is a non-empty string.
+fn issuer_claim(claims: &Map<String, Value>) -> Option<String> {
+    claims
+        .get("iss")
+        .and_then(Value::as_str)
+        .filter(|issuer| !issuer.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn matched_client_audience(access_token: &VerifiedToken) -> Result<String, OidcError> {
@@ -1824,6 +1891,10 @@ pub enum OidcError {
     AlgorithmNotAllowed,
     #[error("token type is not allowed")]
     TokenTypeNotAllowed,
+    /// The token carries an ID-token marker where only an access token is
+    /// admitted.
+    #[error("token is an ID token")]
+    IdTokenPresented,
     #[error("token header is missing kid")]
     MissingKid,
     #[error("token header kid is too long")]
@@ -1856,6 +1927,20 @@ pub enum OidcError {
     ClientNotAllowed,
     #[error("client may not exchange this assertion authority")]
     AssertionIssuerNotAllowed,
+    /// No issuer entry names the token's issuer.
+    #[error("token issuer is not configured")]
+    IssuerNotConfigured,
+    /// The token's actor kind claim contradicts the kind the operator
+    /// declared for its issuer or client.
+    #[error("token actor kind contradicts the declared kind")]
+    ActorKindConflict,
+    /// The token's actor kind claim is not a kind the service reads.
+    #[error("token actor kind claim cannot be read")]
+    ActorKindMalformed,
+    /// The token grants no scope beyond OpenID Connect scopes, and the
+    /// operator declared no actor kind for its client or issuer.
+    #[error("token grants no scope and its actor kind is not declared")]
+    IdentityOnly,
     #[error("issuer must not be empty when an endpoint override is configured")]
     MissingIssuer,
     #[error("OIDC discovery and JWKS endpoint overrides are mutually exclusive")]

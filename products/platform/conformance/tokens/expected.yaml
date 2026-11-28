@@ -23,8 +23,10 @@
 #   setting the product does not have), n-a (the product has no such concept),
 #   unknown (not determined, with a reason).
 #   Stages: header, algorithm, token-type, key, signature, issuer, audience, time,
-#   client, scope, profile, unavailable (the shared verifier's labels) and claims
-#   (a product's own claim extraction).
+#   client, scope, profile, unavailable (the shared verifier's labels), claims
+#   (a product's own claim extraction) and actor-kind (the caller's kind claim
+#   cannot be read, contradicts the declared kind, or the token grants no scope
+#   and has no declared kind).
 #
 # How the fixtures are run (what a driver sets up for each row)
 #   1. Issuer and audience are the product's own. A fixture with a literal aud is
@@ -39,6 +41,16 @@
 #      product's maximum.
 #   5. Algorithm settings, where a product has one, are set to the fixture's.
 #   6. `against: human-only-profile` selects a profile that admits only people.
+#   7. An identity-only token grants no scope and has no declared actor kind. The
+#      OpenID Connect scopes openid, profile, email, address, phone and
+#      offline_access grant nothing, and a kind the token claims is not a
+#      declaration. Every product refuses it at authentication, so its targets
+#      outside `recipe-declared-kind` are `refused/actor-kind`. Under `recipe-declared-kind` BReg admits it on a profile
+#      that requires no scope. A product that requires a scope refuses at `scope`.
+#      A product that chooses its profile by client keeps its rule that a profile
+#      pinning a kind admits only that kind.
+#   8. Documents requires an actor kind of `service` or `human` on every profile,
+#      so no Documents cell targets `admitted/unspecified`.
 
 schema: registry.token-fixture-expectations/v1
 products: [breg, casework, messaging, scheduling, documents, coordinator, adapter, evidence, render, mcp-edge, evidence-oid4vci]
@@ -46,6 +58,7 @@ configurations:
   default: the issuer block as the product's starter writes it
   recipe: the documented lines for the fixture's provider, which name the token type, the scope claim, the client rule and an audience that a fixture states literally. none where main has no such setting
   jwt-accepted: the default block with token type JWT accepted, for the ID token fixtures. none where main has no such setting
+  recipe-declared-kind: the recipe block plus an actor kind the operator declares for the fixture's client, or for the whole issuer where the token names no client. The declared kind follows the fixture's subject kind, human for a user and service for a service. none where main has no such setting
 rows:
   - fixture: thunderid-user-access
     against: plain-read
@@ -141,17 +154,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      casework: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      coordinator: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      render: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      scheduling: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      documents: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      coordinator: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      adapter: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      evidence: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      render: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      mcp-edge: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
   - fixture: keycloak-client-credentials
     against: plain-read
     configuration: default
@@ -171,17 +184,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      casework: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      coordinator: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      render: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      scheduling: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      documents: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      coordinator: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      adapter: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      evidence: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      render: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      mcp-edge: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
   - fixture: keycloak-client-credentials-stock
     against: plain-read
     configuration: default
@@ -216,17 +229,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      casework: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      casework: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
       messaging: { main: none, basis: inferred, target: none, changedBy: none }
-      scheduling: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      scheduling: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
       documents: { main: none, basis: inferred, target: none, changedBy: none }
-      coordinator: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      adapter: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      coordinator: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      adapter: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      render: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
       mcp-edge: { main: none, basis: inferred, target: refused/client, changedBy: none }
-      evidence-oid4vci: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
   - fixture: supabase-oauth-server-user-access
     against: plain-read
     configuration: default
@@ -246,17 +259,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      casework: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      messaging: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      scheduling: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      documents: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      coordinator: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      adapter: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      mcp-edge: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence-oid4vci: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      casework: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      messaging: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      scheduling: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      documents: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      coordinator: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      adapter: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      render: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      mcp-edge: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
   - fixture: entra-v2-user-access
     against: plain-read
     configuration: default
@@ -280,7 +293,7 @@ rows:
       casework: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
       messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
       scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false, targetReason: "every Documents profile names a kind, service or human, and this token names none" }
       coordinator: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
       adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
       evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
@@ -306,17 +319,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      casework: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      messaging: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      scheduling: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      documents: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      coordinator: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      evidence: { main: none, basis: inferred, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      render: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      mcp-edge: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
-      evidence-oid4vci: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      casework: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      messaging: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      scheduling: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      documents: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      coordinator: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      adapter: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      render: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      mcp-edge: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
   - fixture: identity-only
     against: plain-read
     configuration: default
@@ -336,17 +349,17 @@ rows:
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      casework: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      casework: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
       messaging: { main: none, basis: inferred, target: none, changedBy: none }
-      scheduling: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      scheduling: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
       documents: { main: none, basis: inferred, target: none, changedBy: none }
-      coordinator: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      adapter: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      coordinator: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      adapter: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      render: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
       mcp-edge: { main: refused/client, basis: observed, target: refused/client, changedBy: none }
-      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
   - fixture: rstack-dev-run-user
     against: plain-read
     configuration: default
@@ -355,7 +368,7 @@ rows:
       casework: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
       messaging: { main: admitted/unspecified, basis: observed, target: admitted/unspecified, changedBy: none }
       scheduling: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      documents: { main: refused/profile, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided by the caller-contract change" }
+      documents: { main: refused/profile, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false, targetReason: "every Documents profile names a kind, service or human, and this token names none" }
       coordinator: { main: refused/scope, basis: observed, target: admitted, changedBy: caller-contract, landed: false }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
@@ -366,14 +379,14 @@ rows:
     against: human-only-profile
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false }
-      casework: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
-      messaging: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
       scheduling: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "Scheduling records the actor kind and no access profile pins it" }
-      documents: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
       coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      evidence: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
+      evidence: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
       render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
@@ -381,14 +394,14 @@ rows:
     against: human-only-profile
     configuration: recipe
     products:
-      breg: { main: none, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false, reason: "BReg does not start: a profile that names requester clients cannot be combined with allowedClients unrestricted" }
-      casework: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
-      messaging: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
+      breg: { main: none, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "BReg does not start: a profile that names requester clients cannot be combined with allowedClients unrestricted", targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      casework: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      messaging: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
       scheduling: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "Scheduling records the actor kind and no access profile pins it" }
-      documents: { main: none, basis: inferred, target: refused/profile, changedBy: caller-contract, landed: false }
+      documents: { main: none, basis: inferred, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
       coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      evidence: { main: refused/scope, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false }
+      evidence: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
       render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
@@ -501,7 +514,7 @@ rows:
     against: plain-read
     configuration: jwt-accepted
     products:
-      breg: { main: refused/client, basis: observed, target: refused/token-type, changedBy: caller-contract, landed: false }
+      breg: { main: refused/client, basis: observed, target: refused/token-type, changedBy: caller-contract, landed: true }
       casework: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
       messaging: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
       scheduling: { main: none, basis: inferred, target: refused/token-type, changedBy: caller-contract, landed: false }
@@ -531,32 +544,32 @@ rows:
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      casework: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      messaging: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      scheduling: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      documents: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      coordinator: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      adapter: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      evidence: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      render: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      mcp-edge: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      evidence-oid4vci: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
+      breg: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      casework: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      messaging: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      scheduling: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      documents: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      coordinator: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      adapter: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      evidence: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      render: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      mcp-edge: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      evidence-oid4vci: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
   - fixture: supabase-api-key-service-role
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      casework: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      messaging: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      scheduling: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      documents: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      coordinator: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      adapter: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      evidence: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      render: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      mcp-edge: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
-      evidence-oid4vci: { main: refused/algorithm, basis: observed, target: refused/algorithm, changedBy: none }
+      breg: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      casework: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      messaging: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      scheduling: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      documents: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      coordinator: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      adapter: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      evidence: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      render: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      mcp-edge: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      evidence-oid4vci: { main: refused/algorithm, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
   - fixture: supabase-api-key-opaque
     against: plain-read
     configuration: default
@@ -591,17 +604,17 @@ rows:
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      casework: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      messaging: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      scheduling: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      documents: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      coordinator: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      adapter: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      evidence: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      render: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      mcp-edge: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      evidence-oid4vci: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      breg: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      casework: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      messaging: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      scheduling: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      documents: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      coordinator: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      adapter: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      evidence: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      render: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      mcp-edge: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      evidence-oid4vci: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
   - fixture: thunderid-exchanged-holder
     against: plain-read
     configuration: default
@@ -610,7 +623,7 @@ rows:
       casework: { main: refused/audience, basis: observed, target: admitted, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
       messaging: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
       scheduling: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
-      documents: { main: refused/audience, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided by the caller-contract change" }
+      documents: { main: refused/audience, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product", targetReason: "every Documents profile names a kind, service or human, and this token names none" }
       coordinator: { main: refused/audience, basis: observed, target: admitted, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
       adapter: { main: refused/audience, basis: observed, target: admitted, changedBy: none, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product"}
       evidence: { main: refused/audience, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false, reason: "observed: the token's literal aud (https://resource.example.test) is not the audience the driver configures for the product" }
@@ -625,7 +638,7 @@ rows:
       casework: { main: admitted, basis: observed, target: admitted, changedBy: none }
       messaging: { main: admitted/unspecified, basis: observed, target: admitted/unspecified, changedBy: none }
       scheduling: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      documents: { main: refused/profile, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "every Documents profile requires an actor kind and this token declares none; the declared actor kind is decided by the caller-contract change" }
+      documents: { main: refused/profile, basis: observed, target: refused/profile, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "every Documents profile names a kind, service or human, and this token names none" }
       coordinator: { main: admitted, basis: observed, target: admitted, changedBy: none }
       adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
       evidence: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
@@ -636,47 +649,47 @@ rows:
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
-      mcp-edge: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence-oid4vci: { main: admitted, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      casework: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      messaging: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      scheduling: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      documents: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      adapter: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      render: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence-oid4vci: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
   - fixture: thunderid-exchanged-holder-no-scope
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none }
-      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "whether the caller contract gives Render a configurable scope is decided by the caller-contract change" }
-      mcp-edge: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
-      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no scope claim" }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      casework: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      messaging: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      scheduling: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      documents: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      adapter: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      render: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "Render requires the fixed scope render:render and has no scope setting; the fixture carries no scope claim", targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "no scope and no actor kind, so the token is refused at authentication until the client's kind is declared" }
   - fixture: esignet-standin-id-token
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      casework: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      messaging: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      scheduling: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      documents: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      coordinator: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      adapter: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      evidence: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      render: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      mcp-edge: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
-      evidence-oid4vci: { main: refused/token-type, basis: observed, target: refused/token-type, changedBy: none }
+      breg: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      casework: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      messaging: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      scheduling: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      documents: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      coordinator: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      adapter: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      evidence: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      render: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      mcp-edge: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
+      evidence-oid4vci: { main: refused/token-type, basis: observed, target: refused/issuer, changedBy: caller-contract, landed: false, targetReason: "the token's issuer is matched to an issuer entry before any other check, and no entry names this issuer" }
   - fixture: esignet-standin-access-token
     against: plain-read
     configuration: default
@@ -711,105 +724,165 @@ rows:
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none, reason: "observed in the characterisation run: the cause was not traced", targetReason: "authority carried outside scope is not read" }
-      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      scheduling: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
-      evidence: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
+      breg: { main: refused/profile, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      scheduling: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      documents: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      adapter: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      evidence: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      render: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      evidence-oid4vci: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
   - fixture: thunderid-user-access-attribute-claims
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none, reason: "observed in the characterisation run: the cause was not traced", targetReason: "authority carried outside scope is not read" }
-      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      scheduling: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
-      evidence: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
-      evidence-oid4vci: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "authority carried outside scope is not read" }
+      breg: { main: refused/profile, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed in the characterisation run: the cause was not traced", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      scheduling: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      documents: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      adapter: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      evidence: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      render: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
 
   - fixture: thunderid-client-credentials-attribute-claims
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      scheduling: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
-      evidence: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
+      breg: { main: refused/profile, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      scheduling: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      documents: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      adapter: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      evidence: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      render: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      evidence-oid4vci: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
   - fixture: thunderid-client-credentials-attribute-claims
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/profile, basis: observed, target: refused/profile, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      scheduling: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope, and authority carried outside scope is not read" }
-      evidence: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
-      evidence-oid4vci: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "authority carried outside scope is not read" }
+      breg: { main: refused/profile, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      scheduling: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      documents: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      adapter: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      evidence: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      render: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token grants no scope and its actor kind is a claim, not a declaration, so it is refused at authentication until the operator declares the client's kind" }
   - fixture: thunderid-user-access-identity-only
     against: plain-read
     configuration: default
     products:
-      breg: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "the token proves identity only" }
-      casework: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "the token proves identity only" }
-      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
-      scheduling: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "the token proves identity only" }
-      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
-      coordinator: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "the token proves identity only" }
-      adapter: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope and no actor kind" }
-      evidence: { main: refused/claims, basis: observed, target: refused/claims, changedBy: none, targetReason: "the token proves identity only" }
-      render: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, targetReason: "the token proves identity only" }
-      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
-      evidence-oid4vci: { main: admitted, basis: observed, target: admitted, changedBy: none, targetReason: "this check requires no scope and no actor kind" }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      scheduling: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      documents: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      adapter: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      evidence: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      render: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      evidence-oid4vci: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
   - fixture: thunderid-user-access-identity-only
     against: plain-read
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: admitted/unspecified, changedBy: caller-contract, landed: false }
-      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
-      messaging: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
-      scheduling: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
-      documents: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
-      coordinator: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
-      adapter: { main: admitted, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
-      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
-      render: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "no result is defined yet for a token that carries no registry scope" }
-      mcp-edge: { main: refused/scope, basis: observed, target: refused/scope, changedBy: none, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token proves identity only" }
-      evidence-oid4vci: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "no result is defined yet for a token that carries no registry scope" }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      scheduling: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      documents: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      coordinator: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      adapter: { main: admitted, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      evidence: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      render: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      mcp-edge: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      evidence-oid4vci: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
   - fixture: thunderid-user-access-identity-only
     against: human-only-profile
     configuration: recipe
     products:
-      breg: { main: refused/claims, basis: observed, target: unknown, changedBy: caller-contract, landed: false, targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
-      casework: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
-      messaging: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
+      breg: { main: refused/claims, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      casework: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
+      messaging: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
       scheduling: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "Scheduling records the actor kind and no access profile pins it" }
-      documents: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
+      documents: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
       coordinator: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       adapter: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
-      evidence: { main: refused/scope, basis: observed, target: unknown, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "decided with the actor kind an operator declares for the client, by the caller-contract change" }
+      evidence: { main: refused/scope, basis: observed, target: refused/actor-kind, changedBy: caller-contract, landed: false, reason: "observed: the token carries no registry scope, so the scope the profile requires is not met", targetReason: "the token carries only OpenID Connect scopes and no declared actor kind, so it is refused at authentication until the operator declares the client's kind" }
       render: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       mcp-edge: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
       evidence-oid4vci: { main: n-a, basis: inferred, target: n-a, changedBy: none, reason: "no access profile in this product pins an actor kind" }
+  - fixture: identity-only
+    against: plain-read
+    configuration: recipe-declared-kind
+    products:
+      breg: { main: none, basis: inferred, target: admitted/human, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "a declared kind admits the token on a profile that requires no scope" }
+      casework: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      messaging: { main: none, basis: inferred, target: none, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the product chooses its profile by client and offers no unrestricted client rule, so a token with no client claim has no profile to reach" }
+      scheduling: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      documents: { main: none, basis: inferred, target: none, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the product chooses its profile by client and offers no unrestricted client rule, so a token with no client claim has no profile to reach" }
+      coordinator: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "Coordinator chooses its policy by client and offers no unrestricted client rule, so whether a token with no client claim can be configured is not settled" }
+      adapter: { main: none, basis: inferred, target: refused/client, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "a matched client is required and the token names none" }
+      evidence: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      render: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "Render requires a scope and the token carries none" }
+      mcp-edge: { main: none, basis: inferred, target: refused/client, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the edge requires a listed client and the token names none" }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the offer check requires a scope and the token carries none" }
+  - fixture: supabase-user-access
+    against: plain-read
+    configuration: recipe-declared-kind
+    products:
+      breg: { main: none, basis: inferred, target: admitted/human, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "a declared kind admits the token on a profile that requires no scope" }
+      casework: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      messaging: { main: none, basis: inferred, target: none, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the product chooses its profile by client and offers no unrestricted client rule, so a token with no client claim has no profile to reach" }
+      scheduling: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      documents: { main: none, basis: inferred, target: none, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the product chooses its profile by client and offers no unrestricted client rule, so a token with no client claim has no profile to reach" }
+      coordinator: { main: none, basis: inferred, target: unknown, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "Coordinator chooses its policy by client and offers no unrestricted client rule, so whether a token with no client claim can be configured is not settled" }
+      adapter: { main: none, basis: inferred, target: refused/client, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "a matched client is required and the token names none" }
+      evidence: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      render: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "Render requires a scope and the token carries none" }
+      mcp-edge: { main: none, basis: inferred, target: refused/client, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the edge requires a listed client and the token names none" }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the offer check requires a scope and the token carries none" }
+  - fixture: supabase-oauth-server-user-access
+    against: plain-read
+    configuration: recipe-declared-kind
+    products:
+      breg: { main: none, basis: inferred, target: admitted/human, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "a declared kind admits the token on a profile that requires no scope" }
+      casework: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      messaging: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none. The declared kind matches the profile" }
+      scheduling: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      documents: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none. The declared kind matches the profile" }
+      coordinator: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none. The declared kind matches the profile" }
+      adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "this check requires no scope and a declared kind satisfies the actor kind" }
+      evidence: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      render: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "Render requires a scope and the token carries none" }
+      mcp-edge: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the edge requires a scope and the token carries none" }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the offer check requires a scope and the token carries none" }
+  - fixture: entra-v2-app-access
+    against: plain-read
+    configuration: recipe-declared-kind
+    products:
+      breg: { main: none, basis: inferred, target: admitted/service, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "a declared kind admits the token on a profile that requires no scope" }
+      casework: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      messaging: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none. The declared kind matches the profile" }
+      scheduling: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      documents: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none. The declared kind matches the profile" }
+      coordinator: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none. The declared kind matches the profile" }
+      adapter: { main: none, basis: inferred, target: admitted, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "this check requires no scope and a declared kind satisfies the actor kind" }
+      evidence: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the profile requires a scope and the token carries none" }
+      render: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "Render requires a scope and the token carries none" }
+      mcp-edge: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the edge requires a scope and the token carries none" }
+      evidence-oid4vci: { main: none, basis: inferred, target: refused/scope, changedBy: caller-contract, landed: false, reason: "no setting declares an actor kind", targetReason: "the offer check requires a scope and the token carries none" }

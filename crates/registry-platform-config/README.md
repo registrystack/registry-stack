@@ -119,6 +119,13 @@ accepted reference through the explicitly enabled environment or file provider.
   The issuer text stays exactly as written for token comparison. Rust callers
   constructing either URL field use `registry_platform_yaml::Url::new`; the
   product's HTTPS and supervised loopback rules still apply afterward.
+- `CallerIssuers`: the `issuers` map from an issuer id to an entry that holds a
+  `CallerIssuerCore` (issuer, audience, key source, `accessTokenType`,
+  `scopeClaim`, `allowedClients`, an optional `actorKind` or
+  `clientActorKinds`). The members that relax something are `Stated` values:
+  they never refuse, and the loader hands each one to the posture report with
+  its pointer and position. `CallerIssuers::check` reports the problems of the
+  set, such as two entries naming one issuer or a client admitted by two.
 - `PackageConfig`: an absolute `root` and an optional `expectedDigest` pin.
 - `ListenerConfig` and `PrivateListenerConfig`: `bind` as `host:port` with an
   IP address host, and for private listeners the declared TLS termination and

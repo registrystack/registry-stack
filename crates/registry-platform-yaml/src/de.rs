@@ -36,12 +36,13 @@ pub(crate) const DATA_LITERAL: &str = "\0registry-platform-yaml/data-literal";
 /// `expecting` text carries the bounds.
 pub(crate) const BOUNDED: &str = "\0registry-platform-yaml/bounded";
 pub(crate) const BOUNDED_EXPECTING: &str = "a whole number from ";
-/// The newtype name a development-only setting asks for. A deserializer
-/// that handles it records where the value sits for [`gated_site`] while the
-/// value decodes.
+/// The newtype name a value the posture report records asks for: a
+/// development-only setting (`Gated` in `registry-platform-config`) and an
+/// explicit production setting (`Stated`). A deserializer that handles it
+/// records where the value sits for [`gated_site`] while the value decodes.
 pub const DEVELOPMENT_ONLY: &str = "\0registry-platform-yaml/development-only";
 
-/// Where a development-only value sits in the document.
+/// Where a value read under [`DEVELOPMENT_ONLY`] sits in the document.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatedSite {
     /// The RFC 6901 pointer from the document root.

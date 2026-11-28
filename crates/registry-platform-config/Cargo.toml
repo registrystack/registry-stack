@@ -15,6 +15,7 @@ test-support = []
 schema = ["dep:schemars", "registry-platform-yaml/schema"]
 
 [dependencies]
+registry-cli-report.workspace = true
 registry-platform-canonical-json = { workspace = true }
 registry-platform-loopback.workspace = true
 registry-platform-posture.workspace = true

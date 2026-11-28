@@ -893,7 +893,7 @@ jobs:
         if: matrix.name == 'platform' && contains(matrix.packages, 'registry-platform-testing')
         run: cargo test --locked -p registry-platform-testing --features token-fixtures --test token_fixtures
 
-      # The refusal trace id impl sits behind refusal-trace-id, which no
+      # The refusal trace id impl and the failedCheck layer sit behind refusal-trace-id, which no
       # platform crate enables, so the shard's own run skips its test.
       - name: Test the refusal trace id implementation
         if: matrix.name == 'platform' && contains(matrix.packages, 'registry-platform-httpsec')

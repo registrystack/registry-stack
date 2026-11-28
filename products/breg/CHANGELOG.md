@@ -124,6 +124,8 @@
 - PostgreSQL supports `database.transport: loopback-plaintext` in either posture
   and `private-network-plaintext` in development.
 
+- Under `accessTokenType: JWT`, a token that carries an ID-token marker (`nonce`, `at_hash`, `c_hash`, `s_hash`, or a `typ` claim of `ID`) is refused at the token-type check.
+
 - A `rowBoundarySets` member declares a named list of row boundaries once
   per project or module file. A grant, an Action or Proposal target, or a
   Record type's `accessRequirements` writes
