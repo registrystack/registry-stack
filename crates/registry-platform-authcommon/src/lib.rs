@@ -4,7 +4,9 @@
 pub mod client_assertion;
 pub mod refusal;
 
-pub use refusal::FailedCheck;
+#[doc(hidden)]
+pub use refusal::__refusal_trace_id_seal;
+pub use refusal::{FailedCheck, RefusalTraceId};
 #[cfg(feature = "refusal-recorder")]
 pub use refusal::{
     RefusalLine, RefusalNote, RefusalRecorder, REFUSAL_LOG_LINES_PER_WINDOW, REFUSAL_LOG_WINDOW,

@@ -47,18 +47,9 @@ fn fixture_client(case: &FixtureCase) -> Option<String> {
 
 /// The first scope the fixture carries, read from `scope` or `scp`.
 fn first_scope(case: &FixtureCase) -> Option<String> {
-    if let Some(scope) = literal_string(case, "scope") {
-        return scope.split_whitespace().next().map(str::to_owned);
-    }
-    match case.fixture.claims.get("scp") {
-        Some(ClaimValue::Literal(Value::String(scope))) => {
-            scope.split_whitespace().next().map(str::to_owned)
-        }
-        Some(ClaimValue::Literal(Value::Array(scopes))) => {
-            scopes.first().and_then(Value::as_str).map(str::to_owned)
-        }
-        _ => None,
-    }
+    case.fixture
+        .read_scope("scope")
+        .or_else(|| case.fixture.read_scope("scp"))
 }
 
 /// The algorithm the offer boundary is configured with for the row: the

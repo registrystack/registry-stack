@@ -19,6 +19,10 @@ default = []
 # With the feature on, a missing variable fails the suite. With `cli` on too,
 # src/cli.rs also runs the `provision` command against the first server.
 postgres-test = []
+# Test helpers for the provision tests of the products that use this crate:
+# a verified-TLS superuser session and the two PROVISION_TEST_DATABASE_*
+# variables. Dev-dependencies only, never a runtime build.
+test-support = []
 
 # The shared `provision` command: clap arguments, the runner and the report.
 cli = [

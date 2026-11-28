@@ -160,6 +160,12 @@ each time: the container ID must be the full hex ID, the CA copy cannot sit
 directly in `/tmp`, the URL host must be `localhost` (the certificate's name),
 and the PostGIS image starts PostgreSQL twice before it is really ready.
 
+`crates/registry-bregctl/tests/provision_postgres.rs` (`cargo test -p registry-bregctl --features
+postgres-test --test provision_postgres`) provisions as a non-superuser owner against that same TLS
+PostGIS container. It reads `PROVISION_TEST_DATABASE_URL` (the superuser URL with
+`sslmode=verify-full`) and `PROVISION_TEST_DATABASE_CA` (the `BREG_TEST_TLS_CA_PEM_PATH` file) and
+fails when either is missing.
+
 Native development lifecycle change. The test owns a PostgreSQL container, so
 it needs Docker:
 

@@ -22,7 +22,7 @@ A **negative** fixture is a token that every product must refuse, in every confi
 
 ## Providers covered
 
-Keycloak, ThunderID, Microsoft Entra ID, Supabase Auth and eSignet. One fixture, `rstack-dev-run-user`, holds the shape the development runner signs. One fixture, `identity-only`, is a token built to carry identity and nothing else.
+Keycloak, ThunderID, Microsoft Entra ID, Supabase Auth and eSignet. One fixture, `rstack-dev-run-user`, holds the shape the development runner signs. One fixture, `identity-only`, is a token built to carry identity and nothing else. Two fixtures, `esignet-standin-id-token` and `esignet-standin-access-token`, are tokens of a stand-in for eSignet that is a second ThunderID. They are not eSignet's own shape, which `esignet-id-token` and `esignet-access-token` take from eSignet's documentation.
 
 ## What a fixture file holds
 
@@ -81,6 +81,7 @@ A corpus test fails on any string shaped like a compact JWT, and on any private 
 Every fixture states its source in `source.basis`.
 
 - `observed` with `observedFrom: capture`. The token was issued by a running provider. The fixture names the provider version, the container image digest, and the capture file. Only claim names, header members and value types were kept.
+- `observed` with `observedFrom: issuer`. The token was issued by a running provider, and no image digest or capture file was kept. The fixture names the provider version, the date and a note on what was kept. Header members, claim names and value types are the observed ones. Claim values are synthetic.
 - `observed` with `observedFrom: code`. The shape was read from the code that signs it.
 - `documentation`. The shape comes from the provider's public documentation. The fixture names the page. Replace a documentation fixture with an observed one as soon as you can capture a token.
 - `constructed`. The token was built on purpose and the fixture says why.

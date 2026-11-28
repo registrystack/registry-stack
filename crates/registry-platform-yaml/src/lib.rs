@@ -127,7 +127,7 @@ pub use check_acceptances::{
     CHECK_ACCEPTANCES_API_VERSION, CHECK_ACCEPTANCES_FILE, CHECK_ACCEPTANCES_FORMAT,
     CHECK_ACCEPTANCES_KIND, CHECK_ACCEPTANCES_SCHEMA_ID,
 };
-pub use de::{Invalid, SHARED_BLOCK_PREFIX};
+pub use de::{gated_site, GatedSite, Invalid, DEVELOPMENT_ONLY, SHARED_BLOCK_PREFIX};
 pub use diagnostic::{Diagnostic, Related, Report, Severity, Source};
 pub use document::{
     decode_document, read_document, Decoded, Document, Reader, MAXIMUM_DIAGNOSTICS_PER_FILE,

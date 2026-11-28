@@ -82,17 +82,6 @@ fn scope_claim(case: &FixtureCase) -> &'static str {
     }
 }
 
-/// The first scope the fixture carries in the claim the configuration names.
-fn read_scope(case: &FixtureCase, claim: &str) -> String {
-    match case.fixture.claims.get(claim) {
-        Some(ClaimValue::Literal(Value::String(text))) => text.split_whitespace().next(),
-        Some(ClaimValue::Literal(Value::Array(items))) => items.first().and_then(Value::as_str),
-        _ => None,
-    }
-    .unwrap_or(PLACEHOLDER_SCOPE)
-    .to_owned()
-}
-
 /// The actor kind the profile admits: the one the fixture declares when it is
 /// a kind the Document Store has, and `human` otherwise or when the row
 /// selects the human-only profile.
@@ -169,7 +158,10 @@ async fn observe(case: FixtureCase) -> Outcome {
     );
 
     let claim = scope_claim(&case);
-    let scope = read_scope(&case, claim);
+    let scope = case
+        .fixture
+        .read_scope(claim)
+        .unwrap_or_else(|| PLACEHOLDER_SCOPE.to_owned());
     let client = fixture_client(&case);
     let project = project_text(&client, &scope, profile_actor_kind(&case));
     let package = root.path().join("package");

@@ -57,72 +57,82 @@ expectedFailures:
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (bregctl check accepts the Keycloak issuer with RS256). bregctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: casework
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (caseworkctl check). caseworkctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: messaging
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (messagingctl check). messagingctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: scheduling
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (schedulingctl check). schedulingctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: documents
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (documentsctl check). documentsctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: coordinator
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (coordinatorctl check, with the deployment block written by hand). coordinatorctl provision is refused with coordinator.cli.usage (unrecognized command), so roles, the database and grants are made by hand."
   - journey: own-provider
     product: adapter
     step: database.provision
     code: journey.needs.hand-written-sql
     finding: X13
     removedBy: M4
-    basis: predicted
-    reason: Roles, databases and grants are made by hand. The only provisioning code is private to rstack dev.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "prepare and issuer pass (adapterctl check of the facade-recovery example with the breg-records profile). adapterctl provision --runtime-config R --admin-url-file A is refused as an unrecognized subcommand, so roles, the database and grants are made by hand."
   - journey: own-provider
     product: evidence
-    step: call
-    code: http.401.token-type
-    finding: G3
-    removedBy: M7
-    basis: predicted
-    reason: No database. Evidence accepts at+jwt or application/at+jwt only and Keycloak sends typ JWT.
+    step: issuer
+    code: product.evidence.bundle.invalid-authentication
+    finding: X1
+    removedBy: M1
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "evidencectl check refuses the local target (outer code evidence.target.publication-invalid): the local profile takes only a canonical 127.0.0.1 HTTP origin with a port, and a Keycloak issuer carries the /realms/<realm> path, so any such issuer needs allowInsecureHttp: true. The loopback transport class of M1 (A2) removes the URL-shape rule. Behind it the call is predicted to stop at token-type, because Keycloak sends typ JWT."
   - journey: own-provider
     product: render
     step: call
-    code: http.401.token-type
+    code: product.render.unauthorized
     finding: G3
     removedBy: M7
-    basis: predicted
-    reason: Render fixes the token type at at+jwt and Keycloak sends typ JWT.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "No database. Start, ready and the client-credentials token pass (RS256, audience urn:example:render, scope render:render, client portal). POST /v1/render/letter answers 401 with problem render.unauthorized. Render logs no authentication stage, so the code is the problem code. Inferred cause: the token type fixed at at+jwt (registry-render/src/auth.rs:71 on main) against Keycloak's typ JWT."
+
   - journey: rstack-dev
     product: breg
     step: plan
@@ -211,108 +221,125 @@ expectedFailures:
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: casework
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: messaging
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: evidence
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: scheduling
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: documents
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: coordinator
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: adapter
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: render
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The development journey did not finish for this product, so there are no files to promote."
   - journey: promote
     product: discovery
     step: input
     code: journey.promote.no-input
     removedBy: M4
-    basis: predicted
-    reason: The development journey does not finish for this product, so there are no files to promote.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "The own-provider cell of discovery is unreached (it verifies no token and keeps no database), so there are no files to promote."
 
 unreached:
   - journey: own-provider
     product: discovery
-    step: call
-    basis: predicted
-    reason: Discovery verifies no token. Its last step is one served public call, and whether the steps before it pass is not known until the first run.
+    step: prepare
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Discovery verifies no token and keeps no database, so the reader's own provider and PostgreSQL have nothing to serve it. Its tutorial packages from a publication origin served by products/discovery/tutorial/publication_server.py, which a journey does not run."
   - journey: own-provider
     product: breg-mcp
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: breg-review
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: registry-mcp
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: evidence-oid4vci
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: evidence-oid4vp
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: own-provider
     product: adapter-job
     step: prepare
-    basis: predicted
-    reason: Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127021546-ddef"
+    reason: "Supporting runtime. It starts beside its parent and is added to the journey when the parent's cell passes."
   - journey: rstack-dev
     product: breg-mcp
     step: init
@@ -352,32 +379,51 @@ unreached:
   - journey: promote
     product: breg-mcp
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: breg-review
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: registry-mcp
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: evidence-oid4vci
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: evidence-oid4vp
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
   - journey: promote
     product: adapter-job
     step: input
-    basis: predicted
-    reason: Supporting runtime. It is promoted with its parent.
+    basis: observed
+    observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), journey run 20261127023442-18b4 against own-provider run 20261127021546-ddef"
+    reason: "Supporting runtime. It is promoted with its parent."
 
+# The scheduling row above is the unassisted outcome, which the ratchet checks
+# against an unassisted input. The assisted baseline input (run
+# 20261127024425-265d, kept) gives this observed outcome instead, in promote
+# run 20261127025000-816f (acceptance mode, exit 1):
+#
+#   - journey: promote
+#     product: scheduling
+#     step: refusals
+#     code: journey.promote.nothing-refused
+#     removedBy: M6
+#     basis: observed
+#     observedOn: "bin-4eb643d6 (runtime code equals origin/main cd83550e), promote run 20261127025000-816f on own-provider run 20261127024425-265d (assisted: sql, certificate, token-type, mapper)"
+#     reason: "The assisted Scheduling cell reached T1. Started with no development declaration, schedulingctl check (which has no --production flag) lists no refusal and the server starts and answers /readyz, so zero refusals are listed. No shared posture exists on main, so nothing can refuse. The count becomes meaningful at M1 with M6."
 passes: []

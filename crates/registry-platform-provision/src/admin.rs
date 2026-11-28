@@ -204,6 +204,25 @@ impl AdminConfig {
     }
 }
 
+#[cfg(feature = "test-support")]
+impl AdminConfig {
+    /// Opens a session to `database` whose connection task runs on the current
+    /// runtime for as long as the client lives. The failure is the driver's,
+    /// which carries neither the URL nor the password.
+    pub(crate) async fn connect_detached(
+        &self,
+        database: Option<&str>,
+    ) -> Result<Client, tokio_postgres::Error> {
+        let mut config = self.config.clone();
+        if let Some(database) = database {
+            config.dbname(database);
+        }
+        let (client, connection) = config.connect(self.tls.clone()).await?;
+        tokio::spawn(connection);
+        Ok(client)
+    }
+}
+
 impl std::fmt::Debug for AdminConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AdminConfig")

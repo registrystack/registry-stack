@@ -1,0 +1,54 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "thunderid-user-access-identity-only",
+  "class": "positive",
+  "provider": "thunderid",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "ThunderID 1.1.0",
+    "note": "Observed from a ThunderID 1.1.0 issuer on 27 November 2026. Authorization code with PKCE, public client, a person with no grants. Header members and claim names are the observed ones. Claim values are synthetic. Signed by the corpus test key."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "at+jwt",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "aci": "synthetic-aci",
+    "aud": {
+      "bind": "audience"
+    },
+    "client_id": "journey-app",
+    "exp": {
+      "offsetSeconds": 900
+    },
+    "grant_type": "authorization_code",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "iss": {
+      "bind": "issuer"
+    },
+    "jti": "synthetic-jti-0071",
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "role": "authenticated",
+    "scope": "openid email profile",
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "tfid": "synthetic-tfid"
+  },
+  "omits": [
+    "azp",
+    "registry_actor_kind",
+    "registry_scope"
+  ],
+  "notes": "scope holds the OpenID Connect scopes only. The token carries no registry authority claim. The lifetime, 900 seconds, is the observed one."
+}

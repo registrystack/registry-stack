@@ -7,10 +7,11 @@
   "tokenUse": "api-key",
   "subjectKind": "unspecified",
   "source": {
-    "basis": "documentation",
-    "consultedOn": "2026-11-27",
-    "url": "https://supabase.com/docs/guides/api/api-keys",
-    "note": "The page lists the legacy anon and service_role keys as long-lived JWTs and does not document their claims. The role claim is named on the JWT fields page. The claim set here is the minimum. Replace with an observed shape when one exists."
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "self-hosted Supabase stack",
+    "note": "Observed from a self-hosted Supabase Auth issuer on 27 November 2026, the legacy key. Claim values are synthetic. Signed by the corpus test key."
   },
   "header": {
     "alg": "HS256",
@@ -20,13 +21,14 @@
     }
   },
   "claims": {
-    "role": "anon",
+    "exp": {
+      "offsetSeconds": 157680000
+    },
     "iat": {
       "offsetSeconds": 0
     },
-    "exp": {
-      "offsetSeconds": 315360000
-    }
+    "iss": "supabase",
+    "role": "anon"
   },
-  "notes": "The expiry models a long-lived key, a test choice."
+  "notes": "The observed header has no kid. The corpus schema requires one, so the fixture carries a generated kid. The lifetime, five years, is the observed one. The asymmetric variant of the key (ES256, with a kid, same claims) was also observed and is not a separate fixture."
 }

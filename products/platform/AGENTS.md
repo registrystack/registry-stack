@@ -37,7 +37,8 @@ Preserve these shared boundaries:
   `#[derive(Debug)]` is easy to miss in review.
 - Security logs use stable, low-cardinality field names (`request_id`,
   `principal_id_hash`, `auth_mode`, `issuer`, `client_id`, `azp`, `scope`,
-  `policy`, `decision`, `audit_envelope_id`, `error_code`) and never include
+  `policy`, `decision`, `audit_envelope_id`, `error_code`, `failed_check`,
+  `suppressed`, `trace_id`) and never include
   bearer tokens, raw API keys, private key material, full SD-JWTs, or
   unredacted subject identifiers.
 - Audit primitives provide minimized, fail-closed records with keyed

@@ -259,20 +259,41 @@ Secret values never appear in a diagnostic or a log.
 ### Create the database and roles
 
 Use PostgreSQL 17 or newer; `apply` and startup refuse an older server.
-As a PostgreSQL administrator, create the migration role, the runtime role, and the database, and let only those two roles connect:
+`provision` creates what the two database URLs in your runtime file name: the migration role, the runtime role, and the database, and it lets only those two roles connect.
+It takes the role names, the database name, and the passwords from `database.migrationUrlRef` and `database.runtimeUrlRef`, so you write each of them once.
+
+Run it as a PostgreSQL administrator that can create roles and databases (`CREATEROLE` and `CREATEDB`).
+It needs no superuser.
+Put the administrator URL in a file or an environment variable, never on the command line.
+The connection always uses verified TLS: it trusts the certificate authority behind `database.caBundleRef` when the runtime file names one, and the system roots otherwise.
+The URL's `sslmode` must be `require`, `verify-ca`, or `verify-full`.
+
+```sh
+coordinatorctl provision --runtime-config /etc/registry-coordinator/runtime.yaml \
+  --admin-url-file /run/registry-coordinator/secrets/admin-database-url
+```
+
+Use `--admin-url-env NAME` for a variable instead of a file.
+Run again at any time: it creates only what is missing, refuses a role or database that exists in another shape, and never changes a password or drops anything.
+Add `--format json` for a machine-readable report.
+The report and the errors never contain a password, a password verifier, or a URL.
+
+To review the statements first, or to run them yourself with `psql`, add `--print-sql`.
+It connects to nothing and prints a script with a `\password` line after each role instead of a password:
 
 ```sql
 CREATE ROLE coordinator_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<migration-password>';
+  NOINHERIT NOBYPASSRLS;
 CREATE ROLE coordinator_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
-  NOINHERIT NOBYPASSRLS PASSWORD '<runtime-password>';
-CREATE DATABASE coordinator;
+  NOINHERIT NOBYPASSRLS;
+CREATE DATABASE coordinator WITH ALLOW_CONNECTIONS false;
 REVOKE ALL ON DATABASE coordinator FROM PUBLIC;
 GRANT CONNECT ON DATABASE coordinator TO coordinator_migration, coordinator_runtime;
 GRANT CREATE ON DATABASE coordinator TO coordinator_migration;
+ALTER DATABASE coordinator WITH ALLOW_CONNECTIONS true;
 ```
 
-These are the only grants you make.
+These are the only grants `provision` makes.
 The migration role needs `CREATE` on the database because `apply` creates the schema the runtime file's `namespace` names, and the migration role owns that schema and its tables.
 A namespace starts with `coordinator_` and is at most 60 characters.
 The runtime role needs only `CONNECT`.

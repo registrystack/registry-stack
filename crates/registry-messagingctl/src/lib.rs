@@ -12,6 +12,8 @@
 //!   reports the package digest and renders every template's sample.
 //! - `preview` renders one template version with given data, offline, and
 //!   in JSON prints the exact bytes the runtime's preview route answers.
+//! - `provision` creates the roles and the database the runtime file names,
+//!   or with `--print-sql` prints the SQL that does.
 //! - `plan` reads the configured package, activation ledger, schema, and
 //!   runtime role without writing; `apply` performs that activation with
 //!   migration authority; `status` reads the resulting history with the
@@ -80,6 +82,7 @@ use uuid::Uuid;
 mod cli_contract_tests;
 mod dev;
 mod identity_facts;
+mod provision;
 mod report;
 mod selected_binary;
 mod starter;
@@ -117,6 +120,8 @@ enum Command {
     Check(CheckArgs),
     /// Render one template version with the given data, offline.
     Preview(PreviewArgs),
+    /// Create the roles and the database the runtime file names, or print the SQL.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Report what activating the configured package would change, without writing.
     Plan(ActivationArgs),
     /// Apply schema changes and record the configured package as active.
@@ -742,6 +747,7 @@ where
     let command = command_path(&cli.command);
     let outcome = match cli.command {
         Command::Serve(args) => return serve(args, cli.format, format_requested, stdout, stderr),
+        Command::Provision(args) => return provision(&args, cli.format),
         Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
         Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
         Command::Api(args) => return api(*args, format_requested, stderr),
@@ -773,6 +779,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Generate(GenerateCommand::IdentityFacts(_)) => "generate identity-facts",
         Command::Check(_) => "check",
         Command::Preview(_) => "preview",
+        Command::Provision(_) => "provision",
         Command::Plan(_) => "plan",
         Command::Apply(_) => "apply",
         Command::Status(_) => "status",
@@ -787,6 +794,23 @@ fn command_path(command: &Command) -> &'static str {
         Command::Connection { .. } => "connection",
         Command::RstackDev(_) => "rstack-dev",
     }
+}
+
+/// Runs the shared `provision` command, which writes its own report and sets
+/// its own exit code. The global `--format` selects its report as it selects
+/// every other command's.
+fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFormat) -> ExitCode {
+    let shared = match format {
+        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+    };
+    registry_platform_provision::run_provision(
+        "messagingctl",
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        args,
+        shared,
+        provision::load,
+    )
 }
 
 fn api(

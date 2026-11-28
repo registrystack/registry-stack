@@ -63,6 +63,7 @@ mod module_lock_patch;
 mod package_inspection;
 mod package_lifecycle;
 mod proposal_retention;
+mod provision;
 mod reconcile_lifecycle;
 mod report;
 mod review_recovery;
@@ -252,6 +253,14 @@ enum Command {
     /// Status reads as the migration role in one read-only transaction and takes no apply lock,
     /// so it answers while an apply runs.
     Status(StatusArgs),
+    /// Create the PostgreSQL roles, database and schemas a Registry needs, from its runtime file.
+    ///
+    /// The runtime file's two database URLs name both roles, the database and both passwords.
+    /// The administrator URL comes from a file or an environment variable, never from the command
+    /// line. The command grants the runtime role CONNECT and nothing else: apply grants the rest.
+    /// With --package, a package that needs PostGIS also gets its schema, extension and
+    /// bounding-box role, which CREATE EXTENSION postgis needs a superuser for.
+    Provision(ProvisionCommand),
     /// Inspect and operate native Record timers through bounded audited commands.
     Timer(timer_operator_lifecycle::TimerArgs),
     /// Verify configured startup dependencies without binding a listener.
@@ -892,6 +901,16 @@ struct PlanArgs {
     /// Package digest the target package must have, as package prints it; plan refuses another package before any database contact.
     #[arg(long, value_name = "SHA256_DIGEST", value_parser = parse_expected_digest)]
     expected_digest: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ProvisionCommand {
+    #[command(flatten)]
+    shared: registry_platform_provision::ProvisionArgs,
+
+    /// Absolute target package directory; a package that needs PostGIS adds the PostGIS steps.
+    #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+    package: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -3069,6 +3088,7 @@ where
                 Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
+        Command::Provision(args) => return provision(&args, format),
         Command::Status(args) => {
             return match status(&args) {
                 Ok(report) => write_status_success(&report, format, stdout, stderr),
@@ -6473,6 +6493,23 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, Refusal> {
         schema_fingerprint: outcome.schema_fingerprint,
         activation_id: outcome.activation_id,
     })
+}
+
+/// Runs the shared `provision` command, which writes its own report and sets
+/// its own exit code. The global `--format` selects its report as it selects
+/// every other command's.
+fn provision(args: &ProvisionCommand, format: OutputFormat) -> ExitCode {
+    let shared = match format {
+        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+    };
+    registry_platform_provision::run_provision(
+        "bregctl",
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        &args.shared,
+        shared,
+        |runtime_config| provision::load(runtime_config, args.package.as_deref()),
+    )
 }
 
 fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, Refusal> {
@@ -17176,6 +17213,7 @@ mod tests {
                 "apply",
                 "plan",
                 "status",
+                "provision",
                 "timer",
                 "doctor",
                 "verify",

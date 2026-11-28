@@ -8,14 +8,13 @@
   "subjectKind": "user",
   "source": {
     "basis": "observed",
-    "observedFrom": "capture",
+    "observedFrom": "issuer",
     "observedOn": "2026-11-27",
-    "version": "1.0.1",
-    "image": "ghcr.io/thunder-id/thunderid:1.0.1@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e",
-    "captureFile": "thunderid-user-id.json"
+    "version": "ThunderID 1.1.0",
+    "note": "Observed from a ThunderID 1.1.0 issuer on 27 November 2026. Header members and claim names are the observed ones. Claim values are synthetic. Signed by the corpus test key."
   },
   "header": {
-    "alg": "RS256",
+    "alg": "ES256",
     "typ": "JWT",
     "kid": {
       "generated": true
@@ -26,6 +25,8 @@
     "auth_time": {
       "offsetSeconds": 0
     },
+    "email": "journey-user@example.test",
+    "email_verified": true,
     "exp": {
       "offsetSeconds": 3600
     },
@@ -36,16 +37,18 @@
       "bind": "issuer"
     },
     "jti": "synthetic-jti-0021",
+    "name": "Journey User",
     "nbf": {
       "offsetSeconds": 0
     },
-    "nonce": "synthetic-nonce",
     "sub": "00000000-0000-4000-8000-000000000001"
   },
   "omits": [
     "scope",
     "client_id",
-    "azp"
+    "azp",
+    "nonce",
+    "registry_actor_kind"
   ],
-  "notes": "aud is the client, as in the capture. The lifetime is a test choice."
+  "notes": "aud is the client, as observed. The lifetime is a test choice, since none was observed for an ID token."
 }

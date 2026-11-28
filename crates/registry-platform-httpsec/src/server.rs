@@ -103,6 +103,13 @@ fn parse_traceparent(value: &str) -> Option<TraceContext> {
     })
 }
 
+// The request trace id is the one value `record_refusal!` takes from a request:
+// it is a validated W3C trace id, so it carries no other caller text.
+#[cfg(feature = "refusal-trace-id")]
+impl registry_platform_authcommon::__refusal_trace_id_seal::Sealed for TraceId {}
+#[cfg(feature = "refusal-trace-id")]
+impl registry_platform_authcommon::RefusalTraceId for TraceId {}
+
 fn fresh_span_id() -> String {
     let value = u128::from(Ulid::generate());
     let span = u64::try_from(value & u128::from(u64::MAX)).unwrap_or(1);
@@ -802,6 +809,30 @@ mod tests {
         assert!(TraceId::parse("0123456789abcdef0123456789abcdef").is_ok());
         assert!(TraceId::parse("00000000000000000000000000000000").is_err());
         assert!(TraceId::parse("not-a-trace").is_err());
+    }
+
+    #[cfg(feature = "refusal-trace-id")]
+    #[test]
+    fn the_request_trace_id_is_the_one_a_refusal_line_takes() {
+        use registry_platform_authcommon::{
+            record_refusal, FailedCheck, RefusalNote, RefusalRecorder,
+        };
+
+        // Caller text never becomes a trace id, so it cannot reach a refusal
+        // line through the macro's `trace_id` field.
+        assert!(TraceId::parse("canary-request-value-7f3a").is_err());
+
+        let recorder = RefusalRecorder::new("httpsec").unwrap();
+        let trace = TraceContext::server_created();
+        let note = RefusalNote::new(FailedCheck::Scope);
+        record_refusal!(recorder, note, trace_id = &trace.trace_id);
+        record_refusal!(recorder, note, trace_id = trace.trace_id.clone());
+        record_refusal!(
+            recorder,
+            note,
+            trace_id = TraceId::parse("4bf92f3577b34da6a3ce929d0e0e4736").unwrap()
+        );
+        assert_eq!(recorder.counter().get(&["scope"]), Some(3));
     }
 
     #[test]

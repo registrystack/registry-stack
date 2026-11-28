@@ -7,10 +7,11 @@
   "tokenUse": "access",
   "subjectKind": "user",
   "source": {
-    "basis": "documentation",
-    "consultedOn": "2026-11-27",
-    "url": "https://supabase.com/docs/guides/auth/jwt-fields",
-    "note": "Header and claim names from the JWT fields page. The signing keys page lists ES256 as an asymmetric option, which is the one a verifier can check from a key set. Replace with an observed shape when one exists."
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "self-hosted Supabase stack",
+    "note": "Observed from a self-hosted Supabase Auth issuer on 27 November 2026, password grant. Claim values are synthetic. Signed by the corpus test key. This fixture holds the stock shape."
   },
   "header": {
     "alg": "ES256",
@@ -20,13 +21,6 @@
     }
   },
   "claims": {
-    "iss": {
-      "bind": "issuer"
-    },
-    "aud": "authenticated",
-    "sub": "00000000-0000-4000-8000-000000000001",
-    "role": "authenticated",
-    "session_id": "synthetic-session",
     "aal": "aal1",
     "amr": [
       {
@@ -34,15 +28,24 @@
         "timestamp": 1700000000
       }
     ],
-    "is_anonymous": false,
+    "app_metadata": {},
+    "aud": "authenticated",
     "email": "journey-user@example.test",
-    "phone": "",
+    "exp": {
+      "offsetSeconds": 3600
+    },
     "iat": {
       "offsetSeconds": 0
     },
-    "exp": {
-      "offsetSeconds": 3600
-    }
+    "is_anonymous": false,
+    "iss": {
+      "bind": "issuer"
+    },
+    "phone": "",
+    "role": "authenticated",
+    "session_id": "synthetic-session",
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "user_metadata": {}
   },
   "omits": [
     "scope",
@@ -51,5 +54,5 @@
     "azp",
     "registry_actor_kind"
   ],
-  "notes": "The documentation defines no scope claim and no client claim for a user access token."
+  "notes": "The token carries no scope claim and no client claim. The lifetime, 3600 seconds, is the observed one."
 }

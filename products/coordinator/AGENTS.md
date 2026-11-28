@@ -83,5 +83,10 @@ COORDINATOR_SCHEDULING_TEST_DATABASE_URL=<separate Scheduling database> \
   products/coordinator/scripts/test-postgres.sh
 ```
 
+The `provision_postgres` target needs `PROVISION_TEST_DATABASE_URL`, a
+disposable superuser URL over verified TLS (`sslmode=verify-full`), and
+`PROVISION_TEST_DATABASE_CA`, the path of the CA PEM. It fails without them,
+and `scripts/test-postgres.sh` does not run it.
+
 `README.md` names the focused runtime test targets and the native-service
 journeys. The client binding checks are in `crates/CLIENTS.md`.

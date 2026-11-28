@@ -472,9 +472,28 @@ impl fmt::Debug for JwksFetcher {
 /// A symmetric key, a private-key member or an unnamed key is refused here,
 /// at startup, rather than when a token first selects it. The rule on members
 /// is [`public_jwks_document`]. An OKP key passes that rule and is refused
-/// here with [`OidcError::InvalidJwk`].
+/// here with [`StaticJwksError::OctetKeyPair`], which names its position, `kid`
+/// and `crv`. A key with a member of the wrong shape is refused with
+/// [`StaticJwksError::KeyShape`], which names its position.
 pub fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, OidcError> {
     let document = public_jwks_document(bytes)?;
+    let keys = document["keys"].as_array().into_iter().flatten();
+    for (key, member) in keys.enumerate() {
+        if member["kty"] == "OKP" {
+            let label = |name: &str| member[name].as_str().map(str::to_owned);
+            return Err(StaticJwksError::OctetKeyPair {
+                key,
+                kid: label("kid"),
+                crv: label("crv"),
+            }
+            .into());
+        }
+        // Parsing each key alone names the one a member of the wrong shape
+        // broke, which the whole-set parse below cannot.
+        if serde_json::from_value::<Jwk>(member.clone()).is_err() {
+            return Err(StaticJwksError::KeyShape { key }.into());
+        }
+    }
     let jwks: JwkSet = serde_json::from_value(document).map_err(|_| OidcError::Parse)?;
     let all_asymmetric = jwks.keys.iter().all(|key| {
         matches!(
@@ -948,14 +967,19 @@ fn validate_jwk(jwk: &Jwk) -> Result<(), OidcError> {
     Ok(())
 }
 
+/// Check that the key a token's `kid` names can serve the token's header
+/// `alg`. A key the source should not publish stays [`OidcError::InvalidJwk`],
+/// a key-source fault. A header the key cannot serve, including a `kid` that
+/// names an encryption key, is [`OidcError::AlgorithmNotAllowed`]: the caller
+/// chose that header, so it is a token fault.
 fn validate_jwk_for_header(jwk: &Jwk, header_alg: Algorithm) -> Result<(), OidcError> {
     validate_jwk(jwk)?;
     if jwk_family(jwk) != algorithm_family(header_alg) {
-        return Err(OidcError::InvalidJwk);
+        return Err(OidcError::AlgorithmNotAllowed);
     }
     if let Some(jwk_alg) = explicit_or_inferred_jwk_algorithm(jwk)? {
         if jwk_alg != header_alg {
-            return Err(OidcError::InvalidJwk);
+            return Err(OidcError::AlgorithmNotAllowed);
         }
     }
     Ok(())
@@ -1017,6 +1041,8 @@ fn explicit_or_inferred_jwk_algorithm(jwk: &Jwk) -> Result<Option<Algorithm>, Oi
     }
 }
 
+/// A key whose declared `alg` is not a signing algorithm cannot verify any
+/// token, so a header that names it fails as [`OidcError::AlgorithmNotAllowed`].
 fn key_algorithm_to_jwt_algorithm(algorithm: KeyAlgorithm) -> Result<Algorithm, OidcError> {
     match algorithm {
         KeyAlgorithm::HS256 => Ok(Algorithm::HS256),
@@ -1034,7 +1060,7 @@ fn key_algorithm_to_jwt_algorithm(algorithm: KeyAlgorithm) -> Result<Algorithm, 
         KeyAlgorithm::RSA1_5
         | KeyAlgorithm::RSA_OAEP
         | KeyAlgorithm::RSA_OAEP_256
-        | KeyAlgorithm::UNKNOWN_ALGORITHM => Err(OidcError::InvalidJwk),
+        | KeyAlgorithm::UNKNOWN_ALGORITHM => Err(OidcError::AlgorithmNotAllowed),
     }
 }
 
@@ -1482,10 +1508,10 @@ impl TokenVerifier {
             return Err(OidcError::AudienceMismatch);
         }
         let Some(access_sub) = access_token.claims.sub.as_deref() else {
-            return Err(OidcError::InvalidToken);
+            return Err(OidcError::SubjectMismatch);
         };
         if data.claims.sub.as_deref() != Some(access_sub) {
-            return Err(OidcError::InvalidToken);
+            return Err(OidcError::SubjectMismatch);
         }
         Ok(data.claims)
     }
@@ -1729,18 +1755,46 @@ fn map_jwt_error(
     expected_issuer: &str,
     token: &str,
 ) -> OidcError {
+    let issuer_mismatch = || OidcError::IssuerMismatch {
+        expected: expected_issuer.to_string(),
+        actual: issuer_from_untrusted_payload(token).unwrap_or_default(),
+    };
     match error.kind() {
         JwtErrorKind::ExpiredSignature => OidcError::TokenExpired,
         JwtErrorKind::ImmatureSignature => OidcError::TokenNotYetValid,
-        JwtErrorKind::InvalidIssuer => OidcError::IssuerMismatch {
-            expected: expected_issuer.to_string(),
-            actual: issuer_from_untrusted_payload(token).unwrap_or_default(),
-        },
+        JwtErrorKind::InvalidIssuer => issuer_mismatch(),
         JwtErrorKind::InvalidAudience => OidcError::AudienceMismatch,
-        JwtErrorKind::MissingRequiredClaim(claim) if claim == "exp" => OidcError::InvalidTimeClaims,
+        JwtErrorKind::MissingRequiredClaim(claim) => match claim.as_str() {
+            "aud" => OidcError::AudienceMismatch,
+            "iss" => issuer_mismatch(),
+            "exp" | "nbf" => OidcError::InvalidTimeClaims,
+            _ => OidcError::InvalidToken,
+        },
+        JwtErrorKind::InvalidClaimFormat(_) => OidcError::InvalidTimeClaims,
+        JwtErrorKind::Json(_) if time_claim_is_malformed(token) => OidcError::InvalidTimeClaims,
         JwtErrorKind::InvalidSignature => OidcError::SignatureInvalid,
         _ => OidcError::InvalidToken,
     }
+}
+
+/// True when a time claim is present but is not a whole number of seconds
+/// [`Claims`] can hold. [`decode`] reports such a claim as a JSON error,
+/// after the signature has been verified.
+fn time_claim_is_malformed(token: &str) -> bool {
+    let Some(payload) = token.split('.').nth(1) else {
+        return false;
+    };
+    let Ok(decoded) = URL_SAFE_NO_PAD.decode(payload) else {
+        return false;
+    };
+    let Ok(claims) = serde_json::from_slice::<Map<String, Value>>(&decoded) else {
+        return false;
+    };
+    ["exp", "nbf", "iat"].iter().any(|name| {
+        claims
+            .get(*name)
+            .is_some_and(|value| !value.is_null() && value.as_i64().is_none())
+    })
 }
 
 fn issuer_from_untrusted_payload(token: &str) -> Option<String> {
@@ -1799,6 +1853,10 @@ pub enum OidcError {
     TokenNotYetValid,
     #[error("token audience does not match")]
     AudienceMismatch,
+    /// A UserInfo response names another subject than the access token, or
+    /// the access token names none.
+    #[error("token subject does not match the access token")]
+    SubjectMismatch,
     #[error("token signature is invalid")]
     SignatureInvalid,
     #[error("token is invalid")]
@@ -1835,10 +1893,12 @@ impl OidcEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::static_jwks::tests::{keycloak_realm_jwks, KEYCLOAK_ENC_KID, KEYCLOAK_SIG_KID};
     use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use jsonwebtoken::{encode, EncodingKey, Header};
+    use registry_platform_authcommon::FailedCheck;
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::net::TcpListener;
@@ -2506,8 +2566,35 @@ mod tests {
         validate_jwk_for_header(&rsa, Algorithm::RS256).expect("matching alg accepts");
         assert!(matches!(
             validate_jwk_for_header(&rsa, Algorithm::RS384),
-            Err(OidcError::InvalidJwk)
+            Err(OidcError::AlgorithmNotAllowed)
         ));
+        assert!(matches!(
+            validate_jwk_for_header(&rsa, Algorithm::ES256),
+            Err(OidcError::AlgorithmNotAllowed)
+        ));
+
+        let rsa_oaep: Jwk = serde_json::from_value(json!({
+            "kty": "RSA",
+            "kid": "enc",
+            "alg": "RSA-OAEP",
+            "use": "enc",
+            "n": URL_SAFE_NO_PAD.encode(vec![0xff; 256]),
+            "e": "AQAB",
+        }))
+        .expect("RSA-OAEP JWK parses");
+        assert!(matches!(
+            validate_jwk_for_header(&rsa_oaep, Algorithm::RS256),
+            Err(OidcError::AlgorithmNotAllowed)
+        ));
+
+        let short = rsa_jwk_with_modulus_bytes("short", 128);
+        assert!(
+            matches!(
+                validate_jwk_for_header(&short, Algorithm::RS256),
+                Err(OidcError::InvalidJwk)
+            ),
+            "a key the source should not publish stays a key-source fault"
+        );
 
         let oct: Jwk = serde_json::from_value(json!({
             "kty": "oct",
@@ -2519,7 +2606,7 @@ mod tests {
         validate_jwk_for_header(&oct, Algorithm::HS256).expect("matching alg accepts");
         assert!(matches!(
             validate_jwk_for_header(&oct, Algorithm::EdDSA),
-            Err(OidcError::InvalidJwk)
+            Err(OidcError::AlgorithmNotAllowed)
         ));
 
         let p256: Jwk = serde_json::from_value(json!({
@@ -2532,8 +2619,157 @@ mod tests {
         validate_jwk_for_header(&p256, Algorithm::ES256).expect("matching curve accepts");
         assert!(matches!(
             validate_jwk_for_header(&p256, Algorithm::ES384),
-            Err(OidcError::InvalidJwk)
+            Err(OidcError::AlgorithmNotAllowed)
         ));
+    }
+
+    fn keycloak_realm_verifier() -> TokenVerifier {
+        let keys = parse_static_jwks(&keycloak_realm_jwks()).expect("a realm key set loads");
+        TokenVerifier::new(
+            TokenVerifierConfig::access_token_profile(
+                "https://keycloak.example/realms/registry",
+                vec!["registry-api".to_string()],
+                vec![Algorithm::RS256, Algorithm::ES256],
+                vec!["at+jwt".to_string()],
+            ),
+            Arc::new(JwksFetcher::new_static(keys, jwks_test_config())),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_header_the_named_key_cannot_serve_is_a_token_fault() {
+        let verifier = keycloak_realm_verifier();
+        let claims = json!({
+            "iss": "https://keycloak.example/realms/registry",
+            "aud": "registry-api",
+            "sub": "subject-1",
+            "exp": 4_102_444_800_i64,
+        });
+        for (reason, alg, kid) in [
+            (
+                "an ES256 header naming the RSA signing key",
+                "ES256",
+                KEYCLOAK_SIG_KID,
+            ),
+            (
+                "an RS256 header naming the RSA-OAEP encryption key",
+                "RS256",
+                KEYCLOAK_ENC_KID,
+            ),
+        ] {
+            let header = json!({"alg": alg, "typ": "at+jwt", "kid": kid});
+            let token = unsigned_token(header, claims.clone());
+            let error = verifier.verify(&token).await.expect_err(reason);
+            assert_eq!(
+                error.failed_check(),
+                FailedCheck::TokenAlgorithm,
+                "{reason}: {error:?}"
+            );
+            assert!(!error.is_key_source_unavailable(), "{reason}");
+            assert_eq!(
+                error.authentication_stage().label(),
+                "algorithm",
+                "{reason}"
+            );
+        }
+
+        let header = json!({"alg": "RS256", "typ": "at+jwt", "kid": KEYCLOAK_SIG_KID});
+        let error = verifier
+            .verify(&unsigned_token(header, claims))
+            .await
+            .expect_err("an unsigned token is refused");
+        assert!(
+            matches!(error, OidcError::SignatureInvalid),
+            "the signing key reaches the signature check: {error:?}"
+        );
+    }
+
+    fn signed_hs256_value(kid: &str, claims: &Value, secret: &[u8]) -> String {
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some(kid.to_string());
+        header.typ = Some("at+jwt".to_string());
+        encode(&header, claims, &EncodingKey::from_secret(secret)).expect("sign HS256 test token")
+    }
+
+    #[tokio::test]
+    async fn a_missing_or_malformed_claim_names_the_check_it_failed() {
+        let secret = b"registry-platform-oidc-claim-check-secret";
+        let verifier = hs256_test_verifier(
+            "https://issuer.example",
+            vec!["registry-api".to_string()],
+            Vec::new(),
+            "kid",
+            secret,
+        )
+        .await;
+        let base = json!({
+            "iss": "https://issuer.example",
+            "aud": "registry-api",
+            "sub": "subject-1",
+            "exp": 4_102_444_800_i64,
+        });
+        let without = |name: &str| {
+            let mut claims = base.clone();
+            claims
+                .as_object_mut()
+                .expect("claims are an object")
+                .remove(name);
+            claims
+        };
+        let with = |name: &str, value: Value| {
+            let mut claims = base.clone();
+            claims[name] = value;
+            claims
+        };
+        verifier
+            .verify(&signed_hs256_value("kid", &base, secret))
+            .await
+            .expect("the base token verifies");
+
+        for (reason, claims, expected) in [
+            ("no aud", without("aud"), FailedCheck::TokenAudience),
+            ("no iss", without("iss"), FailedCheck::TokenIssuer),
+            ("no exp", without("exp"), FailedCheck::TokenTime),
+            (
+                "a string exp",
+                with("exp", json!("soon")),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a fractional exp",
+                with("exp", json!(4_102_444_800.5_f64)),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a negative exp",
+                with("exp", json!(-1)),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a string nbf",
+                with("nbf", json!("now")),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a negative nbf",
+                with("nbf", json!(-1)),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a string iat",
+                with("iat", json!("now")),
+                FailedCheck::TokenTime,
+            ),
+            (
+                "a numeric sub",
+                with("sub", json!(7)),
+                FailedCheck::CredentialMalformed,
+            ),
+        ] {
+            let token = signed_hs256_value("kid", &claims, secret);
+            let error = verifier.verify(&token).await.expect_err(reason);
+            assert_eq!(error.failed_check(), expected, "{reason}: {error:?}");
+        }
     }
 
     fn verifier_for_header_tests() -> TokenVerifier {
@@ -3293,7 +3529,13 @@ mod tests {
                 .extra
                 .insert("scope".to_string(), json!("record:read"));
             // Preserve the selected claim's explicit null; the generic test
-            // signer omits nulls to represent absent registered claims.
+            // signer omits nulls to represent absent registered claims. A
+            // null `nbf` is itself a malformed time claim, so it is omitted
+            // here and the refusal comes from the selected claim.
+            let mut claims = serde_json::to_value(claims).expect("claims serialize");
+            if let Value::Object(map) = &mut claims {
+                map.retain(|name, value| name == "permissions" || !value.is_null());
+            }
             let mut header = Header::new(Algorithm::HS256);
             header.kid = Some("kid".to_string());
             header.typ = Some("at+jwt".to_string());
@@ -3647,17 +3889,31 @@ mod tests {
             secret,
             Some("JWT"),
         );
-        assert!(matches!(
-            verifier
-                .verify_userinfo_jwt_with_claims_policy(
-                    &wrong_subject,
-                    &access,
-                    &accepted_issuers,
-                    &accepted_audiences,
-                )
-                .await,
-            Err(OidcError::InvalidToken)
-        ));
+        let error = verifier
+            .verify_userinfo_jwt_with_claims_policy(
+                &wrong_subject,
+                &access,
+                &accepted_issuers,
+                &accepted_audiences,
+            )
+            .await
+            .expect_err("a UserInfo response about another subject is refused");
+        assert!(matches!(error, OidcError::SubjectMismatch), "{error:?}");
+        assert_eq!(error.failed_check(), FailedCheck::TokenClaims, "{error:?}");
+
+        let mut access_without_subject = access.clone();
+        access_without_subject.claims.sub = None;
+        let error = verifier
+            .verify_userinfo_jwt_with_claims_policy(
+                &valid,
+                &access_without_subject,
+                &accepted_issuers,
+                &accepted_audiences,
+            )
+            .await
+            .expect_err("an access token without a subject matches no UserInfo response");
+        assert!(matches!(error, OidcError::SubjectMismatch), "{error:?}");
+        assert_eq!(error.failed_check(), FailedCheck::TokenClaims, "{error:?}");
     }
 
     #[tokio::test]
@@ -4658,7 +4914,7 @@ mod tests {
             (
                 "an OKP key",
                 br#"{"keys":[{"kty":"OKP","kid":"one","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#,
-                "jwk",
+                "static",
             ),
         ] {
             let error = parse_static_jwks(invalid).expect_err(reason);
@@ -4669,5 +4925,71 @@ mod tests {
             };
             assert_eq!(kind, expected, "{reason}");
         }
+    }
+
+    #[test]
+    fn an_okp_key_is_refused_with_its_position_and_the_remedy() {
+        let error = parse_static_jwks(
+            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"OKP","kid":"two","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}"#,
+        )
+        .expect_err("an OKP key is refused");
+        assert!(
+            matches!(
+                error,
+                OidcError::StaticKeySet(StaticJwksError::OctetKeyPair { key: 1, .. })
+            ),
+            "{error:?}"
+        );
+        let text = error.to_string();
+        assert!(
+            text.contains(r#"key 1 (kid "two", crv "Ed25519") is an OKP key"#),
+            "{text}"
+        );
+        assert!(text.contains("use an RSA or EC key"), "{text}");
+        assert!(error.is_key_source_unavailable());
+    }
+
+    #[test]
+    fn an_okp_key_without_a_crv_is_named_by_kid_alone() {
+        let text = parse_static_jwks(br#"{"keys":[{"kty":"OKP","kid":"only","x":"AA"}]}"#)
+            .expect_err("an OKP key is refused")
+            .to_string();
+        assert!(
+            text.contains(r#"key 0 (kid "only") is an OKP key"#),
+            "{text}"
+        );
+        assert!(!text.contains("crv"), "{text}");
+    }
+
+    #[test]
+    fn an_okp_key_names_are_bounded_and_quoted() {
+        let long = "k".repeat(500);
+        let document =
+            format!(r#"{{"keys":[{{"kty":"OKP","kid":"{long}","crv":"a\nb","x":"AA"}}]}}"#);
+        let text = parse_static_jwks(document.as_bytes())
+            .expect_err("an OKP key is refused")
+            .to_string();
+        assert!(!text.contains(&long), "{text}");
+        assert!(text.contains(r#"crv "a\nb""#), "{text}");
+        assert!(text.len() < 400, "{}", text.len());
+    }
+
+    #[test]
+    fn a_key_of_the_wrong_shape_is_named_by_position() {
+        let error = parse_static_jwks(
+            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"two","n":5,"e":"AQAB"}]}"#,
+        )
+        .expect_err("a key with a numeric modulus is refused");
+        assert!(
+            matches!(
+                error,
+                OidcError::StaticKeySet(StaticJwksError::KeyShape { key: 1 })
+            ),
+            "{error:?}"
+        );
+        let text = error.to_string();
+        assert!(text.contains("key 1 "), "{text}");
+        assert!(!text.contains("two"), "{text}");
+        assert!(error.is_key_source_unavailable());
     }
 }

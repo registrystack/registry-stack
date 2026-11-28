@@ -15,7 +15,17 @@ use serde_json::{json, Value};
 
 const ISSUER: &str = "https://issuer.example.test/realms/journey";
 const AUDIENCE: &str = "https://api.example.test";
-const PRIVATE_JWK_MEMBERS: [&str; 7] = ["d", "p", "q", "dp", "dq", "qi", "k"];
+const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
+
+#[test]
+fn the_private_member_list_is_the_platform_list() {
+    assert_eq!(
+        PRIVATE_JWK_MEMBERS.into_iter().collect::<BTreeSet<_>>(),
+        registry_platform_crypto::PRIVATE_JWK_MEMBERS
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    );
+}
 
 fn corpus() -> TokenCorpus {
     TokenCorpus::load().expect("the corpus loads and validates")
@@ -66,6 +76,34 @@ fn parse_error(extra: Value) -> String {
         .to_string()
 }
 
+fn fixture_with_claims(claims: Value) -> TokenFixture {
+    let mut full = json!({
+        "iss": { "bind": "issuer" },
+        "aud": { "bind": "audience" },
+        "sub": "subject-1",
+        "iat": { "offsetSeconds": 0 },
+        "exp": { "offsetSeconds": 300 }
+    });
+    for (key, value) in claims.as_object().expect("claims is an object") {
+        full[key] = value.clone();
+    }
+    TokenFixture::parse("unit-fixture", &minimal_fixture(json!({ "claims": full })))
+        .expect("the fixture parses")
+}
+
+#[test]
+fn read_scope_skips_openid_connect_scopes() {
+    let mixed = fixture_with_claims(json!({ "scope": "openid records:get" }));
+    assert_eq!(mixed.read_scope("scope").as_deref(), Some("records:get"));
+    let only_openid = fixture_with_claims(json!({ "scope": "openid email profile" }));
+    assert_eq!(only_openid.read_scope("scope"), None);
+    let none = fixture_with_claims(json!({}));
+    assert_eq!(none.read_scope("scope"), None);
+    let list = fixture_with_claims(json!({ "scp": ["openid", "records:get", "records:write"] }));
+    assert_eq!(list.read_scope("scp").as_deref(), Some("records:get"));
+    assert_eq!(list.read_scope("scope"), None);
+}
+
 // ---------------------------------------------------------------------------
 // The corpus as written
 // ---------------------------------------------------------------------------
@@ -73,13 +111,13 @@ fn parse_error(extra: Value) -> String {
 #[test]
 fn every_fixture_loads_and_validates() {
     let corpus = corpus();
-    assert_eq!(corpus.fixtures().len(), 21, "11 positive and 10 negative");
+    assert_eq!(corpus.fixtures().len(), 29, "16 positive and 13 negative");
     let positive = corpus
         .fixtures()
         .iter()
         .filter(|fixture| fixture.class == FixtureClass::Positive)
         .count();
-    assert_eq!(positive, 11);
+    assert_eq!(positive, 16);
     let ids: BTreeSet<&str> = corpus.fixtures().iter().map(|f| f.id.as_str()).collect();
     assert_eq!(ids.len(), corpus.fixtures().len(), "ids are unique");
 }
@@ -336,7 +374,7 @@ fn no_fixture_file_holds_a_private_jwk_member_or_a_live_looking_token() {
         });
         checked += 1;
     }
-    assert_eq!(checked, 21);
+    assert_eq!(checked, 29);
 }
 
 fn walk(value: &Value, visit: &mut impl FnMut(&Value)) {

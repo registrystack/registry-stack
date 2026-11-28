@@ -2059,6 +2059,18 @@ impl DatabaseConfig {
     pub fn ca_bundle_ref(&self) -> Option<&SecretReference> {
         self.ca_bundle_ref.as_ref()
     }
+
+    /// The secret reference to the runtime role's PostgreSQL URL, which
+    /// `bregctl provision` reads for the role, database and password.
+    pub fn runtime_url_ref(&self) -> &SecretReference {
+        &self.runtime_url_ref
+    }
+
+    /// The secret reference to the migration role's PostgreSQL URL, which
+    /// `bregctl provision` reads for the role, database and password.
+    pub fn migration_url_ref(&self) -> &SecretReference {
+        &self.migration_url_ref
+    }
 }
 
 impl fmt::Debug for DatabaseConfig {
