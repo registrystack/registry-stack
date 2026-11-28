@@ -102,7 +102,8 @@ pub(crate) fn run(
         .audit_profile()
         .map_err(HistoryErasureLifecycleError::RuntimeConfig)?;
     let lock_key = RegistryLockKey::derive(&package.manifest().package_id)
-        .map_err(|_| HistoryErasureLifecycleError::DatabaseConfiguration)?;
+        .map_err(|_| HistoryErasureLifecycleError::DatabaseConfiguration)?
+        .for_posture(config.posture());
     let timeouts = HistoryErasureTimeouts::new(
         bounded_timeout(config.operational_timeouts().migration_lock)?,
         bounded_timeout(config.operational_timeouts().migration_statement)?,

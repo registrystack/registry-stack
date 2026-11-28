@@ -110,6 +110,20 @@ An administrator that is not a superuser becomes a member of the roles it create
 
 ## Grant the runtime database role
 
+Stop every Adapter process of an earlier release before starting this one
+against the same journal database. An earlier process's journal writes are
+refused once the journal migrates. The payment audit migration also refuses
+writes from earlier Adapter processes.
+{/* Evidence: crates/registry-adapter/src/journal/migrations/0600_declared_posture.sql;
+    crates/registry-adapter/src/payments/migrations/declared_posture.sql;
+    crates/registry-adapter/src/payments/migrations/g2p_declared_posture.sql. */}
+
+Each new disbursement audit event records the process's declared posture.
+Existing disbursement events keep their original history with an empty posture.
+
+{/* Evidence: crates/registry-adapter/src/payments/g2p_store.rs migrate_g2p, event;
+    crates/registry-adapter/tests/postgres_journal_retention_served.rs served_disbursement_status_with_marked_peer. */}
+
 The facade journals every request and, when it serves a write, keeps idempotency state in
 PostgreSQL.
 The database transport defaults to `verified-tls`. Use `database.transport: loopback-plaintext`
@@ -549,7 +563,7 @@ Drain a direct BReg job the same way, and take a backup, before upgrading from a
 receiver identity did not include the client assertion audience: this binary's receiver identity
 includes it, so an item left pending stops as `adapter.job.breg-receiver-changed` before any BReg
 call, and no configuration clears it.
-The new `init-store` moves the store to schema 104, which the previous binary refuses, so the
+The new `init-store` moves the store to schema 105, which the previous binary refuses, so the
 recovery is the same: restore that backup, settle the item with the previous binary, and upgrade
 again.
 Run the new binary's `init-store` once before you restart passes.
@@ -888,6 +902,7 @@ orchestrators:
 
 A successful readiness body contains `status: ready`, `posture` and
 `developmentSettings`. Each development setting has a `code` and `pointer`.
+A setting from the payments configuration also names that file in `file`.
 In development, the facade, payment, metrics and job hook listeners add
 `Registry-Posture: development` to every response.
 Each new PostgreSQL request journal row carries the posture declared by the facade process.
@@ -899,7 +914,9 @@ reason code `adapter.operation.reserved-facade-path` in the effective contract.
 {/* Evidence: crates/registry-adapter/src/facade.rs;
     crates/registry-adapter/src/journal.rs ready;
     crates/registry-adapter/src/journal.rs append_in_posture;
-    crates/registry-adapter/tests/postgres_journal_retention_served.rs served_journal_rows_include_the_declared_posture;
+    crates/registry-adapter/tests/postgres_journal_retention_served.rs
+    served_journal_rows_include_the_declared_posture,
+    serve_grants_the_collection_tables_beside_a_project;
     crates/registry-adapter/tests/health_routes.rs;
     crates/registry-adapter-engine/src/load.rs ReservedFacadePath. */}
 

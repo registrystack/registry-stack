@@ -507,6 +507,40 @@ mod tests {
     }
 
     #[test]
+    fn production_identity_facts_refuse_unrestricted_clients() {
+        let directory = crate::canonical_tempdir();
+        let runtime = directory.path().join("runtime.yaml");
+        let source = fs::read_to_string(manifest(
+            "tests/fixtures/identity/runtime-task-authority.yaml",
+        ))
+        .unwrap();
+        let listed =
+            "    allowedClients:\n      - casework-staff\n      - task-agent\n      - task-status";
+        assert!(source.contains(listed));
+        fs::write(
+            &runtime,
+            source.replace(listed, "    allowedClients: unrestricted"),
+        )
+        .unwrap();
+        let output = directory.path().join("facts.yaml");
+        let error = generate(
+            &manifest(EXAMPLE),
+            &runtime,
+            &output,
+            DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .unwrap_err();
+        let refusal = error
+            .downcast_ref::<registry_casework::RuntimeConfigError>()
+            .unwrap();
+        assert_eq!(refusal.code(), "casework.posture.unrestricted-clients");
+        assert!(!output.exists());
+    }
+
+    #[test]
     fn a_customized_human_identity_is_refused_because_hosted_users_carry_the_actor_kind() {
         let directory = crate::canonical_tempdir();
         let runtime = directory.path().join("runtime.yaml");

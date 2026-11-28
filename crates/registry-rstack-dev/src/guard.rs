@@ -390,7 +390,9 @@ struct TestLaunch {
 
 impl Command {
     pub(super) fn new(root: &Path, name: &str, binary: &Path) -> Result<Self> {
-        Self::with_launch(root, name, binary, None, None)
+        let environment =
+            BTreeMap::from([(crate::POSTURE_ENV.to_owned(), crate::DEVELOPMENT.to_owned())]);
+        Self::with_launch(root, name, binary, None, Some(&environment))
     }
 
     pub(super) fn isolated(
@@ -703,6 +705,70 @@ mod tests {
             command,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn breg_guard_launch_declares_development_for_the_workload() {
+        use registry_platform_config::{DEVELOPMENT, POSTURE_ENV};
+
+        let scratch = tempfile::tempdir().unwrap();
+        let command = Command::new(scratch.path(), "breg", Path::new("/bin/sh")).unwrap();
+        assert_eq!(
+            command.test_launch.environment,
+            BTreeMap::from([(POSTURE_ENV.to_owned(), DEVELOPMENT.to_owned())])
+        );
+        assert!(command.test_launch.workdir.is_none());
+        assert!(!command.test_launch.clean_env);
+    }
+
+    #[test]
+    fn guarded_breg_overrides_an_inherited_production_posture() {
+        use registry_platform_config::{DEVELOPMENT, POSTURE_ENV};
+
+        let scratch = tempfile::tempdir().unwrap();
+        let output = scratch.path().join("posture");
+        let mut command = Command::new(scratch.path(), "breg", Path::new("/bin/sh")).unwrap();
+        command.command.env(POSTURE_ENV, "production");
+        command
+            .args([
+                "-c",
+                r#"printf '%s' "$REGISTRY_STACK_POSTURE" > "$1"; exec sleep 60"#,
+                "breg",
+            ])
+            .arg(&output);
+        let mut child = command.spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let observed = loop {
+            if let Ok(value) = fs::read_to_string(&output) {
+                if !value.is_empty() {
+                    break value;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "guarded workload did not write its posture"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        child.stop().unwrap();
+        assert_eq!(observed, DEVELOPMENT);
+    }
+
+    #[test]
+    fn isolated_launch_preserves_its_declared_environment() {
+        let scratch = tempfile::tempdir().unwrap();
+        let environment = BTreeMap::from([("APP_CONFIG".to_owned(), "run.json".to_owned())]);
+        let command = Command::isolated(
+            scratch.path(),
+            "application",
+            Path::new("/bin/sh"),
+            scratch.path(),
+            &environment,
+        )
+        .unwrap();
+        assert_eq!(command.test_launch.environment, environment);
+        assert_eq!(command.test_launch.workdir.as_deref(), Some(scratch.path()));
+        assert!(command.test_launch.clean_env);
     }
 
     #[test]

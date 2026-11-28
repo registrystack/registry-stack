@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ProposalRetentionCliError {
+    RuntimeConfig(registry_breg::runtime_config::RuntimeConfigError),
     Operator,
     ActiveDetailPinned,
     RetainMode,
@@ -71,10 +72,7 @@ pub(crate) fn list(
     }
     let runtime = operator_runtime()?;
     let page = runtime.block_on(async {
-        let service =
-            ProposalRetentionOperatorService::from_runtime_config(runtime_config, posture)
-                .await
-                .map_err(map_error)?;
+        let service = load_service(runtime_config, posture).await?;
         service
             .list(action_id, after_cursor, limit)
             .await
@@ -96,10 +94,7 @@ pub(crate) fn dry_run(
     let scope = scope(action_id, proposal_id, submission_version)?;
     let runtime = operator_runtime()?;
     let dry_run = runtime.block_on(async {
-        let service =
-            ProposalRetentionOperatorService::from_runtime_config(runtime_config, posture)
-                .await
-                .map_err(map_error)?;
+        let service = load_service(runtime_config, posture).await?;
         service.dry_run(scope).await.map_err(map_error)
     })?;
     Ok(ProposalRetentionDryRunOutcome { dry_run })
@@ -118,10 +113,7 @@ pub(crate) fn erase(
     let scope = scope(action_id, proposal_id, submission_version)?;
     let runtime = operator_runtime()?;
     let erase = runtime.block_on(async {
-        let service =
-            ProposalRetentionOperatorService::from_runtime_config(runtime_config, posture)
-                .await
-                .map_err(map_error)?;
+        let service = load_service(runtime_config, posture).await?;
         service.erase(scope).await.map_err(map_error)
     })?;
     Ok(ProposalRetentionEraseOutcome { erase })
@@ -135,13 +127,29 @@ pub(crate) fn cleanup_attachments(
         return Err(ProposalRetentionCliError::Operator);
     }
     operator_runtime()?.block_on(async {
-        ProposalRetentionOperatorService::from_runtime_config(runtime_config, posture)
-            .await
-            .map_err(map_error)?
+        load_service(runtime_config, posture)
+            .await?
             .cleanup_attachments()
             .await
             .map_err(map_error)
     })
+}
+
+async fn load_service(
+    path: &Path,
+    posture: registry_platform_config::DeclaredPosture,
+) -> Result<ProposalRetentionOperatorService, ProposalRetentionCliError> {
+    let config =
+        registry_breg::runtime_config::load_runtime_config(path, posture).map_err(|error| {
+            if crate::is_posture_refusal(&error) {
+                ProposalRetentionCliError::RuntimeConfig(error)
+            } else {
+                ProposalRetentionCliError::Operator
+            }
+        })?;
+    ProposalRetentionOperatorService::from_loaded_config(config)
+        .await
+        .map_err(map_error)
 }
 
 fn scope<'a>(

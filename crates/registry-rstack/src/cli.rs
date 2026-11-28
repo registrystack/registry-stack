@@ -7,6 +7,10 @@ use crate::ReleaseManifest;
 use clap::{
     value_parser, Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
 };
+use registry_platform_config::{
+    declared, DeclaredPosture, Posture, PostureSource, DEVELOPMENT, POSTURE_ENV,
+};
+use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::fs;
@@ -1524,7 +1528,54 @@ fn dev_help(format: ReportFormat) -> Result<(), CliFailure> {
     Ok(())
 }
 
+fn admit_dev(action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure> {
+    if !matches!(action, DevCommand::Check { .. } | DevCommand::Start { .. }) {
+        return Ok(());
+    }
+    // The hosted commands also enforce this when called directly.
+    let (code, message, fix) = match declared(None) {
+        Err(error) => (error.code(), error.message(), error.suggested_action()),
+        Ok(DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Environment,
+        }) => (
+            "platform.posture.conflict",
+            "rstack dev runs development processes",
+            "Unset REGISTRY_STACK_POSTURE, or set it to development.",
+        ),
+        Ok(_) => return Ok(()),
+    };
+
+    if matches!(action, DevCommand::Start { .. }) {
+        return Err(format!("{code}: {message}. {fix}").into());
+    }
+
+    let report = Report::new(vec![Diagnostic::error(code, "", message, fix)]);
+    match format {
+        ReportFormat::Json => {
+            // Keep the hosted dev-check report shape without loading a product host.
+            let envelope = json!({
+                "ok": false,
+                "command": "dev-check",
+                "status": "usage-error",
+                "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
+                "kind": "BRegCtlReport",
+                "version": registry_platform_buildinfo::DISPLAY_VERSION,
+                "diagnostics": report.to_json_value(),
+            });
+            reportln!("{envelope}");
+        }
+        ReportFormat::Human => {
+            write!(io::stderr().lock(), "{}", report.render_human()).map_err(|error| {
+                CliFailure::operational(format!("cannot write report: {error}"))
+            })?;
+        }
+    }
+    Err(CliFailure::reported(2))
+}
+
 fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<(), CliFailure> {
+    admit_dev(action, format)?;
     let option = |name: &str, value: &std::ffi::OsStr| {
         let mut option = OsString::from(format!("--{name}="));
         option.push(value);
@@ -1683,6 +1734,7 @@ fn dispatch_dev(cli: &Cli, action: &DevCommand, format: ReportFormat) -> Result<
     };
 
     command
+        .env(POSTURE_ENV, DEVELOPMENT)
         .arg(DEV_RUNNER_COMMAND)
         .arg(name)
         .args(options)

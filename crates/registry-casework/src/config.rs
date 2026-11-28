@@ -29,7 +29,9 @@ use registry_platform_oidc::{
     IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
     TokenVerifierConfig,
 };
-use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, RetiredApiVersion};
+use registry_platform_yaml::{
+    escape_pointer_segment, Diagnostic, Report, RetiredApiVersion, Severity,
+};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
@@ -578,7 +580,7 @@ fn unrestricted_clients_setting(check: &RuntimeFileCheck<RuntimeConfig>) -> Opti
         setting: &UNRESTRICTED_CLIENTS,
         pointer: Some(ALLOWED_CLIENTS_POINTER.to_owned()),
         position,
-        origin: SettingOrigin::Combination,
+        origin: SettingOrigin::RuntimeFile,
     })
 }
 
@@ -2061,6 +2063,36 @@ mod tests {
     use registry_platform_config::write_package;
     use serde_json::json;
 
+    #[test]
+    fn read_report_accessors_select_the_first_error() {
+        let report = RuntimeConfigError::ReadReport(Report::new(vec![
+            Diagnostic::warning("example.warning", "/warning", "warning", "warning action"),
+            Diagnostic::error("example.error", "/error", "error", "error action"),
+            Diagnostic::error("example.later", "/later", "later", "later action"),
+        ]));
+        assert_eq!(report.code(), "example.error");
+        assert_eq!(report.pointer(), "/error");
+        assert_eq!(report.suggested_action(), "error action");
+    }
+
+    #[test]
+    fn development_only_refusal_uses_the_setting_member_and_remedy() {
+        static TEST_SETTING: DevelopmentSetting = DevelopmentSetting {
+            code: "example.development-only",
+            key: "exampleSetting",
+            summary: "a development fixture",
+            production: "Replace the fixture.",
+        };
+        let error = RuntimeConfigError::from(DevelopmentOnlyRefused {
+            setting: &TEST_SETTING,
+        });
+        assert_eq!(error.code(), TEST_SETTING.code);
+        assert_eq!(error.pointer(), "/exampleSetting");
+        let remedy = error.suggested_action();
+        assert!(remedy.starts_with(TEST_SETTING.production));
+        assert!(remedy.contains("--posture development"));
+    }
+
     const TEST_POSTURE: DeclaredPosture = DeclaredPosture {
         posture: registry_platform_config::Posture::Development,
         source: registry_platform_config::PostureSource::Flag,
@@ -2163,6 +2195,19 @@ mod tests {
             "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
             "audit":{"path":directory.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
         })
+    }
+
+    #[test]
+    fn unrestricted_clients_are_a_runtime_file_setting() {
+        let root = tempfile::tempdir().unwrap();
+        let path = write_operator(&operator_value(root.path(), root.path()), root.path());
+        let checked = RuntimeConfig::loader(TEST_POSTURE).check_offline::<RuntimeConfig>(
+            &path,
+            false,
+            stand_in_for,
+        );
+        let setting = unrestricted_clients_setting(&checked).unwrap();
+        assert_eq!(setting.origin, SettingOrigin::RuntimeFile);
     }
 
     #[test]
@@ -3348,6 +3393,14 @@ pub enum RuntimeConfigError {
 const REBUILD_PACKAGE: &str =
     "Rebuild the package with `caseworkctl package`, then point package.root at it.";
 
+fn first_read_error(report: &Report) -> &Diagnostic {
+    report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.severity == Severity::Error)
+        .expect("a refused runtime read reports an error")
+}
+
 impl RuntimeConfigError {
     fn is_identifier_collision(&self) -> bool {
         matches!(self, Self::ContextProviderIdCollision)
@@ -3376,7 +3429,7 @@ impl RuntimeConfigError {
                 "database.testOnlyPlaintext"
             }
             Self::DatabaseTransport(_) => "database.transport",
-            Self::DevelopmentOnly(_) => "authentication.oidc.allowedClients",
+            Self::DevelopmentOnly(error) => error.setting.key,
             Self::InvalidAuditDestination(error) => audit_field(error),
             Self::InvalidContextProviders => "contextProviders",
             Self::UnconfiguredReviewCompletionDestination => "reviewCompletionDestinations",
@@ -3407,7 +3460,7 @@ impl RuntimeConfigError {
     pub fn pointer(&self) -> String {
         match self {
             Self::Load(error) => error.deciding_diagnostic().path.clone(),
-            Self::ReadReport(report) => report.diagnostics()[0].path.clone(),
+            Self::ReadReport(report) => first_read_error(report).path.clone(),
             Self::BindingSecret { pointer, .. }
             | Self::InvalidReviewCompletionDestination { pointer, .. }
             | Self::InvalidContextProvider { pointer, .. }
@@ -3430,7 +3483,7 @@ impl RuntimeConfigError {
     pub fn code(&self) -> &str {
         match self {
             Self::Load(error) => &error.deciding_diagnostic().code,
-            Self::ReadReport(report) => &report.diagnostics()[0].code,
+            Self::ReadReport(report) => &first_read_error(report).code,
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).0,
             Self::InvalidApiVersion => "casework.runtime.unsupported-api-version",
             Self::InvalidKind => "casework.runtime.wrong-kind",
@@ -3478,7 +3531,7 @@ impl RuntimeConfigError {
     pub fn suggested_action(&self) -> String {
         let action = match self {
             Self::Load(error) => return error.deciding_diagnostic().suggested_action.clone(),
-            Self::ReadReport(report) => return report.diagnostics()[0].suggested_action.clone(),
+            Self::ReadReport(report) => return first_read_error(report).suggested_action.clone(),
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).1,
             Self::InvalidApiVersion => {
                 "Write apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1."
@@ -3541,7 +3594,14 @@ impl RuntimeConfigError {
                 "Add a reviewCompletionDestinations entry for each destination casework.yaml trustedProducers.PRODUCER_ID.completion.destinationId names."
             }
             Self::DatabaseTransport(error) => error.suggested_action(),
-            Self::DevelopmentOnly(_) => "List the clients the deployment admits. For a laptop or test run, start it with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+            Self::DevelopmentOnly(error) => {
+                return format!(
+                    "{} For a laptop or test run, start it with `rstack dev`, or declare development with {POSTURE_ENV}={DEVELOPMENT} or --posture {DEVELOPMENT}.",
+                    error.setting.production,
+                    POSTURE_ENV = registry_platform_config::POSTURE_ENV,
+                    DEVELOPMENT = registry_platform_config::DEVELOPMENT,
+                );
+            }
             Self::Oidc => {
                 "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
             }

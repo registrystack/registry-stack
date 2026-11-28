@@ -141,9 +141,8 @@ impl TimerOperatorError {
             Self::RuntimeConfigPath => "timer.runtime-config.path-invalid",
             Self::RuntimeConfigRefused => "timer.runtime-config.refused",
             Self::PackageRefused => "timer.package.refused",
-            Self::DatabaseUnavailable | Self::PostureMismatch { .. } => {
-                "timer.database.unavailable"
-            }
+            Self::DatabaseUnavailable => "timer.database.unavailable",
+            Self::PostureMismatch { .. } => crate::migration::POSTURE_MISMATCH_CODE,
             Self::OutcomeUnresolved => "timer.outcome.unresolved",
             Self::OperationRefused => "timer.operation.refused",
             Self::OccurrenceNotFound => "timer.occurrence.not-found",

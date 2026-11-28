@@ -17,6 +17,10 @@ codes:
   request.nonce-invalid: {status: 400, title: Request nonce is invalid, detail: 'requestNonce must be 32 random bytes encoded as unpadded base64url (43 characters), generated anew for each request'}
   request.selector-invalid: {status: 400, title: Selector is invalid, detail: selector does not match an available request profile}
   auth.invalid-credential: {status: 401, title: Bearer access token is invalid, detail: bearer access token validation failed}
+  platform.task-grant.development-assertion:
+    status: 401
+    title: Development task assertion refused
+    detail: task grant was issued in the development posture
   evidence.denied: {status: 403, title: Evidence request is not permitted, detail: the Evidence request is not permitted}
   resource.not-found: {status: 404, title: Requested resource was not found, detail: the requested resource was not found}
   format.unsupported: {status: 406, title: Requested format is not supported, detail: the requested format is not supported}
@@ -39,7 +43,7 @@ authorization_refusal_audit:
   applies_after: successful authentication when the authorization decision refuses the request
   order: The minimal registry.evidence.audit.authorization-refusal/v1 event is durably accepted before the evidence.denied response.
   failure: An audit append failure replaces the evidence.denied response with service.unavailable.
-  operational_only: [evidence.invalid-request, request.nonce-invalid, request.selector-invalid, auth.invalid-credential]
+  operational_only: [evidence.invalid-request, request.nonce-invalid, request.selector-invalid, auth.invalid-credential, platform.task-grant.development-assertion]
 selector_refusal:
   code: request.selector-invalid
   applies_to: Every selector the matched entitlement resolves that fails its selector profile, or whose values the inputs schema of the acquiring Source refuses.

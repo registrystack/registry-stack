@@ -63,6 +63,10 @@ fn fake_docker_path() -> std::ffi::OsString {
 /// system `false` as every product runtime, since these runs stop before a
 /// service starts, and the fake Docker CLI with no daemon.
 fn rstack_dev(state: &std::path::Path, json: bool) -> Command {
+    rstack_dev_with_host(state, json, &host("bregctl"))
+}
+
+fn rstack_dev_with_host(state: &std::path::Path, json: bool, bregctl: &std::path::Path) -> Command {
     let uninstalled = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("dev-run-uninstalled");
     let mut command = Command::new(env!("CARGO_BIN_EXE_rstack"));
     command
@@ -76,7 +80,7 @@ fn rstack_dev(state: &std::path::Path, json: bool) -> Command {
     command
         .arg("dev")
         .env("RSTACK_DEV_STATE_DIR", state)
-        .env("RSTACK_BREGCTL_BIN", host("bregctl"))
+        .env("RSTACK_BREGCTL_BIN", bregctl)
         .env("RSTACK_BREG_BIN", system_binary("false"))
         .env_remove("RSTACK_CASEWORKCTL_BIN")
         .env("RSTACK_CASEWORK_BIN", system_binary("false"))
@@ -260,6 +264,93 @@ fn assert_error_envelope(report: &serde_json::Value, class: &str) {
         panic!("{report} violates the error schema: {errors:?}");
     }
     assert_eq!(report["error"]["class"], class, "{report}");
+}
+
+#[test]
+fn start_and_check_refuse_explicit_production_and_invalid_postures() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("evidence");
+    copy_tree(&example_project("evidence/examples/standalone"), &project);
+    for (posture, code) in [
+        ("production", "platform.posture.conflict"),
+        ("staging", "platform.posture.invalid-value"),
+    ] {
+        for action in ["start", "check"] {
+            let output = rstack_dev_with_host(&state, true, &system_binary("false"))
+                .args([action, utf8(&project)])
+                .env_remove("RSTACK_EVIDENCECTL_BIN")
+                .env_remove("RSTACK_EVIDENCE_BIN")
+                .env("REGISTRY_STACK_POSTURE", posture)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "{action} with {posture}: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            if action == "start" {
+                assert_error_envelope(&report, "usage");
+                assert!(report["error"]["message"].as_str().unwrap().contains(code));
+            } else {
+                assert_eq!(report["status"], "usage-error");
+                assert_eq!(report["ok"], false);
+                assert_eq!(report["command"], "dev-check");
+                assert_eq!(report["kind"], "BRegCtlReport");
+                assert_eq!(
+                    report["apiVersion"],
+                    "id.registrystack.org/formats/breg/ctl-report/v1alpha1"
+                );
+                assert!(report["version"]
+                    .as_str()
+                    .is_some_and(|version| !version.is_empty()));
+                assert_eq!(report["diagnostics"][0]["code"], code, "{report}");
+            }
+        }
+    }
+    assert!(!state.exists());
+}
+
+#[test]
+fn launcher_execs_every_dev_host_in_development_posture() {
+    let scratch = tempfile::tempdir().unwrap();
+    let state = scratch.path().join("state");
+    let project = scratch.path().join("project");
+    let probe = scratch.path().join("posture-probe");
+    fs::write(
+        &probe,
+        "#!/bin/sh\n[ \"${REGISTRY_STACK_POSTURE-}\" = development ]\n",
+    )
+    .unwrap();
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o700)).unwrap();
+    for (arguments, posture) in [
+        (vec!["check", utf8(&project)], None),
+        (vec!["start", utf8(&project)], None),
+        (vec!["status", RUN_ID], Some("production")),
+        (
+            vec!["token", RUN_ID, "--as", "operator"],
+            Some("production"),
+        ),
+        (vec!["stop", RUN_ID], Some("production")),
+    ] {
+        let mut command = rstack_dev_with_host(&state, true, &probe);
+        command.args(&arguments);
+        if let Some(posture) = posture {
+            command.env("REGISTRY_STACK_POSTURE", posture);
+        } else {
+            command.env_remove("REGISTRY_STACK_POSTURE");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{} host did not observe development posture: {}",
+            arguments[0],
+            output.status
+        );
+    }
 }
 
 /// A run directory whose supervisor is gone: its lock file exists, unlocked.

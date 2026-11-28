@@ -787,6 +787,7 @@ async fn real_postgres_refuses_the_active_package_again_and_binds_only_the_recor
     assert_eq!(
         recorded,
         RecordedRegistryState {
+            posture: initial.posture(),
             identity: active.clone(),
             ready: true,
             activation_applied: true,
@@ -4708,6 +4709,7 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     let report = preflight_field_encryption_backfill(
         &mut migration,
         FieldEncryptionBackfillPreflightRequest {
+            posture: package.posture(),
             expected: &active,
             migration_role: &database.migration_role,
             timeouts: FieldEncryptionBackfillTimeouts::new(
@@ -5031,6 +5033,7 @@ async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value
     let report = preflight_field_encryption_backfill(
         &mut migration,
         FieldEncryptionBackfillPreflightRequest {
+            posture: package.posture(),
             expected: &active,
             migration_role: &database.migration_role,
             timeouts: FieldEncryptionBackfillTimeouts::new(
@@ -9163,6 +9166,7 @@ async fn real_postgres_operator_preflight_scans_blind_index_reindex_steps() {
         .reviewed_migration_plan()
         .expect("the successor carries its reviewed plan");
     let request = |field_encryption| FieldEncryptionBackfillPreflightRequest {
+        posture: scenario.package.posture(),
         expected: &scenario.active,
         migration_role: &scenario.database.migration_role,
         timeouts: FieldEncryptionBackfillTimeouts::new(

@@ -3442,6 +3442,29 @@
         "policyId": {
           "type": "string"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "project": {
           "type": "string"
         },

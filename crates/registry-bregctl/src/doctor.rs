@@ -6,7 +6,7 @@ use std::path::Path;
 use registry_breg::package::PackageError;
 use registry_breg::postgres::DatabaseConnectionCause;
 use registry_breg::runtime_config::load_runtime_config;
-use registry_breg::startup::{check_loaded, CheckedStartup, StartupError};
+use registry_breg::startup::{check_loaded_observing_posture, CheckedStartup, StartupError};
 use registry_breg::{Diagnostic, DiagnosticSeverity, RelatedDiagnostic};
 
 /// The startup dependencies `prepare()` checks, in the order it checks them.
@@ -35,12 +35,8 @@ pub(crate) struct DoctorRefusal {
 /// The dependencies and refresh timings verified by a passing doctor check.
 pub(crate) struct DoctorSuccess {
     pub(crate) checked: CheckedStartup,
+    pub(crate) diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     pub(crate) external_refresh_timings: Vec<registry_breg::runtime_config::ExternalRefreshTiming>,
-}
-
-pub(crate) enum Outcome {
-    Checked(DoctorSuccess),
-    PostureMismatch(registry_platform_config::Posture),
 }
 
 /// Run the startup dependency check without binding a listener, keeping only
@@ -51,7 +47,7 @@ pub(crate) enum Outcome {
 pub(crate) fn run(
     posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
-) -> Result<Outcome, DoctorRefusal> {
+) -> Result<DoctorSuccess, DoctorRefusal> {
     if !runtime_config.is_absolute() {
         return Err(DoctorRefusal {
             diagnostics: vec![diagnostic(
@@ -78,13 +74,13 @@ pub(crate) fn run(
             )],
             runtime_configuration: false,
         })?;
-    let checked = match runtime.block_on(check_loaded(config.clone())) {
-        Ok(checked) => checked,
-        Err(StartupError::PostureMismatch { recorded, .. }) => {
-            return Ok(Outcome::PostureMismatch(recorded));
-        }
-        Err(error) => return Err(startup_refusal(error)),
-    };
+    let checked = runtime
+        .block_on(check_loaded_observing_posture(config.clone()))
+        .map_err(startup_refusal)?;
+    let mut diagnostics = config.posture_report().diagnostics(runtime_config);
+    if checked.recorded_posture != posture.posture {
+        diagnostics.push(crate::activation_posture_finding(checked.recorded_posture));
+    }
     let package = config.load_active_package().map_err(|_| DoctorRefusal {
         diagnostics: vec![diagnostic(
             "startup.package.refused",
@@ -104,10 +100,11 @@ pub(crate) fn run(
         });
     }
     let external_refresh_timings = config.external_refresh_timings(package.registry());
-    Ok(Outcome::Checked(DoctorSuccess {
+    Ok(DoctorSuccess {
         checked,
+        diagnostics,
         external_refresh_timings,
-    }))
+    })
 }
 
 /// Preserve the runtime check's safe field diagnosis in doctor's compiler
@@ -301,11 +298,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         }
         StartupError::DatabaseConnection(cause) => database_connection_diagnostic(cause),
         StartupError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
-        StartupError::PostureMismatch { recorded, .. } => (
-            registry_breg::migration::POSTURE_MISMATCH_CODE,
-            "database",
-            registry_breg::migration::posture_mismatch_message(recorded),
-        ),
+        StartupError::PostureMismatch { .. } => unreachable!("handled in run"),
         StartupError::DatabaseUnready => (
             "startup.database.unready",
             "database",
@@ -468,6 +461,19 @@ mod tests {
     use registry_breg::runtime_config::RuntimeConfigError;
     use registry_platform_config::MetricsBindError;
     use std::collections::HashSet;
+
+    #[test]
+    fn package_identity_refusal_names_both_posture_remedies() {
+        let refusal = startup_diagnostic(StartupError::PackageRefused(
+            PackageError::DeploymentIdentity,
+        ));
+        assert_eq!(refusal.code, "breg.posture.placeholder-identity");
+        assert!(refusal.message.contains("canonicalBaseIri"));
+        assert!(refusal.message.contains("--posture development"));
+        assert!(refusal
+            .message
+            .contains("REGISTRY_STACK_POSTURE=development"));
+    }
 
     #[test]
     fn checked_dependencies_is_pinned_to_startups_own_vocabulary() {

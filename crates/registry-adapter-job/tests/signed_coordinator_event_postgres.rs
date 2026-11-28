@@ -8,6 +8,7 @@
 #[path = "support/job_fixture.rs"]
 mod job_fixture;
 
+use registry_platform_config::Posture::Production;
 use std::collections::{BTreeMap, VecDeque};
 use std::str::FromStr as _;
 use std::sync::{Arc, Mutex};
@@ -115,8 +116,7 @@ async fn admit(
 }
 
 async fn isolated_store() -> Pool {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let base = crate::job_fixture::test_database_url();
     let schema = format!("adapter_job_event_{}", uuid::Uuid::new_v4().simple());
     let (admin, connection) = tokio_postgres::connect(&base, NoTls)
         .await
@@ -525,7 +525,7 @@ async fn a_submicrosecond_event_time_keeps_identical_retry_bytes_after_store_rou
         .await
         .expect("the job state exists");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");
@@ -1110,7 +1110,7 @@ async fn a_rescan_of_a_refused_retry_of_a_lost_event_sends_it_to_the_revised_tri
 async fn stage_a_rescan_then_die(pool: &Pool) {
     let mut client = pool.get().await.expect("a pooled client");
     let ttl = Duration::from_secs(60);
-    let lease = store::take_lease(&client, "case-daily", ttl)
+    let lease = store::take_lease(&client, "case-daily", ttl, Production)
         .await
         .expect("the lease answers")
         .expect("the lease grants");

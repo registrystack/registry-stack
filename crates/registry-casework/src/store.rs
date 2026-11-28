@@ -257,6 +257,7 @@ impl PostgresStore {
             )
             .collect();
         let transport = if config.test_only_plaintext {
+            // The postgres-test transport uses NoTls without restricting the host.
             DatabaseTransport::LoopbackPlaintext
         } else {
             config.plaintext_permitted(&hosts, witness)?

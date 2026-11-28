@@ -181,9 +181,11 @@ async fn authenticate(case: FixtureCase, key_set_uri: String) -> Outcome {
     match authenticator.authenticate(case.token.expose()).await {
         Ok(context) => Outcome::Admitted(Some(context.actor_kind().as_str().to_owned())),
         Err(AuthenticationError::Malformed) => Outcome::Refused(Stage::Header),
-        Err(AuthenticationError::Context(_) | AuthenticationError::SenderConstrained) => {
-            Outcome::Refused(Stage::Claims)
-        }
+        Err(
+            AuthenticationError::Context(_)
+            | AuthenticationError::SenderConstrained
+            | AuthenticationError::DevelopmentAssertion,
+        ) => Outcome::Refused(Stage::Claims),
         Err(AuthenticationError::Verification(check)) => {
             match verifier_refusal(&config, &case).await {
                 Some(stage) => Outcome::Refused(stage),

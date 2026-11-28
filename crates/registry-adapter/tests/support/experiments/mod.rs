@@ -302,7 +302,7 @@ endpoints:
 database:
   runtimeUrlRef: secret:env/EXPERIMENT_DB_URL
   migrationUrlRef: secret:env/EXPERIMENT_DB_URL
-  testOnlyPlaintext: true
+  transport: loopback-plaintext
 oidc:
   issuer: {ISSUER}
   audience: {AUDIENCE}
@@ -363,6 +363,7 @@ cursorKeyRef: secret:env/EXPERIMENT_CURSOR_KEY
             .arg("--pack")
             .arg(scenario.pack())
             .envs(&environment)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
         let mut child = command.spawn().expect("start the native adapter binary");
@@ -554,6 +555,7 @@ cursorKeyRef: secret:env/EXPERIMENT_CURSOR_KEY
             .arg("--format=json")
             .args(arguments)
             .envs(&self.environment)
+            .env_remove("REGISTRY_STACK_POSTURE")
             .output()
             .expect("run the native adapterctl binary");
         assert!(

@@ -163,6 +163,9 @@ enum GenerateCommand {
 enum ProviderCommand {
     /// Create an approval project from a Base Registry Engine (BReg) Action and print missing configuration.
     Add {
+        /// Deployment posture used to check the runtime example. Generation requires development.
+        #[arg(long, value_name = "POSTURE")]
+        posture: Option<String>,
         /// New Casework directory, or a previously generated project to check without rewriting.
         #[arg(value_name = "DIRECTORY")]
         project: PathBuf,
@@ -656,6 +659,9 @@ impl Command {
             Self::Serve(args) => args.posture.as_deref(),
             Self::Provision(args) => args.posture.as_deref(),
             Self::Apply { posture, .. }
+            | Self::Provider {
+                command: ProviderCommand::Add { posture, .. },
+            }
             | Self::Generate {
                 command: GenerateCommand::IdentityFacts { posture, .. },
             } => posture.as_deref(),
@@ -754,6 +760,7 @@ fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
         Command::Provider {
             command:
                 ProviderCommand::Add {
+                    posture: _,
                     project,
                     breg_project,
                     action,
@@ -772,6 +779,7 @@ fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
                 breg_package.as_deref(),
                 package_output.as_deref(),
                 &bregctl,
+                posture(),
             )
         }
         Command::Provider {

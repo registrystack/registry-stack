@@ -231,7 +231,7 @@ To generate one of the approval patterns for an existing Proposal-mode Action,
 use `caseworkctl provider add`:
 
 ```sh
-caseworkctl provider add ./review --breg-project ./facility \
+caseworkctl provider add ./review --posture development --breg-project ./facility \
   --action correct-address --pattern single-reviewer-approval \
   --breg-package ./facility-package
 ```

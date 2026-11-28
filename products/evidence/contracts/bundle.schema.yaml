@@ -521,15 +521,15 @@ $defs:
       issuer:
         description: >-
           Exact token issuer an inbound access token must declare, with path-based issuers
-          supported; deployable bundles require HTTPS.
+          supported. Deployable bundles admit HTTPS or loopback HTTP.
         $ref: '#/$defs/Url'
         pattern: ^https?://
         maxLength: 512
       allowInsecureHttp:
         description: >-
           Permits plain HTTP to the issuer and JWKS URI beyond loopback under the local assurance
-          profile only. Deployable bundles require HTTPS for both even when it is set, and a
-          production or evidence-grade bundle that sets it to true is refused. Omission is false.
+          profile in development. Production and evidence-grade bundles accept loopback HTTP
+          with the opt-in omitted or false.
         type: boolean
         default: false
       audience:
@@ -589,9 +589,9 @@ $defs:
               operator declares, it inherits the declared issuer's allowance on any origin: it
               may resolve to a public, private, or loopback address, while cloud-metadata and
               link-local destinations remain prohibited, DNS is pinned for each fetch, and
-              ambient proxies and redirects are disabled. It requires HTTPS; the local assurance
-              profile also permits HTTP on the exact numeric 127.0.0.1 loopback origin with an
-              explicit port, or elsewhere under allowInsecureHttp.
+              ambient proxies and redirects are disabled. Deployable bundles admit HTTPS or loopback
+              HTTP. The local profile without the opt-in requires HTTP on the exact numeric
+              127.0.0.1 issuer origin with an explicit port.
             $ref: '#/$defs/Url'
             pattern: ^https?://
             maxLength: 512

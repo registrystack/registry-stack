@@ -528,9 +528,25 @@ fn the_dev_registry_serves_with_one_role_and_its_rehearsal_stays_split() {
     private::directory(&root.join("build")).unwrap();
     private::directory(&root.join("build/package")).unwrap();
     config::runtime(&root, &state, &clients, false).unwrap();
+    let rendered = fs::read_to_string(root.join("runtime.yaml")).unwrap();
+    let runtime =
+        registry_breg::runtime_config::parse_runtime_config(&rendered, crate::DEV_POSTURE).unwrap();
+    assert!(runtime
+        .posture_report()
+        .settings()
+        .iter()
+        .any(|setting| { setting.pointer.as_deref() == Some("/listener/publicOrigin") }));
+    let refusal =
+        registry_breg::runtime_config::parse_runtime_config(&rendered, crate::DEFAULT_POSTURE)
+            .unwrap_err();
+    assert!(refusal.diagnostics(None).iter().any(|diagnostic| {
+        diagnostic.code == "breg.posture.http-public-origin"
+            && diagnostic.path == "/listener/publicOrigin"
+    }));
     let served: Value =
         serde_norway::from_slice(&private::read(&root.join("runtime.yaml"), MAX_BYTES).unwrap())
             .unwrap();
+    assert_eq!(served["audit"]["hashKeyCustody"], "development-generated");
     assert_eq!(served["database"]["roles"]["migration"], MIGRATION_ROLE);
     assert_eq!(served["database"]["roles"]["runtime"], MIGRATION_ROLE);
     assert_eq!(
@@ -3109,6 +3125,8 @@ fn activation_preflight_refuses_a_successful_doctor_posture_finding() {
     assert!(refusal
         .to_string()
         .contains("breg.activation.posture-mismatch"));
+    assert!(refusal.to_string().contains("bregctl dev stop --remove"));
+    assert!(refusal.to_string().contains("bregctl dev start"));
 }
 
 #[test]
@@ -6013,13 +6031,22 @@ fn development_child_commands_set_the_development_posture() {
             .any(|(key, value)| key == registry_platform_config::POSTURE_ENV
                 && value == Some(std::ffi::OsStr::new(registry_platform_config::DEVELOPMENT))));
     };
-    // The supervisor, service and prerequisite tools use this constructor.
-    for program in [
-        std::env::current_exe().unwrap(),
-        PathBuf::from("breg"),
-        PathBuf::from("docker"),
-    ] {
-        assert_development(development_command(program));
-    }
+    let root = state.root();
+    let breg = Path::new("breg");
+    let docker = Path::new("docker");
+    assert_development(supervisor_command(
+        &std::env::current_exe().unwrap(),
+        &root,
+        breg,
+        docker,
+    ));
+    assert_development(service_command(
+        breg,
+        &["--runtime-config"],
+        &root.join("runtime.yaml"),
+        &root,
+    ));
+    assert_development(version_command(breg));
+    assert_development(docker_child_command(docker, &["ps"]));
     assert_development(ctl(&state));
 }

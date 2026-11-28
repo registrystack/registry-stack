@@ -241,7 +241,7 @@ impl std::fmt::Debug for AuthenticatedContext {
 
 /// Why a bearer token was refused. Every variant names the check that failed,
 /// so the operator-side count and log line can say which of the checks it was.
-/// The caller sees one closed `401` whichever variant this is.
+/// The caller sees a closed `401` problem for each refusal class.
 #[derive(Debug, Error)]
 pub enum AuthenticationError {
     #[error("access token is malformed")]
@@ -252,6 +252,8 @@ pub enum AuthenticationError {
     Context(FailedCheck),
     #[error("access token is bound to a sender proof this profile cannot validate")]
     SenderConstrained,
+    #[error("task grant was issued in the development posture")]
+    DevelopmentAssertion,
 }
 
 impl AuthenticationError {
@@ -262,6 +264,7 @@ impl AuthenticationError {
             Self::Malformed => FailedCheck::CredentialMalformed,
             Self::Verification(check) | Self::Context(check) => *check,
             Self::SenderConstrained => FailedCheck::SenderConstraint,
+            Self::DevelopmentAssertion => FailedCheck::TaskGrantClaims,
         }
     }
 
@@ -408,6 +411,16 @@ impl Authenticator {
                 return Err(AuthenticationError::Verification(error.failed_check()));
             }
         };
+        if self.peer_policy == PeerPolicy::RefuseDevelopmentPeer
+            && verified
+                .claims
+                .extra
+                .get(registry_platform_oidc::POSTURE_CLAIM)
+                .and_then(Value::as_str)
+                == Some(registry_platform_config::DEVELOPMENT)
+        {
+            return Err(AuthenticationError::DevelopmentAssertion);
+        }
         // The scope gate reads only the verified token's scope set. It runs
         // after signature verification and before any authority claim is
         // read, so a token that lacks a required scope reaches no protected
@@ -643,7 +656,6 @@ impl Authenticator {
                                 | GrantContextError::InvalidVerifiedClient
                                 | GrantContextError::ClientMismatch => TaskGrantError::Client,
                                 GrantContextError::ResourceMismatch => TaskGrantError::Resource,
-                                GrantContextError::DevelopmentAssertion => TaskGrantError::Claims,
                                 _ => TaskGrantError::Claims,
                             });
                         }

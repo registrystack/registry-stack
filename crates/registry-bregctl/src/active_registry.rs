@@ -79,6 +79,9 @@ pub(crate) fn recorded_identity_for_digest(
         ))
         .map_err(read_refusal)?
         .ok_or(ActiveRegistryError::Uninitialized)?;
+    if recorded.posture != config.posture() {
+        return Err(ActiveRegistryError::Unavailable);
+    }
     bind_recorded_identity(config, recorded.identity, package_digest)
 }
 
@@ -105,6 +108,9 @@ pub(crate) fn observed_identity_for_digest(
         ))
         .map_err(read_refusal)?
         .ok_or(ActiveRegistryError::Uninitialized)?;
+    if status.posture != config.posture() {
+        return Err(ActiveRegistryError::Unavailable);
+    }
     bind_recorded_identity(config, status.identity, package_digest)
 }
 

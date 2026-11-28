@@ -107,8 +107,18 @@ on a non-zero port such as `8090`, not the public origin's `443`. The listener s
 Use explicit lists for `offers.allowedClients` and `offers.requiredScopes` in production.
 Development also accepts `unrestricted` for either gate, independently of `validationMode`.
 
+Strict validation requires HTTPS for the client assertion audience. Supervised local
+development also accepts an HTTP audience on `127.0.0.1` with an explicit port.
+
 Called origins may use HTTPS or loopback HTTP in either posture. For an offer issuer or key set
 beyond loopback, HTTP requires the development posture and `offers.allowInsecureHttp: true`.
+In production, the delivery service refuses Evidence responses marked
+`Registry-Posture: development` and offer tokens with a signed development mark.
+Task-grant tokens cannot create wallet offers in either posture.
+
+{/* Evidence: crates/registry-evidence-oid4vci/src/issuer.rs, response_posture_follows_the_delivery_declaration;
+    crates/registry-evidence-oid4vci/tests/offer_authorization.rs, ordinary_offer_token_posture_refuses_development_in_production,
+    task_bound_and_partial_grants_cannot_create_deferred_wallet_offers. */}
 Use `validationMode: supervised-local-development` only in development. If you publish an HTTP
 credential issuer in this mode, write `http://127.0.0.1:<port>` and bind the listener to that address
 and port. Strict mode requires an HTTPS credential issuer.
@@ -327,7 +337,7 @@ credential it stores is the Registry Evidence's SD-JWT VC response, bound to the
 | Code | Meaning | Recovery |
 | --- | --- | --- |
 | `platform.runtime-config.unavailable` | The runtime file could not be read. | Check that the file exists and that the runtime user can read it. |
-| `evidence.oid4vci.https-required` | A called origin requires HTTPS or loopback HTTP, or a published issuer requires HTTPS. | Use HTTPS, or use loopback HTTP for a called origin. |
+| `evidence.oid4vci.https-required` | A called origin requires HTTPS or loopback HTTP, or an issuer identifier or assertion audience requires HTTPS. | Use HTTPS, or use loopback HTTP for a called origin. |
 | `evidence.oid4vci.listener-port` | The listener port is zero. | Bind the listener to a non-zero private port your TLS proxy forwards to. |
 | `evidence.oid4vci.nonce-lifetime` | The nonce outlives the access token. | Lower `store.nonceLifetimeSeconds` to at most `store.accessTokenLifetimeSeconds`. |
 | `evidence.oid4vci.secret-file-root` | The file provider root is relative. | Write `secretProviders.file.root` as an absolute directory path. |

@@ -134,6 +134,9 @@ pub enum Command {
         /// JWKS reachability.
         #[arg(long)]
         require_runtime_dependencies: bool,
+        /// Internal Evidencectl seam for safe local checks after a posture conflict.
+        #[arg(long, hide = true, requires = "require_runtime_dependencies")]
+        offline_dependencies_only: bool,
         /// Also prove the configured audit sink resolves inside this absolute
         /// directory, which the deployment declares persistent.
         ///
@@ -238,6 +241,12 @@ pub enum Command {
     /// Internal Evidencectl seam for bundle-only fixture evaluation.
     #[command(hide = true)]
     BundleEvaluate {
+        #[arg(
+            long,
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         #[arg(long)]
         bundle: PathBuf,
         /// Validated compiled target grants used only for offline fixtures.
@@ -258,6 +267,12 @@ pub enum Command {
     /// Internal Evidencectl seam for recording final offline Adapter facts.
     #[command(hide = true)]
     BundleRecordFixtureFacts {
+        #[arg(
+            long,
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         #[arg(long)]
         bundle: PathBuf,
         /// Validated compiled target grants used only for offline fixtures.
@@ -487,6 +502,20 @@ mod tests {
             assert!(runtime.is_required_set(), "{subcommand}");
         }
         assert!(Cli::try_parse_from(["evidence", "serve"]).is_err());
+    }
+
+    #[test]
+    fn offline_fixture_commands_accept_a_posture() {
+        let cli = command();
+        for name in ["bundle-evaluate", "bundle-record-fixture-facts"] {
+            let subcommand = cli.find_subcommand(name).unwrap();
+            assert!(
+                subcommand
+                    .get_arguments()
+                    .any(|arg| arg.get_id() == "posture"),
+                "{name}"
+            );
+        }
     }
 
     #[test]

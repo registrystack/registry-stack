@@ -31,6 +31,7 @@ mod schemas;
 mod verify;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_adapter::engine::load::posture_member;
 use registry_platform_yaml::Report;
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
@@ -359,6 +360,7 @@ fn check_command(
             "diagnostics": checked.to_json_value(),
             "filesChecked": run.files_checked,
             "posture": posture_member(declared),
+            "explicitProductionSettings": run.explicit_production_settings,
         });
         return write_configuration_report(
             &checked,
@@ -378,6 +380,7 @@ fn check_command(
         "status": "complete",
         "project": run.project,
         "posture": posture_member(declared),
+        "explicitProductionSettings": run.explicit_production_settings,
         "filesChecked": run.files_checked,
         "diagnostics": checked.to_json_value(),
     });
@@ -403,15 +406,6 @@ fn check_posture(
     }
     registry_platform_config::declared(flag.or(production.then_some("production")))
         .map_err(|error| (error.code(), error.message(), error.suggested_action()))
-}
-
-fn posture_member(declared: registry_platform_config::DeclaredPosture) -> Value {
-    let source = match declared.source {
-        registry_platform_config::PostureSource::Flag => "flag",
-        registry_platform_config::PostureSource::Environment => "environment",
-        registry_platform_config::PostureSource::Default => "default",
-    };
-    json!({"value": declared.posture.as_str(), "source": source})
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -468,6 +462,7 @@ fn job_command(
             let envelope = json!({
                 "ok": false,
                 "command": command_name,
+                "posture": posture_member(declared),
                 "status": failure_status(exit),
                 "diagnostics": diagnostics,
             });
@@ -481,6 +476,7 @@ fn job_command(
             mapping::annotate(&mut diagnostics, &run.annotations);
             let mut report = json!({
                 "command": command_name,
+                "posture": posture_member(declared),
                 "pack": run.pack,
                 "job": run.job,
                 "runtime": run.runtime,
@@ -494,7 +490,7 @@ fn job_command(
         }
         Err(job::JobCheckFailure::Io { path, source }) => {
             let exit = OPERATIONAL_FAILURE_EXIT;
-            let report = failure(
+            let mut report = failure(
                 command_name,
                 exit,
                 vec![json!({
@@ -506,6 +502,7 @@ fn job_command(
                     "suggestedAction": "Correct the path or permissions, then retry.",
                 })],
             );
+            report["posture"] = posture_member(declared);
             write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
         }
         Err(job::JobCheckFailure::Refused { diagnostics, .. }) => {
@@ -515,6 +512,7 @@ fn job_command(
             let envelope = json!({
                 "ok": false,
                 "command": command_name,
+                "posture": posture_member(declared),
                 "status": failure_status(exit),
                 "diagnostics": checked.to_json_value(),
             });
@@ -894,6 +892,7 @@ fn verify_command(
             checked.set_files_checked(run.files_checked);
             let mut report = json!({
                 "command": command_name,
+                "posture": posture_member(declared),
                 "project": run.project,
                 "runtime": run.runtime,
                 "drove": run.drove,
@@ -908,7 +907,7 @@ fn verify_command(
         }
         Err(verify::VerifyFailure::Io { path, source }) => {
             let exit = OPERATIONAL_FAILURE_EXIT;
-            let report = failure(
+            let mut report = failure(
                 command_name,
                 exit,
                 vec![json!({
@@ -920,6 +919,7 @@ fn verify_command(
                     "suggestedAction": "Correct the path or permissions, then retry.",
                 })],
             );
+            report["posture"] = posture_member(declared);
             write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
         }
         Err(verify::VerifyFailure::Refused {
@@ -932,6 +932,7 @@ fn verify_command(
             let envelope = json!({
                 "ok": false,
                 "command": command_name,
+                "posture": posture_member(declared),
                 "status": failure_status(exit),
                 "diagnostics": checked.to_json_value(),
                 "filesChecked": files_checked,
@@ -940,7 +941,8 @@ fn verify_command(
                 .map(|()| ExitCode::from(exit))
         }
         Err(verify::VerifyFailure::Stopped { exit, diagnostics }) => {
-            let report = failure(command_name, exit, diagnostics);
+            let mut report = failure(command_name, exit, diagnostics);
+            report["posture"] = posture_member(declared);
             write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit))
         }
     }

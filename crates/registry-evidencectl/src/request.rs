@@ -115,7 +115,6 @@ pub struct PrepareArgs {
     )]
     runtime_config: Option<PathBuf>,
     #[arg(
-        requires = "runtime_config",
         long = "posture",
         value_name = "POSTURE",
         help = "Declared posture: development or production. Unset means production."
@@ -350,8 +349,7 @@ struct LocalRelyingProcedure {
 impl RequestCommand {
     pub(crate) fn posture_flag(&self) -> Option<Option<&str>> {
         match self {
-            Self::Prepare(args) if args.runtime_config.is_some() => Some(args.posture.as_deref()),
-            Self::Prepare(_) => None,
+            Self::Prepare(args) => Some(args.posture.as_deref()),
         }
     }
 }
@@ -369,16 +367,17 @@ fn prepare(
     args: PrepareArgs,
     declared: Option<registry_platform_config::DeclaredPosture>,
 ) -> Result<ExitCode> {
+    let declared = declared.unwrap_or(crate::DEFAULT_POSTURE);
     if args.profile.is_some() {
-        return prepare_progressive(args);
+        return prepare_progressive(args, declared);
     }
-    prepare_local(
-        args,
-        declared.expect("runtime request has a declared posture"),
-    )
+    prepare_local(args, declared)
 }
 
-fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
+fn prepare_progressive(
+    args: PrepareArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
     if args.purpose.is_some() {
         bail!("progressive preparation accepts profile, requirement, and subject fields");
@@ -394,8 +393,9 @@ fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
         .as_deref()
         .ok_or_else(|| anyhow!("progressive preparation requires a public Requirement URI"))?;
     let (selectors, subjects) = progressive_subject_inputs(&args)?;
-    let client = EvidenceClient::from_profile_path_without_peer_policy(profile)
-        .map_err(|_| anyhow!("progressive request preparation failed"))?;
+    let client =
+        EvidenceClient::from_profile_path(profile, crate::evidence_peer_policy(declared.posture))
+            .map_err(|_| anyhow!("progressive request preparation failed"))?;
     let mut request = AudienceScopedRequest::for_requirement_uri(requirement, selectors);
     if let Some(subjects) = subjects {
         request = request.with_subjects(subjects);
@@ -637,14 +637,15 @@ fn prepare_local(
         .enable_all()
         .build()
         .context("failed to start the Evidence discovery runtime")?;
+    let peer_policy = crate::evidence_peer_policy(declared.posture);
     let catalog = {
-        let discovery = NonVerifyingEvidenceClient::new(
-            EvidenceClientConfig::without_verification_without_peer_policy(
+        let discovery =
+            NonVerifyingEvidenceClient::new(EvidenceClientConfig::without_verification(
                 evidence_origin.clone(),
                 token_provider.clone(),
-            ),
-        )
-        .context("the Evidence discovery client is invalid")?;
+                peer_policy,
+            ))
+            .context("the Evidence discovery client is invalid")?;
         runtime_threads
             .block_on(discovery.discover())
             .context("Evidence definition discovery failed")?
@@ -677,11 +678,12 @@ fn prepare_local(
         .context("failed to remove the private relying procedure input")?;
     validate_local_relying_procedure(&procedure, definition, audience, args.format)?;
 
-    let client_config = EvidenceClientConfig::new_without_peer_policy(
+    let client_config = EvidenceClientConfig::new(
         evidence_origin,
         token_provider,
         procedure.trusted_jwks.clone(),
         procedure.revoked_key_ids.clone(),
+        peer_policy,
     );
     let evidence_client =
         EvidenceClient::new(client_config).context("the local Evidence client is invalid")?;
@@ -1008,6 +1010,9 @@ fn prepare_local_relying_procedure(
     }
     let status = child.wait().context("failed to wait for Evidence")?;
     if !status.success() {
+        if let Some(report) = crate::authored::runtime_refusal(&output) {
+            return Err(report.into());
+        }
         bail!("Evidence relying procedure preparation failed");
     }
     serde_json::from_slice(&output)

@@ -781,6 +781,8 @@ pub struct TokenClientDocument {
     pub private_key_ref: SecretReference,
     /// The authorization server's issuer identifier, exactly as its metadata
     /// publishes it: the client assertion's sole audience. It has no default.
+    /// Strict validation requires HTTPS. Supervised local development also
+    /// accepts HTTP on 127.0.0.1 with an explicit port.
     pub client_assertion_audience: Url,
     /// The fixed RFC 8707 resource identifier of the Evidence API: an
     /// absolute URI with no fragment or user information.
@@ -1236,10 +1238,6 @@ impl DeliveryDocument {
                 "/tokenClient/tokenEndpoint",
                 &self.token_client.token_endpoint,
             ),
-            (
-                "/tokenClient/clientAssertionAudience",
-                &self.token_client.client_assertion_audience,
-            ),
             ("/offers/issuer", &self.offers.issuer),
             ("/offers/jwksUri", &self.offers.jwks_uri),
         ]
@@ -1247,10 +1245,22 @@ impl DeliveryDocument {
 
     fn transport_findings(&self, findings: &mut Vec<Finding>) {
         let issuer = normalized_credential_issuer(self.credential_issuer.as_str());
-        if self.validation_mode.development_setting().is_some() {
+        let supervised = self.validation_mode.development_setting().is_some();
+        if supervised {
             self.supervised_local_development_findings(issuer, findings);
         } else {
             credential_issuer_findings(issuer, findings);
+        }
+        let audience = &self.token_client.client_assertion_audience;
+        let pointer = "/tokenClient/clientAssertionAudience";
+        url_query_or_fragment_findings(pointer, audience, findings);
+        if !(audience.is_https() || supervised && is_supervised_local_audience(audience)) {
+            findings.push(Finding::error(
+                HTTPS_REQUIRED,
+                pointer,
+                "the client assertion audience must use HTTPS unless it names a supervised local issuer",
+                "Write an HTTPS audience, or a 127.0.0.1 HTTP URL with an explicit port in supervised local development.",
+            ).reading(TRANSPORT_READS));
         }
         for (pointer, origin) in self.called_origins() {
             url_query_or_fragment_findings(pointer, origin, findings);
@@ -1610,12 +1620,8 @@ fn normalized_credential_issuer(written: &str) -> &str {
     written.trim_end_matches('/')
 }
 
-/// Require an `https` URL.
-///
-/// The credential issuer is compared exactly by every wallet that reads it, and
-/// the outbound endpoints are what this service authenticates against, so a
-/// query or a fragment in any of them would weaken a comparison. The reader
-/// already refuses a URL without a host or with embedded credentials.
+/// Require HTTPS for a called origin outside loopback.
+/// The reader refuses URLs without a host or with embedded credentials.
 fn https_origin_findings(pointer: &'static str, origin: &Url, findings: &mut Vec<Finding>) {
     if !origin.is_https()
         && !origin
@@ -1636,6 +1642,11 @@ fn https_origin_findings(pointer: &'static str, origin: &Url, findings: &mut Vec
             action,
         ));
     }
+}
+
+fn is_supervised_local_audience(audience: &Url) -> bool {
+    let url = audience.to_url();
+    url.scheme() == "http" && url.host_str() == Some("127.0.0.1") && url.port().is_some()
 }
 
 fn url_query_or_fragment_findings(
@@ -2139,6 +2150,32 @@ store:
         assert!(load_from(&loopback).is_ok());
         let private = VALID.replace("https://evidence.example.org", "http://10.0.0.5");
         assert_refused_with(&private, HTTPS_REQUIRED);
+    }
+
+    #[test]
+    fn strict_offers_allow_loopback_http_without_authorizing_other_hosts() {
+        let loopback = VALID
+            .replace(
+                "issuer: https://mint.example.org",
+                "issuer: http://127.0.0.1:8080",
+            )
+            .replace(
+                "jwksUri: https://mint.example.org",
+                "jwksUri: http://127.0.0.1:8080",
+            );
+        assert!(load_from(&loopback).is_ok());
+        let non_loopback = loopback.replace("127.0.0.1:8080", "local.example.invalid");
+        assert_refused_with(&non_loopback, HTTPS_REQUIRED);
+    }
+
+    #[test]
+    fn strict_client_assertion_audience_requires_https_even_on_loopback() {
+        assert!(load_from(VALID).is_ok());
+        let loopback_audience = VALID.replace(
+            "clientAssertionAudience: https://mint.example.org",
+            "clientAssertionAudience: http://127.0.0.1:8080",
+        );
+        assert_refused_with(&loopback_audience, HTTPS_REQUIRED);
     }
 
     #[test]

@@ -105,7 +105,7 @@ function, outputs, and [grant ceiling](../../reference/glossary/#grant-ceiling).
 Run all four fixtures, and treat a warning as a failure, the way a build should:
 
 ```sh
-rstack evidence test . --target local-target.yaml
+rstack evidence test . --target local-target.yaml --deny-warnings
 ```
 
 ```text test-expect

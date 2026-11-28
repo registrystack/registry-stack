@@ -6,6 +6,9 @@
 //! semantics; this suite proves the host exposes that implementation only
 //! through its explicit feature.
 
+#[path = "support/job_fixture.rs"]
+mod job_fixture;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -368,8 +371,7 @@ fn unserved_job_sources_remain_refused_by_the_host() {
 
 #[cfg(feature = "postgres-test")]
 async fn isolated_store_url() -> String {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let base = crate::job_fixture::test_database_url();
     // The macOS clock ticks in microseconds, so parallel tests can read the
     // same instant; the serial keeps each schema name distinct.
     static NEXT_SCHEMA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

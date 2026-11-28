@@ -536,6 +536,26 @@ async fn local_file_data_key_is_bound_during_apply_and_prepares_ready() {
     .err() else {
         panic!("production refuses both development settings");
     };
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_breg"))
+        .arg("--runtime-config")
+        .arg(&config)
+        .args(["--posture", "production"])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .env("BREG_LOG", "info")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("the Registry runtime configuration was refused"),
+        "{stdout}"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with("breg did not start: its deployment posture was refused."),
+        "{stderr}"
+    );
+    assert!(stderr.contains("2 files"), "{stderr}");
     let diagnostics = refusal.diagnostics(None);
     assert_eq!(diagnostics.len(), 2);
     for (code, pointer, source, action) in [

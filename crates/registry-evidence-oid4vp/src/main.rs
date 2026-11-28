@@ -23,13 +23,8 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let (flag, command) = match cli.command {
         Command::Openapi { output } => {
-            return match render_openapi(output) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(message) => {
-                    eprintln!("evidence-oid4vp: {message}");
-                    ExitCode::FAILURE
-                }
-            };
+            install_logging();
+            return finish(render_openapi(output));
         }
         command @ (Command::Check { .. } | Command::Serve { .. }) => {
             let flag = match &command {
@@ -67,6 +62,11 @@ fn main() -> ExitCode {
         Command::Openapi { .. } => unreachable!(),
     };
 
+    install_logging();
+    finish(run(&config, declared))
+}
+
+fn install_logging() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -74,8 +74,6 @@ fn main() -> ExitCode {
         )
         .json()
         .init();
-
-    finish(run(&config, declared))
 }
 
 fn finish(result: Result<(), String>) -> ExitCode {
@@ -204,7 +202,15 @@ fn check(
     report.set_files_checked(usize::from(!unavailable));
     let (status, code) = if unavailable {
         ("operational-failure", 3)
-    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (deny_warnings
+            && report.diagnostics().iter().any(|diagnostic| {
+                diagnostic.severity == registry_platform_yaml::Severity::Warning
+                    && diagnostic.accepted_reason.is_none()
+                    && !diagnostic.code.starts_with("platform.posture.")
+                    && !diagnostic.code.starts_with("evidence.posture.")
+            }))
+    {
         ("domain-refusal", 1)
     } else {
         ("complete", 0)

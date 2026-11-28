@@ -161,3 +161,23 @@ fn loopback_plaintext_checks_the_driver_host_address() {
         if error.code() == "platform.database.transport-host-mismatch")
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn production_loopback_plaintext_accepts_a_unix_socket_host() {
+    use registry_platform_config::{DatabaseTransport, Gated};
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("url");
+    std::fs::write(
+        &file,
+        "host=/var/run/postgresql user=casework dbname=casework",
+    )
+    .unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
+    let mut config = database("secret:file/url");
+    config.transport = Some(Gated::everywhere(DatabaseTransport::LoopbackPlaintext).unwrap());
+    PostgresStore::connect_runtime(&config, &secrets, None).unwrap();
+}

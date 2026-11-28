@@ -153,6 +153,10 @@ evidencectl test '<editable-project>' --target '<deployment-target>'
 evidence serve --runtime-config '<candidate>/runtime.yaml'
 ```
 
+Activation checks the pinned package, runtime configuration and their combination
+against the declared posture before opening audit or writing authority state.
+Use development to activate a local package.
+
 Activation writes `evidence-activation-audit/v1` entries to the `activation`
 companion of the runtime's configured audit destination: beside a file
 destination `audit.jsonl` it writes `audit.activation.jsonl` under its own
@@ -191,7 +195,9 @@ took effect; restore the audit destination and confirm it with
 between the commit and the response leaves a request with no response; inspect
 authority history before proceeding. Failed state durability barriers never
 acknowledge success. The audit trail lives only in the audit destination; the
-authority store holds the history alone.
+authority store holds the history alone. History validates the runtime file and
+its posture before reading that store. The read can inspect a recorded
+activation after the referenced package has been removed.
 
 `doctor` delegates the runtime-owned startup dependency preflight without
 opening the public listener, sending an Evidence request, or appending an

@@ -14,13 +14,6 @@ use registry_breg::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeC
 use registry_breg::CompiledRegistry;
 use registry_platform_config::package::VerifiedPackage as SharedVerifiedPackage;
 
-/// A baseline package named by `--baseline-package` is read on the author's
-/// machine, where no runtime identity names a database initialization
-/// environment, so its closure is held to the local permission rules.
-const BASELINE_PACKAGE_CONTEXT: PackageLoadContext = PackageLoadContext {
-    posture: registry_platform_config::Posture::Development,
-};
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RuntimePackageInspectionError {
     RuntimeConfigPath,
@@ -34,34 +27,57 @@ pub(crate) enum RuntimePackageInspectionError {
 pub(crate) fn inspect_runtime_package(
     posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
-) -> Result<IntegrityInspectedPackage, RuntimePackageInspectionError> {
+) -> Result<
+    (
+        IntegrityInspectedPackage,
+        Vec<registry_platform_yaml::Diagnostic>,
+    ),
+    RuntimePackageInspectionError,
+> {
     let config = load_inspected_runtime_config(posture, runtime_config)?;
     let shared = verify_envelope(&config)?;
-    inspect_package_integrity_with_verified_envelope(config.package().root(), &shared)
-        .map_err(RuntimePackageInspectionError::Package)
+    let inspected =
+        inspect_package_integrity_with_verified_envelope(config.package().root(), &shared)
+            .map_err(RuntimePackageInspectionError::Package)?;
+    Ok((
+        inspected,
+        config.posture_report().diagnostics(runtime_config),
+    ))
 }
 
 /// Verify the package directory named by `--baseline-package` as the
-/// predecessor for successor planning.
+/// predecessor for successor planning. Its closure follows the declared posture.
 pub(crate) fn inspect_baseline_package(
+    posture: registry_platform_config::DeclaredPosture,
     package: &Path,
 ) -> Result<VerifiedPredecessorPackage, PackageError> {
     if !package.is_absolute() {
         return Err(PackageError::UnsafePath);
     }
-    load_predecessor_package(package, &BASELINE_PACKAGE_CONTEXT)
+    load_predecessor_package(
+        package,
+        &PackageLoadContext {
+            posture: posture.posture,
+        },
+    )
 }
 
 /// Verify the same predecessor package as [`inspect_baseline_package`] and
 /// compile its packaged sources with the current compiler, so a successor
 /// can be rehearsed over the predecessor schema.
 pub(crate) fn inspect_baseline_rehearsal(
+    posture: registry_platform_config::DeclaredPosture,
     package: &Path,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry), PackageError> {
     if !package.is_absolute() {
         return Err(PackageError::UnsafePath);
     }
-    load_predecessor_rehearsal_baseline(package, &BASELINE_PACKAGE_CONTEXT)
+    load_predecessor_rehearsal_baseline(
+        package,
+        &PackageLoadContext {
+            posture: posture.posture,
+        },
+    )
 }
 
 /// Verify the package selected by one runtime configuration as the
@@ -70,15 +86,27 @@ pub(crate) fn inspect_baseline_rehearsal(
 pub(crate) fn inspect_runtime_predecessor_rehearsal_baseline(
     posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
-) -> Result<(VerifiedPredecessorPackage, CompiledRegistry), RuntimePackageInspectionError> {
+) -> Result<
+    (
+        VerifiedPredecessorPackage,
+        CompiledRegistry,
+        Vec<registry_platform_yaml::Diagnostic>,
+    ),
+    RuntimePackageInspectionError,
+> {
     let config = load_inspected_runtime_config(posture, runtime_config)?;
     let shared = verify_envelope(&config)?;
-    load_predecessor_rehearsal_baseline_with_verified_envelope(
+    let (predecessor, registry) = load_predecessor_rehearsal_baseline_with_verified_envelope(
         config.package().root(),
         &config.package_load_context(),
         &shared,
     )
-    .map_err(RuntimePackageInspectionError::Package)
+    .map_err(RuntimePackageInspectionError::Package)?;
+    Ok((
+        predecessor,
+        registry,
+        config.posture_report().diagnostics(runtime_config),
+    ))
 }
 
 fn verify_envelope(

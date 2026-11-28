@@ -563,6 +563,57 @@ pub struct PostgresSourceBinding {
     pub tls: PostgresSourceTls,
 }
 
+#[cfg(feature = "job-postgres")]
+impl PostgresSourceBinding {
+    /// Resolve a loopback-plaintext source to the addresses the driver may
+    /// use. A Unix socket does not need an address.
+    pub fn loopback_addresses(
+        &self,
+        lookup: impl FnOnce(&str, u16) -> std::io::Result<Vec<std::net::IpAddr>>,
+    ) -> Result<Option<Vec<std::net::IpAddr>>, Box<registry_platform_yaml::Diagnostic>> {
+        use registry_platform_httputil::loopback::{loopback_host, LoopbackHost};
+
+        let refused = || {
+            Box::new(registry_platform_yaml::Diagnostic::error(
+                "platform.database.transport-host-mismatch",
+                format!("/sources/postgres/{}/tls", self.endpoint),
+                "loopback-plaintext requires a loopback host",
+                "Use a loopback address, localhost, or a Unix socket, or configure verified TLS.",
+            ))
+        };
+        match loopback_host(&self.host) {
+            Some(LoopbackHost::Literal(address)) => Ok(Some(vec![address])),
+            Some(host @ LoopbackHost::LocalhostName) => {
+                let addresses = lookup(&self.host, self.port).map_err(|_| refused())?;
+                if !host.pinned_by(&addresses) {
+                    return Err(refused());
+                }
+                Ok(Some(addresses))
+            }
+            None if cfg!(unix) && std::path::Path::new(&self.host).is_absolute() => Ok(None),
+            None => Err(refused()),
+        }
+    }
+
+    /// Apply the plaintext host rule during an offline job check. Verified TLS
+    /// sources do not require a lookup during checking.
+    pub fn check_host(&self) -> Result<(), Box<registry_platform_yaml::Diagnostic>> {
+        if matches!(self.tls, PostgresSourceTls::LoopbackPlaintext) {
+            self.loopback_addresses(resolve_postgres_host)?;
+        }
+        Ok(())
+    }
+}
+
+/// Resolve all addresses once so the caller can validate and pin them.
+#[cfg(feature = "job-postgres")]
+pub fn resolve_postgres_host(host: &str, port: u16) -> std::io::Result<Vec<std::net::IpAddr>> {
+    use std::net::ToSocketAddrs as _;
+    (host, port)
+        .to_socket_addrs()
+        .map(|addresses| addresses.map(|address| address.ip()).collect())
+}
+
 /// The transport the host installs for a PostgreSQL source. Verified TLS
 /// is the default. Plaintext requires a loopback host.
 #[cfg(feature = "job-postgres")]

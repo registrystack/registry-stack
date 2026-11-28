@@ -2211,7 +2211,7 @@ fn retired_database_initialization_environment_names_the_replacement() {
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "/identity/databaseInitializationEnvironment"
             && diagnostic.suggested_action.contains(
-                "Delete identity.databaseInitializationEnvironment; if it said local, declare development.",
+                "Delete identity.databaseInitializationEnvironment. If it said local, recreate the development database and apply the package with development declared.",
             )
     }), "{diagnostics:?}");
 }
@@ -6498,18 +6498,22 @@ fn http_public_origin_requires_development_posture() {
         "publicOrigin: http://127.0.0.1:8080",
         "publicOrigin: http://registry.example.test",
     );
-    let error = parse_runtime_config(&non_loopback, PRODUCTION_POSTURE).unwrap_err();
-    assert_eq!(code_of(&error), "breg.posture.http-public-origin");
-    assert_eq!(
-        parse_runtime_config(&non_loopback, DEVELOPMENT_POSTURE).unwrap_err(),
-        RuntimeConfigError::InvalidListener,
-    );
+    for posture in [PRODUCTION_POSTURE, DEVELOPMENT_POSTURE] {
+        let error = parse_runtime_config(&non_loopback, posture).unwrap_err();
+        assert_eq!(error, RuntimeConfigError::InvalidListener);
+        assert!(error.diagnostics(None)[0]
+            .suggested_action
+            .contains("HTTPS"));
+    }
 }
 
 #[test]
 fn offline_check_reports_invalid_field_encryption_alongside_custody_refusal() {
     let fixture = RuntimeFixture::new();
-    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
+        "  bind: 127.0.0.1:8080",
+        "  bind: 127.0.0.1:8080\n  publicOrigin: http://127.0.0.1:8080",
+    );
     let path = fixture.package_root.join("invalid-custody.yaml");
     fs::write(
         &path,
@@ -6518,6 +6522,7 @@ fn offline_check_reports_invalid_field_encryption_alongside_custody_refusal() {
     .unwrap();
     let check = check_runtime_config(&path, true, None, PRODUCTION_POSTURE);
     for code in [
+        "breg.posture.http-public-origin",
         "breg.posture.local-key-custody",
         "breg.runtime.invalid-field-encryption",
     ] {
@@ -6526,4 +6531,24 @@ fn offline_check_reports_invalid_field_encryption_alongside_custody_refusal() {
             "{code}"
         );
     }
+}
+
+#[test]
+fn offline_check_reports_valid_local_file_custody_only_once() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let path = fixture.package_root.join("local-custody.yaml");
+    fs::write(
+        &path,
+        format!("{base}\nfieldEncryption:\n  provider:\n    type: local-file\n    dekRef: secret:file/dek\n"),
+    )
+    .unwrap();
+    let check = check_runtime_config(&path, true, None, PRODUCTION_POSTURE);
+    let errors = check
+        .diagnostics
+        .iter()
+        .filter(|item| item.severity == registry_platform_yaml::Severity::Error)
+        .map(|item| item.code.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(errors, ["breg.posture.local-key-custody"]);
 }

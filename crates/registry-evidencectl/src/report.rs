@@ -115,7 +115,7 @@ pub(crate) fn render(report: &Value) -> String {
     render_with_posture(report, None)
 }
 
-fn render_with_posture(
+pub(crate) fn render_with_posture(
     report: &Value,
     posture: Option<registry_platform_config::DeclaredPosture>,
 ) -> String {

@@ -12,7 +12,7 @@ use std::{sync::Arc, time::Duration};
 use registry_platform_authcommon::{
     parse_bearer_token, BearerParseError, DeclaredScope, FailedCheck,
 };
-use registry_platform_config::{JwksSource, SecretResolver};
+use registry_platform_config::{JwksSource, Posture, SecretResolver, DEVELOPMENT};
 use registry_platform_oidc::{
     parse_static_jwks, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
     OidcError, TokenVerifier, TokenVerifierConfig,
@@ -62,6 +62,7 @@ pub enum AuthSetupError {
 
 /// Verifies bearer tokens from one issuer and extracts the caller.
 pub struct TokenAuthenticator {
+    posture: Posture,
     verifier: TokenVerifier,
     issuer: String,
     required_scope: String,
@@ -83,6 +84,7 @@ impl TokenAuthenticator {
     pub async fn build(
         config: &TokenIssuerConfig,
         secrets: &SecretResolver,
+        posture: Posture,
     ) -> Result<Self, AuthSetupError> {
         let provider = &config.provider;
         let issuer = provider.issuer.to_string();
@@ -143,6 +145,7 @@ impl TokenAuthenticator {
         }
         let scope_claim = profile.scope_claim.clone();
         Ok(Self {
+            posture,
             verifier: TokenVerifier::new(profile, Arc::new(fetcher)),
             issuer,
             required_scope: config.required_scope.clone(),
@@ -169,6 +172,16 @@ impl TokenAuthenticator {
             Err(error) if is_key_source_failure(&error) => return Err(AuthError::KeySource),
             Err(error) => return Err(AuthError::Refused(error.failed_check())),
         };
+        if self.posture == Posture::Production
+            && verified
+                .claims
+                .extra
+                .get(registry_platform_oidc::POSTURE_CLAIM)
+                .and_then(serde_json::Value::as_str)
+                == Some(DEVELOPMENT)
+        {
+            return Err(AuthError::Refused(FailedCheck::TaskGrantClaims));
+        }
         // The scope gate runs on the verified token's scope set: a correctly
         // signed token for this audience without the scope grants nothing.
         if !verified

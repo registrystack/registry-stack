@@ -317,8 +317,7 @@ impl Drop for IsolatedDatabase {
 }
 
 async fn isolated_database_url() -> IsolatedDatabase {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let base = crate::job_fixture::test_database_url();
     let serial = NEXT_SCHEMA.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

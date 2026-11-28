@@ -471,7 +471,7 @@
       "properties": {
         "clientAssertionAudience": {
           "$ref": "#/$defs/Url",
-          "description": "The authorization server's issuer identifier, exactly as its metadata\npublishes it: the client assertion's sole audience. It has no default."
+          "description": "The authorization server's issuer identifier, exactly as its metadata\npublishes it: the client assertion's sole audience. It has no default.\nStrict validation requires HTTPS. Supervised local development also\naccepts HTTP on 127.0.0.1 with an explicit port."
         },
         "clientId": {
           "$ref": "#/$defs/ExternalId",

@@ -102,6 +102,13 @@ pub enum StoreError {
         /// The engine's bound.
         maximum: usize,
     },
+    /// A recorded pass has a posture outside the supported set.
+    InvalidRecordedPosture,
+    /// The recorded pass used a different deployment posture.
+    PostureMismatch {
+        /// The posture recorded by the last pass.
+        recorded: registry_platform_config::Posture,
+    },
     /// A pool or connection could not be built or reached.
     Pool(String),
     /// The driver's own account of what went wrong.
@@ -169,6 +176,15 @@ impl fmt::Display for StoreError {
                 formatter,
                 "the position to save is {bytes} bytes serialized, over the {maximum}-byte cursor bound"
             ),
+            StoreError::InvalidRecordedPosture => write!(
+                formatter,
+                "the last pass has an invalid recorded posture"
+            ),
+            StoreError::PostureMismatch { recorded } => write!(
+                formatter,
+                "{POSTURE_MISMATCH}: the last pass ran under {}; use a fresh store when changing the deployment posture",
+                recorded.as_str()
+            ),
             StoreError::Pool(reason) => write!(
                 formatter,
                 "the adapter job database pool failed: {reason}"
@@ -200,6 +216,8 @@ impl StoreError {
             StoreError::DeliveryAttemptExhausted => "delivery-attempt-exhausted",
             StoreError::ItemIdentityMigrationRequired => "item-identity-migration-required",
             StoreError::PositionBound { .. } => "position-bound",
+            StoreError::InvalidRecordedPosture => "invalid-recorded-posture",
+            StoreError::PostureMismatch { .. } => "posture-mismatch",
             StoreError::Pool(_) => "pool",
             StoreError::Query(error) => return query_cause(error),
         };
@@ -246,6 +264,8 @@ impl std::error::Error for StoreError {
             | StoreError::DeliveryAttemptExhausted
             | StoreError::ItemIdentityMigrationRequired
             | StoreError::PositionBound { .. }
+            | StoreError::InvalidRecordedPosture
+            | StoreError::PostureMismatch { .. }
             | StoreError::Pool(_) => None,
             StoreError::Query(error) => Some(error),
         }
@@ -1488,7 +1508,17 @@ pub async fn read_state(
             &[&job_id],
         )
         .await?;
-    Ok(row.map(|row| JobStateRow {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let last_pass_posture = row
+        .get::<_, Option<&str>>(9)
+        .map(|value| {
+            registry_platform_config::Posture::parse(value)
+                .ok_or(StoreError::InvalidRecordedPosture)
+        })
+        .transpose()?;
+    Ok(Some(JobStateRow {
         position: row.get(0),
         projection_digest: row.get(1),
         lease_expires: row.get(2),
@@ -1498,10 +1528,38 @@ pub async fn read_state(
         rescan_active: row.get(6),
         idle_streak: row.get(7),
         error_streak: row.get(8),
-        last_pass_posture: row
-            .get::<_, Option<&str>>(9)
-            .and_then(registry_platform_config::Posture::parse),
+        last_pass_posture,
     }))
+}
+
+pub const POSTURE_MISMATCH: &str = "adapter.job.posture-mismatch";
+
+impl JobStateRow {
+    pub fn check_posture(
+        &self,
+        posture: registry_platform_config::Posture,
+    ) -> Result<(), StoreError> {
+        if let Some(recorded) = self
+            .last_pass_posture
+            .filter(|recorded| *recorded != posture)
+        {
+            return Err(StoreError::PostureMismatch { recorded });
+        }
+        Ok(())
+    }
+}
+
+/// Check the recorded posture without writing. The lease and rescan writes
+/// also enforce it in their own update predicates.
+pub async fn check_posture(
+    client: &impl GenericClient,
+    job_id: &str,
+    posture: registry_platform_config::Posture,
+) -> Result<(), StoreError> {
+    read_state(client, job_id)
+        .await?
+        .unwrap_or_default()
+        .check_posture(posture)
 }
 
 /// The state one pass leases: the fencing token the lease wrote, and
@@ -1533,6 +1591,7 @@ pub async fn take_lease(
     client: &impl GenericClient,
     job_id: &str,
     ttl: Duration,
+    posture: registry_platform_config::Posture,
 ) -> Result<Option<LeasedState>, StoreError> {
     // make_interval's secs member is double precision.
     let ttl = ttl.as_secs().min(i64::MAX as u64) as f64;
@@ -1541,10 +1600,14 @@ pub async fn take_lease(
             "UPDATE adapter_job_state SET lease_epoch = lease_epoch + 1, \
              lease_expires = now() + make_interval(secs => $2) \
              WHERE job_id = $1 AND (lease_expires IS NULL OR lease_expires <= now()) \
+             AND (last_pass_posture IS NULL OR last_pass_posture = $3) \
              RETURNING lease_epoch, position, rescan_active",
-            &[&job_id, &ttl],
+            &[&job_id, &ttl, &posture.as_str()],
         )
         .await?;
+    if granted.is_none() {
+        check_posture(client, job_id, posture).await?;
+    }
     Ok(granted.map(|row| LeasedState {
         token: row.get(0),
         position: row.get(1),
@@ -1734,15 +1797,21 @@ pub async fn stop_pass(
 ///
 /// [`StoreError::LeaseHeld`] while a pass holds the lease, or when no
 /// state row exists; a failed write refuses.
-pub async fn mark_rescan_due(client: &impl GenericClient, job_id: &str) -> Result<(), StoreError> {
+pub async fn mark_rescan_due(
+    client: &impl GenericClient,
+    job_id: &str,
+    posture: registry_platform_config::Posture,
+) -> Result<(), StoreError> {
     let marked = client
         .execute(
             "UPDATE adapter_job_state SET last_rescan_at = NULL, rescan_active = false \
-             WHERE job_id = $1 AND (lease_expires IS NULL OR lease_expires <= now())",
-            &[&job_id],
+             WHERE job_id = $1 AND (lease_expires IS NULL OR lease_expires <= now()) \
+             AND (last_pass_posture IS NULL OR last_pass_posture = $2)",
+            &[&job_id, &posture.as_str()],
         )
         .await?;
     if marked != 1 {
+        check_posture(client, job_id, posture).await?;
         return Err(StoreError::LeaseHeld);
     }
     Ok(())

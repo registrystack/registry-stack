@@ -23,7 +23,7 @@ oidc:
   audience: test
   allowInsecureHttp: true
 allowedClients: [test]
-allowedPrivateCidrs: []
+allowedPrivateCidrs: [192.168.0.0/16]
 audit:
   retentionDays: 90
 "#,
@@ -72,11 +72,18 @@ audit:
             );
         }
         if flags.is_empty() {
+            assert!(logs.contains("the configuration was refused"), "{logs}");
             assert!(
                 logs.contains("accepted only when the process declares development"),
                 "{logs}"
             );
         } else {
+            let declared = logs
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .find(|line| line["fields"]["message"] == "posture declared")
+                .unwrap_or_else(|| panic!("{logs}"));
+            assert_eq!(declared["fields"]["development_settings"], 2, "{declared}");
             assert!(
                 !logs.contains("accepted only when the process declares development"),
                 "{logs}"

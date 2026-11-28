@@ -644,6 +644,22 @@ fn rate_limiter(bundle: &Bundle) -> Result<EvidenceRateLimiter, RuntimeInitializ
     .map_err(|_| RuntimeInitializationError::RateLimit)
 }
 
+pub(crate) fn runtime_authenticator(
+    config: &crate::config::AuthenticationConfig,
+    issuer_roots: Vec<reqwest::Certificate>,
+    posture: registry_platform_config::Posture,
+) -> Authenticator {
+    let peer_policy = match posture {
+        registry_platform_config::Posture::Production => {
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+        }
+        registry_platform_config::Posture::Development => {
+            registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer
+        }
+    };
+    Authenticator::from_config(config, issuer_roots).with_peer_policy(peer_policy)
+}
+
 /// Everything startup builds from one captured deployment, with whatever its
 /// audit step produced.
 struct Startup<A> {
@@ -705,23 +721,13 @@ async fn assemble<A>(
 
     let rate_limiter = rate_limiter(&bundle)?;
 
-    let peer_policy = match runtime_document.posture.posture() {
-        registry_platform_config::Posture::Production => {
-            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
-        }
-        registry_platform_config::Posture::Development => {
-            registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer
-        }
-    };
     let authenticator = match authenticator_override {
         Some(authenticator) => authenticator,
-        None => Arc::new(
-            Authenticator::from_config(
-                &bundle.config.authentication,
-                issuer_trust_roots(&bundle, &runtime_document)?,
-            )
-            .with_peer_policy(peer_policy),
-        ),
+        None => Arc::new(runtime_authenticator(
+            &bundle.config.authentication,
+            issuer_trust_roots(&bundle, &runtime_document)?,
+            runtime_document.posture.posture(),
+        )),
     };
 
     Ok(Startup {
@@ -4268,7 +4274,10 @@ fn refusal(problem: ProblemCode, category: &'static str, check: FailedCheck) -> 
 
 fn authentication_refusal(error: &AuthenticationError) -> RuntimeFailure {
     refusal(
-        ProblemCode::AuthenticationFailed,
+        match error {
+            AuthenticationError::DevelopmentAssertion => ProblemCode::DevelopmentAssertion,
+            _ => ProblemCode::AuthenticationFailed,
+        },
         "authentication",
         error.failed_check(),
     )

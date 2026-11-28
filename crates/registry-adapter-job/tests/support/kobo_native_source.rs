@@ -161,9 +161,7 @@ impl MaintainedKoboSource {
         private_file(&root.path().join("kobo-token"), b"fixture-token");
         private_file(
             &root.path().join("database"),
-            std::env::var("ADAPTER_TEST_DATABASE_URL")
-                .expect("the native runner supplies disposable PostgreSQL")
-                .as_bytes(),
+            crate::job_fixture::test_database_url().as_bytes(),
         );
         private_file(&root.path().join("event-key"), &[0x5a; 32]);
         private_file(&root.path().join("revised-event-key"), &[0x6a; 32]);

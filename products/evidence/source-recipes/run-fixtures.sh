@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export REGISTRY_STACK_POSTURE=development
 
 catalog_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 scratch_parent=${TMPDIR:-/tmp}

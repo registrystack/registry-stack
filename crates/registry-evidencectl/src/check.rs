@@ -143,24 +143,24 @@ pub(crate) fn check(
     Ok(checked)
 }
 
+static LOCAL_ASSURANCE: registry_platform_config::DevelopmentSetting =
+    registry_platform_config::DevelopmentSetting {
+        code: "evidence.posture.local-assurance",
+        key: "assuranceProfile",
+        summary: "local assurance permits locally held signing keys",
+        production: "Build a production or evidence-grade package with a Transit signer.",
+    };
+
 fn uncompiled_target_posture(
     path: &Path,
     profile: Option<registry_evidence_authoring::target::TargetAssuranceProfile>,
     declared: registry_platform_config::DeclaredPosture,
 ) -> Report {
     use registry_evidence_authoring::target::TargetAssuranceProfile;
-    use registry_platform_config::{
-        DevelopmentSetting, FoundSetting, Posture, PostureReport, SettingOrigin,
-    };
+    use registry_platform_config::{FoundSetting, Posture, PostureReport, SettingOrigin};
 
     match profile {
-        Some(TargetAssuranceProfile::Local) => {
-            static LOCAL_ASSURANCE: DevelopmentSetting = DevelopmentSetting {
-                code: "evidence.posture.local-assurance",
-                key: "assuranceProfile",
-                summary: "local assurance permits locally held signing keys",
-                production: "Build a production or evidence-grade package with a Transit signer.",
-            };
+        Some(TargetAssuranceProfile::Local) | None => {
             let mut posture = PostureReport::new(declared);
             posture.record(FoundSetting {
                 setting: &LOCAL_ASSURANCE,
@@ -226,7 +226,13 @@ fn target_document_diagnostic(refusal: &crate::build::TargetDocumentDiagnostic) 
 }
 
 pub(crate) fn refuses_warnings(diagnostics: &Report, deny_warnings: bool) -> bool {
-    deny_warnings && diagnostics.warning_count() > 0
+    deny_warnings
+        && diagnostics.diagnostics().iter().any(|diagnostic| {
+            diagnostic.severity == registry_platform_yaml::Severity::Warning
+                && diagnostic.accepted_reason.is_none()
+                && !diagnostic.code.starts_with("platform.posture.")
+                && !diagnostic.code.starts_with("evidence.posture.")
+        })
 }
 pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Checked> {
     crate::normalized::inspect(project, target, "explain")
@@ -471,6 +477,36 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn local_assurance_setting_matches_runtime() {
+        let runtime = &registry_evidence::bundle::LOCAL_ASSURANCE;
+        assert_eq!(LOCAL_ASSURANCE.code, runtime.code);
+        assert_eq!(LOCAL_ASSURANCE.key, runtime.key);
+        assert_eq!(LOCAL_ASSURANCE.summary, runtime.summary);
+        assert_eq!(LOCAL_ASSURANCE.production, runtime.production);
+    }
+
+    #[test]
+    fn uncompiled_target_treats_omitted_assurance_as_local() {
+        let path = Path::new("target.yaml");
+        let production = uncompiled_target_posture(path, None, crate::DEFAULT_POSTURE);
+        assert!(production.has_errors());
+        assert_eq!(production.diagnostics()[0].code, LOCAL_ASSURANCE.code);
+        assert_eq!(production.diagnostics()[0].path, "/assuranceProfile");
+
+        let development = uncompiled_target_posture(
+            path,
+            None,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        );
+        assert!(!development.has_errors());
+        assert_eq!(development.warning_count(), 1);
+        assert!(!refuses_warnings(&development, true));
+    }
+
     #[test]
     fn production_requires_an_explicit_target() {
         assert!(check(

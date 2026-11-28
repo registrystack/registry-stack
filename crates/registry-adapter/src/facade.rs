@@ -82,6 +82,8 @@ struct ReplayedResponseRequestId(String);
 /// What every handler shares.
 pub struct FacadeState {
     pub loaded: Loaded,
+    /// The deployment posture and source-located settings safe for readiness.
+    pub readiness_posture: serde_json::Map<String, serde_json::Value>,
     pub effective_contract: EffectiveContract,
     pub authenticator: Authenticator,
     pub journal: Pool,
@@ -1014,7 +1016,7 @@ async fn readiness(state: Arc<FacadeState>) -> Response {
         Err(_) => false,
     };
     if journal_ready {
-        let mut body = state.loaded.posture.ready_member();
+        let mut body = state.readiness_posture.clone();
         body.insert("status".to_owned(), serde_json::json!("ready"));
         no_store(axum::Json(body).into_response())
     } else {

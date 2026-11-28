@@ -461,6 +461,7 @@ impl Docker {
     fn run(&self, arguments: &[&str], input: Option<&[u8]>, deadline: Duration) -> Result<String> {
         let verb = arguments.first().copied().unwrap_or_default();
         let mut child = Command::new(&self.program)
+            .env(super::POSTURE_ENV, super::DEVELOPMENT)
             .args(arguments)
             .stdin(if input.is_some() {
                 Stdio::piped()

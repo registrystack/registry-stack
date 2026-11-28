@@ -83,8 +83,7 @@ impl PostgresNativeSource {
         target: &str,
         household_shape: bool,
     ) -> Self {
-        let base_url = std::env::var("ADAPTER_TEST_DATABASE_URL")
-            .expect("ADAPTER_TEST_DATABASE_URL names an owned disposable PostgreSQL server");
+        let base_url = crate::job_fixture::test_database_url();
         let config = Config::from_str(&base_url).expect("the disposable PostgreSQL URL parses");
         let host = match config.get_hosts().first() {
             Some(Host::Tcp(host)) if host == "localhost" => "127.0.0.1".to_owned(),

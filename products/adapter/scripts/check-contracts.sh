@@ -29,6 +29,8 @@ PATH="$HOME/.cargo/bin:$PATH" cargo fmt --all --check
 clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl -p registry-payment-protocol -p registry-payment-client -p registry-payment-simulator-connector -p registry-payment-mifos-connector --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter -p registry-adapter-core -p registry-adapter-engine -p registry-adapter-job -p registry-adapterctl -p registry-payment-protocol -p registry-payment-client -p registry-payment-simulator-connector -p registry-payment-mifos-connector --no-fail-fast
+# Hold the file-to-Coordinator fixture's CLI posture report to the same contract.
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-file,signed-coordinator-event --test posture
 # The BReg connector is default-off. Compile every connector target with its
 # feature and execute its scripted suites here; the real-runtime scenarios
 # remain isolated under test-connector-native.py because they provision BReg

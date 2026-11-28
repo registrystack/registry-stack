@@ -711,8 +711,7 @@
                 }
               },
               "required": [
-                "code",
-                "pointer"
+                "code"
               ],
               "type": "object"
             },

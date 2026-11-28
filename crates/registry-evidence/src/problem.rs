@@ -15,6 +15,7 @@ pub enum ProblemCode {
     InvalidRequestNonce,
     InvalidSelector,
     AuthenticationFailed,
+    DevelopmentAssertion,
     NotAuthorized,
     ResponseFormatNotAcceptable,
     EvidenceNotAvailable,
@@ -31,6 +32,7 @@ impl ProblemCode {
         Self::InvalidRequestNonce,
         Self::InvalidSelector,
         Self::AuthenticationFailed,
+        Self::DevelopmentAssertion,
         Self::NotAuthorized,
         Self::ResponseFormatNotAcceptable,
         Self::EvidenceNotAvailable,
@@ -46,6 +48,7 @@ impl ProblemCode {
             Self::InvalidRequestNonce => "request.nonce-invalid",
             Self::InvalidSelector => "request.selector-invalid",
             Self::AuthenticationFailed => "auth.invalid-credential",
+            Self::DevelopmentAssertion => registry_platform_oidc::DEVELOPMENT_ASSERTION_CODE,
             Self::NotAuthorized => "evidence.denied",
             Self::ResponseFormatNotAcceptable => "format.unsupported",
             Self::EvidenceNotAvailable => "evidence.unavailable",
@@ -61,7 +64,7 @@ impl ProblemCode {
             Self::MalformedRequest | Self::InvalidRequestNonce | Self::InvalidSelector => {
                 StatusCode::BAD_REQUEST
             }
-            Self::AuthenticationFailed => StatusCode::UNAUTHORIZED,
+            Self::AuthenticationFailed | Self::DevelopmentAssertion => StatusCode::UNAUTHORIZED,
             Self::NotAuthorized => StatusCode::FORBIDDEN,
             Self::ResponseFormatNotAcceptable => StatusCode::NOT_ACCEPTABLE,
             Self::EvidenceNotAvailable => StatusCode::UNPROCESSABLE_ENTITY,
@@ -79,6 +82,7 @@ impl ProblemCode {
             Self::InvalidRequestNonce => "Request nonce is invalid",
             Self::InvalidSelector => "Selector is invalid",
             Self::AuthenticationFailed => "Bearer access token is invalid",
+            Self::DevelopmentAssertion => "Development task assertion refused",
             Self::NotAuthorized => "Evidence request is not permitted",
             Self::ResponseFormatNotAcceptable => "Requested format is not supported",
             Self::EvidenceNotAvailable => "Evidence could not be produced",
@@ -95,6 +99,7 @@ impl ProblemCode {
             Self::InvalidRequestNonce => REQUEST_NONCE_DETAIL,
             Self::InvalidSelector => "selector does not match an available request profile",
             Self::AuthenticationFailed => "bearer access token validation failed",
+            Self::DevelopmentAssertion => "task grant was issued in the development posture",
             Self::NotAuthorized => "the Evidence request is not permitted",
             Self::ResponseFormatNotAcceptable => "the requested format is not supported",
             Self::EvidenceNotAvailable => "evidence could not be produced for this request",

@@ -76,7 +76,13 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                             "migration: registry_migration",
                             &format!("migration: {role}"),
                         )
-                        .replace("runtime: registry_runtime", &format!("runtime: {role}")),
+                        .replace("runtime: registry_runtime", &format!("runtime: {role}"))
+                        .replace("principal: registry_principal", "principal: principal")
+                        .replace("    purpose: registry_purpose\n", "")
+                        .replace(
+                            "    jwksCache:\n",
+                            "    jwksSource:\n      type: static\n      documentRef: secret:file/oidc-jwks\n    jwksCache:\n",
+                        ),
                 )
                 .unwrap();
                 use std::io::Write as _;
@@ -94,6 +100,14 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                     )
                     .unwrap()
                     .write_all(&[7; 32])
+                    .unwrap();
+                fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(config_root.path().join("secrets/oidc-jwks"))
+                    .unwrap()
+                    .write_all(br#"{"keys":[{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"synthetic-doctor-jwks"}]}"#)
                     .unwrap();
                 let run = |args: &[&str]| {
                     Command::new(env!("CARGO_BIN_EXE_bregctl"))
@@ -144,11 +158,15 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                     ])
                 };
                 let before = json_stdout(&status(recorded));
+                let unopened_audit = config_root.path().join("audit/must-stay-absent.jsonl");
+                let apply_config = config_root.path().join("refused-apply.yaml");
+                let source = fs::read_to_string(&config).unwrap();
+                fs::write(&apply_config, source.replace("audit.jsonl", "must-stay-absent.jsonl")).unwrap();
                 for operation in ["plan", "apply"] {
                     let mut args = vec![
                         operation,
                         "--runtime-config",
-                        path(&config),
+                        path(if operation == "apply" { &apply_config } else { &config }),
                         "--package",
                         path(&package),
                         "--posture",
@@ -165,6 +183,7 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                         "{report}"
                     );
                 }
+                assert!(!unopened_audit.exists(), "a posture refusal must precede opening audit");
                 let checked = status(declared);
                 assert!(checked.status.success(), "{checked:?}");
                 let checked = json_stdout(&checked);
@@ -173,6 +192,13 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                     "{checked}"
                 );
                 assert_eq!(checked["ledger"], before["ledger"]);
+                if declared == "development" {
+                    let source = fs::read_to_string(&config).unwrap();
+                    fs::write(&config, source.replace(
+                        "  bind: 127.0.0.1:1\n",
+                        "  bind: 127.0.0.1:1\n  publicOrigin: http://127.0.0.1:1\n",
+                    )).unwrap();
+                }
                 let doctor = run(&[
                     "doctor",
                     "--runtime-config",
@@ -181,9 +207,40 @@ fn opposite_activation_posture_refuses_planning_and_apply_and_reports_findings()
                     declared,
                 ]);
                 assert!(doctor.status.success(), "{}", json_stdout(&doctor));
+                let doctor_report = json_stdout(&doctor);
+                assert!(doctor_report["checked"].is_array(), "{doctor_report}");
+                assert!(doctor_report["roleMode"].is_string(), "{doctor_report}");
+                assert!(doctor_report["advisories"].is_array(), "{doctor_report}");
+                let has_code = |member: &str, code: &str| {
+                    doctor_report[member].as_array().unwrap().iter().any(|item| item["code"] == code)
+                };
+                assert!(has_code("diagnostics", "breg.activation.posture-mismatch"), "{doctor_report}");
+                assert!(has_code("advisories", "breg.activation.posture-mismatch"), "{doctor_report}");
+                if declared == "development" {
+                    assert!(has_code("advisories", "breg.posture.http-public-origin"), "{doctor_report}");
+                }
+                let refresh_config = config_root.path().join("invalid-refresh.yaml");
+                let source = fs::read_to_string(&config).unwrap();
+                fs::write(&refresh_config, format!("{source}
+externalRefresh:
+  plans:
+    people:
+      target: {{view: unknown-view, link: register}}
+      worker:
+        accessProfile: person-refresh
+        requesterClient: wfp-scope
+        principal: refresh-service
+      intervalSeconds: 60
+")).unwrap();
+                let refresh_doctor = run(&[
+                    "doctor", "--runtime-config", path(&refresh_config), "--posture", declared,
+                ]);
+                assert_eq!(refresh_doctor.status.code(), Some(1));
+                let refresh_report = json_stdout(&refresh_doctor);
                 assert_eq!(
-                    json_stdout(&doctor)["diagnostics"][0]["code"],
-                    "breg.activation.posture-mismatch"
+                    refresh_report["diagnostics"][0]["code"],
+                    "breg.external-refresh.view-missing",
+                    "{refresh_report}"
                 );
             });
             admin

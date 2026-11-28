@@ -231,6 +231,8 @@ async fn main() -> ExitCode {
         Command::Check { posture, .. }
         | Command::Evaluate { posture, .. }
         | Command::BundleCheck { posture, .. }
+        | Command::BundleEvaluate { posture, .. }
+        | Command::BundleRecordFixtureFacts { posture, .. }
         | Command::Serve { posture, .. }
         | Command::PrepareLocalRelyingProcedure { posture, .. }
         | Command::LocalAuditLastOperation { posture, .. } => Some(posture),
@@ -286,28 +288,44 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
                         .read_to_end(&mut bytes)
                 })
                 .map_err(|_| CommandError::Cli(CliError("runtime configuration is unavailable")))?;
-            let runtime = registry_evidence::config::RuntimeConfig::parse_yaml_with(
-                &bytes,
-                declared,
-                |name| std::env::var(name).ok(),
-            )
-            .map_err(
-                |error| match error.in_file(&runtime_path.display().to_string()) {
+            use registry_evidence::config::RuntimeConfig;
+            let lookup = |name: &str| std::env::var(name).ok();
+            let mut loaded = if document.is_some() {
+                RuntimeConfig::inspect_yaml(&runtime_path, &bytes, declared, true)
+            } else {
+                RuntimeConfig::decode_yaml_with(&bytes, declared, lookup)
+            }
+            .map_err(|error| {
+                match error.in_file(&runtime_path.display().to_string()) {
                     ConfigError::Refused(report) => CommandError::Refused(report),
                     error => CommandError::Deployment(
                         "runtime authority binding is invalid",
                         ArtifactFault::new(runtime_path.display().to_string(), error.fault()),
                     ),
-                },
-            )?
-            .config;
+                }
+            })?;
+            let activation_bundle = if document.is_some() {
+                Some(
+                    Bundle::preflight_runtime_package(&runtime_path, &mut loaded, true)
+                        .map_err(deployment_load_error)?,
+                )
+            } else {
+                loaded.config.validate().map_err(|error| {
+                    CommandError::Deployment(
+                        "runtime authority binding is invalid",
+                        ArtifactFault::new(runtime_path.display().to_string(), error.fault()),
+                    )
+                })?;
+                None
+            };
+            let runtime = loaded.config;
             let binding = runtime
                 .authority
                 .as_ref()
                 .ok_or(CommandError::Cli(CliError(
                     "runtime authority binding is required",
                 )))?;
-            let result = if let Some(document) = document {
+            let result = if let (Some(document), Some(bundle)) = (document, activation_bundle) {
                 let mut bytes = Vec::new();
                 File::open(&document)
                     .and_then(|file| {
@@ -319,8 +337,6 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
                     })?;
                 match authority::AuthorityDocument::parse(&document.display().to_string(), &bytes) {
                     Ok(document) => {
-                        let bundle =
-                            Bundle::load_pinned(&runtime.package).map_err(deployment_load_error)?;
                         let secrets = runtime.secret_providers.resolver().map_err(|_| {
                             CommandError::Cli(CliError("activation audit secrets are unavailable"))
                         })?;
@@ -422,6 +438,7 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             deny_warnings,
             environment,
             require_runtime_dependencies,
+            offline_dependencies_only,
             require_audit_under: audit_root,
             without_audit_lock,
             ..
@@ -434,6 +451,7 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             dependencies: require_runtime_dependencies.then_some(DependencyProof {
                 audit_root,
                 without_audit_lock,
+                offline_only: offline_dependencies_only,
             }),
         })
         .await),
@@ -628,8 +646,13 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             case,
             explain,
             explain_format,
+            ..
         } => {
             let mut bundle = Bundle::load(&bundle).map_err(deployment_load_error)?;
+            let posture = registry_evidence::check::check_bundle_posture(&bundle, declared);
+            if posture.has_errors() {
+                return Err(CommandError::Refused(Box::new(posture.report())));
+            }
             if let Some(path) = authority_document {
                 let document = read_bundle_authority(&path, &bundle)?;
                 // This copy can reach only the offline fixture kernel, never
@@ -686,8 +709,13 @@ async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandErr
             bundle,
             authority_document,
             fixture,
+            ..
         } => {
             let mut bundle = Bundle::load(&bundle).map_err(deployment_load_error)?;
+            let posture = registry_evidence::check::check_bundle_posture(&bundle, declared);
+            if posture.has_errors() {
+                return Err(CommandError::Refused(Box::new(posture.report())));
+            }
             if let Some(path) = authority_document {
                 let document = read_bundle_authority(&path, &bundle)?;
                 document.apply_to(&mut bundle.config);
@@ -890,6 +918,7 @@ struct CheckRequest {
 
 struct DependencyProof {
     audit_root: Option<PathBuf>,
+    offline_only: bool,
     without_audit_lock: bool,
 }
 
@@ -976,17 +1005,47 @@ async fn run_check(request: CheckRequest) -> ExitCode {
         }
     }
     if let Some(proof) = &request.dependencies {
-        if !check.has_errors() && !check.is_unavailable() {
+        if !proof.offline_only && !check.has_errors() && !check.is_unavailable() {
             if let Err(error) =
                 prove_runtime_dependencies(&request.runtime_config, proof, request.declared).await
             {
                 push_dependency_error(&mut check, error);
             }
+        } else if proof.offline_only
+            || check
+                .report()
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "evidence.posture.assurance-profile-conflict")
+        {
+            // Check local audit storage without opening a writer or resolving secrets.
+            if let Some(audit) = check.audit_destination().cloned() {
+                let file = match &audit {
+                    registry_platform_audit::AuditDestination::File(file) => Some(file),
+                    _ => None,
+                };
+                if let Some(root) = &proof.audit_root {
+                    if let Err(error) = prove_audit_root(file.map(|file| file.path()), root) {
+                        push_dependency_error(&mut check, error);
+                    }
+                }
+                if let Some(file) = file {
+                    if let Err(error) = file.check_writable() {
+                        push_dependency_error(
+                            &mut check,
+                            CommandError::Audit(
+                                "runtime audit initialization failed",
+                                AuditInitializationFault::from(&EvidenceAuditError::Audit(error)),
+                            ),
+                        );
+                    }
+                }
+            }
         }
     }
 
     let report = check.report();
-    let refused = check.has_errors() || (request.deny_warnings && report.warning_count() > 0);
+    let refused = check.has_errors() || (request.deny_warnings && has_denied_warnings(&report));
     let (status, exit) = if check.is_unavailable() {
         ("operational-failure", ExitCode::from(3))
     } else if refused {
@@ -1032,6 +1091,15 @@ async fn run_check(request: CheckRequest) -> ExitCode {
         }
     }
     exit
+}
+
+fn has_denied_warnings(report: &Report) -> bool {
+    report.diagnostics().iter().any(|diagnostic| {
+        diagnostic.severity == registry_platform_yaml::Severity::Warning
+            && diagnostic.accepted_reason.is_none()
+            && !diagnostic.code.starts_with("platform.posture.")
+            && !diagnostic.code.starts_with("evidence.posture.")
+    })
 }
 
 /// Check one verification policy offline and report every problem found.
@@ -1142,13 +1210,7 @@ async fn prove_runtime_dependencies(
     // no file to contain, so the flag is refused rather than silently
     // satisfied.
     if let Some(root) = proof.audit_root.as_deref() {
-        let audit_path = runtime
-            .config
-            .audit
-            .path
-            .as_deref()
-            .ok_or(AUDIT_ROOT_WITHOUT_FILE)?;
-        require_audit_under(Path::new(audit_path), root).map_err(CommandError::AuditRoot)?;
+        prove_audit_root(runtime.config.audit.path.as_deref().map(Path::new), root)?;
     }
     let available = if proof.without_audit_lock {
         // The candidate shares the running writer's audit path, so the lock is
@@ -1166,6 +1228,11 @@ async fn prove_runtime_dependencies(
         return Err(CliError(DEPENDENCY_UNAVAILABLE).into());
     }
     Ok(())
+}
+
+fn prove_audit_root(audit_path: Option<&Path>, root: &Path) -> Result<(), CommandError> {
+    let path = audit_path.ok_or(AUDIT_ROOT_WITHOUT_FILE)?;
+    require_audit_under(path, root).map_err(CommandError::AuditRoot)
 }
 
 const AUDIT_ROOT_WITHOUT_FILE: CliError = CliError(
@@ -1538,8 +1605,19 @@ async fn prepare_local_relying_procedure_command(
     input_path: &Path,
     declared: DeclaredPosture,
 ) -> Result<ExitCode, CommandError> {
-    let deployment = DeploymentInputs::load(runtime_path, declared)
-        .map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    let deployment = match DeploymentInputs::load(runtime_path, declared) {
+        Ok(deployment) => deployment,
+        Err(error) => {
+            let refusal = local_helper_load_error(error, LOCAL_RELYING_PROCEDURE_FAILED);
+            if let CommandError::Refused(report) = &refusal {
+                write_canonical_json_line(
+                    &serde_json::json!({"ok": false, "diagnostics": report.to_json_value()}),
+                    LOCAL_RELYING_PROCEDURE_FAILED,
+                )?;
+            }
+            return Err(refusal);
+        }
+    };
     let input_bytes = read_owner_only_input(
         input_path,
         MAX_LOCAL_REQUEST_BYTES,
@@ -1625,8 +1703,8 @@ fn local_audit_last_operation_command(
     runtime_path: &Path,
     declared: DeclaredPosture,
 ) -> Result<ExitCode, CommandError> {
-    let deployment =
-        DeploymentInputs::load(runtime_path, declared).map_err(|_| LOCAL_AUDIT_FAILED)?;
+    let deployment = DeploymentInputs::load(runtime_path, declared)
+        .map_err(|error| local_helper_load_error(error, LOCAL_AUDIT_FAILED))?;
     if deployment.bundle().config.assurance_profile != AssuranceProfile::Local {
         return Err(LOCAL_AUDIT_FAILED.into());
     }
@@ -1646,6 +1724,23 @@ fn local_audit_last_operation_command(
     };
     write_canonical_json_line(&view, LOCAL_AUDIT_FAILED)?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn local_helper_load_error(error: BundleError, fallback: CliError) -> CommandError {
+    if let BundleError::Refused(report) = error {
+        let diagnostics = report
+            .into_diagnostics()
+            .into_iter()
+            .filter(|diagnostic| {
+                diagnostic.code.starts_with("evidence.posture.")
+                    || diagnostic.code.starts_with("platform.posture.")
+            })
+            .collect::<Vec<_>>();
+        if !diagnostics.is_empty() {
+            return CommandError::Refused(Box::new(Report::new(diagnostics)));
+        }
+    }
+    fallback.into()
 }
 
 /// The closed class a local audit inspection failure reports. Only causes an

@@ -35,6 +35,7 @@ const MAX_SCHEMA_SYNTHESIS_DEPTH: usize = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HookLifecycleError {
+    RuntimeConfig(registry_breg::runtime_config::RuntimeConfigError),
     Event,
     Sample,
     Operator,
@@ -235,9 +236,19 @@ pub(crate) fn list(
 ) -> Result<HookListOutcome, HookLifecycleError> {
     let runtime = operator_runtime()?;
     list_with(runtime_config, limit, |runtime_config, limit| {
+        let config = registry_breg::runtime_config::load_runtime_config(runtime_config, posture)
+            .map_err(|error| {
+                if crate::is_posture_refusal(&error) {
+                    HookLifecycleError::RuntimeConfig(error)
+                } else {
+                    HookLifecycleError::Operator
+                }
+            })?;
         runtime.block_on(async {
-            let service = HookOperatorService::from_runtime_config(runtime_config, posture).await?;
-            service.list(limit).await
+            let service = HookOperatorService::from_loaded_config(config, false)
+                .await
+                .map_err(operator_failure)?;
+            service.list(limit).await.map_err(operator_failure)
         })
     })
 }
@@ -245,12 +256,12 @@ pub(crate) fn list(
 fn list_with(
     runtime_config: &Path,
     limit: u16,
-    operation: impl FnOnce(&Path, u16) -> Result<Vec<HookDeliveryStatus>, HookOperatorError>,
+    operation: impl FnOnce(&Path, u16) -> Result<Vec<HookDeliveryStatus>, HookLifecycleError>,
 ) -> Result<HookListOutcome, HookLifecycleError> {
     if !runtime_config.is_absolute() || limit == 0 || limit > MAX_HOOK_STATUS_RESULTS {
         return Err(HookLifecycleError::Operator);
     }
-    let deliveries = operation(runtime_config, limit).map_err(operator_failure)?;
+    let deliveries = operation(runtime_config, limit)?;
     Ok(HookListOutcome {
         deliveries: deliveries.into_iter().map(list_item).collect(),
     })
@@ -857,7 +868,7 @@ mod tests {
                 called.set(true);
                 assert_eq!(runtime_config, Path::new("/operator/runtime.yaml"));
                 assert_eq!(limit, 17);
-                Ok::<_, HookOperatorError>(vec![HookDeliveryStatus {
+                Ok::<_, HookLifecycleError>(vec![HookDeliveryStatus {
                     event_id,
                     compiled_delivery_id: "record.record-created-v1.webhook".to_owned(),
                     generation: 2,

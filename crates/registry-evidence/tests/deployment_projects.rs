@@ -37,20 +37,19 @@ impl Drop for LoadedProject {
     }
 }
 
+fn bundle_posture(bundle: &Bundle) -> registry_platform_config::Posture {
+    if bundle.config.assurance_profile == registry_evidence_verifier::AssuranceProfile::Local {
+        registry_platform_config::Posture::Development
+    } else {
+        registry_platform_config::Posture::Production
+    }
+}
+
 fn evaluate(project: &LoadedProject, fixture: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_evidence"))
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .arg("evaluate")
-        .args([
-            "--posture",
-            if project.bundle.config.assurance_profile
-                == registry_evidence_verifier::AssuranceProfile::Local
-            {
-                "development"
-            } else {
-                "production"
-            },
-        ])
+        .args(["--posture", bundle_posture(&project.bundle).as_str()])
         .env_remove("REGISTRY_STACK_POSTURE")
         .arg("--runtime-config")
         .arg(&project.runtime_path)
@@ -362,6 +361,7 @@ fn load_project_with(
     fs::set_permissions(&ca_path, fs::Permissions::from_mode(0o444))
         .expect("temporary CA is immutable");
 
+    let posture = bundle_posture(&Bundle::load(&bundle_root).expect("the packaged fixture loads"));
     if activated_authority {
         // Activation is audited, so it resolves the project's audit key.
         let audit_key = secret_root.join("audit-hmac-key");
@@ -370,7 +370,10 @@ fn load_project_with(
             .expect("synthetic audit key is private");
         let activated = Command::new(env!("CARGO_BIN_EXE_evidence"))
             .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-            .args(["authority", "activate", "--runtime-config"])
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .args(["authority", "activate", "--posture"])
+            .arg(posture.as_str())
+            .arg("--runtime-config")
             .arg(&runtime_path)
             .arg("--document")
             .arg(project_root.join("compiled-authority.yaml"))
@@ -385,11 +388,7 @@ fn load_project_with(
     let deployment = DeploymentInputs::load(
         &runtime_path,
         registry_platform_config::DeclaredPosture {
-            posture: if project_name == "public-check-evidence" {
-                registry_platform_config::Posture::Development
-            } else {
-                registry_platform_config::Posture::Production
-            },
+            posture,
             source: registry_platform_config::PostureSource::Flag,
         },
     )

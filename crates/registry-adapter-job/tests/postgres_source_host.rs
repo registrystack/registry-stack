@@ -10,6 +10,9 @@
 
 #![cfg(all(feature = "job-postgres", feature = "postgres-test"))]
 
+#[path = "support/job_fixture.rs"]
+mod job_fixture;
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
@@ -270,8 +273,7 @@ struct DatabaseBinding {
 
 impl DatabaseBinding {
     fn from_environment() -> Self {
-        let base_url = std::env::var("ADAPTER_TEST_DATABASE_URL")
-            .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+        let base_url = crate::job_fixture::test_database_url();
         let config = tokio_postgres::Config::from_str(&base_url)
             .expect("the disposable PostgreSQL URL parses");
         let host = match config.get_hosts().first() {
@@ -872,6 +874,33 @@ async fn actual_check_accepts_the_default_off_postgres_source_host() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("the check report is JSON");
     assert_eq!(report["ok"], true);
     assert_eq!(report["source"]["route"], "ledger-page");
+}
+
+#[tokio::test]
+async fn actual_check_refuses_a_non_loopback_plaintext_postgres_source() {
+    let database = DatabaseBinding::from_environment();
+    let fixture = Fixture::new(
+        &database,
+        DestinationKind::SignedCoordinatorEvent,
+        SourceQuery::Rows,
+    )
+    .await;
+    let mut runtime: Value =
+        serde_json::from_slice(&std::fs::read(&fixture.runtime).unwrap()).unwrap();
+    let sources = runtime["sources"]["postgres"].as_object_mut().unwrap();
+    let (endpoint, source) = sources.iter_mut().next().unwrap();
+    source["host"] = json!("192.0.2.1");
+    source["tls"] = json!({"type": "loopback-plaintext"});
+    let pointer = format!("/sources/postgres/{endpoint}/tls");
+    std::fs::write(&fixture.runtime, serde_json::to_vec(&runtime).unwrap()).unwrap();
+    let output = run_check(&fixture);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("platform.database.transport-host-mismatch"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&pointer), "{stderr}");
 }
 
 #[tokio::test]

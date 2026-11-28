@@ -206,6 +206,7 @@ pub(crate) struct CheckRun {
     pub diagnostics: Vec<Diagnostic>,
     pub files_checked: usize,
     pub fixtures_checked: usize,
+    pub explicit_production_settings: Vec<serde_json::Value>,
     pub project: String,
 }
 
@@ -304,6 +305,21 @@ pub(crate) fn run(
         None => None,
     };
 
+    let mut posture = registry_platform_config::PostureReport::new(declared);
+    if let Some(runtime) = &runtime {
+        registry_adapter_core::record_endpoint_posture(&runtime.endpoints, &mut posture);
+    }
+    let explicit_production_settings = posture
+        .explicit_settings()
+        .iter()
+        .map(|finding| {
+            serde_json::json!({
+                "code": finding.setting.code,
+                "pointer": finding.pointer,
+            })
+        })
+        .collect();
+
     // A document the reader refuses stops the composition: the pure checks
     // need parsed values. The run still reports everything the reader found.
     if report.has_errors() {
@@ -311,6 +327,7 @@ pub(crate) fn run(
             diagnostics: report.into_diagnostics(),
             files_checked: files,
             fixtures_checked: fixtures.len(),
+            explicit_production_settings,
             project: project_string(&args.project),
         });
     }
@@ -361,33 +378,12 @@ pub(crate) fn run(
     }
     check_fixture_bodies(&profile, &project, &fixtures, &mut report);
     check_consultation_fixture_bodies(&project, &directory, &fixtures, &mut report);
-    if !report.has_errors() {
-        if let (Some(runtime), Some(path)) = (runtime, &args.runtime) {
-            let mut posture = registry_platform_config::PostureReport::new(declared);
-            registry_adapter_core::record_endpoint_posture(&runtime.endpoints, &mut posture);
-            for finding in posture.explicit_settings() {
-                let mut diagnostic = Diagnostic::warning(
-                    finding.setting.code,
-                    finding.pointer.as_deref().unwrap_or(""),
-                    finding.setting.summary,
-                    "Keep anonymousHttps only for a fixed source intended to work without credentials.",
-                );
-                diagnostic.artifact = Some(ADAPTER_RUNTIME_KIND.to_owned());
-                diagnostic.source = Some(registry_platform_yaml::Source {
-                    file: path.display().to_string(),
-                    line: None,
-                    column: None,
-                });
-                report.push(diagnostic);
-            }
-        }
-    }
-
     Ok(CheckRun {
         diagnostics: report.into_diagnostics(),
         files_checked: files,
         fixtures_checked: fixtures.len(),
         project: project_string(&args.project),
+        explicit_production_settings,
     })
 }
 

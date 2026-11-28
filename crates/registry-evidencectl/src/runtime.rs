@@ -138,8 +138,17 @@ pub(crate) fn run(
             error
         }
     })?;
-    let base = invoke_check(&evidence, &runtime_config, false, None, false, declared)?;
-    if !base.status.success() {
+    let base = invoke_check(
+        &evidence,
+        &runtime_config,
+        false,
+        None,
+        false,
+        false,
+        declared,
+    )?;
+    let posture_conflict = has_assurance_profile_conflict(&base.stderr);
+    if !base.status.success() && !posture_conflict {
         // `evidence check` exits 3 when an input it depends on could not be
         // read, such as an unreadable runtime file or package.
         let dependency_failure =
@@ -168,9 +177,32 @@ pub(crate) fn run(
         true,
         args.require_audit_under.as_deref(),
         args.without_audit_lock,
+        posture_conflict,
         declared,
-    )?;
+    );
 
+    if posture_conflict {
+        let diagnostic = match dependency {
+            Ok(result) if has_assurance_profile_conflict(&result.stderr) => result.stderr,
+            Ok(result) => [base.stderr, result.stderr].concat(),
+            Err(_) => [
+                base.stderr,
+                b"Evidence offline dependency checks could not be completed.\n".to_vec(),
+            ]
+            .concat(),
+        };
+        return render_refusal(
+            &runtime_config,
+            format,
+            "evidence.posture.assurance-profile-conflict",
+            "domain-refusal",
+            &diagnostic,
+            1,
+            declared,
+        );
+    }
+
+    let dependency = dependency?;
     if dependency.status.success() {
         let report = DoctorReport {
             runtime_config: &runtime_config,
@@ -207,6 +239,12 @@ pub(crate) fn run(
         3,
         declared,
     )
+}
+
+fn has_assurance_profile_conflict(diagnostic: &[u8]) -> bool {
+    String::from_utf8_lossy(diagnostic)
+        .lines()
+        .any(|line| line.starts_with("error[evidence.posture.assurance-profile-conflict]"))
 }
 
 const LOCKED_PROOF_BOUNDARY: &str = "live startup dependency preflight; no public listener, evidence-data request, or application audit event was produced";
@@ -266,6 +304,7 @@ fn invoke_check(
     dependencies: bool,
     audit_root: Option<&std::path::Path>,
     without_audit_lock: bool,
+    offline_only: bool,
     declared: registry_platform_config::DeclaredPosture,
 ) -> Result<CheckOutcome> {
     let mut stdout = tempfile::tempfile().context("creating private Evidence doctor output")?;
@@ -283,6 +322,9 @@ fn invoke_check(
         .stderr(Stdio::from(stderr.try_clone()?));
     if dependencies {
         command.arg("--require-runtime-dependencies");
+    }
+    if offline_only {
+        command.arg("--offline-dependencies-only");
     }
     if let Some(root) = audit_root {
         command.arg("--require-audit-under").arg(root);
@@ -368,7 +410,11 @@ fn render_refusal(
         .to_owned();
     let report = DoctorReport {
         runtime_config,
-        proof_boundary: LOCKED_PROOF_BOUNDARY,
+        proof_boundary: if has_assurance_profile_conflict(runtime_diagnostic) {
+            "offline configuration and requested audit path checks; posture conflict prevented live startup dependency checks"
+        } else {
+            LOCKED_PROOF_BOUNDARY
+        },
         diagnostics: vec![Diagnostic {
             severity: "error",
             code,
@@ -444,6 +490,7 @@ mod tests {
             true,
             Some(root.path()),
             false,
+            false,
             crate::DEFAULT_POSTURE,
         )
         .expect("preflight");
@@ -461,8 +508,16 @@ mod tests {
         assert!(!invoked.contains("evaluate"));
         assert!(!root.path().join("audit.jsonl").exists());
 
-        let outcome = invoke_check(&binary, &runtime, true, None, true, crate::DEFAULT_POSTURE)
-            .expect("preflight");
+        let outcome = invoke_check(
+            &binary,
+            &runtime,
+            true,
+            None,
+            true,
+            false,
+            crate::DEFAULT_POSTURE,
+        )
+        .expect("preflight");
         assert!(outcome.status.success());
         assert_eq!(
             fs::read_to_string(root.path().join("arguments")).expect("arguments"),

@@ -19,6 +19,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use registry_platform_authcommon::{DeclaredScope, FailedCheck};
+use registry_platform_config::{Posture, DEVELOPMENT};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     grant_claims, ClaimNames, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError,
@@ -91,6 +92,7 @@ pub trait OfferAuthorizer: Send + Sync {
 /// The configured issuer's access-token verifier.
 #[derive(Debug)]
 pub struct MintResourceServer {
+    posture: Posture,
     verifier: Arc<TokenVerifier>,
     claims: ClaimNames,
     /// Scopes every offer token must carry. Checked against the verified
@@ -118,6 +120,7 @@ impl MintResourceServer {
         let profile = verifier_profile(config);
         let scope_claim = profile.scope_claim.clone();
         Self {
+            posture: Posture::Production,
             verifier: Arc::new(TokenVerifier::new(profile, fetcher)),
             required_scopes,
             scope_claim,
@@ -127,15 +130,23 @@ impl MintResourceServer {
 
     /// Build the resource server over an already constructed verifier, for a
     /// deployment that resolved its key source another way. No scope gate is
-    /// applied; the verifier alone decides.
+    /// applied. Defaults to production posture.
     #[must_use]
     pub fn new(verifier: Arc<TokenVerifier>) -> Self {
         Self {
+            posture: Posture::Production,
             verifier,
             required_scopes: Vec::new(),
             scope_claim: DEFAULT_SCOPE_CLAIM.to_owned(),
             claims: ClaimNames::default(),
         }
+    }
+
+    /// Apply the delivery service's declared posture to offer authorization.
+    #[must_use]
+    pub fn with_posture(mut self, posture: Posture) -> Self {
+        self.posture = posture;
+        self
     }
 
     /// Apply the issuer's contextual claim names when supplying a verifier
@@ -184,10 +195,8 @@ pub fn verifier_profile(config: &OfferAuthorizationConfig) -> TokenVerifierConfi
 }
 
 /// The key set is declared configuration, so it follows the shared declared
-/// endpoint rule: plain HTTP is fetched on loopback, where only supervised
-/// local validation admits it, and beyond loopback only with
-/// `allowInsecureHttp`. A plain HTTP offer issuer outside a supervised local
-/// group, without that setting, gets the strict policy.
+/// endpoint rule. Plain HTTP is fetched on loopback in either posture.
+/// Beyond loopback it requires `allowInsecureHttp`, which requires development.
 fn fetch_url_policy(config: &OfferAuthorizationConfig) -> FetchUrlPolicy {
     IssuerNetworkPolicy::new(&config.issuer, config.allow_insecure_http)
         .map(|network| network.declared_jwks_fetch_policy())
@@ -209,6 +218,16 @@ impl OfferAuthorizer for MintResourceServer {
         }
         match self.verifier.verify(credential).await {
             Ok(verified) => {
+                if self.posture == Posture::Production
+                    && verified
+                        .claims
+                        .extra
+                        .get(registry_platform_oidc::POSTURE_CLAIM)
+                        .and_then(serde_json::Value::as_str)
+                        == Some(DEVELOPMENT)
+                {
+                    return Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims));
+                }
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|_| AuthorizationError::Refused(FailedCheck::TokenTime))?

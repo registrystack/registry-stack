@@ -950,14 +950,16 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     )
     .expect("write the file-audit live configuration");
 
+    let startup_log = root.join("startup.log");
     let mut service = ChildGuard(
         Command::new(&binary)
-            .env("RUST_LOG", "off")
+            .env("RUST_LOG", "info")
+            .env_remove("REGISTRY_STACK_POSTURE")
             .env(CLIENT_KEY_VARIABLE, &client_identity.private)
             .env(AUDIT_KEY_VARIABLE, AUDIT_KEY)
             .args(["serve", "--posture", "development", "--runtime-config"])
             .arg(&live_config_path)
-            .stdout(Stdio::null())
+            .stdout(fs::File::create(&startup_log).unwrap())
             .stderr(Stdio::null())
             .spawn()
             .expect("start the real delivery binary"),
@@ -984,6 +986,19 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
             |setting| setting["code"] == "evidence.posture.supervised-validation"
                 && setting["pointer"] == "/validationMode"
         ));
+    let startup = fs::read_to_string(startup_log).unwrap();
+    let logs: Vec<Value> = startup
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    for setting in readiness["developmentSettings"].as_array().unwrap() {
+        assert!(
+            logs.iter()
+                .any(|entry| entry["fields"]["error_code"] == setting["code"]
+                    && entry["fields"]["pointer"] == setting["pointer"]),
+            "{startup}"
+        );
+    }
     assert_eq!(
         client
             .get(format!("{ADOPTER_ORIGIN}/health"))

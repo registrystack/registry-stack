@@ -15,10 +15,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use registry_breg::data::{
-    execute_export_page, DataError, DataExportCheckpoint, DataExportOutputState, DataExportPlan,
-    DataExportResumeState, DataHttpMethod, DataHttpRequest, DataHttpResponse, DataImportCheckpoint,
-    DataImportOperation, DataImportPlan, MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
-    MAX_DATA_IMPORT_INPUT_BYTES,
+    execute_export_page_with_dispatch_error, DataError, DataExportCheckpoint,
+    DataExportOutputState, DataExportPlan, DataExportResumeState, DataHttpMethod, DataHttpRequest,
+    DataHttpResponse, DataImportCheckpoint, DataImportOperation, DataImportPlan, ExportPageError,
+    MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES, MAX_DATA_IMPORT_INPUT_BYTES,
 };
 use registry_breg::package::{inspect_package_integrity, PackageError};
 use registry_breg_client::{
@@ -104,6 +104,7 @@ pub(crate) enum DataLifecycleError {
     Token,
     Runtime,
     Transport,
+    DevelopmentPeer,
     Data(DataError),
     /// The export output file and its checkpoint file were not both present.
     ExportPair(ExportPairState),
@@ -291,6 +292,7 @@ pub(crate) fn validate_import(
 }
 
 pub(crate) fn run_import(
+    posture: registry_platform_config::DeclaredPosture,
     request: DataImportRequest<'_>,
 ) -> Result<DataImportOutcome, DataLifecycleError> {
     let inspected = inspect_data_package(request.package)?;
@@ -310,7 +312,7 @@ pub(crate) fn run_import(
     let breg_url = parse_breg_url(request.breg_url)?;
     let token = read_access_token(request.access_token_file)?;
     let entity_route = ingestion_entity_route(&inspected, &plan)?;
-    let client = ingestion_client(&breg_url, &token)?;
+    let client = ingestion_client(&breg_url, &token, crate::peer_policy(posture))?;
     drop(token);
     let drive = IngestionDrive {
         plan: &plan,
@@ -329,11 +331,12 @@ pub(crate) fn run_import(
 /// access context. The caller supplies the Record type API route directly;
 /// this recovery command does not resolve authoring ids or package metadata.
 pub(crate) fn list_ingestion_runs(
+    posture: registry_platform_config::DeclaredPosture,
     request: DataRunListRequest<'_>,
 ) -> Result<DataRunListOutcome, DataLifecycleError> {
     let base = parse_breg_url(request.breg_url)?;
     let token = read_access_token(request.access_token_file)?;
-    let client = ingestion_client(&base, &token)?;
+    let client = ingestion_client(&base, &token, crate::peer_policy(posture))?;
     drop(token);
     let mut query = BRegIngestionRunListQuery::default()
         .access_profile(request.profile)
@@ -370,11 +373,12 @@ pub(crate) fn list_ingestion_runs(
 /// service retains committed rows and receipts and enforces the run's bound
 /// access context and task grant.
 pub(crate) fn cancel_ingestion_run(
+    posture: registry_platform_config::DeclaredPosture,
     request: DataRunCancelRequest<'_>,
 ) -> Result<DataRunCancelOutcome, DataLifecycleError> {
     let base = parse_breg_url(request.breg_url)?;
     let token = read_access_token(request.access_token_file)?;
-    let client = ingestion_client(&base, &token)?;
+    let client = ingestion_client(&base, &token, crate::peer_policy(posture))?;
     drop(token);
     let run = data_runtime()?
         .block_on(client.cancel_ingestion_run(
@@ -474,8 +478,9 @@ struct StartedIngestion {
 fn ingestion_client(
     base: &ServiceBaseUrl,
     token: &str,
+    peer_policy: PeerPolicy,
 ) -> Result<BaseRegistryClient, DataLifecycleError> {
-    let config = BaseRegistryClientConfig::new_without_peer_policy(base.as_url().clone())
+    let config = BaseRegistryClientConfig::new(base.as_url().clone(), peer_policy)
         .with_attempt_timeout(DEFAULT_REQUEST_TIMEOUT)
         .with_connect_timeout(DEFAULT_CONNECT_TIMEOUT)
         .with_user_agent(DATA_HTTP_USER_AGENT);
@@ -1070,10 +1075,7 @@ pub(crate) fn run_export(
     let token = read_access_token(request.access_token_file)?;
     let mut started = load_or_start_export(&plan, &inspected, request.output, request.checkpoint)?;
     let client = build_data_http_client()?;
-    let peer_policy = match posture.posture {
-        registry_platform_config::Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
-        registry_platform_config::Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
-    };
+    let peer_policy = crate::peer_policy(posture);
     run_export_pages(
         &plan,
         &inspected,
@@ -1100,7 +1102,7 @@ pub(crate) fn run_export(
 /// Every page append and every checkpoint publication acts through the
 /// destinations the run resolved, so an ancestor replaced while the run is in
 /// flight cannot redirect either write or land the two in different trees.
-fn run_export_pages<Dispatch, DispatchFuture, DispatchError>(
+fn run_export_pages<Dispatch, DispatchFuture>(
     plan: &DataExportPlan,
     inspected: &InspectedDataPackage,
     started: &mut StartedExport,
@@ -1109,14 +1111,14 @@ fn run_export_pages<Dispatch, DispatchFuture, DispatchError>(
 ) -> Result<(), DataLifecycleError>
 where
     Dispatch: FnMut(DataHttpRequest) -> DispatchFuture,
-    DispatchFuture: Future<Output = Result<DataHttpResponse, DispatchError>>,
+    DispatchFuture: Future<Output = Result<DataHttpResponse, DataLifecycleError>>,
 {
     let runtime = data_runtime()?;
     let mut pages = 0u64;
     let max_pages = max_pages.unwrap_or(u64::MAX);
     while !started.checkpoint.is_complete() && pages < max_pages {
         let progress = runtime
-            .block_on(execute_export_page(
+            .block_on(execute_export_page_with_dispatch_error(
                 plan,
                 &mut started.checkpoint,
                 &inspected.package_revision,
@@ -1125,7 +1127,10 @@ where
                 &started.resume_state,
                 &mut dispatch,
             ))
-            .map_err(map_data_or_transport)?;
+            .map_err(|error| match error {
+                ExportPageError::Dispatch(error) => error,
+                ExportPageError::Data(error) => DataLifecycleError::Data(error),
+            })?;
         let Some(progress) = progress else {
             break;
         };
@@ -1151,8 +1156,9 @@ async fn dispatch_http(
     token: &str,
     request: DataHttpRequest,
     peer_policy: PeerPolicy,
-) -> Result<DataHttpResponse, ()> {
-    let url = data_endpoint(base, request.path_and_query())?;
+) -> Result<DataHttpResponse, DataLifecycleError> {
+    let url =
+        data_endpoint(base, request.path_and_query()).map_err(|_| DataLifecycleError::Transport)?;
     let method = match request.method() {
         DataHttpMethod::Get => Method::GET,
         DataHttpMethod::Post => Method::POST,
@@ -1170,16 +1176,23 @@ async fn dispatch_http(
         .body(request.body().to_vec())
         .send()
         .await
-        .map_err(|_| ())?;
+        .map_err(|_| DataLifecycleError::Transport)?;
     let status = response.status().as_u16();
-    validate_response_headers(response.headers(), peer_policy).map_err(|_| ())?;
+    validate_response_headers(response.headers(), peer_policy).map_err(|error| match error {
+        registry_platform_httputil::ResponseHeaderError::DevelopmentPeer => {
+            DataLifecycleError::DevelopmentPeer
+        }
+        _ => DataLifecycleError::Transport,
+    })?;
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let body = read_data_http_body(response).await.map_err(|_| ())?;
-    DataHttpResponse::new(status, content_type, body).map_err(|_| ())
+    let body = read_data_http_body(response)
+        .await
+        .map_err(|_| DataLifecycleError::Transport)?;
+    DataHttpResponse::new(status, content_type, body).map_err(|_| DataLifecycleError::Transport)
 }
 
 fn build_data_http_client() -> Result<Client, DataLifecycleError> {
@@ -1203,13 +1216,6 @@ async fn read_data_http_body(
     response: reqwest::Response,
 ) -> Result<Vec<u8>, registry_platform_httputil::BoundedReadError> {
     read_bounded(response, MAX_DATA_HTTP_RESPONSE_BYTES as u64).await
-}
-
-fn map_data_or_transport(error: DataError) -> DataLifecycleError {
-    match error {
-        DataError::TransportUnavailable => DataLifecycleError::Transport,
-        other => DataLifecycleError::Data(other),
-    }
 }
 
 struct InspectedDataPackage {
@@ -1760,6 +1766,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+    use registry_breg::data::execute_export_page;
 
     #[test]
     fn a_development_peer_ingestion_answer_maps_to_an_invalid_response() {
@@ -2621,7 +2628,8 @@ mod tests {
             )),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -2829,7 +2837,8 @@ mod tests {
             )),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -2896,7 +2905,8 @@ mod tests {
             )),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -2958,7 +2968,8 @@ mod tests {
             )),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -2992,7 +3003,8 @@ mod tests {
             ScriptedExchange::Respond(ingestion_run_response(200, "OK", &plan, &input, 1, "open")),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -3039,7 +3051,8 @@ mod tests {
         fs::write(&state_path, &legacy_bytes).unwrap();
         let (address, handle) = spawn_scripted_server(Vec::new());
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -3087,7 +3100,8 @@ mod tests {
         fs::write(&state_path, &other_bytes).unwrap();
         let (address, handle) = spawn_scripted_server(Vec::new());
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -3198,7 +3212,8 @@ mod tests {
                 ingestion_run_response(200, "OK", &plan, &input, 0, run_status),
             )]);
             let base = parse_breg_url(&format!("http://{address}")).unwrap();
-            let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+            let client =
+                ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
             let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
             let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -3246,7 +3261,8 @@ mod tests {
             )),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -3274,7 +3290,8 @@ mod tests {
             blocked_run_response(&plan, &input, "importAuthorityClosed"),
         )]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -3313,7 +3330,8 @@ mod tests {
             ScriptedExchange::Respond(blocked_run_response(&plan, &input, "importAuthorityClosed")),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -3349,7 +3367,8 @@ mod tests {
                 problem_response(BRegProblemCode::PreconditionFailed, "Precondition Failed"),
             )]);
             let base = parse_breg_url(&format!("http://{address}")).unwrap();
-            let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+            let client =
+                ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
             let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
             let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -3576,7 +3595,7 @@ mod tests {
                 } else {
                     export_response("BB", None)
                 };
-                async move { Ok::<_, ()>(response) }
+                async move { Ok(response) }
             })
             .unwrap();
 
@@ -3624,7 +3643,8 @@ mod tests {
                 )),
             ]);
             let base = parse_breg_url(&format!("http://{address}")).unwrap();
-            let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+            let client =
+                ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
             let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
             let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -3757,6 +3777,10 @@ mod tests {
             });
             server.join().unwrap();
             assert_eq!(outcome.is_ok(), accepted, "{outcome:?}");
+            if let Err(error) = outcome {
+                let report = crate::data_lifecycle_failure("data export", "data.export", error);
+                assert_eq!(report.diagnostics[0].code, "data.export.development-peer");
+            }
             assert_eq!(!fs::read(&output).unwrap().is_empty(), accepted);
         }
     }
@@ -4210,7 +4234,8 @@ mod tests {
             ingestion_run_response(201, "Created", &plan, &input, 0, "open"),
         )]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
         assert!(matches!(
             start_new_ingestion(
@@ -4230,7 +4255,8 @@ mod tests {
             ingestion_run_response(201, "Created", &plan, &input, 0, "open"),
         )]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
         assert!(matches!(
             start_new_ingestion(
@@ -4272,7 +4298,8 @@ mod tests {
             )),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -4305,7 +4332,8 @@ mod tests {
         fs::write(&checkpoint_path, checkpoint.canonical_json().unwrap()).unwrap();
         let (address, handle) = spawn_scripted_server(Vec::new());
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
         assert!(matches!(
             load_or_start_ingestion(
@@ -4331,7 +4359,8 @@ mod tests {
             )),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();
@@ -4579,7 +4608,8 @@ mod tests {
             )),
         ]);
         let base = parse_breg_url(&format!("http://{address}")).unwrap();
-        let client = ingestion_client(&base, "TEST-TOKEN").unwrap();
+        let client =
+            ingestion_client(&base, "TEST-TOKEN", PeerPolicy::RefuseDevelopmentPeer).unwrap();
         let drive = ingestion_drive(&plan, &inspected, &input, &client);
 
         let destinations = ImportDestinations::resolve(&checkpoint_path).unwrap();

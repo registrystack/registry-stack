@@ -340,8 +340,7 @@ impl NativeCoordinator {
             .as_str()
             .expect("the package report digest");
 
-        let database = std::env::var("ADAPTER_TEST_DATABASE_URL")
-            .expect("the native runner supplies disposable PostgreSQL");
+        let database = crate::job_fixture::test_database_url();
         let (admin, connection) = tokio_postgres::connect(&database, NoTls)
             .await
             .expect("connect the Coordinator database");
@@ -824,8 +823,7 @@ async fn assert_attention_list(
 }
 
 async fn isolated_store() -> Pool {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names disposable PostgreSQL");
+    let base = crate::job_fixture::test_database_url();
     let schema = format!("adapter_job_event_{}", uuid::Uuid::new_v4().simple());
     let (admin, connection) = tokio_postgres::connect(&base, NoTls)
         .await

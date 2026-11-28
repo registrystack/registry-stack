@@ -148,6 +148,7 @@ struct SplitRoles {
     child: Child,
     port: u16,
     _directory: tempfile::TempDir,
+    key: registry_platform_crypto::PrivateJwk,
 }
 
 impl Drop for SplitRoles {
@@ -187,6 +188,7 @@ impl SplitRoles {
             runtime_url,
             Some((project, profile, endpoint)),
             None,
+            "production",
         )
     }
 
@@ -205,6 +207,7 @@ impl SplitRoles {
             runtime_url,
             facade.map(|(_, project)| (project, None, "tracker")),
             Some((payments, packs)),
+            "development",
         )
     }
 
@@ -214,6 +217,7 @@ impl SplitRoles {
         runtime_url: &str,
         facade: Option<(&Path, Option<&Path>, &str)>,
         payments: Option<(&Path, &[&Path])>,
+        posture: &str,
     ) -> Self {
         let endpoints = match facade {
             Some((_, _, endpoint)) => format!(
@@ -282,7 +286,7 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
         }
         if let Some((payments, packs)) = payments {
             command
-                .args(["--posture", "development", "--payments-config"])
+                .args(["--posture", posture, "--payments-config"])
                 .arg(payments);
             for pack in packs {
                 command.arg("--payment-provider-pack").arg(pack);
@@ -304,6 +308,7 @@ cursorKeyRef: secret:env/TEST_CURSOR_KEY
             child,
             port,
             _directory: directory,
+            key,
         }
     }
 
@@ -1281,6 +1286,18 @@ async fn assert_payments_grants_exactly(host: PaymentHost, disbursements: bool, 
     let mut serving =
         SplitRoles::spawn_payments(&database, &runtime_url, facade, &payments, &packs);
     serving.wait_until_listening();
+    if matches!(host, PaymentHost::BesideFacade) {
+        let (status, ready) = served_get(serving.port, "/ready", None).await;
+        assert_eq!(status, 200, "{ready}");
+        assert_eq!(
+            ready["developmentSettings"],
+            serde_json::json!([{
+                "code": "adapter.posture.payment-simulator",
+                "pointer": "/connections/0/binding/provider",
+                "file": "payments.yaml"
+            }])
+        );
+    }
 
     let mut required: Vec<(&str, &[&str])> = COLLECTIONS.to_vec();
     if disbursements {
@@ -1582,4 +1599,262 @@ async fn served_journal_rows_include_the_declared_posture() {
         );
         assert!(rows.iter().all(|row| row.get::<_, &str>(0) == expected));
     }
+}
+
+async fn served_get(port: u16, path: &str, bearer: Option<&str>) -> (u16, serde_json::Value) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
+    if let Some(token) = bearer {
+        request.push_str(&format!("Authorization: Bearer {token}\r\n"));
+    }
+    request.push_str("\r\n");
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        stream.read_to_string(&mut response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap();
+    (
+        head.split_whitespace().nth(1).unwrap().parse().unwrap(),
+        serde_json::from_str(body).unwrap(),
+    )
+}
+
+async fn served_disbursement_status_with_marked_peer(posture: registry_platform_config::Posture) {
+    use registry_adapter::payments::{
+        config::{PaymentsConfig, API_VERSION, KIND},
+        g2p_model::{DisbursementInstruction, G2pAttempt, PreparedG2pRegistryAction},
+        g2p_store::G2pStore,
+        model::digest,
+        provider_mapping::{
+            PaymentEndpointRole, PaymentHttpMethod, PreparedProviderRequest, ProviderAcceptance,
+        },
+    };
+    use registry_platform_config::{
+        DeclaredPosture, Posture, PostureSource, RuntimeConfigLoader, RuntimeEnvelope,
+    };
+    use serde_json::json;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use uuid::Uuid;
+
+    let upstream = UpstreamDouble::start();
+    let database = migrated_schema(
+        &upstream,
+        &Served::govstack_project(),
+        "marked-payment-peer",
+    )
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let (payments, packs) = payments_fixture(directory.path(), true);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/", listener.local_addr().unwrap());
+    let yaml = std::fs::read_to_string(&payments).unwrap();
+    let collections = yaml.find("connections:").unwrap();
+    let disbursements = yaml.find("disbursements:").unwrap();
+    let yaml = format!(
+        "{}connections: []\n{}",
+        &yaml[..collections],
+        &yaml[disbursements..]
+    )
+    .replace("https://disbursements.example.test/", &base);
+    std::fs::write(&payments, &yaml).unwrap();
+    let loaded = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: API_VERSION,
+            kind: KIND,
+        },
+        DeclaredPosture {
+            posture,
+            source: PostureSource::Flag,
+        },
+    )
+    .parse_str::<PaymentsConfig>(&yaml, |_| None)
+    .unwrap();
+    let connection = loaded.config.disbursements.into_iter().next().unwrap();
+    let binding = connection.binding;
+    let record_id = Uuid::new_v4();
+    let instruction = DisbursementInstruction {
+        record_id,
+        instruction_id: Uuid::new_v4(),
+        instruction_version: 1,
+        instruction_digest: "a".repeat(64),
+        institution_id: binding.institution_id.clone(),
+        service_id: binding.service_id.clone(),
+        programme_id: binding.programme_id.clone(),
+        cycle_id: "cycle-1".to_owned(),
+        beneficiary_id: "beneficiary-1".to_owned(),
+        beneficiary_destination: "254700000002".to_owned(),
+        funding_account_id: binding.funding_account_id.clone(),
+        amount_minor: 100_000,
+        currency: binding.currency.clone(),
+        currency_scale: binding.currency_scale,
+    };
+    let intent = binding.provider_intent(&instruction).unwrap();
+    let prepared = PreparedProviderRequest {
+        provider_pack: binding.provider_pack.clone(),
+        role: PaymentEndpointRole::DisbursementSubmit,
+        method: PaymentHttpMethod::Post,
+        path: "/disbursements".to_owned(),
+        query: Default::default(),
+        headers: Default::default(),
+        body: Some(
+            registry_platform_canonical_json::canonicalize_json(&json!({
+                "correlation": intent.correlation_id
+            }))
+            .unwrap(),
+        ),
+    };
+    const CLIENT: &str = "synthetic-client";
+    const SUBJECT: &str = "payment-workflow";
+    let principal = digest(&[ISSUER, CLIENT, SUBJECT]).unwrap();
+    let attempt = G2pAttempt::new(
+        Uuid::new_v4(),
+        connection.id,
+        principal.clone(),
+        instruction,
+        binding,
+        prepared,
+        PreparedG2pRegistryAction {
+            action: "bind-payout-attempt".to_owned(),
+            key: "binding-key".to_owned(),
+            inputs: Default::default(),
+            evidence: "prepared".to_owned(),
+        },
+    )
+    .unwrap();
+
+    let packs: Vec<_> = packs.iter().map(std::path::PathBuf::as_path).collect();
+    let mut serving = SplitRoles::spawn_launch(
+        "",
+        &database,
+        &database,
+        None,
+        Some((&payments, &packs)),
+        posture.as_str(),
+    );
+    serving.wait_until_listening();
+    let manager = deadpool_postgres::Manager::new(database.parse().unwrap(), tokio_postgres::NoTls);
+    let pool = deadpool_postgres::Pool::builder(manager).build().unwrap();
+    let store = G2pStore::new(pool, "govstack-split-roles".to_owned(), posture);
+    let saved = store
+        .reserve(&attempt, "command-key", "request-digest")
+        .await
+        .unwrap();
+    let id = saved.id;
+    let reservation = connect(&database)
+        .await
+        .query_one(
+            "SELECT posture FROM adapter_g2p_events WHERE attempt_id = $1 AND kind = 'g2p.attempt-reserved'",
+            &[&id],
+        )
+        .await
+        .expect("read the reservation audit posture");
+    assert_eq!(reservation.get::<_, &str>(0), posture.as_str());
+    let connection = &saved.connection;
+    store
+        .record_bound(connection, &principal, id)
+        .await
+        .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    store
+        .begin_dispatch(connection, &principal, id, i64::try_from(now).unwrap())
+        .await
+        .unwrap();
+    store
+        .record_acceptance(
+            connection,
+            &principal,
+            id,
+            ProviderAcceptance {
+                correlation_id: intent.correlation_id.clone(),
+                references: [("transfer".to_owned(), "provider-reference".to_owned())].into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub_calls = calls.clone();
+    let response = json!({
+        "correlation": intent.correlation_id,
+        "id": "provider-reference",
+        "minorUnits": "100000", "currency": "KES",
+        "debit": "programme-account", "credit": "254700000002",
+        "private": "opaque-provider-response"
+    });
+    let peer = axum::Router::new().route(
+        "/disbursements/status",
+        axum::routing::get(move || {
+            stub_calls.fetch_add(1, Ordering::Relaxed);
+            let response = response.clone();
+            async move { ([("Registry-Posture", "development")], axum::Json(response)) }
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, peer).await.unwrap() });
+    let token = registry_platform_testing::sign_compact_jwt_with_key(
+        &serving.key,
+        "at+jwt",
+        "canary-resource-key",
+        json!({
+            "iss": ISSUER, "aud": AUDIENCE, "sub": SUBJECT, "client_id": CLIENT,
+            "scope": "payments:disburse", "iat": now, "exp": now + 300,
+            "jti": Uuid::new_v4().to_string()
+        }),
+    );
+    let (status, body) = served_get(
+        serving.port,
+        &format!("/v1/payments/{connection}/disbursements/{id}"),
+        Some(&token),
+    )
+    .await;
+    server.abort();
+    assert_eq!(calls.load(Ordering::Relaxed), 1, "{status}: {body}");
+    match posture {
+        Posture::Production => {
+            assert_eq!(status, 503, "{body}");
+            assert_eq!(body["title"], "adapter.payment.unavailable", "{body}");
+            assert!(
+                !body.to_string().contains("opaque-provider-response"),
+                "{body}"
+            );
+        }
+        Posture::Development => {
+            assert_eq!(status, 200, "{body}");
+        }
+    }
+    let audits = connect(&database)
+        .await
+        .query(
+            "SELECT posture FROM adapter_payment_events WHERE attempt_id = $1 AND kind LIKE 'read-disbursement.%'",
+            &[&id],
+        )
+        .await
+        .unwrap();
+    assert_eq!(audits.len(), 1);
+    assert_eq!(audits[0].get::<_, &str>(0), posture.as_str());
+}
+
+#[tokio::test]
+async fn served_production_refuses_a_development_payment_peer_opaquely() {
+    served_disbursement_status_with_marked_peer(registry_platform_config::Posture::Production)
+        .await;
+}
+
+#[tokio::test]
+async fn served_development_accepts_a_development_payment_peer() {
+    served_disbursement_status_with_marked_peer(registry_platform_config::Posture::Development)
+        .await;
 }

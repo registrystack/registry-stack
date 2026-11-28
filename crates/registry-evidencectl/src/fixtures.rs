@@ -333,20 +333,15 @@ pub(crate) fn run_fixtures(
         evaluated_cases,
         diagnostics: if steps_passed && evaluated_cases == 0 {
             vec![no_case_diagnostic()]
-        } else if !check_outcome.diagnostics.is_empty() {
-            check_outcome
-                .diagnostics
-                .into_iter()
-                .map(|diagnostic| {
-                    serde_json::to_value(diagnostic).expect("native diagnostic serializes")
-                })
-                .collect()
-        } else if !overall_passed {
+        } else if !overall_passed && (check_passed || check_outcome.diagnostics.is_empty()) {
             vec![failed_run_diagnostic(args.command)]
         } else {
             Vec::new()
         }
         .into_iter()
+        .chain(check_outcome.diagnostics.into_iter().map(|diagnostic| {
+            serde_json::to_value(diagnostic).expect("native diagnostic serializes")
+        }))
         .chain(reader_warnings)
         .collect(),
     };
@@ -430,7 +425,7 @@ fn read_fixture_files(
         }
     }
     let report: Report = gathered.report();
-    if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    if report.has_errors() || crate::check::refuses_warnings(&report, deny_warnings) {
         return Err(report.into());
     }
     Ok(report
@@ -514,6 +509,7 @@ impl FixtureTarget {
             let report = crate::authored::runtime_target_refusal(
                 Report::new(std::mem::take(&mut outcome.diagnostics)),
                 &compilation.runtime_path,
+                &compilation.bundle_path,
                 Some(&compilation.target_path),
             );
             let report = crate::authored::runtime_bundle_refusal(
@@ -566,7 +562,13 @@ impl FixtureTarget {
                 if let Some(case) = case {
                     args.extend(["--case", case]);
                 }
-                args.extend(["--explain", "--explain-format", "json"]);
+                args.extend([
+                    "--explain",
+                    "--explain-format",
+                    "json",
+                    "--posture",
+                    declared.posture.as_str(),
+                ]);
                 run_evidence_step(
                     evidence_bin,
                     &["bundle-evaluate", "--bundle"],
@@ -690,15 +692,24 @@ fn run_evidence_step(
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let trace = structured_trace(&stdout);
+            let diagnostics = serde_json::from_str::<JsonValue>(&stdout)
+                .ok()
+                .and_then(|mut value| value.as_object_mut()?.remove("diagnostics"))
+                .map(serde_json::from_value)
+                .transpose();
+            let (diagnostics, stderr) = match diagnostics {
+                Ok(diagnostics) => (diagnostics.unwrap_or_default(), None),
+                Err(_) => (
+                    Vec::new(),
+                    Some("Evidence check returned malformed diagnostics".to_owned()),
+                ),
+            };
             StepOutcome {
-                passed: true,
-                diagnostics: serde_json::from_str::<JsonValue>(&stdout)
-                    .ok()
-                    .and_then(|value| serde_json::from_value(value["diagnostics"].clone()).ok())
-                    .unwrap_or_default(),
+                passed: stderr.is_none(),
+                diagnostics,
                 evaluated_cases: structured_evaluated_cases(trace.as_ref())
                     .or_else(|| evaluated_cases(&stdout)),
-                stderr: None,
+                stderr,
                 trace,
                 failing_case: None,
                 cases: Vec::new(),

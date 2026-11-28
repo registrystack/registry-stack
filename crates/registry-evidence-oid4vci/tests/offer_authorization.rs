@@ -201,6 +201,26 @@ fn signed_offer_fixture(extra: Value) -> (String, Value) {
 }
 
 #[tokio::test]
+async fn offer_authorizer_fetches_declared_loopback_jwks_without_http_opt_in() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let issuer = format!("http://{}", listener.local_addr().unwrap());
+    let (token, keys) = signed_offer_fixture(json!({"iss": issuer}));
+    let app = axum::Router::new().route(
+        "/jwks",
+        axum::routing::get(move || async move { axum::Json(keys) }),
+    );
+    let service = tokio::spawn(async move { axum::serve(listener, app).await });
+    let mut config = offer_config(&issuer, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
+    config.jwks_uri = format!("{issuer}/jwks");
+    assert!(!config.allow_insecure_http);
+    MintResourceServer::from_config(&config)
+        .authorize(&token)
+        .await
+        .expect("the signed offer token must verify with the loopback key set");
+    service.abort();
+}
+
+#[tokio::test]
 async fn restricted_and_unrestricted_clients_audit_the_same_canonical_azp() {
     const AZP: &str = "canonical-offer-client";
     const CLIENT_ID: &str = "non-authoritative-client-id";
@@ -326,16 +346,36 @@ async fn task_bound_and_partial_grants_cannot_create_deferred_wallet_offers() {
         config.required_scopes = Restriction::Listed(vec!["oid4vci:offer".to_owned()]);
         config
     };
-    assert_eq!(
-        resource_server(&config, &keys).authorize(&task_bound).await,
-        Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims))
-    );
+    let (partial, partial_keys) = signed_offer_fixture(json!({"registry_grant_id":"grant-a"}));
+    for posture in [
+        registry_platform_config::Posture::Production,
+        registry_platform_config::Posture::Development,
+    ] {
+        for (token, keys) in [(&task_bound, &keys), (&partial, &partial_keys)] {
+            assert_eq!(
+                resource_server(&config, keys)
+                    .with_posture(posture)
+                    .authorize(token)
+                    .await,
+                Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims))
+            );
+        }
+    }
+}
 
-    let (partial, keys) = signed_offer_fixture(json!({"registry_grant_id":"grant-a"}));
+#[tokio::test]
+async fn ordinary_offer_token_posture_refuses_development_in_production() {
+    let (token, keys) = signed_offer_fixture(json!({"registry_posture":"development"}));
+    let config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
     assert_eq!(
-        resource_server(&config, &keys).authorize(&partial).await,
+        resource_server(&config, &keys).authorize(&token).await,
         Err(AuthorizationError::Refused(FailedCheck::TaskGrantClaims))
     );
+    resource_server(&config, &keys)
+        .with_posture(registry_platform_config::Posture::Development)
+        .authorize(&token)
+        .await
+        .expect("development accepts the marked ordinary credential");
 }
 
 #[tokio::test]

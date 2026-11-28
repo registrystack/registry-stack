@@ -182,15 +182,7 @@ impl ProductRunner<'_> {
                 .iter()
                 .filter(|provider| provider.kind == ProviderKind::Smtp)
             {
-                connections.insert(
-                    provider.id.clone(),
-                    json!({
-                        "type": "smtp",
-                        "host": "127.0.0.1",
-                        "port": mailpit.smtp_port,
-                        "tls": "development-loopback",
-                    }),
-                );
+                connections.insert(provider.id.clone(), smtp_connection(mailpit.smtp_port));
                 self.sinks.insert(
                     provider.id.clone(),
                     json!({
@@ -247,6 +239,15 @@ impl ProductRunner<'_> {
     }
 }
 
+fn smtp_connection(port: u16) -> Value {
+    json!({
+        "type": "smtp",
+        "host": "127.0.0.1",
+        "port": port,
+        "tls": "loopback-plaintext",
+    })
+}
+
 /// The Messaging runtime configuration the run writes, before its bindings.
 /// `providers` connects each declared provider to its sink; a provider it
 /// omits is not activated, and a message that needs one fails with
@@ -270,7 +271,7 @@ pub(super) fn messaging_config(
     );
     config["apiVersion"] = json!("id.registrystack.org/formats/messaging/runtime/v1alpha1");
     config["kind"] = json!("MessagingRuntimeConfig");
-    config["listener"] = json!({"bind": bind, "tlsTermination": "development-loopback"});
+    config["listener"] = json!({"bind": bind, "tlsTermination": "loopback-plaintext"});
     config["identity"] = json!({"databaseId": identity});
     config["authentication"] = json!({"oidc": oidc});
     config["audit"]["destination"] = json!("file");
@@ -360,7 +361,7 @@ mod tests {
 
     #[test]
     fn the_runtime_configuration_names_the_run_issuer_keys_and_the_given_providers() {
-        let providers = json!({"mail-relay": {"type": "smtp"}});
+        let providers = json!({"mail-relay": smtp_connection(2525)});
         let config = messaging_config(
             &plan(),
             "messaging",
@@ -379,9 +380,15 @@ mod tests {
         );
         assert_eq!(
             config["authentication"]["oidc"]["jwksSource"]["type"],
-            "static"
+            "test-issuer"
         );
+        assert_eq!(config["audit"]["hashKeyCustody"], "development-generated");
+        assert_eq!(config["listener"]["tlsTermination"], "loopback-plaintext");
         assert_eq!(config["providers"], providers);
+        assert_eq!(
+            config["providers"]["mail-relay"]["tls"],
+            "loopback-plaintext"
+        );
         let bare = messaging_config(
             &plan(),
             "messaging",

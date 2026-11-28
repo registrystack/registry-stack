@@ -1264,6 +1264,13 @@ fn require_retained_invocation_capture(attempt: &Attempt, step: &Step) -> Result
     }
 }
 
+fn example_client(base_url: reqwest::Url, token: StaticToken) -> Result<BaseRegistryClient> {
+    Ok(BaseRegistryClient::new(
+        BaseRegistryClientConfig::new(base_url, PeerPolicy::AcceptDevelopmentPeer)
+            .with_token_provider(Arc::new(token)),
+    )?)
+}
+
 async fn execute(
     state: &State,
     clients: &Clients,
@@ -1306,10 +1313,7 @@ async fn execute(
                 StaticToken::new(String::from_utf8(token).context("retained token is invalid")?)?;
             native.insert(
                 step.client.clone(),
-                BaseRegistryClient::new(
-                    BaseRegistryClientConfig::new_without_peer_policy(state.breg_origin().parse()?)
-                        .with_token_provider(Arc::new(provider)),
-                )?,
+                example_client(state.breg_origin().parse()?, provider)?,
             );
         }
         let key = (step.client.clone(), step.access_profile.clone());
@@ -1703,6 +1707,37 @@ mod tests {
             .canonicalize()
             .unwrap()
     }
+    #[tokio::test]
+    async fn example_preflight_reads_metadata_from_a_development_peer() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            let body = json!({
+                "id": "fixture-registry", "version": "1",
+                "revision": format!("sha256:{}", "0".repeat(64)),
+                "metadataVersion": "2", "recordTypes": [], "operations": [], "actions": []
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nRegistry-Posture: development\r\nTraceparent: 00-1234567890abcdef1234567890abcdef-1234567890abcdef-01\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let client = example_client(
+            origin.parse().unwrap(),
+            StaticToken::new("synthetic-test-token").unwrap(),
+        )
+        .unwrap();
+        let metadata = client.registry_contract(Some("editor")).await;
+        server.await.unwrap();
+        assert!(metadata.is_ok(), "{metadata:?}");
+    }
+
     #[test]
     fn listing_is_offline_and_does_not_create_dev_state() {
         let temp = tempfile::tempdir().unwrap();
@@ -2649,8 +2684,9 @@ mod tests {
         runtime.block_on(async {
             let bytes = private::read(&state.root().join("secrets/editor-token"), 65536).unwrap();
             let client = BaseRegistryClient::new(
-                BaseRegistryClientConfig::new_without_peer_policy(
+                BaseRegistryClientConfig::new(
                     state.breg_origin().parse().unwrap(),
+                    PeerPolicy::AcceptDevelopmentPeer,
                 )
                 .with_token_provider(Arc::new(
                     StaticToken::new(String::from_utf8(bytes).unwrap()).unwrap(),
@@ -2896,8 +2932,9 @@ journeys:
             let bytes = private::read(&state.root().join("secrets/editor-token"), 65536).unwrap();
             let token = zeroize::Zeroizing::new(String::from_utf8(bytes).unwrap());
             let client = BaseRegistryClient::new(
-                BaseRegistryClientConfig::new_without_peer_policy(
+                BaseRegistryClientConfig::new(
                     state.breg_origin().parse().unwrap(),
+                    PeerPolicy::AcceptDevelopmentPeer,
                 )
                 .with_token_provider(Arc::new(StaticToken::new(token.to_string()).unwrap())),
             )

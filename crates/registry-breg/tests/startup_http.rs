@@ -1819,6 +1819,36 @@ operationalTimeouts:
     )
 }
 
+#[test]
+fn an_unreadable_package_keeps_the_runtime_posture_refusal() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let runtime = root.join("runtime.yaml");
+    let config = runtime_without_telemetry(&root).replace(
+        "  bind: 127.0.0.1:8080",
+        "  bind: 127.0.0.1:8080\n  publicOrigin: http://127.0.0.1:8080",
+    );
+    fs::write(&runtime, config).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_breg"))
+        .arg("--runtime-config")
+        .arg(runtime)
+        .arg("--posture")
+        .arg("production")
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let diagnostics = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        diagnostics.contains("breg.posture.http-public-origin"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("startup.package.refused"),
+        "{diagnostics}"
+    );
+}
+
 #[cfg(feature = "postgres-test")]
 #[tokio::test]
 async fn serve_returns_after_graceful_shutdown_signal() {

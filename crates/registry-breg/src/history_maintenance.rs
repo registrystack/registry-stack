@@ -133,12 +133,14 @@ pub(crate) async fn lock_registry(
 pub(crate) async fn verify_ready_identity(
     transaction: &tokio_postgres::Transaction<'_>,
     expected: &ExpectedRegistryIdentity,
+    posture: registry_platform_config::Posture,
 ) -> Result<(), HistoryMaintenanceError> {
     expected.validate()?;
     let row = transaction
         .query_opt(
             "SELECT package_id, database_id, active_package_digest,
-                    active_activation_id::text, schema_fingerprint, maintenance_status
+                    active_activation_id::text, schema_fingerprint, maintenance_status,
+                    coalesce(to_jsonb(registry_state) ->> 'posture', 'production')
                FROM registry_internal.registry_state
               WHERE singleton
               FOR UPDATE",
@@ -152,7 +154,8 @@ pub(crate) async fn verify_ready_identity(
         && row.get::<_, String>(1) == expected.database_id
         && row.get::<_, String>(2) == expected.package_digest
         && row.get::<_, String>(3) == expected.activation_id
-        && row.get::<_, String>(4) == expected.schema_fingerprint;
+        && row.get::<_, String>(4) == expected.schema_fingerprint
+        && row.get::<_, String>(6) == posture.as_str();
     if !ready {
         return Err(HistoryMaintenanceError::Unavailable);
     }

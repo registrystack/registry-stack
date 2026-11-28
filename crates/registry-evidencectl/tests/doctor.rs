@@ -1215,6 +1215,56 @@ fn delegated_runtime_version_handshake_bounds_are_operational_and_value_safe() {
 }
 
 #[test]
+fn doctor_keeps_posture_conflict_and_reports_audit_findings() {
+    let workspace = tempfile::tempdir().unwrap();
+    let runtime = workspace.path().join("runtime.yaml");
+    fs::write(&runtime, "version: 1\n").unwrap();
+    let binary = workspace.path().join("evidence");
+    fs::write(
+        &binary,
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'evidence {}\n'; exit 0; fi
+printf 'error[evidence.posture.assurance-profile-conflict] /assuranceProfile\n' >&2
+case " $* " in *" --offline-dependencies-only --require-audit-under "*) printf 'error[evidence.deployment.audit-root-refused] /audit\n' >&2;; esac
+exit 1
+"#,
+            registry_platform_buildinfo::DISPLAY_VERSION,
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    executable::wait_until_executable(&binary);
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args([
+            "--format",
+            "json",
+            "doctor",
+            "--posture",
+            "development",
+            "--runtime-config",
+        ])
+        .arg(&runtime)
+        .arg("--evidence-bin")
+        .arg(&binary)
+        .arg("--require-audit-under")
+        .arg(workspace.path())
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        rendered.contains("evidence.posture.assurance-profile-conflict"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("evidence.deployment.audit-root-refused"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
     for format in ["human", "json"] {
         let workspace = tempfile::tempdir().expect("tempdir");

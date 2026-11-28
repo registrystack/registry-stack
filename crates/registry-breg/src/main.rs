@@ -64,7 +64,15 @@ async fn main() {
             // the closed refusal class.
             let error = match error {
                 StartupError::RuntimeConfig(cause) => {
-                    eprintln!("breg did not start: its runtime configuration was refused.");
+                    let refused =
+                        if cause.diagnostics(None).iter().any(|diagnostic| {
+                            diagnostic.code == "breg.posture.placeholder-identity"
+                        }) {
+                            "its deployment posture was refused"
+                        } else {
+                            "its runtime configuration was refused"
+                        };
+                    eprintln!("breg did not start: {refused}.");
                     eprint!("{}", cause.render_human(Some(&arguments.runtime_config)));
                     map_runtime_config_error(cause)
                 }

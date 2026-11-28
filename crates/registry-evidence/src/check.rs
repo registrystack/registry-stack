@@ -19,6 +19,7 @@ use std::{
 };
 
 use registry_adapter_engine::evidence::EvidenceCompileError;
+use registry_platform_audit::AuditDestination;
 use registry_platform_config::{contains_environment_expression, PackageError, PackageErrorKind};
 use registry_platform_config::{DeclaredPosture, PostureReport};
 use registry_platform_yaml::{
@@ -64,6 +65,7 @@ pub struct OfflineCheck {
     unavailable: bool,
     package_root: Option<PathBuf>,
     bundle: Option<Bundle>,
+    audit_destination: Option<AuditDestination>,
     /// The bundle document as the reader saw it, for positions.
     bundle_tree: Option<Node>,
 }
@@ -78,8 +80,14 @@ impl OfflineCheck {
             unavailable: false,
             package_root: None,
             bundle: None,
+            audit_destination: None,
             bundle_tree: None,
         }
+    }
+
+    /// The decoded audit destination, when its settings are available offline.
+    pub fn audit_destination(&self) -> Option<&AuditDestination> {
+        self.audit_destination.as_ref()
     }
 
     /// The bundle the runtime file binds, when the package verified and loaded.
@@ -254,14 +262,7 @@ pub fn check_runtime_file(
     };
     check.files_checked = 1;
 
-    let decoded = if environment {
-        RuntimeConfig::decode_yaml_with(&bytes, declared, |name| std::env::var(name).ok())
-    } else {
-        // An expression stands for itself: the reader still refuses one that
-        // is malformed or written where substitution is not allowed, and the
-        // value it would fill is never read.
-        RuntimeConfig::decode_yaml_with(&bytes, declared, |name| Some(format!("${{{name}}}")))
-    };
+    let decoded = RuntimeConfig::inspect_yaml(path, &bytes, declared, environment);
     let loaded = match decoded {
         Ok(loaded) => loaded,
         Err(ConfigError::Refused(report)) if !environment => {
@@ -287,6 +288,19 @@ pub fn check_runtime_file(
     let mut posture = loaded.posture;
     check.extend(Report::new(posture.diagnostics(path)));
     let layout = Layout::scan(&check.file, &bytes);
+
+    if environment
+        || ![
+            "/audit/path",
+            "/audit/rotateBytes",
+            "/audit/retentionDays",
+            "/audit/destination",
+        ]
+        .iter()
+        .any(|pointer| layout.substituted(pointer))
+    {
+        check.audit_destination = config.audit.destination().ok();
+    }
 
     let package_refused = push_config_findings(&mut check, &layout, &config, !environment);
 
@@ -370,16 +384,16 @@ pub fn check_runtime_bindings_file(
                 "Generate a readable runtime file from the selected Evidence target.",
             );
             check.mark_unavailable();
+            check.extend(check_bundle_posture(bundle, declared).report());
             return check;
         }
     };
     check.files_checked = 1;
-    let loaded = match RuntimeConfig::decode_yaml_with(&bytes, declared, |name| {
-        Some(format!("${{{name}}}"))
-    }) {
+    let loaded = match RuntimeConfig::inspect_yaml(path, &bytes, declared, false) {
         Ok(loaded) => loaded,
         Err(ConfigError::Refused(report)) => {
             push_offline_refusal(&mut check, *report, &bytes);
+            check.extend(check_bundle_posture(bundle, declared).report());
             return check;
         }
         Err(other) => {
@@ -389,6 +403,7 @@ pub fn check_runtime_bindings_file(
                 other.fault().cause(),
                 "Correct the selected target as the message says.",
             );
+            check.extend(check_bundle_posture(bundle, declared).report());
             return check;
         }
     };
@@ -424,22 +439,10 @@ fn report_bundle_posture(
     posture: &mut PostureReport,
 ) {
     let previous = posture.settings().len();
-    let conflict = bundle.record_posture(posture, config);
-    let mut diagnostics = posture
-        .diagnostics(path)
-        .into_iter()
-        .skip(previous)
-        .collect::<Vec<_>>();
-    let package_file = bundle.root().join(BUNDLE_DOCUMENT);
-    for (setting, diagnostic) in posture.settings()[previous..].iter().zip(&mut diagnostics) {
-        if setting.origin == registry_platform_config::SettingOrigin::Package {
-            if let Some(source) = &mut diagnostic.source {
-                source.file = package_file.display().to_string();
-            }
-        }
-    }
-    diagnostics.extend(conflict);
-    check.extend(Report::new(diagnostics));
+    let diagnostics = bundle.posture_findings(posture, config, path);
+    check.extend(Report::new(
+        diagnostics.into_iter().skip(previous).collect(),
+    ));
 }
 
 /// Report the runtime's own findings about one decoded document. Findings at a

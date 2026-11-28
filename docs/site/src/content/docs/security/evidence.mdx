@@ -22,6 +22,13 @@ and task assertions. Development Evidence responses carry `Registry-Posture: dev
 Audit entries record the process posture. Successful `/ready` responses include `posture`
 and `developmentSettings`.
 
+In a production or evidence-grade package, the OIDC issuer and its configured JWKS endpoint
+can use loopback HTTP without `allowInsecureHttp`. Use HTTPS beyond loopback.
+
+{/* Evidence: crates/registry-evidence/src/config.rs, production_oidc_accepts_loopback_http_without_opt_in,
+    deployable_profiles_refuse_non_loopback_http_and_the_insecure_http_opt_in;
+    crates/registry-evidence/src/auth.rs, jwks_fetch_policy_uses_the_shared_declared_endpoint_rule. */}
+
 ## What the runtime guarantees
 
 A caller cannot turn the service into a fact-query engine. It evaluates only
@@ -433,6 +440,13 @@ links them, and the build fails when an invariant drops its test.
     negative_test, and review_rule;
     products/evidence/scripts/check-contracts.sh;
     crates/registry-evidence/tests/security_contract_traceability.rs. */}
+
+Production verifies the token before checking for a signed development mark. A verified token
+that carries that mark returns `platform.task-grant.development-assertion` before Evidence reads
+request context or checks the grant deadline.
+
+{/* Evidence: crates/registry-evidence/src/auth.rs, DevelopmentAssertion;
+    crates/registry-evidence/src/runtime_tests.rs, production_rejects_development_task_assertions_before_context. */}
 
 ## What the operator must uphold
 

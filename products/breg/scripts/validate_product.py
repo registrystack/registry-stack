@@ -82,7 +82,12 @@ POSTGRES_ENTRYPOINT = PRODUCT_ROOT / "scripts/test-postgres.sh"
 # The citizen review page and gateway link the runtime only under their own
 # PostgreSQL test feature, so their suites run in the product's lane.
 POSTGRES_TEST_PACKAGES = frozenset({"registry-breg", "registry-breg-review", "registry-breg-mcp"})
+POSTGRES_POSTURE_TEST_COMMAND = (
+    "cargo test --locked -p registry-bregctl --features postgres-test --test cli "
+    "posture_tests::opposite_activation_posture_refuses_planning_and_apply_and_reports_findings -- --exact"
+)
 POSTGRES_TEST_COMMANDS = (
+    POSTGRES_POSTURE_TEST_COMMAND,
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test http_auth",
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test http_read_only",
     "cargo test --locked -p registry-breg --features runtime,tooling,schema --test runtime_config",
@@ -570,6 +575,9 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
                 arguments = shlex.split(line)
             except ValueError:
                 errors.append("PostgreSQL entrypoint: invalid Cargo command quoting")
+                continue
+            if arguments == shlex.split(POSTGRES_POSTURE_TEST_COMMAND):
+                cargo_commands.append(POSTGRES_POSTURE_TEST_COMMAND)
                 continue
             if arguments == serial_record_timers_arguments:
                 serial_record_timers_invocations += 1

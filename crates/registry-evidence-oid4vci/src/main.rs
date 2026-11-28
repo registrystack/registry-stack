@@ -207,7 +207,15 @@ fn check(
     report.set_files_checked(usize::from(!unavailable));
     let (status, code) = if unavailable {
         ("operational-failure", 3)
-    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (deny_warnings
+            && report.diagnostics().iter().any(|diagnostic| {
+                diagnostic.severity == registry_platform_yaml::Severity::Warning
+                    && diagnostic.accepted_reason.is_none()
+                    && !diagnostic.code.starts_with("platform.posture.")
+                    && !diagnostic.code.starts_with("evidence.posture.")
+            }))
+    {
         ("domain-refusal", 1)
     } else {
         ("complete", 0)

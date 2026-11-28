@@ -139,15 +139,18 @@ works](../../explanation/how-evidence-works/#what-do-i-define) explains each par
 ## Prove the starter
 
 ```sh
-rstack evidence check . --target local-target.yaml
-rstack evidence test . --target local-target.yaml
+rstack evidence check . --target local-target.yaml --deny-warnings
+rstack evidence test . --target local-target.yaml --deny-warnings
 ```
 
 ```text test-expect
 Evidence project check: complete
 Project: .
 Target: local-target.yaml
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 PASS: check
 PASS: fixtures/record-status.yaml (13 cases)
 2 passed, 0 failed (13 cases evaluated)
@@ -191,14 +194,17 @@ with `<extract-file>` replaced by its name:
 Check the target again:
 
 ```sh
-rstack evidence check . --target local-target.yaml
+rstack evidence check . --target local-target.yaml --deny-warnings
 ```
 
 ```text test-expect
 Evidence project check: complete
 Project: .
 Target: local-target.yaml
-0 errors, 0 warnings in 1 file
+warning[evidence.posture.local-assurance] local-target.yaml /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 ```
 
 This check matches the key `record-status` to the pack endpoint's `sqliteExtract.extractProfile`: a profile with no

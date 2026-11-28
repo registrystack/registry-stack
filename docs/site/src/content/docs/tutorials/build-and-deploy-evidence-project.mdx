@@ -170,13 +170,17 @@ error[evidence.target.production-assurance-required] deploy-target/target.yaml:/
 1 error, 0 warnings in 1 file
 ```
 
-This target uses `assuranceProfile: local` and a local signing key. Package it under development into a new directory outside the project.
+The omitted `assuranceProfile` defaults to `local`. This target uses a local signing key. Package it under development into a new directory outside the project.
 
 ```sh
 rstack evidence package adult-status --target deploy-target/target.yaml --output candidate
 ```
 
 ```text test-expect
+warning[evidence.posture.local-assurance] deploy-target/target.yaml /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
+0 errors, 1 warning in 1 file
 Package digest: sha256:<digest>
 Package: candidate/bundle
 Runtime: candidate/runtime.yaml
@@ -257,6 +261,9 @@ rstack evidence runtime check --runtime-config candidate/runtime.yaml
 
 ```text test-expect
 Evidence package sha256:<digest> passed check (4 requirements)
+warning[evidence.posture.local-assurance] <package-document> /assuranceProfile
+  local assurance permits locally held signing keys; production refuses it
+  next: Build a production or evidence-grade package with a Transit signer.
 0 errors, 1 warning in 23 files
 ```
 

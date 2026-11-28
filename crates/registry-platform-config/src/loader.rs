@@ -429,6 +429,21 @@ impl RuntimeConfigLoader {
         self.parse_file(path, &bytes, &lookup, Decision::Refuse)
     }
 
+    /// Check captured runtime bytes without reopening the file.
+    ///
+    /// The caller owns file admission and capture. `path` names the source in
+    /// diagnostics. As with [`Self::check_offline`], the loader reports posture
+    /// settings while returning the decoded document, without deciding posture.
+    pub fn check_offline_bytes<T: DeserializeOwned>(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        substitute: bool,
+        stand_in_for: fn(&str) -> &'static str,
+    ) -> crate::RuntimeFileCheck<T> {
+        self.check_offline_input(path, Ok(bytes), substitute, stand_in_for)
+    }
+
     /// The bytes of the file at `path`, read under the file rules: the one
     /// read every check of the file works from.
     pub(crate) fn read_file(&self, path: &Path) -> Result<Vec<u8>, RuntimeConfigError> {

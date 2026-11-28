@@ -1496,15 +1496,14 @@ fn chunked_bodies_are_refused_upfront_as_problems() {
     stream
         .set_read_timeout(Some(Duration::from_secs(60)))
         .unwrap();
-    let head = format!(
-        "POST /v1/render/receipt HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {API_KEY}\r\nTransfer-Encoding: chunked\r\n\r\n"
+    // The whole request goes in one write. The server refuses on the head
+    // and closes, so a body sent in a later write could arrive at a closed
+    // socket, draw a reset and fail the write before the answer is read.
+    let request = format!(
+        "POST /v1/render/receipt HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {API_KEY}\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n0\r\n\r\n",
+        body.len()
     );
-    stream.write_all(head.as_bytes()).unwrap();
-    stream
-        .write_all(format!("{:x}\r\n", body.len()).as_bytes())
-        .unwrap();
-    stream.write_all(body.as_bytes()).unwrap();
-    stream.write_all(b"\r\n0\r\n\r\n").unwrap();
+    stream.write_all(request.as_bytes()).unwrap();
     let _ = stream.shutdown(std::net::Shutdown::Write);
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw).unwrap();
