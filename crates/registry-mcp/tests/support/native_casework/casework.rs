@@ -161,6 +161,8 @@ impl Casework {
                 "apply".as_ref(),
                 "--runtime-config".as_ref(),
                 runtime.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
                 "--operator-reference".as_ref(),
                 "native-staff-proof".as_ref(),
             ],
@@ -172,6 +174,8 @@ impl Casework {
             &[
                 "--runtime-config".as_ref(),
                 runtime.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
                 "serve".as_ref(),
             ],
             root.join("service.log"),
@@ -181,8 +185,9 @@ impl Casework {
                 .as_str(),
         )
         .await;
-        let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
+        let client = CaseworkClient::new(CaseworkClientConfig::new(
             base_url.clone(),
+            registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
         ))
         .expect("native Casework client");
         Self {

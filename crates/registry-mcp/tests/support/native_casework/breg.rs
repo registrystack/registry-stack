@@ -159,6 +159,8 @@ impl Breg {
                 project.as_os_str(),
                 "--runtime-config".as_ref(),
                 rehearsal.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
                 "--credentials".as_ref(),
                 root.join("credentials.yaml").as_os_str(),
                 "--output".as_ref(),
@@ -188,6 +190,8 @@ impl Breg {
                 "apply".as_ref(),
                 "--runtime-config".as_ref(),
                 live.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
                 "--package".as_ref(),
                 package.as_os_str(),
                 "--initial".as_ref(),
@@ -197,7 +201,12 @@ impl Breg {
         let base_url = Url::parse(&format!("http://{address}/")).expect("native BReg URL");
         let process = ServiceProcess::start(
             &binary,
-            &["--runtime-config".as_ref(), live.as_os_str()],
+            &[
+                "--runtime-config".as_ref(),
+                live.as_os_str(),
+                "--posture".as_ref(),
+                "development".as_ref(),
+            ],
             root.join("service.log"),
             base_url.join("ready").expect("BReg readiness URL").as_str(),
         )
@@ -352,8 +361,9 @@ fn install_delegated_profile(project: &Path) {
 }
 
 fn client(base_url: &Url, token: String) -> BaseRegistryClient {
-    BaseRegistryClient::new(BaseRegistryClientConfig::new_without_peer_policy(
+    BaseRegistryClient::new(BaseRegistryClientConfig::new(
         base_url.clone(),
+        registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
     ))
     .expect("native BReg client")
     .with_bearer_token(BearerToken::new(token).expect("synthetic BReg bearer token"))
