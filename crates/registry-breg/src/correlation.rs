@@ -535,14 +535,26 @@ pub(crate) fn finish_response(
 /// folded answer is not itself a refusal.
 pub(crate) fn record_noted_refusal(response: &Response, correlation: &RequestCorrelation) {
     if let Some(note) = response.extensions().get::<RefusalNote>().copied() {
-        let declared = correlation.declared_scope.get();
-        record_refusal!(
-            crate::metrics::process_refusal_recorder(),
-            note,
-            trace_id = correlation.trace_id(),
-            declared = declared.as_ref()
-        );
+        record_refusal_note(note, correlation);
     }
+}
+
+/// Count and log one refusal check on the operator side without attaching a
+/// [`RefusalNote`] to the response. Used when a concealed `412` must stay
+/// indistinguishable on the wire from an unknown target in development as well
+/// as production, while still counting under its check in metrics and logs.
+pub(crate) fn record_refusal_check(check: FailedCheck, correlation: &RequestCorrelation) {
+    record_refusal_note(RefusalNote::new(check), correlation);
+}
+
+fn record_refusal_note(note: RefusalNote, correlation: &RequestCorrelation) {
+    let declared = correlation.declared_scope.get();
+    record_refusal!(
+        crate::metrics::process_refusal_recorder(),
+        note,
+        trace_id = correlation.trace_id(),
+        declared = declared.as_ref()
+    );
 }
 
 pub(crate) fn method_name(method: &axum::http::Method) -> &'static str {
@@ -660,5 +672,36 @@ mod refusal_guard_tests {
         assert_eq!(orphan["detail"], "The action guard was not satisfied.");
         assert!(orphan.get("guardReason").is_none());
         assert!(!orphan.to_string().contains(label));
+    }
+
+    #[test]
+    fn record_refusal_check_counts_without_attaching_a_response_note() {
+        let recorder = crate::metrics::process_refusal_recorder();
+        let before = recorder
+            .counter()
+            .get(&[FailedCheck::ActionGuard.as_str()])
+            .unwrap_or(0);
+        let correlation = RequestCorrelation::from_headers(&HeaderMap::new());
+        record_refusal_check(FailedCheck::ActionGuard, &correlation);
+        let response = finish_response(
+            problem_response(
+                StatusCode::PRECONDITION_FAILED,
+                "Precondition Failed",
+                "The mutation precondition failed.",
+                "precondition.failed",
+            ),
+            &correlation,
+            "POST",
+            Instant::now(),
+        );
+        let after = recorder
+            .counter()
+            .get(&[FailedCheck::ActionGuard.as_str()])
+            .unwrap_or(0);
+        assert!(after > before, "operator refusal counter must advance");
+        assert!(
+            response.extensions().get::<RefusalNote>().is_none(),
+            "concealed 412 must carry no RefusalNote for development body rewriting"
+        );
     }
 }
