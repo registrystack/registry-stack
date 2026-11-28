@@ -231,12 +231,8 @@ impl RuntimeConfigError {
     /// and path.
     #[must_use]
     pub fn deciding_diagnostic(&self) -> &Diagnostic {
-        let diagnostics = &self.detail.diagnostics;
-        diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.severity == Severity::Error)
-            .min_by_key(|diagnostic| rank(diagnostic))
-            .unwrap_or(&diagnostics[0])
+        deciding_diagnostic(&self.detail.diagnostics)
+            .expect("a runtime configuration error always carries a diagnostic")
     }
 
     fn render(&self) -> String {
@@ -249,6 +245,17 @@ impl RuntimeConfigError {
         rendered.truncate(rendered.trim_end().len());
         rendered
     }
+}
+
+/// Select the first error of the lowest rank, or the first diagnostic if
+/// there are no errors. An empty list has no deciding diagnostic.
+#[must_use]
+pub fn deciding_diagnostic(diagnostics: &[Diagnostic]) -> Option<&Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == Severity::Error)
+        .min_by_key(|diagnostic| rank(diagnostic))
+        .or_else(|| diagnostics.first())
 }
 
 /// How early a diagnostic decides the refusal; lower decides first.

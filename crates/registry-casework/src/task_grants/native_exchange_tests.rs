@@ -1653,6 +1653,7 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
     assert_eq!(acquired_again.header_file, acquired.header_file);
     assert_eq!(acquired_again.grant_expires_at, acquired.grant_expires_at);
     let claims = payload(&token);
+    assert!(claims.get(registry_platform_oidc::POSTURE_CLAIM).is_none());
     assert_eq!(claims["registry_grant_id"], grant_id);
     assert_eq!(claims["registry_grant_source_issuer"], AUTHORITY);
     assert!(claims.get("registry_grant_authority").is_none());
@@ -1985,6 +1986,22 @@ async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stoc
         "{}",
         permitted_read.body
     );
+    let development_read = resource::send(
+        &app,
+        axum::http::Method::GET,
+        &format!(
+            "/v1/records/sites/{}?accessProfile=submitter",
+            resource::id(&old)
+        ),
+        &development_token,
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(development_read.status, StatusCode::UNAUTHORIZED);
+    // The distinct development-assertion problem code arrives with the BReg change.
+    assert_eq!(development_read.body["code"], "authentication.refused");
     let adjacent_read = resource::send(
         &app,
         axum::http::Method::GET,

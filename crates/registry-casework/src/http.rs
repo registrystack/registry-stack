@@ -17,7 +17,6 @@ use registry_platform_authcommon::{
     parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
     RefusalRecorder,
 };
-use registry_platform_config::Posture;
 use registry_platform_httpsec::refusal_detail::name_failed_check;
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
@@ -92,18 +91,11 @@ pub fn router(state: HttpState) -> Router {
 /// The router, counting and logging every refusal through `recorder`. A test
 /// passes its own recorder to read what a request counted. A service uses
 /// [`router`], whose recorder feeds the metrics scrape.
+///
+/// The posture `state` declares shapes refusal bodies: under development a
+/// refusal body also names the check that failed, as `failedCheck`. Under
+/// production the body is unchanged.
 pub fn router_with_recorder(state: HttpState, recorder: Arc<RefusalRecorder>) -> Router {
-    router_in_posture(state, recorder, Posture::Production)
-}
-
-/// [`router_with_recorder`] for a process that declared `posture`. Under
-/// development a refusal body also names the check that failed, as
-/// `failedCheck`. Under production the body is unchanged.
-pub fn router_in_posture(
-    state: HttpState,
-    recorder: Arc<RefusalRecorder>,
-    posture: Posture,
-) -> Router {
     let review = Router::new()
         .route("/v1/review-requests", post(create_review_request))
         .route("/v1/review-results", get(review_result_feed))
@@ -230,13 +222,12 @@ pub fn router_in_posture(
             post(preview_caseload_move),
         )
         .route("/v1/directory/caseload/apply", post(apply_caseload_move));
-    http_edge_recording(app, Some(state.clone()), Arc::clone(&recorder), posture)
+    http_edge_recording(app, Some(state.clone()), Arc::clone(&recorder))
         .merge(contract_edge(
             review,
             HttpContract::Review,
             Some(state.clone()),
             recorder,
-            posture,
         ))
         .with_state(state)
 }
@@ -246,19 +237,13 @@ fn http_edge<S>(router: Router<S>, source_state: Option<HttpState>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    http_edge_recording(
-        router,
-        source_state,
-        crate::metrics::refusal_recorder(),
-        Posture::Production,
-    )
+    http_edge_recording(router, source_state, crate::metrics::refusal_recorder())
 }
 
 fn http_edge_recording<S>(
     router: Router<S>,
     source_state: Option<HttpState>,
     recorder: Arc<RefusalRecorder>,
-    posture: Posture,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -268,7 +253,6 @@ where
         HttpContract::Casework,
         source_state,
         recorder,
-        posture,
     )
 }
 
@@ -277,7 +261,6 @@ fn contract_edge<S>(
     contract: HttpContract,
     source_state: Option<HttpState>,
     recorder: Arc<RefusalRecorder>,
-    posture: Posture,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -2212,7 +2195,6 @@ mod tests {
                 HttpContract::Review,
                 None,
                 crate::metrics::refusal_recorder(),
-                Posture::Production,
             ),
         );
         for (path, selected, other, base) in [
@@ -2317,7 +2299,6 @@ mod tests {
             HttpContract::Review,
             None,
             crate::metrics::refusal_recorder(),
-            Posture::Production,
         );
         for (method, path, media, body, expected) in [
             (
@@ -2956,7 +2937,6 @@ mod tests {
                 .route("/outage", answer(|| HttpError::ServiceUnavailable)),
             None,
             recorder,
-            Posture::Production,
         )
     }
 

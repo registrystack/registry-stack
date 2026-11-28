@@ -237,6 +237,9 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
     {
         "registry-platform-config",
         "registry-coordinator",
+        "registry-adapter",
+        "registry-adapter-engine",
+        "registry-adapterctl",
         "registry-breg",
         "registry-breg-mcp",
         "registry-breg-review",
@@ -1760,6 +1763,7 @@ def classify(
         or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
         or any(matches(path, *DISCOVERY_TUTORIAL_INPUTS) for path in paths),
         "breg_contracts": breg_contracts or provision_postgres,
+        "evidence_doctor": bool(affected & {"registry-evidence", "registry-evidencectl"}),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "evidence_assurance": evidence_assurance,
         "evidence_postgres": bool(affected & EVIDENCE_POSTGRES_PACKAGES),

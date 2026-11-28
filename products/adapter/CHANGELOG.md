@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: Rust client configurations take a peer policy in `PaymentClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
 - Start a local development run from the starter with `rstack dev start`.
 - BREAKING: the facade and payment runtime read the issuer map under
   `oidc.issuers`. Each entry has its own signing keys and client list, and

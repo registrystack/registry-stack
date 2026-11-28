@@ -5325,6 +5325,7 @@ mod schema_tests {
     fn schema_types_the_keys_of_a_map_as_the_identifier_the_reader_reads() {
         let schema = super::runtime_config_schema().unwrap();
         for (map, identifier) in [
+            ("/$defs/RawOidcConfig/properties/issuers", "LocalId"),
             ("/$defs/RawDestinationsConfig/properties/hooks", "LocalId"),
             ("/properties/externalSources", "LocalId"),
             ("/$defs/ExternalRefreshConfig/properties/plans", "LocalId"),

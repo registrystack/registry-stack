@@ -2,7 +2,69 @@
 
 ## Unreleased
 
+- BREAKING: Rust client configurations take a peer policy in `CaseworkClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+- BREAKING: Rust client configurations take a peer policy in `ReviewClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
 - Every `caseworkctl init` template includes a development plan and scenario for reading a review policy.
+
+- BREAKING: `authentication.oidc.issuers` lists the issuers whose access tokens
+  Casework accepts, keyed by an issuer id you choose, with at least one entry.
+  An entry holds `issuer`, `audience`, `jwksSource`, `allowInsecureHttp`,
+  `allowedClients`, `accessTokenType`, `scopeClaim`, `actorKind`,
+  `clientActorKinds`, `assertionIssuers`, `revokedKeyIds` and
+  `maximumTokenLifetimeSeconds`. A token is verified only by the entry whose
+  `issuer` it names, with that entry's keys and rules. `delegatedStaffReaders`
+  stays beside `issuers`. Startup refuses two entries with the same `issuer`, a
+  client that two entries list, and each moved member at its former place,
+  naming its place in an entry. Migration: move every member of
+  `authentication.oidc` other than `delegatedStaffReaders` under
+  `authentication.oidc.issuers.main`.
+- BREAKING: `scopeClaim` defaults to `scope`. Migration: an issuer that writes
+  scopes in `registry_scopes` needs `scopeClaim: registry_scopes` in its entry.
+- BREAKING: `humanIdentity` is removed, and startup refuses it with its
+  replacement. A person is a caller whose actor kind resolves to `human`: the
+  kind `actorKind` declares for the issuer, or `clientActorKinds` declares for
+  the token's client, else the token's `registry_actor_kind` claim. A kind claim
+  other than `human`, `agent` or `service`, a claimed kind that differs from the
+  declared kind, and a token that grants only OpenID Connect scopes without a
+  declared kind are refused with 401 `authentication.refused` on the
+  `actor-kind` check. A non-human kind on a profile only a person may use is
+  still 403 `profile.not-human`. An access profile whose `principalClaim`
+  is `registry_actor_kind` is refused. Migration: an issuer that does not write
+  `registry_actor_kind: human` for people needs `actorKind: human` in its entry,
+  or `clientActorKinds` for the clients people sign in with.
+- BREAKING: each `delegatedStaffReaders` binding requires `representedHuman`,
+  the claim and value that say the represented person is human, for example
+  `representedHuman: {claim: registry_subject_actor_kind, value: human}`. A
+  delegated staff read whose token does not carry that value is refused with
+  403 `profile.not-human`. The token's own actor kind is the gateway's and is
+  not read as the represented person's. Startup refuses a binding without
+  `representedHuman`, with an empty claim or value, or with a claim equal to
+  the scope claim of the issuer entry that lists the binding's client or to an
+  access profile's `principalClaim`. Migration: move the claim and value of
+  the removed `humanIdentity` into `representedHuman` on each binding.
+- `allowedClients: unrestricted` in an issuer entry is marked in the runtime
+  schema as the development-only setting
+  `casework.posture.unrestricted-clients`. Production refuses it in any entry,
+  on every listener.
+- Under `tlsTermination: operator-controlled-upstream`, an issuer entry with
+  `allowedClients: unrestricted` is refused in every posture, with
+  `casework.runtime.allowed-clients-required` at that entry's `allowedClients`.
+- An issuer entry may state `accessTokenType: JWT` to admit access tokens typed
+  `JWT` as well as `at+jwt`. An ID token is refused either way.
+- Startup logs the posture it runs under, production unless development is
+  declared, and one line for each explicit production setting the file
+  states (`accessTokenType: JWT`, a `scopeClaim` other than `scope`,
+  `actorKind`, `clientActorKinds`), with its code and pointer.
+  `caseworkctl check --runtime-config` lists the same settings in
+  `explicitProductionSettings`.
+- The `request refused` line for a `scope` or `profile` refusal names the issuer
+  entry's `scopeClaim`, `actorKind` and `clientActorKinds` in its remedy.
+- A human source pair refused for its actor kind names `clientActorKinds` and
+  `registry_actor_kind` on the refusal log line.
+- The runtime schema declares no empty default for an issuer entry's
+  `assertionIssuers`. Omitting the member still means no assertion-issuer rule
+  applies.
 
 - BREAKING: review completion wakes use Standard Webhooks. Casework signs
   `webhook-id`, `webhook-timestamp` and the exact JSON bytes with
@@ -26,12 +88,12 @@
   reports include it.
 - BREAKING: An undeclared posture is production. Runtime files that select
   development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development
-  for laptop and test runs.
+  for laptop and test runs. `rstack dev` sets it for you.
 - BREAKING: `caseworkctl check` reports development settings as errors under
   the default posture. Migration: Pass --posture development, or set
   REGISTRY_STACK_POSTURE, when checking a laptop file.
 - BREAKING: `caseworkctl provider add` accepts `--posture` and validates
-  runtime examples under the resolved posture. Use `--posture development`
+  runtime examples under the resolved posture. Migration: Use `--posture development`
   to generate the development example. A production check of an existing
   example requires an explicit client list.
 - Provider-add JSON reports include the resolved `posture` and its `source`.

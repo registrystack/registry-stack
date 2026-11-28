@@ -122,6 +122,34 @@ impl<T> RuntimeFileCheck<T> {
         report
     }
 
+    /// Return the authored string scalar and its position at `pointer`,
+    /// including when typed decoding failed. Substituted values are not covered.
+    #[must_use]
+    pub fn authored_scalar(
+        &self,
+        pointer: &str,
+    ) -> Option<(&str, registry_platform_yaml::Position)> {
+        let node = self.tree.as_ref()?.pointer(pointer)?;
+        let NodeValue::String(value) = &node.value else {
+            return None;
+        };
+        Some((value.text.as_str(), node.span.start))
+    }
+
+    /// Return the keys of the authored mapping at `pointer` in source order,
+    /// including when typed decoding failed. Empty when nothing is authored
+    /// there or the member is not a mapping.
+    #[must_use]
+    pub fn authored_keys(&self, pointer: &str) -> Vec<&str> {
+        match self.tree.as_ref().and_then(|tree| tree.pointer(pointer)) {
+            Some(Node {
+                value: NodeValue::Mapping(entries),
+                ..
+            }) => entries.iter().map(|entry| entry.key.as_str()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Whether the member at `pointer`, or a member above it, holds an
     /// expression the check did not substitute. A product skips its value
     /// checks of such a member.
@@ -526,6 +554,17 @@ mod tests {
         let substituted = check(&text, true);
         assert_eq!(substituted.diagnostics[0].code, "config.substitution");
         assert_eq!(substituted.diagnostics[0].path, "/bind");
+    }
+
+    #[test]
+    fn authored_keys_reads_a_mapping_in_source_order_when_decoding_fails() {
+        let text =
+            format!("{HEAD}bind: 127.0.0.1:8080\ncount: 3\nentries:\n  zeta: 1\n  alpha: 2\n");
+        let checked = check(&text, false);
+        assert!(checked.loaded.is_none(), "an unknown member fails decoding");
+        assert_eq!(checked.authored_keys("/entries"), ["zeta", "alpha"]);
+        assert!(checked.authored_keys("/count").is_empty());
+        assert!(checked.authored_keys("/absent").is_empty());
     }
 
     #[test]

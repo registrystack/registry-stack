@@ -602,7 +602,7 @@ fn print_sql_requires_development_for_unrestricted_clients() {
         .unwrap()
         .to_json_value();
     let mut contents = contents;
-    contents["authentication"]["oidc"]["allowedClients"] = json!("unrestricted");
+    contents["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] = json!("unrestricted");
     fs::write(
         &deployment.runtime,
         serde_norway::to_string(&contents).unwrap(),

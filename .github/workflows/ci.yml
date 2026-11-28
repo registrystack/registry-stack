@@ -71,6 +71,7 @@ jobs:
       breg_contracts_lanes: ${{ steps.filter.outputs.breg_contracts_lanes }}
       casework_postgres: ${{ steps.filter.outputs.casework_postgres }}
       scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}
+      evidence_doctor: ${{ steps.filter.outputs.evidence_doctor }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       evidence_assurance: ${{ steps.filter.outputs.evidence_assurance }}
       evidence_postgres: ${{ steps.filter.outputs.evidence_postgres }}
@@ -173,6 +174,9 @@ jobs:
 
       - name: Check feature-gated Base Registry Engine tests are selected
         run: python3 .github/scripts/check_breg_gated_tests.py
+
+      - name: Test the README start path
+        run: python3 -I -m unittest discover -s products/platform/scripts -p test_readme_start_path.py
 
       - name: Test platform fuzz runner
         run: uv run --no-project --with PyYAML==6.0.2 python -m unittest products/platform/scripts/test_run_fuzz_smoke.py
@@ -1000,6 +1004,38 @@ jobs:
 
       - name: Enforce Evidence configuration reference parity
         run: uv run --no-project --with PyYAML==6.0.2 products/evidence/scripts/check-config-key-paths.sh
+
+  evidence-doctor:
+    name: Evidence runtime doctor
+    needs: changes
+    if: needs.changes.outputs.evidence_doctor == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Verify Evidence doctor preserves diagnostics from the runtime
+        shell: bash
+        env:
+          EVIDENCECTL_BIN: ${{ github.workspace }}/target/debug/evidencectl
+        run: |
+          set -euo pipefail
+          cargo build --locked -p registry-evidencectl --bin evidencectl
+          cargo test --locked -p registry-evidence --test cli -- \
+            --ignored --exact doctor_preserves_real_posture_and_audit_diagnostics_without_opening_a_writer \
+            | tee "${RUNNER_TEMP}/evidence-doctor.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-doctor.log"
 
   evidence-postgres:
     name: Evidence PostgreSQL status ledger and store
@@ -2409,6 +2445,7 @@ jobs:
       - rust-tests
       - discovery-contracts
       - evidence-contracts
+      - evidence-doctor
       - evidence-postgres
       - breg-contracts
       - breg-postgres-18
@@ -2781,17 +2818,6 @@ jobs:
           [[ -n "$test_binary" ]]
           cp "$test_binary" \
             target/debug/inji-oid4vci-interop-test
-
-      - name: Verify Evidence doctor preserves diagnostics from the runtime
-        shell: bash
-        env:
-          EVIDENCECTL_BIN: ${{ github.workspace }}/target/debug/evidencectl
-        run: |
-          set -euo pipefail
-          cargo test --locked -p registry-evidence --test cli -- \
-            --ignored --exact doctor_preserves_real_posture_and_audit_diagnostics_without_opening_a_writer \
-            | tee "${RUNNER_TEMP}/evidence-doctor.log"
-          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-doctor.log"
 
       - name: Assemble the client package the application tutorial imports
         shell: bash
@@ -4059,6 +4085,7 @@ jobs:
       - rust-tests
       - discovery-contracts
       - evidence-contracts
+      - evidence-doctor
       - evidence-postgres
       - evidence-fuzz
       - breg-contracts

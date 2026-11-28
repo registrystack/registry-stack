@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: Rust client configurations take a peer policy in `MessagingClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
 - When both the flag and the environment declare production, `messagingctl dev` names both settings to remove.
 - `messagingctl provision` reports all diagnostics returned by its runtime configuration loader.
 

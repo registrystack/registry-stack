@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `rstack dev` writes each product's run issuer as the one entry, `main`, of its issuer set, so BReg, Messaging, Scheduling, Documents, Coordinator, the Adapter and Render read the runtime files a run generates.
+- BREAKING: `ObjectStoreError` and `VerifierError` add `DevelopmentPeer` variants. Migration: Update exhaustive matches.
+- A peer policy that refuses development checks each comma-separated `Registry-Posture` value in every header field. An exact `development` value after trimming whitespace marks the response as a development peer.
+- Each product module of the Rust client facade re-exports `PeerPolicy`.
+
 - The TypeScript client README gives the matching `bregctl` release requirement and shows the incompatible-version diagnostic.
 
 - Generated TypeScript services export a Proposal type for each register member, such as `FacilityProposal`, with that member's Action types.

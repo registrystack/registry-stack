@@ -16,12 +16,15 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use registry_casework::{
-    router_in_posture, secret_resolver, AuthenticationError, CaseworkAuthenticator,
+    router_with_recorder, secret_resolver, AuthenticationError, CaseworkAuthenticator,
     CaseworkService, DatabaseConfig, HttpState, PostgresStore, RuntimeConfig,
 };
 use registry_casework_core::{CaseworkActsAs, CaseworkProject};
 use registry_platform_authcommon::{FailedCheck, RefusalRecorder};
-use registry_platform_config::{Posture, SecretProvider, SecretResolver};
+use registry_platform_config::{
+    DeclaredPosture, LoadedRuntimeConfig, Posture, PostureReport, PostureSource, SecretProvider,
+    SecretResolver,
+};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_testing::{
     access_token_test_key, jwks_from_private_jwk, sign_compact_jwt_with_key, CapturedDiagnosticLogs,
@@ -134,8 +137,9 @@ impl Deployment {
     }
 
     /// Read `entries` as `authentication.oidc.issuers` the way startup reads
-    /// a runtime file.
-    fn config(&self, entries: Value) -> RuntimeConfig {
+    /// a runtime file that declares the development posture, so an entry may
+    /// state a development-only setting.
+    fn config(&self, entries: Value) -> LoadedRuntimeConfig<RuntimeConfig> {
         let root = self.path();
         let document = json!({
             "apiVersion": "id.registrystack.org/formats/casework/runtime/v1alpha1",
@@ -148,20 +152,20 @@ impl Deployment {
             "authentication": {"oidc": {"issuers": entries}},
             "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
         });
-        let config = RuntimeConfig::loader()
+        let loaded = RuntimeConfig::loader(declared(Posture::Development))
             .parse_str::<RuntimeConfig>(&document.to_string(), |_| None)
-            .expect("the runtime file parses")
-            .config;
-        let findings = config.findings(None);
+            .expect("the runtime file parses");
+        let findings = loaded.config.findings(None);
         assert!(findings.is_empty(), "{findings:?}");
-        config
+        loaded
     }
 
     async fn authenticator(&self, entries: Value) -> CaseworkAuthenticator {
-        let config = self.config(entries);
-        let resolver = secret_resolver(&config).expect("the secret providers resolve");
-        let verifiers = config
-            .issuer_verifiers(&resolver)
+        let loaded = self.config(entries);
+        let resolver = secret_resolver(&loaded.config).expect("the secret providers resolve");
+        let verifiers = loaded
+            .config
+            .issuer_verifiers(&resolver, loaded.development.as_ref())
             .await
             .expect("each issuer entry builds a verifier");
         CaseworkAuthenticator::new(&project(), verifiers).expect("the issuer set builds")
@@ -176,15 +180,23 @@ impl Deployment {
         let project = project();
         let service = CaseworkService::new(unconnected_store(self.path()), project.clone(), [])
             .expect("a service with no providers");
-        router_in_posture(
+        router_with_recorder(
             HttpState {
+                posture: PostureReport::new(declared(posture)),
                 service,
                 authenticator: Arc::new(self.authenticator(entries).await),
                 project: Arc::new(project),
             },
             recorder,
-            posture,
         )
+    }
+}
+
+/// `posture`, declared by flag.
+fn declared(posture: Posture) -> DeclaredPosture {
+    DeclaredPosture {
+        posture,
+        source: PostureSource::Flag,
     }
 }
 
@@ -210,6 +222,7 @@ fn unconnected_store(root: &Path) -> PostgresStore {
             transport: None,
         },
         &secrets,
+        None,
     )
     .expect("an unconnected runtime store")
 }

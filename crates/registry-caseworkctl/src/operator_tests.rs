@@ -129,7 +129,8 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         .expect("the maintained runtime fixture is not empty")
         .to_json_value();
     runtime["secretProviders"]["environment"] = json!({});
-    runtime["authentication"]["oidc"]["allowedClients"] = json!(["operator-test"]);
+    runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+        json!(["operator-test"]);
     runtime["database"] = json!({"runtimeUrlRef":format!("secret:env/{secret}"),"migrationUrlRef":format!("secret:env/{secret}"),"testOnlyPlaintext":true});
     let config = project.join("runtime.yaml");
     std::fs::write(&config, serde_norway::to_string(&runtime).unwrap()).unwrap();
@@ -146,7 +147,9 @@ fn apply_reports_a_schema_newer_than_this_binary_with_its_own_refusal() {
         ];
         args.extend(extra.iter().map(OsString::from));
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-        let exit = main_entry_from(args, &mut stdout, &mut stderr);
+        let exit = main_entry_with_posture_resolver(args, &mut stdout, &mut stderr, |flag| {
+            registry_platform_config::declared_from(flag, None)
+        });
         assert!(
             stderr.is_empty(),
             "JSON diagnostics must be part of the report on stdout"
@@ -334,7 +337,7 @@ fn production_check_refuses_unrestricted_clients() {
         .iter()
         .any(|diagnostic| {
             diagnostic.code == "casework.posture.unrestricted-clients"
-                && diagnostic.path == "/authentication/oidc/allowedClients"
+                && diagnostic.path == "/authentication/oidc/issuers/main/allowedClients"
                 && diagnostic.severity == registry_platform_yaml::Severity::Error
         }));
 }
@@ -382,7 +385,7 @@ acceptances:
   - code: casework.posture.unrestricted-clients
     scope:
       file: runtime.example.yaml
-      path: /authentication/oidc/allowedClients
+      path: /authentication/oidc/issuers/main/allowedClients
     reason: A local acceptance must not hide this warning.
 "#,
     )

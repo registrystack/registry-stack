@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- BREAKING: Rust client configurations take a peer policy in `CoordinatorClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
+
 - Production event intake refuses signed development envelopes with `event.development-peer` at `/posture`. Development intake accepts these envelopes after signature verification. An invalid signature returns `event.unauthenticated` in either posture.
 
 - Typed remote mutations require an unauthenticated doctor response with HTTP 401 or 200 and a valid posture header if present. Probe refusals point to `--url`, with `coordinator.command.probe-posture-invalid` for malformed or repeated headers.

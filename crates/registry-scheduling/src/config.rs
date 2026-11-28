@@ -3205,7 +3205,7 @@ holdPolicy:
                 "hmacSha256KeyRef": "secret:file/hook"
             }});
             let path = write_operator(root.path(), document);
-            check_runtime(&path, None, false)
+            check_runtime(&path, None, false, DEFAULT_POSTURE)
                 .diagnostics
                 .iter()
                 .map(|d| format!("{} {}", d.code, d.path))
