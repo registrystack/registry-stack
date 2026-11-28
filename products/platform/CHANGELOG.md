@@ -2,8 +2,9 @@
 
 ## Unreleased
 - The ThunderID journey example acquires task grants only through its own numeric loopback issuer and a numeric loopback Casework service.
-- Managed runs refuse missing retained keys and name the affected file. BReg reports recommend a clean start for retention-related refusals.
-- Managed stop with `--clean` holds the project lock through cleanup and can use the ID of a stopped or expired run.
+- Managed runs create and report new project keys on restart. If a recorded key is missing, the runner names the file and recommends a clean start. BReg reports also recommend a clean start for retention-related refusals.
+- Managed stop with `--clean` holds the project lock through cleanup and can use the ID of a stopped or expired run. Clean retries succeed when there is nothing left for the run ID. An early stop names when to retry, and a stalled supervisor names the recovery and clean commands.
+- Managed development runs treat an empty Docker daemon ID as unknown and keep checking volume generations.
 - Development state requires an absolute directory. Managed volumes record the canonical project path and state root.
 - Lost managed run recovery finishes when the PostgreSQL container is gone and reports any remaining rehearsal objects.
 - Managed development runs recheck the PostgreSQL volume generation after attaching it.

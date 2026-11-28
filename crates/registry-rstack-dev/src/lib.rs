@@ -280,7 +280,7 @@ fn recovery_message(run_id: &str, facts: &Value) -> String {
         format!("run {run_id} could not be recovered: {reason}; release these resources by hand")
     } else if let Some(detail) = facts["detail"].as_str() {
         format!(
-            "run {run_id} gave up cleanup after {} seconds ({detail}); run rstack dev stop {run_id} --recover or release these resources by hand",
+            "run {run_id} gave up cleanup after {} seconds ({detail}). Run rstack dev stop {run_id} --recover, or release these resources by hand. To clear managed project state after recovery, run rstack dev stop {run_id} --clean.",
             CLEANUP_BUDGET.as_secs()
         )
     } else {
@@ -718,6 +718,9 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     let run = report["run_id"].as_str().expect("run report");
     let status = report["status"].as_str().expect("run status");
     writeln!(output, "Run {run} {status}")?;
+    if let Some(message) = report["message"].as_str() {
+        writeln!(output, "  {message}")?;
+    }
     if let Some(recovered) = report.get("recovered") {
         for group in recovered["stopped_process_groups"]
             .as_array()
@@ -767,6 +770,11 @@ fn emit(output: &mut dyn Write, report: &Value, machine: bool) -> std::io::Resul
     if let Some(products) = report["products"].as_object() {
         for (product, url) in products {
             writeln!(output, "  {product} {}", url.as_str().expect("product URL"))?;
+        }
+    }
+    for path in report["createdKeptKeys"].as_array().into_iter().flatten() {
+        if let Some(path) = path.as_str() {
+            writeln!(output, "  Created kept key {path}")?;
         }
     }
     if let Some(configs) = report["runtimeConfigs"].as_object() {
@@ -1253,6 +1261,9 @@ fn reserve_run_issuer(plan: &mut plan::Plan) -> Result<Option<TcpListener>> {
 }
 
 fn check_daemon(state: &Path, daemon: &str) -> Result<()> {
+    if daemon.is_empty() {
+        return Ok(());
+    }
     if let Some(saved) = read_private(&state.join("docker-daemon"))? {
         let saved = std::str::from_utf8(&saved)
             .context("cannot read the retained Docker daemon ID. Start with --clean")?;
@@ -1391,7 +1402,6 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                 engine.require_free_volume(key)?;
                 let volume_exists = engine.has_project_volume(key)?;
                 retained_volume = !input.clean && volume_exists;
-                products.set_retained_volume(retained_volume);
                 if input.clean {
                     engine.remove_project_volume(key)?;
                 }
@@ -1428,7 +1438,9 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
                     fresh_generation = Some(generation.clone());
                     generation
                 };
-                write_private(&state.join("docker-daemon"), daemon.as_bytes())?;
+                if !daemon.is_empty() {
+                    write_private(&state.join("docker-daemon"), daemon.as_bytes())?;
+                }
                 let server = engine.start_server(
                     root,
                     &input.project,
@@ -1556,6 +1568,10 @@ fn worker(root: &Path, output: &mut dyn Write) -> Result<()> {
         }
         if let Some(hook_sink) = products.breg_hook_report() {
             report["bregHookSink"] = hook_sink;
+        }
+        let created_keys = products.created_kept_keys();
+        if !created_keys.is_empty() {
+            report["createdKeptKeys"] = json!(created_keys.as_slice());
         }
         report["runtimeConfigs"] = products.runtime_configs();
         report["scenarios"] = json!(journey_reports);
@@ -1829,10 +1845,17 @@ fn clean_project(engine: &Docker, state: &Path, key: &str) -> Result<()> {
         .with_context(|| format!("cannot remove development state {}", state.display()))
 }
 
-fn request_clean(root: &Path) -> Result<Option<File>> {
+fn request_clean(root: &Path, run_id: &str) -> Result<Option<File>> {
     let gate = match File::open(root.join(CLEAN_GATE)) {
         Ok(gate) => gate,
-        Err(error) if error.kind() == io::ErrorKind::NotFound && !root.exists() => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if !root.exists() {
+                return Ok(None);
+            }
+            return Err(Operational(format!(
+                "run {run_id} is still starting. Retry when it reports ready, or run rstack dev stop {run_id} without --clean."
+            )).into());
+        }
         Err(error) => return Err(error).context("cannot open the supervisor's stop --clean lock"),
     };
     flock(&gate, FlockOperation::LockExclusive)?;
@@ -1886,12 +1909,27 @@ fn stop_with_clean(run_id: &str, clean: bool) -> Result<Value> {
             Err(error) if root.exists() => return Err(error),
             Err(_) => {}
         }
-        if let Some(mut result) = request_clean(&root)? {
-            let mut report = stop(run_id)?;
+        if let Some(mut result) = request_clean(&root, run_id)? {
+            let recovery = || {
+                format!(
+                "Run rstack dev stop {run_id} --recover, then rstack dev stop {run_id} --clean."
+            )
+            };
+            let mut report = stop(run_id).map_err(|error| {
+                if error.is::<RecoveryNeeded>() {
+                    error.context(recovery())
+                } else {
+                    error
+                }
+            })?;
             let mut bytes = Vec::new();
             result.read_to_end(&mut bytes)?;
-            let failure: Option<String> = serde_json::from_slice(&bytes)
-                .context("the supervisor did not report the clean result. Retry stop --clean")?;
+            let failure: Option<String> = serde_json::from_slice(&bytes).with_context(|| {
+                format!(
+                    "The supervisor did not report the clean result. {}",
+                    recovery()
+                )
+            })?;
             if let Some(failure) = failure {
                 return Err(anyhow::anyhow!("{failure}"));
             }
@@ -1899,10 +1937,18 @@ fn stop_with_clean(run_id: &str, clean: bool) -> Result<Value> {
             return Ok(report);
         }
     }
-    let (key, state) = project_for_ended_run(&root, run_id)?.with_context(|| {
-        format!("cannot identify the project of run {run_id}. Start the project with --clean")
-    })?;
+    let nothing_to_clean = || {
+        let mut report = simple_report(run_id, "stopped");
+        report["message"] = json!("Nothing left to clean for this run ID.");
+        report
+    };
+    let Some((key, state)) = project_for_ended_run(&root, run_id)? else {
+        return Ok(nothing_to_clean());
+    };
     let _project_lock = lock_project(&root, &key)?;
+    if !state.exists() {
+        return Ok(nothing_to_clean());
+    }
     ensure_private(&state, false)?;
     ensure!(
         read_private(&state.join(format!("run-{run_id}")))?.as_deref() == Some(key.as_bytes()),
@@ -2562,10 +2608,25 @@ mod tests {
     }
 
     #[test]
+    fn clean_before_the_supervisor_gate_names_both_options() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join(RUN_ID);
+        private_directory(&root).unwrap();
+        let error = request_clean(&root, RUN_ID).unwrap_err().to_string();
+        assert!(error.contains("still starting"), "{error}");
+        assert!(error.contains("Retry when it reports ready"), "{error}");
+        assert!(
+            error.contains(&format!("rstack dev stop {RUN_ID}")),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn docker_daemon_mismatch_names_both_engines_and_remedies() {
         let root = tempfile::tempdir().unwrap();
         write_private(&root.path().join("docker-daemon"), b"engine-one").unwrap();
         check_daemon(root.path(), "engine-one").unwrap();
+        check_daemon(root.path(), "").unwrap();
         let error = check_daemon(root.path(), "engine-two")
             .unwrap_err()
             .to_string();
@@ -2853,6 +2914,10 @@ mod tests {
         let message = gave_up.to_string();
         assert!(
             message.contains(&format!("rstack dev stop {RUN_ID} --recover")),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("rstack dev stop {RUN_ID} --clean")),
             "{message}"
         );
         assert!(message.contains("database unreachable"), "{message}");

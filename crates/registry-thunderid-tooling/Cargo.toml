@@ -76,3 +76,7 @@ required-features = ["session"]
 [[example]]
 name = "contextual-exchange"
 required-features = ["session"]
+
+[[example]]
+name = "journey-issuer"
+test = true

@@ -889,10 +889,23 @@ Use synthetic test people and keep the issuer's private directory under your use
 
 Stop and TTL expiry terminate the services and remove the containers and run files.
 Managed runs keep the PostgreSQL volume, project keys and audit journals. The next start skips unchanged scenarios that previously passed.
-Use `rstack dev stop RUN_ID --clean` to clear the managed project state and volume even after a normal stop or TTL expiry.
-Use `rstack dev stop RUN_ID --clean` to delete the managed volume and project state after stopping, or `rstack dev start PROJECT --clean` to delete them before starting.
+Use `rstack dev stop RUN_ID --clean` to delete the managed volume and project state, even after a normal stop or TTL expiry.
+Use `rstack dev start PROJECT --clean` to delete them before starting.
 Both commands permanently delete the project's local development data.
 When you supply a PostgreSQL server, stop and TTL expiry also drop the run's databases and roles, including the `breg_bbox_` role of a spatial BReg run.
+
+If the connected Docker daemon reports a different ID from the one saved in project state, the runner refuses to start.
+Switch back to the original Docker context to keep using its volume, or start with `--clean` to discard the saved project state and start fresh on the current daemon.
+
+If the volume is missing and the daemon check passes, the runner moves the previous project state to `<state dir>.orphaned-<timestamp>` beside the project state directory and reports the path.
+The runner leaves that folder for you to inspect. To remove it, delete the reported folder yourself once you no longer need its keys and audit journals.
+
+If a recorded project key is missing, startup refuses and names its path.
+Restore the original key from a backup, or use `--clean` to discard the kept data.
+When the project first needs a new key, the runner creates it and reports its path.
+
+{/* Evidence: crates/registry-rstack-dev/src/lib.rs check_daemon, orphan_project_state, orphanedState;
+    crates/registry-rstack-dev/src/products.rs kept_key. */}
 
 {/* Evidence: crates/registry-rstack-dev/src/database.rs breg_bbox_. */}
 {/* TODO[evidence]: the NOLOGIN attribute of the breg_bbox_ role was not individually anchored. */}
@@ -902,6 +915,7 @@ When you supply a PostgreSQL server, stop and TTL expiry also drop the run's dat
 A BReg project with encrypted fields runs without extra setup.
 `start` draws a development data key from the operating system's random source when it needs one and writes a copy as `field-key` in the run directory, readable only by your user.
 BReg reads it through its `local-file` key custody, which it accepts only in the development posture.
+The runner never prints the key or writes it to the checkout.
 The run's copy is removed with the run directory. Managed runs keep the project's copy in the project state.
 When a run needs recovery, the report names the key file under `recovery.field_encryption_key` until `stop --recover` removes it.
 Runs using a supplied PostgreSQL server draw a new key each time.
@@ -921,7 +935,7 @@ A deployment supplies its key as [Encrypt a field](../breg-field-encryption/) de
 The owner-only state directory holds run directories and managed project state.
 It defaults to `$XDG_STATE_HOME/registry-stack/rstack-dev` when `XDG_STATE_HOME` is absolute,
 `~/.local/state/registry-stack/rstack-dev` on Linux, or `~/Library/Application Support/registry-stack/rstack-dev` on macOS.
-Set `RSTACK_DEV_STATE_DIR` to use another location.
+Set `RSTACK_DEV_STATE_DIR` to use another location. The state root must be an absolute path.
 A run directory is renamed to `.<run_id>.removing` before it is deleted, and `status` and `stop` ignore that name.
 If the deletion is interrupted, delete that directory yourself; the run's field-encryption key is deleted before the rename, so it holds no key material.
 
