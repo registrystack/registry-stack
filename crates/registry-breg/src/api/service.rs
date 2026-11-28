@@ -931,6 +931,16 @@ impl HttpService {
         self
     }
 
+    /// Serve under `declared`, as startup does after it reads the posture.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_declared_posture_for_test(
+        self,
+        declared: registry_platform_config::DeclaredPosture,
+    ) -> Self {
+        self.with_posture(registry_platform_config::PostureReport::new(declared))
+    }
+
     pub(crate) fn with_external_views(
         mut self,
         service: Arc<dyn super::external_views::ExternalViewService>,

@@ -134,8 +134,8 @@ impl Messaging {
             "listener":{"bind":address.to_string(), "tlsTermination":"development-loopback"},
             "secretProviders":{"file":{"root":root.path()}},
             "database":{"runtimeUrlRef":"secret:file/database", "migrationUrlRef":"secret:file/database", "testOnlyPlaintext":true},
-            "authentication":{"oidc":{"issuer":issuer.issuer(), "audience":"urn:example:messaging",
-                "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}, "scopeClaim":"scope", "allowedClients":["case-system"]}},
+            "authentication":{"oidc":{"issuers":{"main":{"issuer":issuer.issuer(), "audience":"urn:example:messaging",
+                "jwksSource":{"type":"static", "documentRef":"secret:file/jwks"}, "scopeClaim":"scope", "allowedClients":["case-system"]}}}},
             "audit":{"destination":"file", "path":root.path().join("audit/messaging.ndjson"), "hashKeyRef":"secret:file/audit-key"}
         })).unwrap()).unwrap();
         drop(listener);

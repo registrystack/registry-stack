@@ -1583,8 +1583,8 @@ class Journey:
             "listener":{"bind":f"127.0.0.1:{port}","tlsTermination":"development-loopback"},
             "secretProviders":{"file":{"root":str(secret)}},
             "database": database_config,
-            "authentication":{"oidc":{"issuer":self.urls["issuer"],"audience":"urn:example:messaging",
-                "scopeClaim":"scope","allowedClients":["case-system"],"jwksSource":{"type":"static","documentRef":"secret:file/jwks"}}},
+            "authentication":{"oidc":{"issuers":{"main":{"issuer":self.urls["issuer"],"audience":"urn:example:messaging",
+                "scopeClaim":"scope","allowedClients":["case-system"],"jwksSource":{"type":"static","documentRef":"secret:file/jwks"}}}}},
             "providers":{"mail-relay":{"type":"smtp","host":"127.0.0.1","port":smtp_port,
                 "tls":"development-loopback"}},
             "audit":{"destination":"file","path":str(self.root / "audit/messaging.ndjson"),"hashKeyRef":"secret:file/audit-key"}})

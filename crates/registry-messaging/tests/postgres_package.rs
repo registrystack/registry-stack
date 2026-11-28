@@ -235,12 +235,12 @@ impl Deployment {
                 "migrationUrlRef": self.migration_reference,
                 "testOnlyPlaintext": true
             },
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:messaging",
                 "jwksSource": {"type": "static", "documentRef": format!("secret:env/{jwks_name}")},
                 "allowedClients": ["case-system", "operations-console"]
-            }},
+            }}}},
             "audit": {
                 "path": self.root.path().join("audit").join("messaging.jsonl"),
                 "hashKeyRef": format!("secret:env/{audit_name}")

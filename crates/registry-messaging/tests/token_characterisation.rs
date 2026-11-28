@@ -17,7 +17,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use registry_messaging::auth::{AuthenticationError, MessagingAuthenticator};
 use registry_messaging::config::RuntimeConfig;
@@ -26,7 +25,6 @@ use registry_messaging_core::{
     AccessProfile, AccessProfiles, ActorKind, ActsAs, MESSAGING_RUNTIME_API_VERSION,
     MESSAGING_RUNTIME_KIND,
 };
-use registry_platform_oidc::TokenVerifier;
 use registry_platform_testing::{
     Against, ClaimValue, Configuration, FixtureCase, Outcome, TokenCorpus, TokenSigner,
 };
@@ -56,7 +54,8 @@ fn fixture_client(case: &FixtureCase) -> String {
         .unwrap_or_else(|| PLACEHOLDER_CLIENT.to_owned())
 }
 
-/// The claim the configuration reads scopes from.
+/// The claim the configuration reads scopes from. The recipe reads `scp`
+/// where the fixture carries that claim.
 fn scope_claim(case: &FixtureCase) -> &'static str {
     if case.configuration == Configuration::Recipe
         && case.fixture.claims.contains_key("scp")
@@ -128,6 +127,43 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
         .fixture
         .read_scope(claim)
         .unwrap_or_else(|| PLACEHOLDER_SCOPE.to_owned());
+    let client = fixture_client(&case);
+    let mut entry = json!({
+        "issuer": case.issuer,
+        "audience": case.audience,
+        "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-jwks"},
+        "allowedClients": [client, PACKAGE_CLIENTS[0], PACKAGE_CLIENTS[1]],
+        "scopeClaim": claim
+    });
+    // A row that admits a token typed `JWT`, or whose recipe does, says so.
+    let jwt_typed = case
+        .fixture
+        .header
+        .as_ref()
+        .and_then(|header| header.typ.as_deref())
+        .is_some_and(|typ| typ.eq_ignore_ascii_case("JWT"));
+    if case.configuration == Configuration::JwtAccepted
+        || (case.configuration == Configuration::Recipe && jwt_typed)
+    {
+        entry["accessTokenType"] = json!("JWT");
+    }
+    // The operator's declared kind is for the fixture's client, or for the
+    // whole issuer where the token names no client.
+    if let Some(kind) = case.declared_kind {
+        let kind = match kind {
+            registry_platform_oidc::ActorKind::Human => "human",
+            registry_platform_oidc::ActorKind::Agent => "agent",
+            registry_platform_oidc::ActorKind::Service => "service",
+        };
+        if literal_string(&case, "client_id")
+            .or_else(|| literal_string(&case, "azp"))
+            .is_some()
+        {
+            entry["clientActorKinds"] = json!({ client: kind });
+        } else {
+            entry["actorKind"] = json!(kind);
+        }
+    }
     let runtime_path = root.path().join("runtime.json");
     fs::write(
         &runtime_path,
@@ -142,13 +178,7 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
                 "runtimeUrlRef": "secret:env/MESSAGING_RUNTIME_URL",
                 "migrationUrlRef": "secret:env/MESSAGING_MIGRATION_URL"
             },
-            "authentication": {"oidc": {
-                "issuer": case.issuer,
-                "audience": case.audience,
-                "jwksSource": {"type": "static", "documentRef": "secret:file/issuer-jwks"},
-                "allowedClients": [fixture_client(&case), PACKAGE_CLIENTS[0], PACKAGE_CLIENTS[1]],
-                "scopeClaim": claim
-            }},
+            "authentication": {"oidc": {"issuers": {"main": entry}}},
             "audit": {"path": root.path().join("audit"), "hashKeyRef": "secret:file/audit-hash-key"}
         }))
         .expect("a runtime document"),
@@ -157,37 +187,35 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
     let config = RuntimeConfig::load(&runtime_path, registry_messaging::config::DEFAULT_POSTURE)
         .expect("the runtime configuration loads");
     let resolver = config.secret_resolver().expect("the secret resolver");
-    let keys = config
-        .jwks_fetcher(&resolver)
-        .await
-        .expect("the static key source");
 
     let profiles = profiles(&case, &scope);
-    let admitted = config
-        .admitted_clients(&profiles)
-        .expect("the listed clients cover the profile");
-    let authenticator = MessagingAuthenticator::new(
-        config.verifier_profile(&admitted),
-        Arc::clone(&keys),
-        profiles,
-        config.binds_assertion_issuers(),
-    );
+    let sources = config
+        .issuer_sources(&resolver, &profiles)
+        .await
+        .expect("the issuer entries build over the static key source");
+    let authenticator = MessagingAuthenticator::new(sources, profiles)
+        .expect("the issuer entries name distinct issuers");
     let token = case.token.expose();
+    // The verifier's own verdict names the stage of a refusal, which the
+    // authenticator reports only as the check that failed.
+    let verdict = authenticator.verify(token).await;
     match authenticator.authenticate(token).await {
-        Ok(caller) => Outcome::Admitted(Some(
-            caller
-                .actor_kind
-                .map_or("unspecified", ActorKind::as_str)
-                .to_owned(),
-        )),
+        Ok(caller) => {
+            assert!(verdict.is_ok(), "an admitted token the issuer set refused");
+            Outcome::Admitted(Some(
+                caller
+                    .actor_kind
+                    .map_or("unspecified", ActorKind::as_str)
+                    .to_owned(),
+            ))
+        }
         Err(AuthenticationError::Claims(_)) => refusal("claims"),
         Err(AuthenticationError::Unavailable) => refusal("unavailable"),
         Err(error @ (AuthenticationError::Refused(_) | AuthenticationError::Profile(_))) => {
-            let reference = TokenVerifier::new(config.verifier_profile(&admitted), keys);
-            match reference.verify(token).await {
-                Err(failure) => Outcome::refused_by(&failure),
+            match verdict {
+                Err(failure) => Outcome::refused_by(&failure.error),
                 Ok(verified) if matches!(error, AuthenticationError::Profile(_)) => {
-                    if verified.scopes.iter().any(|held| held == &scope) {
+                    if verified.token.scopes.iter().any(|held| held == &scope) {
                         refusal("profile")
                     } else {
                         refusal("scope")

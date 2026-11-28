@@ -366,7 +366,9 @@ fn borrowed_configuration_uses_scope_and_static_issuer_keys() {
         },
     )
     .unwrap();
-    assert_eq!(checked.authentication.oidc.scope_claim, "scope");
+    use registry_platform_config::CallerIssuerEntry as _;
+    let (_, entry) = checked.authentication.oidc.issuers.iter().next().unwrap();
+    assert_eq!(entry.core().scope_claim.get().as_str(), "scope");
     assert!(document.contains(&binding.issuer));
     assert!(document.contains(&binding.resource));
     assert!(document.contains("secret:file/jwks.json"));

@@ -571,7 +571,7 @@ fn production_schema_test_executor_has_no_raw_server_source_or_receipt_seams() {
     assert!(signature.contains("package: &PreparedPackage"));
     assert!(signature.contains("credentials: SchemaTestCredentialBindings"));
     let internal_executor = implementation
-        .split_once("async fn execute_schema_test_with_key_source(")
+        .split_once("async fn execute_schema_test_with_issuers(")
         .and_then(|(_, tail)| tail.split_once("struct SchemaTestRuntime"))
         .map(|(executor, _)| executor)
         .expect("private executor implementation remains structurally visible");

@@ -9995,7 +9995,7 @@ fn generate_identity_facts(
         .map_err(|error| runtime_config_failure("generate", error))?;
     let profile = profile(args.production);
     let (compiled, source) = compile_with_source(&args.project, profile, "generate")?;
-    let facts =
+    let stated =
         identity_facts::facts(&config, &compiled, args.issuer.as_deref()).map_err(|error| {
             fail(
                 error.code(),
@@ -10016,9 +10016,10 @@ fn generate_identity_facts(
                 },
             )
         })?;
+    let facts = stated.facts;
     identity_facts::write(&facts, &args.output).map_err(|error| {
         fail(
-            "identity-facts.output-failed",
+            error.code(),
             &error.to_string(),
             DiagnosticArtifact::GeneratedArtifacts,
             SuggestedAction::RetryArtifactGeneration,
@@ -10046,7 +10047,15 @@ fn generate_identity_facts(
                 "claims": facts.claims.len(),
             }
         })),
-        next_steps: Vec::new(),
+        next_steps: stated
+            .omitted_agent_profiles
+            .iter()
+            .map(|id| {
+                format!(
+                    "The access profile `{id}` requires an agent and is left out of the identity facts: it is reached only by a delegated or task-grant token, which hosted generation does not issue, so a grant naming it is refused."
+                )
+            })
+            .collect(),
     })
 }
 

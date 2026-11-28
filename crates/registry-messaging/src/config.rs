@@ -2,7 +2,7 @@
 
 //! The operator runtime configuration document and the package it names.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,26 +14,26 @@ use registry_platform_audit::{
     AuditDestination, AuditDestinationError, AuditDestinationKind, MAX_AUDIT_RETAIN_DAYS,
     MIN_AUDIT_ROTATE_BYTES,
 };
+use registry_platform_config::{
+    AccessTokenType, AuditKeyConfig, CallerIssuerCore, CallerIssuerEntry, CallerIssuers,
+    ConfigBlockError, ConfigBlockErrorKind, DatabaseTransportError, DeclaredPosture,
+    DevelopmentWitness, FoundExplicitSetting, MetricsBindError, OidcClientsConfig, Posture,
+    PostureReport, PostureSource, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    RuntimeFileCheck, SecretReference, SecretResolver, DEFAULT_STAND_IN,
+};
 pub use registry_platform_config::{
     AdmittedClients, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
-    JwksSource as OidcJwksSource, ListenerNetworkExposure, MetricsListenerConfig, OidcIssuerConfig,
-    OidcPackageClientsConfig, PackageClients, PackageClientsError,
-    PackageConfig as RuntimePackageConfig, PrivateListenerConfig as ListenerConfig,
-    SecretProvidersConfig,
+    JwksSource as OidcJwksSource, ListenerNetworkExposure, MetricsListenerConfig, PackageClients,
+    PackageClientsError, PackageConfig as RuntimePackageConfig,
+    PrivateListenerConfig as ListenerConfig, SecretProvidersConfig,
     MAX_ASSERTION_ISSUERS_PER_CLIENT as MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
     MAX_ASSERTION_ISSUER_BYTES as MAXIMUM_ASSERTION_ISSUER_BYTES,
     MAX_ASSERTION_ISSUER_CLIENTS as MAXIMUM_ASSERTION_ISSUER_CLIENTS,
     MAX_ASSERTION_ISSUER_CLIENT_BYTES as MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
     UNAVAILABLE_CODE as RUNTIME_CONFIG_UNAVAILABLE_CODE,
 };
-use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, DatabaseTransportError,
-    DeclaredPosture, DevelopmentWitness, MetricsBindError, Posture, PostureReport, PostureSource,
-    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference,
-    SecretResolver, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
-};
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
+    fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm, DeclaredKinds,
     IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, OidcError,
     TokenVerifierConfig,
 };
@@ -41,6 +41,7 @@ use registry_platform_yaml::{escape_pointer_segment, Diagnostic, Report, Retired
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
+use crate::auth::IssuerSource;
 use crate::http_provider::{HttpProviderError, HttpProviderSettings};
 use crate::package::{load_runtime_package, LoadedPackage, PackageLoadError, PackageLoadReason};
 use crate::smtp::SmtpProviderSettings;
@@ -74,14 +75,12 @@ where
     secret_reference(deserializer).map(Some)
 }
 
+/// The JSON Pointer of the `issuers` member.
+const ISSUERS_POINTER: &str = "/authentication/oidc/issuers";
+
 /// The default listener binding. Each Registry Stack runtime has its own
 /// default port so a laptop can run several side by side.
 pub const DEFAULT_LISTENER_BIND: &str = "127.0.0.1:8107";
-
-/// The RFC 9068 access-token media type this runtime verifies. The pair of
-/// spellings it admits is derived, never authored, so no deployment can widen
-/// it to an ordinary JWT.
-const MESSAGING_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 
 pub const MESSAGING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
     api_version: MESSAGING_RUNTIME_API_VERSION,
@@ -91,8 +90,39 @@ pub const MESSAGING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 /// The keys the runtime document no longer accepts, each with what replaced
 /// it (CFG-CHANGE-2).
 pub const MESSAGING_REMOVED_KEYS: &[RemovedKey] = &[
-    REMOVED_OIDC_JWKS_URI,
-    REMOVED_OIDC_JWKS_SOURCE_KIND,
+    RemovedKey {
+        path: "authentication.oidc.issuer",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.audience",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksUri",
+        replacement:
+            "declare it under authentication.oidc.issuers.ISSUER_ID as jwksSource with type: uri",
+    },
+    RemovedKey {
+        path: "authentication.oidc.jwksSource",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowInsecureHttp",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.allowedClients",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.assertionIssuers",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
+    RemovedKey {
+        path: "authentication.oidc.scopeClaim",
+        replacement: "declare it under authentication.oidc.issuers.ISSUER_ID",
+    },
     RemovedKey {
         path: "providers.*.attemptTimeoutSeconds",
         replacement: "Write attemptTimeoutMilliseconds in milliseconds: \
@@ -294,29 +324,54 @@ pub struct AuthenticationConfig {
     pub oidc: OidcConfig,
 }
 
-/// The OIDC issuer whose access tokens this runtime accepts, the clients it
-/// admits, and the claim carrying their scopes.
+/// The OIDC issuers whose access tokens this runtime accepts, each with the
+/// clients it admits and the claim carrying their scopes.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
-    /// The exact token issuer, audience, and signing-key source.
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuers"))]
     #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub provider: OidcIssuerConfig,
-    /// The OAuth clients this runtime admits: `from-package` for the
-    /// requester clients of the package's access profiles, or a list that
-    /// covers every client a profile names. Every access profile resolves its
-    /// caller from the matched client, so the admitted set is never empty.
-    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-package-clients"))]
-    #[cfg_attr(feature = "schema", schemars(flatten))]
-    pub clients: OidcPackageClientsConfig,
-    #[serde(default = "default_scope_claim")]
-    pub scope_claim: String,
+    pub issuers: CallerIssuers<IssuerConfig>,
 }
 
-fn default_scope_claim() -> String {
-    "scope".to_owned()
+/// One issuer Messaging accepts access tokens from: the shared caller-issuer
+/// members and the assertion authorities each client may exchange from.
+///
+/// `allowedClients` is `from-package` for the requester clients of the
+/// package's access profiles, or a list. Every access profile resolves its
+/// caller from the matched client, so the admitted set is never empty and
+/// `unrestricted` is refused. A client belongs to one issuer, and the lists
+/// of all entries together cover every client a profile names.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssuerConfig {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer-core"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    core: CallerIssuerCore<PackageClients>,
+    /// Assertion authorities each client may exchange a subject token from,
+    /// keyed by client identifier. Omitted, no assertion-issuer rule applies
+    /// and a token that arrived through an exchange is refused. Written, it
+    /// lists at least one client, each with at least one authority.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "registry_platform_config::non_empty_assertion_issuers"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "registry_platform_config::assertion_issuers_schema")
+    )]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
+}
+
+impl CallerIssuerEntry for IssuerConfig {
+    type Clients = PackageClients;
+
+    fn core(&self) -> &CallerIssuerCore<PackageClients> {
+        &self.core
+    }
 }
 
 /// Where the audit journal is written and the key its hashes are made with.
@@ -650,13 +705,29 @@ impl RuntimeConfig {
         if self.secret_providers.check().is_err() {
             return;
         }
-        let mut references = self.database.references();
-        references.push(("audit.hashKeyRef", self.audit.key.hash_key_ref.as_str()));
-        if let Some(document_ref) = self.authentication.oidc.provider.jwks_source.document_ref() {
-            references.push(("authentication.oidc.jwksSource.documentRef", document_ref));
+        let mut references: Vec<(String, &str)> = self
+            .database
+            .references()
+            .into_iter()
+            .map(|(field, raw)| (field.to_owned(), raw))
+            .collect();
+        references.push((
+            "audit.hashKeyRef".to_owned(),
+            self.audit.key.hash_key_ref.as_str(),
+        ));
+        for (id, entry) in self.authentication.oidc.issuers.iter() {
+            if let Some(document_ref) = entry.core().provider.jwks_source.document_ref() {
+                references.push((
+                    format!(
+                        "authentication.oidc.issuers.{}.jwksSource.documentRef",
+                        id.as_str()
+                    ),
+                    document_ref,
+                ));
+            }
         }
         for (field, raw) in references {
-            if let Err(error) = self.secret_providers.check_reference(field, raw) {
+            if let Err(error) = self.secret_providers.check_reference(&field, raw) {
                 findings.push(error.into());
             }
         }
@@ -717,42 +788,67 @@ impl RuntimeConfig {
     }
 
     fn check_oidc(&self, findings: &mut Vec<RuntimeConfigError>) {
-        let oidc = &self.authentication.oidc;
-        if let Err(error) = oidc.provider.check("authentication.oidc") {
-            findings.push(error.into());
-        }
-        if let Err(error) = oidc.clients.check("authentication.oidc") {
-            findings.push(error.into());
-        }
-        if oidc.scope_claim.is_empty() {
-            findings.push(RuntimeConfigError::EmptyScopeClaim);
-        }
-        // Every access profile resolves its caller from the matched client,
-        // so `allowedClients: unrestricted` would admit every client the
-        // issuer verifies while reaching no profile. Development keeps no
-        // exception.
-        match &oidc.clients.allowed_clients {
-            PackageClients::Unrestricted => {
-                findings.push(RuntimeConfigError::AllowedClientsRequired)
+        let issuers = &self.authentication.oidc.issuers;
+        findings.extend(
+            issuers
+                .check(ISSUERS_POINTER)
+                .into_iter()
+                .map(|diagnostic| RuntimeConfigError::Issuer(Box::new(diagnostic))),
+        );
+        for (id, entry) in issuers.iter() {
+            let field = format!("authentication.oidc.issuers.{}", id.as_str());
+            let core = entry.core();
+            if let Err(error) = core.provider.check(&field) {
+                findings.push(error.into());
             }
-            PackageClients::Listed(clients) => {
-                if clients.iter().any(String::is_empty) {
-                    findings.push(RuntimeConfigError::AllowedClientsRequired);
+            let assertions = OidcClientsConfig {
+                allowed_clients: Vec::new(),
+                assertion_issuers: entry.assertion_issuers.clone(),
+            };
+            if let Err(error) = assertions.check(&field) {
+                findings.push(error.into());
+            }
+            // Every access profile resolves its caller from the matched
+            // client, so `allowedClients: unrestricted` would admit every
+            // client the issuer verifies while reaching no profile.
+            // Development keeps no exception.
+            match &core.allowed_clients {
+                PackageClients::Unrestricted => {
+                    findings.push(RuntimeConfigError::AllowedClientsRequired {
+                        issuer: id.as_str().to_owned(),
+                    });
                 }
-                self.check_assertion_issuer_clients(clients, findings);
+                PackageClients::Listed(clients) => {
+                    if clients.iter().any(String::is_empty) {
+                        findings.push(RuntimeConfigError::AllowedClientsRequired {
+                            issuer: id.as_str().to_owned(),
+                        });
+                    }
+                    self.check_assertion_issuer_clients(id.as_str(), entry, clients, findings);
+                }
+                PackageClients::FromPackage => {}
             }
-            PackageClients::FromPackage => {}
         }
     }
 
-    /// Every client `assertionIssuers` names must be one the runtime admits.
+    /// Every client an entry's `assertionIssuers` names must be one the
+    /// entry admits.
     fn check_assertion_issuer_clients(
         &self,
+        issuer: &str,
+        entry: &IssuerConfig,
         admitted: &[String],
         findings: &mut Vec<RuntimeConfigError>,
     ) {
-        for (client, issuers) in &self.authentication.oidc.clients.assertion_issuers {
-            let pointer = pointer_to(&["authentication", "oidc", "assertionIssuers", client]);
+        for (client, issuers) in &entry.assertion_issuers {
+            let pointer = pointer_to(&[
+                "authentication",
+                "oidc",
+                "issuers",
+                issuer,
+                "assertionIssuers",
+                client,
+            ]);
             if issuers.is_empty() {
                 findings.push(RuntimeConfigError::EmptyAssertionIssuers {
                     pointer: pointer.clone(),
@@ -821,27 +917,31 @@ impl RuntimeConfig {
         loaded: &LoadedPackage,
         findings: &mut Vec<RuntimeConfigError>,
     ) {
-        match self.admitted_clients(loaded.package.access_profiles()) {
+        let profiles = loaded.package.access_profiles();
+        match self.admitted_clients(profiles) {
             Ok(admitted) => {
-                if self.authentication.oidc.clients.allowed_clients == PackageClients::FromPackage {
-                    self.check_assertion_issuer_clients(admitted.as_slice(), findings);
+                for (id, entry) in self.authentication.oidc.issuers.iter() {
+                    if entry.core().allowed_clients == PackageClients::FromPackage {
+                        self.check_assertion_issuer_clients(
+                            id.as_str(),
+                            entry,
+                            admitted[id.as_str()].as_slice(),
+                            findings,
+                        );
+                    }
                 }
+                self.check_resolved_issuers(&admitted, findings);
             }
-            // Each profile the list leaves out is its own finding.
+            // Each profile the lists leave out is its own finding.
             Err(RuntimeConfigError::ProfileClientNotAllowed { .. }) => {
-                if let PackageClients::Listed(listed) =
-                    &self.authentication.oidc.clients.allowed_clients
-                {
-                    for profile in loaded.package.access_profiles().iter() {
-                        if profile
-                            .requester_clients
-                            .iter()
-                            .any(|client| !listed.contains(client))
-                        {
-                            findings.push(RuntimeConfigError::ProfileClientNotAllowed {
-                                profile: profile.id.clone(),
-                            });
-                        }
+                let covered = self.listed_clients();
+                for profile in profiles.iter() {
+                    if profile
+                        .requester_clients
+                        .iter()
+                        .any(|client| !covered.contains(client.as_str()))
+                    {
+                        findings.push(self.profile_not_covered(&profile.id));
                     }
                 }
             }
@@ -849,32 +949,161 @@ impl RuntimeConfig {
         }
     }
 
-    /// The clients the token verifier admits, given the access profiles of
-    /// the package this runtime serves. `from-package` is the sorted union of
-    /// the profiles' requester clients, and a list must cover every one of
-    /// them, or the profile naming the missing client could never be reached.
-    /// The verifier is never handed an empty list, which it reads as "every
-    /// client".
+    /// The refusal for `profile`, which names a client no entry admits. It
+    /// points at the one entry's list, or at the set of entries when there are
+    /// several.
+    fn profile_not_covered(&self, profile: &str) -> RuntimeConfigError {
+        let issuers = &self.authentication.oidc.issuers;
+        let pointer = match (issuers.len(), issuers.iter().next()) {
+            (1, Some((id, _))) => pointer_to(&[
+                "authentication",
+                "oidc",
+                "issuers",
+                id.as_str(),
+                "allowedClients",
+            ]),
+            _ => ISSUERS_POINTER.to_owned(),
+        };
+        RuntimeConfigError::ProfileClientNotAllowed {
+            profile: profile.to_owned(),
+            pointer,
+        }
+    }
+
+    /// The clients the entries that list their clients name, together.
+    fn listed_clients(&self) -> BTreeSet<&str> {
+        self.authentication
+            .oidc
+            .issuers
+            .iter()
+            .filter_map(|(_, entry)| match &entry.core().allowed_clients {
+                PackageClients::Listed(clients) => Some(clients),
+                PackageClients::FromPackage | PackageClients::Unrestricted => None,
+            })
+            .flatten()
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// The clients each token verifier admits, by issuer id, given the access
+    /// profiles of the package this runtime serves. `from-package` is the
+    /// sorted union of the profiles' requester clients and a list is the list.
+    /// A client belongs to one issuer, so an entry that reads its clients
+    /// from the package refuses every other entry's list naming a package
+    /// client. Without such an entry, the lists together must cover every
+    /// client a profile names, or the profile naming the missing client could
+    /// never be reached. No verifier is handed an empty list, which it reads
+    /// as "every client".
     pub fn admitted_clients(
         &self,
         profiles: &AccessProfiles,
-    ) -> Result<AdmittedClients, RuntimeConfigError> {
-        let allowed = &self.authentication.oidc.clients.allowed_clients;
-        allowed
-            .resolve(&profiles.requester_clients())
-            .map_err(|error| match error {
-                PackageClientsError::Unrestricted | PackageClientsError::Empty => {
-                    RuntimeConfigError::AllowedClientsRequired
+    ) -> Result<BTreeMap<String, AdmittedClients>, RuntimeConfigError> {
+        let package_clients = profiles.requester_clients();
+        let issuers = &self.authentication.oidc.issuers;
+        let mut admitted = BTreeMap::new();
+        let mut from_package = None;
+        for (id, entry) in issuers.iter() {
+            let list = match &entry.core().allowed_clients {
+                PackageClients::FromPackage => {
+                    from_package = Some(id.as_str());
+                    AdmittedClients::new(package_clients.clone())
                 }
-                PackageClientsError::Missing(client) => {
-                    RuntimeConfigError::ProfileClientNotAllowed {
-                        profile: profiles
-                            .iter()
-                            .find(|profile| profile.requester_clients.contains(&client))
-                            .map_or_else(String::new, |profile| profile.id.clone()),
-                    }
+                PackageClients::Listed(listed) => AdmittedClients::new(listed.clone()),
+                PackageClients::Unrestricted => None,
+            };
+            let list = list.ok_or_else(|| RuntimeConfigError::AllowedClientsRequired {
+                issuer: id.as_str().to_owned(),
+            })?;
+            admitted.insert(id.as_str().to_owned(), list);
+        }
+        if let Some(reading) = from_package {
+            for (id, entry) in issuers.iter() {
+                let PackageClients::Listed(listed) = &entry.core().allowed_clients else {
+                    continue;
+                };
+                if let Some(index) = listed
+                    .iter()
+                    .position(|client| package_clients.contains(client))
+                {
+                    return Err(RuntimeConfigError::Resolved(Box::new(Diagnostic::error(
+                        "platform.oidc.client-in-two-issuers",
+                        pointer_to(&[
+                            "authentication",
+                            "oidc",
+                            "issuers",
+                            id.as_str(),
+                            "allowedClients",
+                            &index.to_string(),
+                        ]),
+                        format!(
+                            "the client is also admitted by the entry {reading}, which reads its clients from the package"
+                        ),
+                        "Admit each client through one issuer entry, so a client rule binds to one issuer.",
+                    ))));
                 }
-            })
+            }
+        } else {
+            let covered = self.listed_clients();
+            if let Some(missing) = package_clients
+                .iter()
+                .find(|client| !covered.contains(client.as_str()))
+            {
+                return Err(self.profile_not_covered(
+                    &profiles
+                        .iter()
+                        .find(|profile| profile.requester_clients.contains(missing))
+                        .map_or_else(String::new, |profile| profile.id.clone()),
+                ));
+            }
+        }
+        Ok(admitted)
+    }
+
+    /// Run the rules about an entry's audience and client kinds again over
+    /// the clients `from-package` resolved to, as the shared check runs them
+    /// over a list.
+    fn check_resolved_issuers(
+        &self,
+        admitted: &BTreeMap<String, AdmittedClients>,
+        findings: &mut Vec<RuntimeConfigError>,
+    ) {
+        for (id, entry) in self.authentication.oidc.issuers.iter() {
+            let core = entry.core();
+            if core.allowed_clients != PackageClients::FromPackage {
+                continue;
+            }
+            let clients = admitted[id.as_str()].as_slice();
+            let base = ["authentication", "oidc", "issuers", id.as_str()];
+            if core.access_token_type.get() == &AccessTokenType::Jwt
+                && clients.contains(&core.provider.audience)
+            {
+                let mut segments = base.to_vec();
+                segments.push("audience");
+                findings.push(RuntimeConfigError::Resolved(Box::new(Diagnostic::error(
+                    "platform.oidc.audience-is-a-client",
+                    pointer_to(&segments),
+                    "with accessTokenType JWT the audience is also one of the clients the package names",
+                    "Use an audience that names this service and no client, so an ID token issued to a client is not read as an access token.",
+                ))));
+            }
+            if let Some(kinds) = &core.client_actor_kinds {
+                for client in
+                    kinds.get().0.keys().filter(|client| {
+                        !clients.iter().any(|admitted| admitted == client.as_str())
+                    })
+                {
+                    let mut segments = base.to_vec();
+                    segments.push("clientActorKinds");
+                    segments.push(client.as_str());
+                    findings.push(RuntimeConfigError::Resolved(Box::new(Diagnostic::error(
+                        "platform.oidc.actor-kind-for-unadmitted-client",
+                        pointer_to(&segments),
+                        "clientActorKinds names a client the package does not name",
+                        "Name only clients the package's access profiles name, or list the client in allowedClients.",
+                    ))));
+                }
+            }
+        }
     }
 
     /// Each connection must be for a provider the package declares, of the
@@ -928,12 +1157,25 @@ impl RuntimeConfig {
         }
     }
 
-    /// Build the token verifier's key source from the configured JWKS source.
+    /// The entry `id` names.
+    fn issuer(&self, id: &str) -> Result<&IssuerConfig, RuntimeConfigError> {
+        self.authentication
+            .oidc
+            .issuers
+            .iter()
+            .find_map(|(entry_id, entry)| (entry_id.as_str() == id).then_some(entry))
+            .ok_or(RuntimeConfigError::Oidc)
+    }
+
+    /// Build the key source of the issuer entry `id` from its configured JWKS
+    /// source.
     pub async fn jwks_fetcher(
         &self,
+        id: &str,
         secrets: &SecretResolver,
     ) -> Result<std::sync::Arc<JwksFetcher>, RuntimeConfigError> {
-        let provider = &self.authentication.oidc.provider;
+        let provider = &self.issuer(id)?.core().provider;
+        let document_field = format!("authentication.oidc.issuers.{id}.jwksSource.documentRef");
         let network =
             IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
                 .map_err(|_| RuntimeConfigError::Oidc)?;
@@ -941,7 +1183,7 @@ impl RuntimeConfig {
             OidcJwksSource::Discovery {} => {
                 let (discovery, policy) = fetch_discovery_for_issuer(
                     &OidcDiscoveryConfig {
-                        issuer: self.authentication.oidc.provider.issuer.to_string(),
+                        issuer: provider.issuer.to_string(),
                         jwks_uri_override: None,
                         discovery_timeout: Duration::from_secs(5),
                         max_doc_bytes: 1024 * 1024,
@@ -967,22 +1209,22 @@ impl RuntimeConfig {
             OidcJwksSource::Static { document_ref }
             | OidcJwksSource::TestIssuer { document_ref } => {
                 let document = secrets.resolve(document_ref).map_err(|error| {
-                    RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
-                        "authentication.oidc.jwksSource.documentRef",
-                        document_ref,
-                        &error,
-                    ))
+                    RuntimeConfigError::OidcJwksSecret {
+                        issuer: id.to_owned(),
+                        message: describe_secret_failure(&document_field, document_ref, &error),
+                    }
                 })?;
                 let jwks = parse_static_jwks(document.expose_secret()).map_err(|error| {
                     match error {
                         // The document is the operator's own file, so its text names the
                         // rule it breaks and never a key value.
-                        OidcError::StaticKeySet(refused) => {
-                            RuntimeConfigError::OidcJwksSecret(format!(
-                                "the document authentication.oidc.jwksSource.documentRef names \
+                        OidcError::StaticKeySet(refused) => RuntimeConfigError::OidcJwksSecret {
+                            issuer: id.to_owned(),
+                            message: format!(
+                                "the document {document_field} names \
                                  is not a usable static key set: {refused}"
-                            ))
-                        }
+                            ),
+                        },
                         _ => RuntimeConfigError::Oidc,
                     }
                 })?;
@@ -992,37 +1234,49 @@ impl RuntimeConfig {
         Ok(std::sync::Arc::new(fetcher))
     }
 
-    /// The access-token verifier profile this deployment's OIDC settings
-    /// describe.
+    /// The access-token verifier profile of the issuer entry `id`, over the
+    /// clients `admitted` resolved for it.
     ///
-    /// RFC 9068 gives the access token one media type spelled two ways, and
-    /// [`access_token_typ_set`] admits exactly that pair, so an ID token or any
-    /// other JWT minted for this audience is refused.
-    #[must_use]
-    pub fn verifier_profile(&self, admitted: &AdmittedClients) -> TokenVerifierConfig {
-        TokenVerifierConfig::access_token_profile(
-            self.authentication.oidc.provider.issuer.to_string(),
-            vec![self.authentication.oidc.provider.audience.clone()],
+    /// The entry's `accessTokenType` selects the token media type. An ID token
+    /// is refused under either type.
+    pub fn verifier_profile(
+        &self,
+        id: &str,
+        admitted: &AdmittedClients,
+    ) -> Result<TokenVerifierConfig, RuntimeConfigError> {
+        let entry = self.issuer(id)?;
+        TokenVerifierConfig::for_caller_issuer(
+            entry.core(),
             vec![
                 AccessTokenAlgorithm::RS256.to_jsonwebtoken(),
                 AccessTokenAlgorithm::ES256.to_jsonwebtoken(),
             ],
-            access_token_typ_set(MESSAGING_ACCESS_TOKEN_TYPE),
+            Some(admitted),
         )
-        .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(admitted.as_slice().to_vec())
-        .with_assertion_issuers(self.authentication.oidc.clients.assertion_issuers.clone())
+        .map(|profile| profile.with_assertion_issuers(entry.assertion_issuers.clone()))
+        .map_err(|_| RuntimeConfigError::Oidc)
     }
 
-    /// Whether this deployment declared any token-exchange authority.
-    #[must_use]
-    pub fn binds_assertion_issuers(&self) -> bool {
-        !self
-            .authentication
-            .oidc
-            .clients
-            .assertion_issuers
-            .is_empty()
+    /// Every issuer entry as the authenticator takes it: its verifier
+    /// profile over the clients resolved against `profiles`, its signing
+    /// keys, and the caller kinds it declares.
+    pub async fn issuer_sources(
+        &self,
+        secrets: &SecretResolver,
+        profiles: &AccessProfiles,
+    ) -> Result<Vec<IssuerSource>, RuntimeConfigError> {
+        let admitted = self.admitted_clients(profiles)?;
+        let mut sources = Vec::new();
+        for (id, entry) in self.authentication.oidc.issuers.iter() {
+            let id = id.as_str();
+            sources.push(IssuerSource::new(
+                id,
+                self.verifier_profile(id, &admitted[id])?,
+                self.jwks_fetcher(id, secrets).await?,
+                DeclaredKinds::from_core(entry.core()).map_err(|_| RuntimeConfigError::Oidc)?,
+            ));
+        }
+        Ok(sources)
     }
 
     /// Build the secret resolver from the providers this document enables.
@@ -1141,6 +1395,17 @@ impl RuntimeCheck {
     pub fn defers_within(&self, pointer: &str) -> bool {
         self.check.defers_within(pointer)
     }
+
+    /// The explicit production settings the document states, each with its
+    /// position. A setting is never a finding: it records a choice the
+    /// operator made on purpose.
+    #[must_use]
+    pub fn explicit_settings(&self) -> &[FoundExplicitSetting] {
+        self.check
+            .loaded
+            .as_ref()
+            .map_or(&[], |loaded| loaded.posture.explicit_settings())
+    }
 }
 
 fn runtime_identifier_collision_diagnostics(
@@ -1250,10 +1515,16 @@ pub fn check_runtime_file(
             findings
                 .iter()
                 .filter(|finding| !finding.is_identifier_collision())
+                .filter(|finding| !finding.is_shared_issuer_rule())
                 .filter(|finding| !reads_deferred_value(&check, finding))
                 .map(|finding| positioned(&check, finding)),
         );
         diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
+        diagnostics.extend(config.authentication.oidc.issuers.check_file(
+            ISSUERS_POINTER,
+            &check,
+            MESSAGING_RUNTIME_KIND,
+        ));
     }
     let runtime_report = check.report_with(MESSAGING_RUNTIME_KIND, diagnostics);
     let mut diagnostics = runtime_report.into_diagnostics();
@@ -1305,9 +1576,15 @@ pub fn startup_report(
         .findings(package.as_ref())
         .iter()
         .filter(|finding| !finding.is_identifier_collision())
+        .filter(|finding| !finding.is_shared_issuer_rule())
         .map(|finding| positioned(&check, finding))
         .collect();
     diagnostics.extend(runtime_identifier_collision_diagnostics(&check, config));
+    diagnostics.extend(config.authentication.oidc.issuers.check_file(
+        ISSUERS_POINTER,
+        &check,
+        MESSAGING_RUNTIME_KIND,
+    ));
     let report = check.report_with(MESSAGING_RUNTIME_KIND, diagnostics);
     (!report.is_empty()).then_some(report)
 }
@@ -1357,9 +1634,9 @@ fn reads_deferred_value(
         RuntimeConfigError::RelativeOperatedPath(_)
         | RuntimeConfigError::InvalidAuditDestination(_) => vec!["/audit".to_owned()],
         RuntimeConfigError::AssertionIssuerClientNotAllowed { .. }
-        | RuntimeConfigError::ProfileClientNotAllowed { .. } => {
-            vec!["/authentication/oidc/allowedClients".to_owned()]
-        }
+        | RuntimeConfigError::ProfileClientNotAllowed { .. }
+        | RuntimeConfigError::AllowedClientsRequired { .. }
+        | RuntimeConfigError::Resolved(_) => vec![ISSUERS_POINTER.to_owned()],
         // A connection rule reads several members of its provider, and the
         // listener's termination decides whether development transport is
         // accepted.
@@ -1390,8 +1667,8 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["package", "expectedDigest"] => {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         }
-        ["authentication", "oidc", "issuer"]
-        | ["authentication", "oidc", "jwksSource", "uri"]
+        ["authentication", "oidc", "issuers", _, "issuer"]
+        | ["authentication", "oidc", "issuers", _, "jwksSource", "uri"]
         | ["providers", _, "authentication", "tokenEndpoint"] => "https://deferred.invalid",
         ["providers", _, "baseUrl"] => "https://deferred.invalid/",
         ["providers", _, "callbackVerifier", "url"] => "https://deferred.invalid/deferred",
@@ -1437,15 +1714,20 @@ pub enum RuntimeConfigError {
     /// the offline check can defer it while the listener bind is an expression.
     #[error("metricsListener.bind is refused: {0}")]
     MetricsListenerSharesSocket(MetricsBindError),
-    #[error("authentication.oidc.scopeClaim must not be empty")]
-    EmptyScopeClaim,
+    /// A problem in the set of issuer entries that the shared check reports.
+    #[error("{}", .0.message)]
+    Issuer(Box<Diagnostic>),
+    /// A rule about the issuer entries that needs the clients the package
+    /// names, so it runs once those are resolved.
+    #[error("{}", .0.message)]
+    Resolved(Box<Diagnostic>),
     #[error(
-        "authentication.oidc.allowedClients must list at least one non-empty client identifier; unrestricted reaches no access profile"
+        "authentication.oidc.issuers.{issuer}.allowedClients must be from-package or list at least one non-empty client identifier; unrestricted reaches no access profile"
     )]
-    AllowedClientsRequired,
+    AllowedClientsRequired { issuer: String },
     #[error("{} must list at least one issuer", dotted(.pointer))]
     EmptyAssertionIssuers { pointer: String },
-    #[error("{} names a client authentication.oidc.allowedClients does not admit", dotted(.pointer))]
+    #[error("{} names a client its issuer entry does not admit", dotted(.pointer))]
     AssertionIssuerClientNotAllowed { pointer: String },
     #[error(
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
@@ -1472,9 +1754,9 @@ pub enum RuntimeConfigError {
     Package(#[source] PackageLoadError),
     #[error(
         "access profile {profile} names a requester client \
-         authentication.oidc.allowedClients does not admit"
+         that no entry under authentication.oidc.issuers admits"
     )]
-    ProfileClientNotAllowed { profile: String },
+    ProfileClientNotAllowed { profile: String, pointer: String },
     #[error("providers.{provider} names a provider the package does not declare")]
     UndeclaredProvider { provider: String },
     #[error("providers.{provider} has a type other than the package declares, {declared}")]
@@ -1488,8 +1770,8 @@ pub enum RuntimeConfigError {
     MissingProviderSource { provider: String },
     #[error("the OIDC issuer could not be initialized")]
     Oidc,
-    #[error("the static OIDC signing keys could not be loaded: {0}")]
-    OidcJwksSecret(String),
+    #[error("the static OIDC signing keys could not be loaded: {message}")]
+    OidcJwksSecret { issuer: String, message: String },
 }
 
 /// The package refusal that a pinned digest decides.
@@ -1536,10 +1818,15 @@ impl RuntimeConfigError {
             Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "/metricsListener/bind".to_owned()
             }
-            Self::EmptyScopeClaim => "/authentication/oidc/scopeClaim".to_owned(),
-            Self::AllowedClientsRequired | Self::ProfileClientNotAllowed { .. } => {
-                "/authentication/oidc/allowedClients".to_owned()
-            }
+            Self::Issuer(diagnostic) | Self::Resolved(diagnostic) => diagnostic.path.clone(),
+            Self::AllowedClientsRequired { issuer } => pointer_to(&[
+                "authentication",
+                "oidc",
+                "issuers",
+                issuer,
+                "allowedClients",
+            ]),
+            Self::ProfileClientNotAllowed { pointer, .. } => pointer.clone(),
             Self::InvalidDatabaseReference => "/database".to_owned(),
             Self::DatabaseTransport(DatabaseTransportError::TestOnlyPlaintext) => {
                 "/database/testOnlyPlaintext".to_owned()
@@ -1560,7 +1847,14 @@ impl RuntimeConfigError {
             }
             Self::Package(_) => "/package/root".to_owned(),
             Self::Oidc => "/authentication/oidc".to_owned(),
-            Self::OidcJwksSecret(_) => "/authentication/oidc/jwksSource/documentRef".to_owned(),
+            Self::OidcJwksSecret { issuer, .. } => pointer_to(&[
+                "authentication",
+                "oidc",
+                "issuers",
+                issuer,
+                "jwksSource",
+                "documentRef",
+            ]),
         }
     }
 
@@ -1581,8 +1875,8 @@ impl RuntimeConfigError {
             Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "messaging.runtime.invalid-metrics-listener"
             }
-            Self::EmptyScopeClaim => "messaging.runtime.empty-scope-claim",
-            Self::AllowedClientsRequired => "messaging.runtime.allowed-clients-required",
+            Self::Issuer(diagnostic) | Self::Resolved(diagnostic) => &diagnostic.code,
+            Self::AllowedClientsRequired { .. } => "messaging.runtime.allowed-clients-required",
             Self::EmptyAssertionIssuers { .. } => "messaging.runtime.empty-assertion-issuers",
             Self::AssertionIssuerClientNotAllowed { .. } => {
                 "messaging.runtime.assertion-issuer-client-not-allowed"
@@ -1607,7 +1901,7 @@ impl RuntimeConfigError {
             Self::ProviderTypeMismatch { .. } => "messaging.runtime.provider-type-mismatch",
             Self::MissingProviderSource { .. } => "messaging.package.missing-provider-source",
             Self::Oidc => "messaging.runtime-dependency.unavailable",
-            Self::OidcJwksSecret(_) => "messaging.runtime.unreadable-jwks-secret",
+            Self::OidcJwksSecret { .. } => "messaging.runtime.unreadable-jwks-secret",
         }
     }
 
@@ -1642,17 +1936,19 @@ impl RuntimeConfigError {
             Self::InvalidMetricsListener(cause) | Self::MetricsListenerSharesSocket(cause) => {
                 return cause.remedy("metricsListener.networkExposure");
             }
-            Self::EmptyScopeClaim => {
-                "Name the claim that carries the caller's scopes, or remove the member to use scope."
+            Self::Issuer(diagnostic) | Self::Resolved(diagnostic) => {
+                return diagnostic.suggested_action.clone();
             }
-            Self::AllowedClientsRequired => {
-                "List every client identifier this deployment admits in authentication.oidc.allowedClients."
+            Self::AllowedClientsRequired { issuer } => {
+                return format!(
+                    "Write authentication.oidc.issuers.{issuer}.allowedClients as from-package, or list the clients this issuer admits."
+                );
             }
             Self::EmptyAssertionIssuers { .. } => {
                 "List the issuers this client may exchange a subject token from, or remove the client from assertionIssuers."
             }
             Self::AssertionIssuerClientNotAllowed { .. } => {
-                "Add the client to authentication.oidc.allowedClients, or remove it from assertionIssuers."
+                "Add the client to the allowedClients of its issuer entry, or remove it from assertionIssuers."
             }
             Self::InvalidDatabaseReference => {
                 "Write database.runtimeUrlRef and database.migrationUrlRef as secret references."
@@ -1679,7 +1975,7 @@ impl RuntimeConfigError {
             Self::Package(error) if error.is_root_invalid() => BUILD_PACKAGE,
             Self::Package(_) => REBUILD_PACKAGE,
             Self::ProfileClientNotAllowed { .. } => {
-                "Add every requester client the package's access profiles name to authentication.oidc.allowedClients."
+                "Add every requester client the package's access profiles name to the allowedClients of an entry under authentication.oidc.issuers, or write from-package on one entry."
             }
             Self::UndeclaredProvider { .. } => {
                 "Remove the connection, or declare the provider in the package and rebuild it with `messagingctl package`."
@@ -1691,8 +1987,10 @@ impl RuntimeConfigError {
             Self::Oidc => {
                 "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
             }
-            Self::OidcJwksSecret(_) => {
-                "Make the secret authentication.oidc.jwksSource.documentRef names readable and hold a JWKS document."
+            Self::OidcJwksSecret { issuer, .. } => {
+                return format!(
+                    "Make the secret authentication.oidc.issuers.{issuer}.jwksSource.documentRef names readable and hold a JWKS document."
+                );
             }
         };
         action.to_owned()
@@ -1711,8 +2009,15 @@ impl RuntimeConfigError {
                 | Self::MissingProviderSource { .. }
                 | Self::InvalidSecretProviders
                 | Self::Oidc
-                | Self::OidcJwksSecret(_)
+                | Self::OidcJwksSecret { .. }
         )
+    }
+
+    /// Whether the shared issuer-set check reported this refusal, which an
+    /// offline check reports through [`CallerIssuers::check_file`] so each
+    /// diagnostic carries its position and the entry it involves.
+    fn is_shared_issuer_rule(&self) -> bool {
+        matches!(self, Self::Issuer(_))
     }
 }
 
@@ -1848,11 +2153,11 @@ pub(crate) mod tests {
                 "runtimeUrlRef": "secret:env/MESSAGING_RUNTIME_URL",
                 "migrationUrlRef": "secret:env/MESSAGING_MIGRATION_URL"
             },
-            "authentication": {"oidc": {
+            "authentication": {"oidc": {"issuers": {"main": {
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:messaging",
                 "allowedClients": ["case-system", "operations-console"]
-            }},
+            }}}},
             "audit": {"path": root.join("audit"), "hashKeyRef": "secret:file/audit-hash-key"}
         })
     }
@@ -1966,12 +2271,12 @@ pub(crate) mod tests {
         std::fs::write(&file, document).unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
         let mut runtime = runtime_value(root.path());
-        runtime["authentication"]["oidc"]["jwksSource"] =
+        runtime["authentication"]["oidc"]["issuers"]["main"]["jwksSource"] =
             json!({"type": "static", "documentRef": "secret:file/issuer-jwks"});
         let path = write_project(root.path(), &runtime, &package_value());
         let config = RuntimeConfig::load_with_environment(path, &no_environment, DEFAULT_POSTURE)?;
         let resolver = config.secret_resolver()?;
-        config.jwks_fetcher(&resolver).await.map(|_| ())
+        config.jwks_fetcher("main", &resolver).await.map(|_| ())
     }
 
     fn static_key(extra: Value) -> Value {
@@ -2011,7 +2316,7 @@ pub(crate) mod tests {
                 .await
                 .expect_err(member);
             assert!(
-                matches!(error, RuntimeConfigError::OidcJwksSecret(_)),
+                matches!(error, RuntimeConfigError::OidcJwksSecret { .. }),
                 "{member}: {error}"
             );
             assert_eq!(error.code(), "messaging.runtime.unreadable-jwks-secret");
@@ -2069,13 +2374,299 @@ pub(crate) mod tests {
         runtime_value(Path::new("/placeholder"))
     }
 
+    /// The one issuer entry of a document that declares one.
+    fn only_entry(config: &RuntimeConfig) -> &IssuerConfig {
+        let mut entries = config.authentication.oidc.issuers.iter();
+        let (_, entry) = entries.next().expect("an issuer entry");
+        assert!(entries.next().is_none(), "one issuer entry");
+        entry
+    }
+
+    /// `base()` with a second issuer entry, `partner`, naming `clients`.
+    fn with_partner(clients: Value) -> Value {
+        let mut value = base();
+        value["authentication"]["oidc"]["issuers"]["partner"] = json!({
+            "issuer": "https://partner.example.test",
+            "audience": "urn:example:messaging",
+            "allowedClients": clients,
+        });
+        value
+    }
+
+    fn codes_of(error: &RuntimeConfigError) -> Vec<String> {
+        match error {
+            RuntimeConfigError::Load(error) => error
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code.clone())
+                .collect(),
+            other => vec![other.code().to_owned()],
+        }
+    }
+
+    #[test]
+    fn two_issuers_with_the_same_iss_refuse_at_startup() {
+        let mut value = with_partner(json!(["partner-system"]));
+        value["authentication"]["oidc"]["issuers"]["partner"]["issuer"] =
+            json!("https://identity.example.test");
+        let error = load(value).unwrap_err();
+        assert_eq!(error.code(), "platform.oidc.duplicate-issuer", "{error}");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/partner/issuer"
+        );
+        assert!(
+            !error.to_string().contains("identity.example.test"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_client_listed_by_two_issuers_is_refused() {
+        let error = load(with_partner(json!(["case-system"]))).unwrap_err();
+        assert_eq!(
+            error.code(),
+            "platform.oidc.client-in-two-issuers",
+            "{error}"
+        );
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/partner/allowedClients/0"
+        );
+    }
+
+    #[test]
+    fn a_package_client_listed_beside_from_package_is_refused() {
+        let mut value = with_partner(json!(["case-system"]));
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!("from-package");
+        let error = load(value).unwrap_err();
+        assert_eq!(
+            error.code(),
+            "platform.oidc.client-in-two-issuers",
+            "{error}"
+        );
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/partner/allowedClients/0"
+        );
+    }
+
+    #[test]
+    fn each_issuer_admits_its_own_clients_and_together_they_cover_the_package() {
+        let mut value = base();
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["case-system"]);
+        value["authentication"]["oidc"]["issuers"]["partner"] = json!({
+            "issuer": "https://partner.example.test",
+            "audience": "urn:example:messaging",
+            "allowedClients": ["operations-console"],
+        });
+        let config = load(value).expect("two lists that together cover the package load");
+        let profiles = registry_messaging_core::AccessProfiles::new(vec![
+            profile_naming("first", &["case-system"]),
+            profile_naming("second", &["operations-console"]),
+        ])
+        .unwrap();
+        let admitted = config.admitted_clients(&profiles).unwrap();
+        assert_eq!(admitted["main"].as_slice(), ["case-system"]);
+        assert_eq!(admitted["partner"].as_slice(), ["operations-console"]);
+
+        // Neither list names the second profile's client.
+        let mut value = base();
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["case-system"]);
+        value["authentication"]["oidc"]["issuers"]["partner"] = json!({
+            "issuer": "https://partner.example.test",
+            "audience": "urn:example:messaging",
+            "allowedClients": ["reporting-job"],
+        });
+        let error = load(value).unwrap_err();
+        assert!(
+            matches!(error, RuntimeConfigError::ProfileClientNotAllowed { .. }),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_resolved_package_client_equal_to_the_audience_under_jwt_is_refused() {
+        let mut value = from_package();
+        value["authentication"]["oidc"]["issuers"]["main"]["accessTokenType"] = json!("JWT");
+        value["authentication"]["oidc"]["issuers"]["main"]["audience"] = json!("case-system");
+        let error = load(value).unwrap_err();
+        assert_eq!(
+            error.code(),
+            "platform.oidc.audience-is-a-client",
+            "{error}"
+        );
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/audience"
+        );
+        assert!(
+            !error.to_string().contains("case-system"),
+            "the message names no client: {error}"
+        );
+
+        // The same audience under the default token type is not refused.
+        let mut value = from_package();
+        value["authentication"]["oidc"]["issuers"]["main"]["audience"] = json!("case-system");
+        load(value).expect("the default token type keeps ID tokens out by its type");
+    }
+
+    #[test]
+    fn a_client_actor_kind_for_a_client_the_package_does_not_name_is_refused() {
+        let mut value = from_package();
+        value["authentication"]["oidc"]["issuers"]["main"]["clientActorKinds"] =
+            json!({"reporting-job": "service"});
+        let error = load(value).unwrap_err();
+        assert_eq!(
+            error.code(),
+            "platform.oidc.actor-kind-for-unadmitted-client",
+            "{error}"
+        );
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/clientActorKinds/reporting-job"
+        );
+
+        let mut value = from_package();
+        value["authentication"]["oidc"]["issuers"]["main"]["clientActorKinds"] =
+            json!({"case-system": "service"});
+        load(value).expect("a package client may carry a declared kind");
+    }
+
+    #[test]
+    fn a_kind_declared_for_the_issuer_and_for_its_clients_is_refused() {
+        let mut value = base();
+        value["authentication"]["oidc"]["issuers"]["main"]["actorKind"] = json!("service");
+        value["authentication"]["oidc"]["issuers"]["main"]["clientActorKinds"] =
+            json!({"case-system": "service"});
+        let error = load(value).unwrap_err();
+        assert_eq!(error.code(), "platform.oidc.actor-kind-twice", "{error}");
+    }
+
+    #[test]
+    fn an_issuer_list_with_no_entry_is_refused() {
+        let mut value = base();
+        value["authentication"]["oidc"]["issuers"] = json!({});
+        let error = load(value).unwrap_err();
+        assert!(
+            codes_of(&error)
+                .iter()
+                .any(|code| code == "platform.oidc.no-issuer" || code == "config.invalid-value"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_token_type_and_scope_claim_are_the_entry_s_to_state() {
+        let mut value = base();
+        value["authentication"]["oidc"]["issuers"]["main"]["accessTokenType"] = json!("JWT");
+        value["authentication"]["oidc"]["issuers"]["main"]["scopeClaim"] = json!("scp");
+        let config = load(value).expect("an entry may state both");
+        let core = only_entry(&config).core();
+        assert_eq!(core.scope_claim.get().as_str(), "scp");
+        let admitted = AdmittedClients::new(vec!["case-system".to_owned()]).unwrap();
+        let profile = config.verifier_profile("main", &admitted).unwrap();
+        assert_eq!(profile.scope_claim, "scp");
+        assert!(profile
+            .allowed_typ
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case("JWT")));
+    }
+
+    #[test]
+    fn a_non_default_token_type_or_scope_claim_is_an_explicit_production_setting() {
+        let mut value = base();
+        assert!(
+            load(value.clone())
+                .unwrap()
+                .posture_report()
+                .explicit_settings()
+                .is_empty(),
+            "the strict defaults record nothing"
+        );
+        value["authentication"]["oidc"]["issuers"]["main"]["accessTokenType"] = json!("JWT");
+        value["authentication"]["oidc"]["issuers"]["main"]["scopeClaim"] = json!("scp");
+        let config = load(value.clone()).expect("an explicit setting never refuses");
+        let found: Vec<(&str, Option<&str>)> = config
+            .posture_report()
+            .explicit_settings()
+            .iter()
+            .map(|found| (found.setting.code, found.pointer.as_deref()))
+            .collect();
+        assert!(
+            found.contains(&(
+                "platform.posture.jwt-access-token",
+                Some("/authentication/oidc/issuers/main/accessTokenType")
+            )),
+            "{found:?}"
+        );
+        assert!(
+            found.contains(&(
+                "platform.posture.scope-claim",
+                Some("/authentication/oidc/issuers/main/scopeClaim")
+            )),
+            "{found:?}"
+        );
+
+        // The offline check lists the same settings with their positions.
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = value;
+        rebase(&mut runtime, root.path());
+        let path = write_project(root.path(), &runtime, &package_value());
+        let checked =
+            check_runtime_file(&path, CheckedAgainst::NamedPackage, true, DEFAULT_POSTURE);
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        let codes: Vec<&str> = checked
+            .explicit_settings()
+            .iter()
+            .map(|found| found.setting.code)
+            .collect();
+        assert!(
+            codes.contains(&"platform.posture.jwt-access-token"),
+            "{codes:?}"
+        );
+        assert!(codes.contains(&"platform.posture.scope-claim"), "{codes:?}");
+        assert!(checked
+            .explicit_settings()
+            .iter()
+            .all(|found| found.position.is_some()));
+    }
+
+    #[test]
+    fn the_offline_check_reports_each_issuer_problem_with_its_other_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime = with_partner(json!(["case-system"]));
+        rebase(&mut runtime, root.path());
+        let path = write_project(root.path(), &runtime, &package_value());
+        let checked =
+            check_runtime_file(&path, CheckedAgainst::NamedPackage, true, DEFAULT_POSTURE);
+        let found = checked
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "platform.oidc.client-in-two-issuers")
+            .unwrap_or_else(|| panic!("{:?}", checked.diagnostics));
+        assert_eq!(
+            found.path,
+            "/authentication/oidc/issuers/partner/allowedClients/0"
+        );
+        assert!(found
+            .source
+            .as_ref()
+            .is_some_and(|source| source.line.is_some()));
+        assert!(!found.related.is_empty(), "{found:?}");
+    }
+
     #[test]
     fn default_posture_refuses_all_selected_development_settings() {
         let mut document = base();
         document["database"]["transport"] = serde_json::json!("private-network-plaintext");
-        document["authentication"]["oidc"]["issuer"] =
+        document["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
             serde_json::json!("http://identity.example.test");
-        document["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+        document["authentication"]["oidc"]["issuers"]["main"]["allowInsecureHttp"] =
+            serde_json::json!(true);
         let text = serde_norway::to_string(&document).unwrap();
         let error = RuntimeConfig::loader(DEFAULT_POSTURE)
             .parse_str::<RuntimeConfig>(&text, |_| None)
@@ -2170,28 +2761,31 @@ pub(crate) mod tests {
     fn shared_runtime_configuration_blocks_use_the_platform_contract() {
         let config = load(base()).unwrap();
         assert_eq!(config.retention, RetentionConfig::default());
-        assert_eq!(config.authentication.oidc.scope_claim, "scope");
+        let (_, entry) = config.authentication.oidc.issuers.iter().next().unwrap();
+        assert_eq!(entry.core().scope_claim.get().as_str(), "scope");
         assert!(config.metrics_listener.is_none());
         assert_eq!(
             config.listener.bind.socket_addr(),
             DEFAULT_LISTENER_BIND.parse().unwrap()
         );
-        assert!(!config.binds_assertion_issuers());
+        assert!(only_entry(&config).assertion_issuers.is_empty());
     }
 
     #[test]
     fn loopback_http_issuer_needs_no_opt_in_in_production() {
         let mut runtime = base();
-        runtime["authentication"]["oidc"]["issuer"] = json!("http://127.0.0.1:8082");
+        runtime["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            json!("http://127.0.0.1:8082");
         let config = load(runtime).expect("loopback HTTP issuer");
-        assert!(!config.authentication.oidc.provider.allow_insecure_http);
+        assert!(!only_entry(&config).core().provider.allow_insecure_http);
     }
 
     #[test]
     fn runtime_reads_the_explicit_http_issuer_opt_in() {
         let mut runtime = base();
-        runtime["authentication"]["oidc"]["issuer"] = json!("http://identity.example.test");
-        runtime["authentication"]["oidc"]["allowInsecureHttp"] = json!(true);
+        runtime["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            json!("http://identity.example.test");
+        runtime["authentication"]["oidc"]["issuers"]["main"]["allowInsecureHttp"] = json!(true);
         let declared = DeclaredPosture {
             posture: Posture::Development,
             source: PostureSource::Flag,
@@ -2205,7 +2799,7 @@ pub(crate) mod tests {
             "platform.posture.insecure-issuer-http"
         );
         let config = loaded.config;
-        assert!(config.authentication.oidc.provider.allow_insecure_http);
+        assert!(only_entry(&config).core().provider.allow_insecure_http);
     }
 
     #[test]
@@ -2251,12 +2845,12 @@ pub(crate) mod tests {
         assert_eq!(error.pointer(), "/audit/hashKeyRef");
 
         let mut value = base();
-        value["authentication"]["oidc"]["jwksSource"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["jwksSource"] =
             json!({"type": "static", "documentRef": "${JWKS}"});
         let error = load(value).unwrap_err();
         assert_eq!(
             error.pointer(),
-            "/authentication/oidc/jwksSource/documentRef"
+            "/authentication/oidc/issuers/main/jwksSource/documentRef"
         );
     }
 
@@ -2297,7 +2891,7 @@ pub(crate) mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let mut runtime = runtime_value(root.path());
-        runtime["authentication"]["oidc"]["issuer"] = json!("https://${HOST}/");
+        runtime["authentication"]["oidc"]["issuers"]["main"]["issuer"] = json!("https://${HOST}/");
         let path = write_project(root.path(), &runtime, &package_value());
         let error = RuntimeConfig::load_with_environment(
             &path,
@@ -2314,7 +2908,8 @@ pub(crate) mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = runtime_value(root.path());
         runtime["listener"]["bind"] = json!("${MESSAGING_BIND}");
-        runtime["authentication"]["oidc"]["issuer"] = json!("${ISSUER:-https://fallback.test}");
+        runtime["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            json!("${ISSUER:-https://fallback.test}");
         let path = write_project(root.path(), &runtime, &package_value());
         let config = RuntimeConfig::load_with_environment(
             &path,
@@ -2327,7 +2922,7 @@ pub(crate) mod tests {
             "127.0.0.1:9107".parse().unwrap()
         );
         assert_eq!(
-            config.authentication.oidc.provider.issuer.as_str(),
+            only_entry(&config).core().provider.issuer.as_str(),
             "https://fallback.test"
         );
 
@@ -2340,35 +2935,47 @@ pub(crate) mod tests {
         assert!(error.to_string().contains("MESSAGING_BIND"), "{error}");
     }
 
+    /// The issuer members an earlier runtime document wrote beside
+    /// `authentication.oidc`, each refused where it stood and told where it
+    /// goes.
     #[test]
-    fn removed_jwks_uri_names_jwks_source_replacement() {
-        let mut value = base();
-        value["authentication"]["oidc"]["jwksUri"] =
-            json!("https://identity.example.test/jwks.json");
-        let error = load(value).unwrap_err();
-        assert_eq!(error.pointer(), "/authentication/oidc/jwksUri");
-        assert_eq!(error.code(), "config.removed-key");
-        assert!(error.suggested_action().contains("jwksSource"), "{error}");
-    }
-
-    #[test]
-    fn a_jwks_source_tagged_by_kind_names_type() {
-        let mut value = base();
-        value["authentication"]["oidc"]["jwksSource"] =
-            json!({"kind": "uri", "uri": "https://identity.example.test/jwks.json"});
-        let error = load(value).unwrap_err();
-        assert_eq!(error.pointer(), "/authentication/oidc/jwksSource/kind");
-        assert_eq!(error.code(), "config.removed-key");
-        assert!(
-            error
-                .suggested_action()
-                .contains("authentication.oidc.jwksSource.type"),
-            "{error}"
-        );
-        assert!(
-            !error.to_string().contains("identity.example.test"),
-            "{error}"
-        );
+    fn the_issuer_members_that_moved_name_the_issuer_entry() {
+        for (member, value) in [
+            ("issuer", json!("https://identity.example.test")),
+            ("audience", json!("urn:example:messaging")),
+            ("jwksUri", json!("https://identity.example.test/jwks.json")),
+            (
+                "jwksSource",
+                json!({"type": "uri", "uri": "https://identity.example.test/jwks.json"}),
+            ),
+            ("allowInsecureHttp", json!(true)),
+            ("allowedClients", json!("from-package")),
+            (
+                "assertionIssuers",
+                json!({"case-system": ["https://a.test"]}),
+            ),
+            ("scopeClaim", json!("scope")),
+        ] {
+            let mut document = base();
+            document["authentication"]["oidc"][member] = value;
+            let error = load(document).unwrap_err();
+            assert_eq!(
+                error.pointer(),
+                format!("/authentication/oidc/{member}"),
+                "{member}"
+            );
+            assert_eq!(error.code(), "config.removed-key", "{member}");
+            assert!(
+                error
+                    .suggested_action()
+                    .contains("authentication.oidc.issuers.ISSUER_ID"),
+                "{member}: {error}"
+            );
+            assert!(
+                !error.to_string().contains("identity.example.test"),
+                "{member}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -2386,7 +2993,7 @@ pub(crate) mod tests {
         assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
 
         let mut runtime = runtime_value(root.path());
-        runtime["authentication"]["oidc"]["issuer"] = json!("https://${HOST}/");
+        runtime["authentication"]["oidc"]["issuers"]["main"]["issuer"] = json!("https://${HOST}/");
         let path = write_project(root.path(), &runtime, &package_value());
         for value in [
             "a.example\nkind: Other",
@@ -2400,7 +3007,7 @@ pub(crate) mod tests {
             )
             .unwrap_err();
             assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
-            assert_eq!(error.pointer(), "/authentication/oidc/issuer");
+            assert_eq!(error.pointer(), "/authentication/oidc/issuers/main/issuer");
             assert!(
                 error.to_string().contains("config.invalid-value"),
                 "{error}"
@@ -2419,7 +3026,7 @@ pub(crate) mod tests {
     fn a_malformed_environment_expression_is_refused() {
         for issuer in ["${ISSUER", "${1BAD}", "${}"] {
             let mut value = base();
-            value["authentication"]["oidc"]["issuer"] = json!(issuer);
+            value["authentication"]["oidc"]["issuers"]["main"]["issuer"] = json!(issuer);
             let error = load(value).unwrap_err();
             assert!(
                 matches!(
@@ -2760,25 +3367,32 @@ pub(crate) mod tests {
     #[test]
     fn allowed_clients_are_required_and_must_cover_every_profile() {
         let mut value = base();
-        value["authentication"]["oidc"]["allowedClients"] = json!("unrestricted");
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!("unrestricted");
         let error = load(value).unwrap_err();
         assert!(
-            matches!(error, RuntimeConfigError::AllowedClientsRequired),
+            matches!(error, RuntimeConfigError::AllowedClientsRequired { .. }),
             "{error}"
         );
-        assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/allowedClients"
+        );
         assert!(error.suggested_action().contains("allowedClients"));
 
         // The reader refuses the shapes that decide nothing: an empty list,
         // an omitted member, and a repeated client.
         let mut value = base();
-        value["authentication"]["oidc"]["allowedClients"] = json!([]);
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] = json!([]);
         let error = load(value).unwrap_err();
         assert_eq!(error.code(), "config.invalid-value", "{error}");
-        assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/allowedClients"
+        );
 
         let mut value = base();
-        value["authentication"]["oidc"]
+        value["authentication"]["oidc"]["issuers"]["main"]
             .as_object_mut()
             .unwrap()
             .remove("allowedClients");
@@ -2787,14 +3401,18 @@ pub(crate) mod tests {
         assert!(error.to_string().contains("allowedClients"), "{error}");
 
         let mut value = base();
-        value["authentication"]["oidc"]["allowedClients"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
             json!(["case-system", "operations-console", "case-system"]);
         let error = load(value).unwrap_err();
         assert_eq!(error.code(), "config.duplicate-item", "{error}");
-        assert_eq!(error.pointer(), "/authentication/oidc/allowedClients/2");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/allowedClients/2"
+        );
 
         let mut value = base();
-        value["authentication"]["oidc"]["allowedClients"] = json!(["case-system"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["case-system"]);
         let error = load(value).unwrap_err();
         assert!(
             matches!(error, RuntimeConfigError::ProfileClientNotAllowed { .. }),
@@ -2823,7 +3441,8 @@ pub(crate) mod tests {
 
     fn from_package() -> Value {
         let mut value = base();
-        value["authentication"]["oidc"]["allowedClients"] = json!("from-package");
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!("from-package");
         value
     }
 
@@ -2839,8 +3458,8 @@ pub(crate) mod tests {
         ])
         .unwrap();
         let admitted = config.admitted_clients(&profiles).unwrap();
-        assert_eq!(admitted.as_slice(), ["c1", "c2", "c3"]);
-        let mut profile = config.verifier_profile(&admitted);
+        assert_eq!(admitted["main"].as_slice(), ["c1", "c2", "c3"]);
+        let mut profile = config.verifier_profile("main", &admitted["main"]).unwrap();
         assert_eq!(profile.allowed_clients, ["c1", "c2", "c3"]);
         profile.allowed_algorithms = vec![jsonwebtoken::Algorithm::HS256];
         let verifier = TokenVerifier::new(profile, keys());
@@ -2875,7 +3494,7 @@ pub(crate) mod tests {
         let none = registry_messaging_core::AccessProfiles::default();
         let error = config.admitted_clients(&none).unwrap_err();
         assert!(
-            matches!(error, RuntimeConfigError::AllowedClientsRequired),
+            matches!(error, RuntimeConfigError::AllowedClientsRequired { .. }),
             "{error}"
         );
     }
@@ -2883,7 +3502,8 @@ pub(crate) mod tests {
     #[test]
     fn an_explicit_list_missing_a_package_client_is_refused_with_the_profile() {
         let mut value = base();
-        value["authentication"]["oidc"]["allowedClients"] = json!(["case-system"]);
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["case-system"]);
         let config = RuntimeConfig::parse_with_environment(
             &serde_json::to_string(&value).unwrap(),
             &no_environment,
@@ -2896,15 +3516,19 @@ pub(crate) mod tests {
         .unwrap();
         let error = config.admitted_clients(&profiles).unwrap_err();
         assert!(
-            matches!(&error, RuntimeConfigError::ProfileClientNotAllowed { profile } if profile == "left-out"),
+            matches!(&error, RuntimeConfigError::ProfileClientNotAllowed { profile, .. } if profile == "left-out"),
             "{error}"
+        );
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/allowedClients"
         );
     }
 
     #[test]
     fn assertion_issuer_client_outside_the_package_is_refused_under_from_package() {
         let mut value = from_package();
-        value["authentication"]["oidc"]["assertionIssuers"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] =
             json!({"unknown-client": ["https://assertions.example.test"]});
         let error = load(value).unwrap_err();
         assert!(
@@ -2916,33 +3540,39 @@ pub(crate) mod tests {
         );
         assert_eq!(
             error.pointer(),
-            "/authentication/oidc/assertionIssuers/unknown-client"
+            "/authentication/oidc/issuers/main/assertionIssuers/unknown-client"
         );
         let mut value = from_package();
-        value["authentication"]["oidc"]["assertionIssuers"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] =
             json!({"case-system": ["https://assertions.example.test"]});
-        assert!(load(value).unwrap().binds_assertion_issuers());
+        assert!(!only_entry(&load(value).unwrap())
+            .assertion_issuers
+            .is_empty());
     }
 
     #[test]
     fn the_keywords_other_than_from_package_and_unrestricted_are_refused() {
         let mut value = base();
-        value["authentication"]["oidc"]["allowedClients"] = json!("any");
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] = json!("any");
         let error = load(value).unwrap_err();
         assert_eq!(error.code(), "config.invalid-value", "{error}");
-        assert_eq!(error.pointer(), "/authentication/oidc/allowedClients");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/allowedClients"
+        );
         let mut value = base();
-        value["authentication"]["oidc"]["allowedClients"] = json!("unrestricted");
+        value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!("unrestricted");
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::AllowedClientsRequired
+            RuntimeConfigError::AllowedClientsRequired { .. }
         ));
     }
 
     #[test]
     fn a_repeated_allowed_client_is_refused_at_the_repetition() {
         let mut value = base();
-        let clients = value["authentication"]["oidc"]["allowedClients"]
+        let clients = value["authentication"]["oidc"]["issuers"]["main"]["allowedClients"]
             .as_array_mut()
             .unwrap();
         let first = clients[0].clone();
@@ -2955,12 +3585,14 @@ pub(crate) mod tests {
         assert_eq!(error.code(), "config.duplicate-item");
         assert_eq!(
             error.pointer(),
-            format!("/authentication/oidc/allowedClients/{last}")
+            format!("/authentication/oidc/issuers/main/allowedClients/{last}")
         );
         let report = error.to_string();
         assert!(report.contains("the list is a set"), "{report}");
         assert!(
-            report.contains("/authentication/oidc/allowedClients/0 the first occurrence"),
+            report.contains(
+                "/authentication/oidc/issuers/main/allowedClients/0 the first occurrence"
+            ),
             "{report}"
         );
     }
@@ -2968,7 +3600,7 @@ pub(crate) mod tests {
     #[test]
     fn assertion_issuers_may_name_only_allowed_clients() {
         let mut value = base();
-        value["authentication"]["oidc"]["assertionIssuers"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] =
             json!({"unknown-client": ["https://assertions.example.test"]});
         let error = load(value).unwrap_err();
         assert!(
@@ -2980,19 +3612,21 @@ pub(crate) mod tests {
         );
         assert_eq!(
             error.pointer(),
-            "/authentication/oidc/assertionIssuers/unknown-client"
+            "/authentication/oidc/issuers/main/assertionIssuers/unknown-client"
         );
         let mut value = base();
-        value["authentication"]["oidc"]["assertionIssuers"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] =
             json!({"case-system": ["https://a.test", "https://a.test"]});
         assert!(matches!(
             load(value).unwrap_err(),
             RuntimeConfigError::Block(_)
         ));
         let mut value = base();
-        value["authentication"]["oidc"]["assertionIssuers"] =
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] =
             json!({"case-system": ["https://assertions.example.test"]});
-        assert!(load(value).unwrap().binds_assertion_issuers());
+        assert!(!only_entry(&load(value).unwrap())
+            .assertion_issuers
+            .is_empty());
     }
 
     #[test]
@@ -3083,20 +3717,24 @@ pub(crate) mod tests {
     #[test]
     fn an_empty_assertion_issuer_map_is_refused_at_its_pointer() {
         let mut value = base();
-        value["authentication"]["oidc"]["assertionIssuers"] = json!({});
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] = json!({});
         let error = load(value).unwrap_err();
-        assert_eq!(error.pointer(), "/authentication/oidc/assertionIssuers");
+        assert_eq!(
+            error.pointer(),
+            "/authentication/oidc/issuers/main/assertionIssuers"
+        );
     }
 
     #[test]
     fn a_listed_client_with_no_assertion_issuers_is_refused_at_that_client() {
         let mut value = base();
-        value["authentication"]["oidc"]["assertionIssuers"] = json!({"case-system": []});
+        value["authentication"]["oidc"]["issuers"]["main"]["assertionIssuers"] =
+            json!({"case-system": []});
         let error = load(value).unwrap_err();
         assert_eq!(error.code(), "config.invalid-value", "{error}");
         assert_eq!(
             error.pointer(),
-            "/authentication/oidc/assertionIssuers/case-system"
+            "/authentication/oidc/issuers/main/assertionIssuers/case-system"
         );
     }
 
@@ -3433,7 +4071,7 @@ pub(crate) mod tests {
     fn the_verifier_admits_only_the_access_token_media_type() {
         let config = load(base()).unwrap();
         let admitted = AdmittedClients::new(vec!["case-system".to_owned()]).unwrap();
-        let profile = config.verifier_profile(&admitted);
+        let profile = config.verifier_profile("main", &admitted).unwrap();
         assert!(registry_platform_oidc::is_access_token_typ_pair(
             &profile.allowed_typ
         ));
@@ -3605,7 +4243,8 @@ pub(crate) mod tests {
         runtime["retention"] = json!({"payloadRetentionDays": 10, "recordRetentionDays": 9});
         runtime["providers"] = provider_connections();
         runtime["providers"]["sms-gateway"]["tlsTrustProfile"] = json!("gateway-ca");
-        runtime["authentication"]["oidc"]["allowedClients"] = json!(["case-system"]);
+        runtime["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] =
+            json!(["case-system"]);
         let path = write_project(root.path(), &runtime, &package_value());
 
         let check = check_runtime_file(&path, CheckedAgainst::Nothing, true, DEFAULT_POSTURE);
@@ -3642,7 +4281,7 @@ pub(crate) mod tests {
         );
         assert!(codes_and_pointers(&check.diagnostics).contains(&(
             "messaging.runtime.profile-client-not-allowed",
-            "/authentication/oidc/allowedClients"
+            "/authentication/oidc/issuers/main/allowedClients"
         )));
 
         // The package `package.root` names is the one the check reads by
@@ -3651,7 +4290,7 @@ pub(crate) mod tests {
         assert!(check.package.is_some());
         assert!(codes_and_pointers(&check.diagnostics).contains(&(
             "messaging.runtime.profile-client-not-allowed",
-            "/authentication/oidc/allowedClients"
+            "/authentication/oidc/issuers/main/allowedClients"
         )));
 
         // The startup refusal reports the same findings.
@@ -3666,7 +4305,8 @@ pub(crate) mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = runtime_value(root.path());
         runtime["listener"]["bind"] = json!("${MESSAGING_CHECK_UNSET_BIND}");
-        runtime["authentication"]["oidc"]["issuer"] = json!("${MESSAGING_CHECK_UNSET_ISSUER}");
+        runtime["authentication"]["oidc"]["issuers"]["main"]["issuer"] =
+            json!("${MESSAGING_CHECK_UNSET_ISSUER}");
         let path = write_project(root.path(), &runtime, &package_value());
 
         let check = check_runtime_file(&path, CheckedAgainst::Nothing, false, DEFAULT_POSTURE);
@@ -3676,7 +4316,10 @@ pub(crate) mod tests {
         assert_eq!(
             codes_and_pointers(&check.diagnostics),
             [
-                ("config.substitution", "/authentication/oidc/issuer"),
+                (
+                    "config.substitution",
+                    "/authentication/oidc/issuers/main/issuer"
+                ),
                 ("config.substitution", "/listener/bind"),
             ]
         );

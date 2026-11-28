@@ -12,14 +12,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use registry_messaging::auth::MessagingAuthenticator;
+use registry_messaging::auth::{IssuerSource, MessagingAuthenticator};
 use registry_messaging::package::LoadedPackage;
 use registry_messaging_core::{AccessProfile, ActorKind, Caller};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 use registry_platform_oidc::{
-    access_token_typ_set, parse_static_jwks, JwksFetcher, JwksFetcherConfig, OidcError,
-    TokenVerifier, TokenVerifierConfig,
+    access_token_typ_set, parse_static_jwks, DeclaredKinds, JwksFetcher, JwksFetcherConfig,
+    OidcError, TokenVerifier, TokenVerifierConfig,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -411,11 +411,15 @@ pub(super) async fn verify(
         return Err(refusal());
     }
     let caller = MessagingAuthenticator::new(
-        verifier,
-        keys,
+        vec![IssuerSource::new(
+            super::config::SESSION_ISSUER_ID,
+            verifier,
+            keys,
+            DeclaredKinds::None,
+        )],
         loaded.package.access_profiles().clone(),
-        false,
     )
+    .map_err(|_| refusal())?
     .authenticate(signed)
     .await
     .map_err(|_| refusal())?;

@@ -46,9 +46,10 @@ database:
 package:
   root: /replace/me/packages/build-1/package
 
-# The token issuer this deployment accepts, and the claim names that carry
-# Registry authority. `authorityClaims` must name the claims the access profiles
-# in registry.yaml read: `principalClaim`, and the claims row boundaries compare.
+# The token issuers this deployment accepts, one entry per issuer, and the claim
+# names that carry Registry authority. `authorityClaims` must name the claims the
+# access profiles in registry.yaml read: `principalClaim`, and the claims row
+# boundaries compare.
 authentication:
   oidc:
     issuers:

@@ -621,8 +621,9 @@
   },
   "$defs": {
     "LocalId": {
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
     },
     "Display": {
       "type": "object",

@@ -164,7 +164,7 @@ pub enum StartupError {
     #[error("the Registry authentication profile was refused")]
     Authentication,
     /// The project names clients that no `authentication.oidc.issuers` entry
-    /// lists in `allowedClients`; `unrestricted` lists none.
+    /// lists in `allowedClients`. `unrestricted` lists none.
     #[error(
         "the project names clients that no authentication.oidc.issuers entry lists in \
          allowedClients; list each client named in requesterClients, trusted actors, or consent \
@@ -2316,7 +2316,10 @@ async fn finish_prepared_server(
         }
         Arc::new(registry)
     });
-    let app = with_request_timeout(
+    // The request-timeout layer owns the correlation boundary and renders
+    // the final problem body, so the development `failedCheck` member is
+    // added outside it as well as inside the router.
+    let app = serving_router(
         authenticated_router_with_listener(
             service,
             authenticator,
@@ -2324,8 +2327,8 @@ async fn finish_prepared_server(
         ),
         config.operational_timeouts().http_request,
         telemetry_metrics.clone(),
-    )
-    .layer(registry_platform_httpsec::posture_mark(config.posture()));
+        config.posture(),
+    );
     let metrics = config
         .metrics_listener()
         .zip(telemetry_metrics)
@@ -2498,6 +2501,30 @@ pub fn with_request_timeout_and_metrics_for_test(
     metrics: Option<Arc<Metrics>>,
 ) -> Router {
     with_request_timeout(app, timeout, metrics)
+}
+
+/// The router as startup serves it. The request-timeout layer owns the
+/// correlation boundary and renders the final problem body, so the
+/// development-only `failedCheck` member is added outside it, and the posture
+/// mark outside that.
+fn serving_router(
+    app: Router,
+    timeout: Duration,
+    metrics: Option<Arc<Metrics>>,
+    posture: registry_platform_config::Posture,
+) -> Router {
+    with_request_timeout(app, timeout, metrics)
+        .layer(registry_platform_httpsec::refusal_detail::name_failed_check(posture))
+        .layer(registry_platform_httpsec::posture_mark(posture))
+}
+
+#[doc(hidden)]
+pub fn serving_router_for_test(
+    app: Router,
+    timeout: Duration,
+    posture: registry_platform_config::Posture,
+) -> Router {
+    serving_router(app, timeout, None, posture)
 }
 
 /// State of the request-timeout boundary: the HTTP deadline plus the metrics

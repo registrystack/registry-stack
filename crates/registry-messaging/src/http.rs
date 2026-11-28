@@ -56,6 +56,7 @@ use registry_platform_authcommon::{
     parse_bearer_token, record_refusal, BearerParseError, DeclaredScope, FailedCheck, RefusalNote,
 };
 use registry_platform_canonical_json::parse_json_strict;
+use registry_platform_httpsec::refusal_detail::name_failed_check;
 use registry_platform_httpsec::{
     normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
     FrameworkRejection, ProblemBody, TraceContext,
@@ -407,6 +408,7 @@ pub fn router(state: HttpState) -> Router {
             )
             .with_state(state)
             .layer(middleware::from_fn_with_state(refusals, record_refusals))
+            .layer(name_failed_check(posture))
             .layer(middleware::from_fn_with_state(metrics, count_requests)),
         posture,
     )
@@ -973,7 +975,9 @@ async fn authenticate(state: &HttpState, headers: &HeaderMap) -> Result<Caller, 
     };
     result.map_err(|refusal| {
         state.metrics.record_authentication_refusal(refusal.error);
-        authentication_problem(refusal.error).with_declared(refusal.declared)
+        authentication_problem(refusal.error)
+            .with_declared(refusal.declared)
+            .with_remedy(refusal.remedy)
     })
 }
 
@@ -1020,6 +1024,10 @@ pub struct HttpError {
     /// What the deployment declared about a scope refusal. It rides with the
     /// check to the recording layer and is never written to the response.
     declared: Option<DeclaredScope>,
+    /// The sentence the verifier gave for the log line when it refused the
+    /// credential. It replaces the fixed advice for the check and is never
+    /// written to the response.
+    remedy: Option<&'static str>,
 }
 
 impl HttpError {
@@ -1030,6 +1038,7 @@ impl HttpError {
             problem,
             check: Some(check),
             declared: None,
+            remedy: None,
         }
     }
 
@@ -1037,6 +1046,12 @@ impl HttpError {
     #[must_use]
     pub(crate) fn with_declared(self, declared: Option<DeclaredScope>) -> Self {
         Self { declared, ..self }
+    }
+
+    /// Attach the verifier's sentence for the refusal's log line.
+    #[must_use]
+    pub(crate) fn with_remedy(self, remedy: Option<&'static str>) -> Self {
+        Self { remedy, ..self }
     }
 
     /// An answer whose check follows from its problem code alone: the
@@ -1056,6 +1071,7 @@ impl HttpError {
             problem,
             check,
             declared: None,
+            remedy: None,
         }
     }
 
@@ -1119,7 +1135,7 @@ const fn attribution(problem: ProblemCode) -> Attribution {
 const fn remedy(check: FailedCheck) -> Option<&'static str> {
     match check {
         FailedCheck::Scope => {
-            Some("check authentication.oidc.scopeClaim and accessProfiles requiredScopes")
+            Some("check scopeClaim of the issuer entry and accessProfiles requiredScopes")
         }
         FailedCheck::AccessProfile | FailedCheck::ActorKind => {
             Some("check accessProfiles actorKind and requesterClients")
@@ -1178,6 +1194,12 @@ impl IntoResponse for HttpError {
         let mut response = problem_answer(self.problem, self.check);
         if let Some(declared) = self.declared {
             response.extensions_mut().insert(declared);
+        }
+        if let (Some(remedy), Some(note)) = (
+            self.remedy,
+            response.extensions().get::<RefusalNote>().copied(),
+        ) {
+            response.extensions_mut().insert(note.with_remedy(remedy));
         }
         response
     }
@@ -1476,6 +1498,107 @@ mod tests {
         );
         let metrics = call(metrics, "GET", METRICS_PATH, None).await;
         assert_eq!(metrics.headers()["registry-posture"], "development");
+    }
+
+    /// A state declared as `posture`, over an in-memory journal the test can
+    /// read.
+    fn state_declared(
+        posture: Posture,
+        authenticator: MessagingAuthenticator,
+        audit: MessagingAudit,
+    ) -> HttpState {
+        let mut state = state_over(authenticator, true, audit);
+        state.posture = PostureReport::new(registry_platform_config::DeclaredPosture {
+            posture,
+            source: registry_platform_config::PostureSource::Flag,
+        });
+        state
+    }
+
+    async fn problem_members(response: Response) -> serde_json::Map<String, serde_json::Value> {
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/problem+json"
+        );
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let mut members = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone();
+        // Each request carries its own trace.
+        assert!(members.remove("traceId").is_some());
+        members
+    }
+
+    #[tokio::test]
+    async fn the_development_body_names_the_failed_check_and_production_does_not() {
+        let message = "/v1/messages/0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
+        let forged = token_signed_with(sender_claims(), b"another-secret-another-secret-another!");
+        let mut answers = Vec::new();
+        for posture in [Posture::Production, Posture::Development] {
+            let state = state_declared(posture, authenticator(), memory_journal().1);
+            let response = call(router(state), "GET", message, Some(&forged)).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{posture:?}");
+            answers.push(problem_members(response).await);
+        }
+        let [production, mut development] = <[_; 2]>::try_from(answers).unwrap();
+        assert!(!production.contains_key("failedCheck"), "{production:?}");
+        assert_eq!(
+            development.remove("failedCheck"),
+            Some(json!(FailedCheck::TokenSignature.as_str()))
+        );
+        assert_eq!(
+            development, production,
+            "the development body adds failedCheck and nothing else"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_token_reaches_the_same_profile_in_both_postures() {
+        let mut answers = Vec::new();
+        for posture in [Posture::Production, Posture::Development] {
+            let (sink, journal) = memory_journal();
+            let state = state_declared(posture, authenticator(), journal);
+            let response = post_json(
+                router(state),
+                PREVIEW,
+                Some(&token(sender_claims())),
+                &sample_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{posture:?}");
+            let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+            let records = self::journal(&sink);
+            assert_eq!(records.len(), 1, "{posture:?}");
+            answers.push((body, records[0]["accessProfile"].clone()));
+        }
+        assert_eq!(answers[0], answers[1]);
+        assert_eq!(answers[0].1, json!("case-notices"));
+
+        // A token no profile names is refused the same way in both postures,
+        // and development alone says which check refused it.
+        let mut unprofiled = sender_claims();
+        unprofiled["azp"] = json!(UNPROFILED_CLIENT);
+        let mut refusals = Vec::new();
+        for posture in [Posture::Production, Posture::Development] {
+            let state = state_declared(posture, authenticator(), memory_journal().1);
+            let response = post_json(
+                router(state),
+                PREVIEW,
+                Some(&token(unprofiled.clone())),
+                &sample_request(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{posture:?}");
+            refusals.push(problem_members(response).await);
+        }
+        let [production, mut development] = <[_; 2]>::try_from(refusals).unwrap();
+        assert_eq!(
+            development.remove("failedCheck"),
+            Some(json!(FailedCheck::AccessProfile.as_str()))
+        );
+        assert_eq!(development, production);
     }
 
     #[tokio::test]

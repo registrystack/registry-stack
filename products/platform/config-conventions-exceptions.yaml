@@ -895,3 +895,15 @@ exceptions:
   class: exchange-model
   reason: "The publication block carries the `title` member of the published bundle metadata, which that exchange model fixes."
   resolution: Permanent for the published bundle metadata.
+- rule: CFG-NAME-2
+  format: platform/runtime-config-blocks
+  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/AccessTokenType/oneOf/0/const/at+jwt
+  class: protocol-constant
+  reason: at+jwt is written as the JWT access token profile (RFC 9068) defines the typ header value
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: platform/runtime-config-blocks
+  location: products/platform/generated/runtime-config-blocks.schema.json#/$defs/AccessTokenType/oneOf/1/const/JWT
+  class: protocol-constant
+  reason: JWT is written as JSON Web Token (RFC 7519) defines the typ header value
+  resolution: Permanent.
