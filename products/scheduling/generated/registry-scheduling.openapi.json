@@ -1575,6 +1575,7 @@
               "cursor.expired",
               "cursor.invalid",
               "eligibility.unavailable",
+              "grant.lifetime-too-long",
               "hold.expired",
               "hold.released",
               "hook.unavailable",
@@ -1840,6 +1841,33 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-scheduling/eligibility/unavailable"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemGrantLifetimeTooLong": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "grant.lifetime-too-long"
+              },
+              "detail": {
+                "const": "The task grant has more than 900 seconds left before it expires. Present a task grant that expires within 900 seconds."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Task grant lifetime too long"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-scheduling/grant/lifetime-too-long"
               }
             },
             "type": "object"
@@ -3266,12 +3294,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -3866,12 +3897,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -4070,12 +4104,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -4365,12 +4402,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -4899,12 +4939,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -5979,12 +6022,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -6320,12 +6366,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemOperationNotAuthorized"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemGrantLifetimeTooLong"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, operation.not-authorized",
+            "description": "Problem response: profile.not-authorized, operation.not-authorized, grant.lifetime-too-long",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"

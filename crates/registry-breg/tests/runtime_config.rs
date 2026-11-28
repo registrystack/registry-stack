@@ -26,6 +26,7 @@ use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::destination::{
     DestinationDnsFamily, DestinationSendError, EventDeliveryHeaders,
 };
+use registry_platform_oidc::StaticJwksError;
 use serde_json::{json, Value};
 
 const DATABASE_URL_CANARY: &str =
@@ -110,6 +111,12 @@ fn public_origin_accepts_only_explicit_web_origins_and_redacts_debug() {
         ("http://127.0.0.1:8080", "http://127.0.0.1:8080"),
         ("http://[::1]:8080/", "http://[::1]:8080"),
         ("http://localhost:8080", "http://localhost:8080"),
+        ("http://LOCALHOST:8080", "http://LOCALHOST:8080"),
+        ("http://127.0.0.2:8080", "http://127.0.0.2:8080"),
+        (
+            "http://[::ffff:127.0.0.1]:8080",
+            "http://[::ffff:127.0.0.1]:8080",
+        ),
     ] {
         let origin = PublicOrigin::parse(input).expect("explicit HTTPS or loopback origin");
         assert_eq!(origin.as_str(), expected);
@@ -122,6 +129,9 @@ fn public_origin_accepts_only_explicit_web_origins_and_redacts_debug() {
         "ftp://registry.example",
         "http://registry.example",
         "http://127.0.0.1.attacker.example",
+        "http://localhost.:8080",
+        "http://app.localhost:8080",
+        "http://[::ffff:10.0.0.1]:8080",
         "https://user:secret@registry.example",
         "https://registry.example/a//b",
         "https://registry.example/a/../b",
@@ -3325,12 +3335,6 @@ async fn static_jwks_validation_refuses_unsafe_documents_value_free() {
     };
     let cases = [
         ("top-level-missing", "{}".to_owned(), "EdDSA"),
-        (
-            "top-level-unknown",
-            serde_json::to_string(&json!({"keys":[valid.clone()],"issuer":"issuer-canary"}))
-                .expect("JWKS serializes"),
-            "EdDSA",
-        ),
         ("empty-keys", r#"{"keys":[]}"#.to_owned(), "EdDSA"),
         (
             "keys-not-array",
@@ -3340,11 +3344,6 @@ async fn static_jwks_validation_refuses_unsafe_documents_value_free() {
         (
             "private-member",
             static_jwks_document(&[with_member(valid.clone(), "d", json!("private-canary"))]),
-            "EdDSA",
-        ),
-        (
-            "unknown-member",
-            static_jwks_document(&[with_member(valid.clone(), "x5c", json!(["cert-canary"]))]),
             "EdDSA",
         ),
         (
@@ -3462,7 +3461,32 @@ async fn static_jwks_validation_refuses_unsafe_documents_value_free() {
             .oidc_key_source()
             .await
             .expect_err("invalid static JWKS refused");
-        assert_eq!(error, RuntimeConfigError::InvalidOidc, "{name}");
+        let expected = match name {
+            "top-level-missing" | "keys-not-array" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::NotAKeySet)
+            }
+            "empty-keys" => RuntimeConfigError::InvalidStaticJwks(StaticJwksError::Empty),
+            "private-member" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::PrivateKeyMember {
+                    key: 0,
+                    member: "d",
+                })
+            }
+            "duplicate-json-field" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::NotJson)
+            }
+            "oct-key" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::SymmetricKey { key: 0 })
+            }
+            "missing-kid" | "empty-kid" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::MissingKeyId { key: 0 })
+            }
+            "duplicate-kid" => {
+                RuntimeConfigError::InvalidStaticJwks(StaticJwksError::RepeatedKeyId { key: 1 })
+            }
+            _ => RuntimeConfigError::InvalidOidc,
+        };
+        assert_eq!(error, expected, "{name}");
         let rendered = format!("{error:?} {error} {config:?}");
         for canary in [
             "oidc-jwks",
@@ -3480,6 +3504,69 @@ async fn static_jwks_validation_refuses_unsafe_documents_value_free() {
             assert!(!rendered.contains(canary), "{name} leaked {canary}");
         }
     }
+}
+
+#[tokio::test]
+async fn a_static_key_set_with_unknown_public_members_loads() {
+    let fixture = RuntimeFixture::new();
+    let kid = "static-ed25519";
+    let key = static_ed25519_jwk(kid);
+    let documents = [
+        (
+            "x5c",
+            static_jwks_document(&[with_member(key.clone(), "x5c", json!(["cert-canary"]))]),
+        ),
+        (
+            "ext",
+            static_jwks_document(&[with_member(key.clone(), "ext", json!(true))]),
+        ),
+        (
+            "top-level",
+            serde_json::to_string(&json!({"keys":[key.clone()],"issuer":"issuer-canary"}))
+                .expect("JWKS serializes"),
+        ),
+    ];
+    for (name, document) in documents {
+        fixture.write_secret("oidc-jwks", document.as_bytes());
+        let config = parse_runtime_config_with_env(
+            &runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks"),
+            env_lookup,
+        )
+        .expect("runtime shell parses");
+        let source = config
+            .oidc_key_source()
+            .await
+            .unwrap_or_else(|error| panic!("{name} key set refused: {error}"));
+        source
+            .key_for_kid(kid)
+            .await
+            .unwrap_or_else(|_| panic!("{name} key set key is selectable by kid"));
+    }
+}
+
+#[tokio::test]
+async fn a_private_member_in_a_static_key_set_is_named_in_the_startup_refusal() {
+    let fixture = RuntimeFixture::new();
+    let document = static_jwks_document(&[with_member(
+        static_ed25519_jwk("static-ed25519"),
+        "d",
+        json!("private-canary"),
+    )]);
+    fixture.write_secret("oidc-jwks", document.as_bytes());
+    let config = parse_runtime_config_with_env(
+        &runtime_with_static_jwks_ref(&fixture, "secret:file/oidc-jwks"),
+        env_lookup,
+    )
+    .expect("runtime shell parses");
+    let error = config
+        .oidc_key_source()
+        .await
+        .expect_err("private member refused");
+    let rendered = error.render_human(None);
+    assert!(rendered.contains("breg.runtime.invalid-oidc"), "{rendered}");
+    assert!(rendered.contains("/authentication/oidc"), "{rendered}");
+    assert!(rendered.contains("private-key member \"d\""), "{rendered}");
+    assert!(!rendered.contains("private-canary"), "{rendered}");
 }
 
 #[tokio::test]

@@ -925,11 +925,10 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
                 if !is_eligible_private_address(ip) {
                     return Err(DestinationSendError::PrivateAddressNotAllowed);
                 }
-                if self.allowed_private_cidrs.is_empty()
-                    || self
-                        .allowed_private_cidrs
-                        .iter()
-                        .any(|cidr| cidr.contains(&ip))
+                if self
+                    .allowed_private_cidrs
+                    .iter()
+                    .any(|cidr| cidr.contains(&ip))
                 {
                     Ok(())
                 } else {
@@ -4665,12 +4664,9 @@ fn validate_response_headers(headers: &HeaderMap) -> Result<(), DestinationSendE
 }
 
 fn origin_explicitly_denotes_loopback(origin: &Url) -> bool {
-    match origin.host() {
-        Some(::url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(::url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(::url::Host::Ipv6(ip)) => is_loopback(normalize_ipv4_mapped(IpAddr::V6(ip))),
-        None => false,
-    }
+    origin
+        .host()
+        .is_some_and(|host| crate::loopback::loopback_host(&host.to_string()).is_some())
 }
 
 /// RFC 6761 reserves `localhost.` and every name below it for loopback. A
@@ -4708,10 +4704,7 @@ fn private_cidr_is_exact_host(cidr: IpNet, address: IpAddr) -> bool {
 }
 
 fn is_loopback(ip: IpAddr) -> bool {
-    match normalize_ipv4_mapped(ip) {
-        IpAddr::V4(ip) => ip.is_loopback(),
-        IpAddr::V6(ip) => ip.is_loopback(),
-    }
+    crate::loopback::loopback_address(ip)
 }
 
 fn is_always_denied_in_production(ip: IpAddr) -> bool {
@@ -5678,14 +5671,33 @@ mod tests {
             &[],
         )
         .expect("private service destination validates");
-        assert_eq!(classify(&policy, &["10.89.0.4"]), Ok(()));
-        assert_eq!(classify(&policy, &["fd42::4"]), Ok(()));
+        for address in ["10.89.0.4", "fd42::4"] {
+            assert_eq!(
+                classify(&policy, &[address]),
+                Err(DestinationSendError::PrivateAddressNotAllowed),
+                "an empty private range list admits no private address: {address}"
+            );
+        }
         for address in ["127.0.0.1", "169.254.169.254", "8.8.8.8", "::1"] {
             assert!(
                 classify(&policy, &[address]).is_err(),
                 "private service accepted {address}"
             );
         }
+
+        let listed = DataDestinationPolicy::new(
+            "private-service",
+            "http://registry-service:8080/",
+            DestinationProfile::PrivateServiceHttp,
+            &[cidr("10.0.0.0/8")],
+        )
+        .expect("listed private service destination validates");
+        assert_eq!(classify(&listed, &["10.0.0.5"]), Ok(()));
+        assert_eq!(
+            classify(&listed, &["169.254.169.254"]),
+            Err(DestinationSendError::CloudMetadataDenied),
+            "a metadata address stays refused beside a listed range"
+        );
 
         let narrowed = DataDestinationPolicy::new(
             "private-service",

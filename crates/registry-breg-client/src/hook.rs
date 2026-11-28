@@ -1,6 +1,21 @@
+use std::time::{Duration, SystemTime};
+
 use registry_platform_hooks::receiver::{
     verify_delivery, DeliveryFreshness, ReceiverError, SignedDelivery,
 };
+
+/// How the verifier bounds the signed delivery time.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BRegHookFreshness {
+    /// Refuse a delivery time further than 300 seconds from the receiver clock.
+    #[default]
+    DefaultWindow,
+    /// Refuse a delivery time further than `skew` from the receiver clock.
+    Within { skew: Duration },
+    /// Check only that the delivery time is well formed. The caller enforces
+    /// its own window.
+    CallerEnforced,
+}
 
 /// Exact request material supplied to the BReg Version 1 hook verifier.
 ///
@@ -13,6 +28,7 @@ pub struct BRegHookDelivery<'a> {
     pub headers: &'a [(String, String)],
     pub body: &'a [u8],
     pub key: &'a [u8],
+    pub freshness: BRegHookFreshness,
 }
 
 impl std::fmt::Debug for BRegHookDelivery<'_> {
@@ -23,9 +39,10 @@ impl std::fmt::Debug for BRegHookDelivery<'_> {
 
 /// Authenticated BReg hook attributes and exact body.
 ///
-/// Verification does not apply replay, delivery-time skew, or deduplication
-/// policy. Receivers must apply those policies to `delivery_time` and
-/// `idempotency_key` before acting on the body.
+/// Verification applies the delivery-time window named by
+/// [`BRegHookFreshness`], 300 seconds by default. It does not apply replay or
+/// deduplication policy. Receivers must deduplicate on `idempotency_key`
+/// before acting on the body.
 #[derive(Clone, Eq, PartialEq)]
 pub struct BRegVerifiedHookDelivery {
     pub id: String,
@@ -57,6 +74,8 @@ pub enum BRegHookVerificationError {
     MissingHeader,
     #[error("the Base Registry Engine hook delivery time is invalid; check the signed delivery time and sender clock")]
     InvalidDeliveryTime,
+    #[error("the Base Registry Engine hook delivery time is outside the freshness window; check the receiver clock, or pass a wider window")]
+    StaleDelivery,
     #[error("a Base Registry Engine hook header is repeated; remove duplicate signed headers")]
     DuplicateHeader,
     #[error(
@@ -80,6 +99,7 @@ impl BRegHookVerificationError {
         match self {
             Self::MissingHeader => "missing-header",
             Self::InvalidDeliveryTime => "invalid-delivery-time",
+            Self::StaleDelivery => "stale-delivery",
             Self::DuplicateHeader => "duplicate-header",
             Self::BodyTooLarge => "body-too-large",
             Self::InvalidKey => "invalid-key",
@@ -90,16 +110,30 @@ impl BRegHookVerificationError {
     }
 }
 
-/// Verify one exact BReg Version 1 hook delivery without applying receiver policy.
+/// Verify one exact BReg Version 1 hook delivery against the system clock.
 ///
 /// This delegates header extraction, the signature input, RFC 3339
 /// delivery-time validation, and constant-time HMAC comparison to the shared
-/// `registry_platform_hooks::receiver::verify_delivery`. Caller-enforced
-/// freshness leaves the receiver's clock policy separate; the caller receives
-/// the authenticated raw delivery time to enforce its own skew bound.
+/// `registry_platform_hooks::receiver::verify_delivery`. The delivery time must
+/// fall inside the window `delivery.freshness` names, 300 seconds either way by
+/// default. Deduplication stays with the caller.
 pub fn verify_hook_delivery(
     delivery: BRegHookDelivery<'_>,
 ) -> Result<BRegVerifiedHookDelivery, BRegHookVerificationError> {
+    verify_hook_delivery_at(delivery, SystemTime::now())
+}
+
+/// Same as [`verify_hook_delivery`], against `now`. For tests and for callers
+/// with their own clock.
+pub fn verify_hook_delivery_at(
+    delivery: BRegHookDelivery<'_>,
+    now: SystemTime,
+) -> Result<BRegVerifiedHookDelivery, BRegHookVerificationError> {
+    let freshness = match delivery.freshness {
+        BRegHookFreshness::DefaultWindow => DeliveryFreshness::default_at(now),
+        BRegHookFreshness::Within { skew } => DeliveryFreshness::Within { now, skew },
+        BRegHookFreshness::CallerEnforced => DeliveryFreshness::CallerEnforced,
+    };
     let verified = verify_delivery(
         SignedDelivery {
             method: delivery.method,
@@ -111,7 +145,7 @@ pub fn verify_hook_delivery(
             body: delivery.body,
             key: delivery.key,
         },
-        DeliveryFreshness::CallerEnforced,
+        freshness,
     )
     .map_err(map_receiver_error)?;
 
@@ -132,9 +166,8 @@ pub fn verify_hook_delivery(
 fn map_receiver_error(error: ReceiverError) -> BRegHookVerificationError {
     match error {
         ReceiverError::MissingHeader => BRegHookVerificationError::MissingHeader,
-        ReceiverError::InvalidDeliveryTime | ReceiverError::Stale => {
-            BRegHookVerificationError::InvalidDeliveryTime
-        }
+        ReceiverError::InvalidDeliveryTime => BRegHookVerificationError::InvalidDeliveryTime,
+        ReceiverError::Stale => BRegHookVerificationError::StaleDelivery,
         ReceiverError::DuplicateHeader => BRegHookVerificationError::DuplicateHeader,
         ReceiverError::BodyTooLarge => BRegHookVerificationError::BodyTooLarge,
         ReceiverError::InvalidKey => BRegHookVerificationError::InvalidKey,

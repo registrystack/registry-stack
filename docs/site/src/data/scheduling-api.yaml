@@ -10,6 +10,7 @@
     - ['`cursor.expired`', '410', 'A page cursor has expired. Start again without a cursor and deduplicate entries by `id`.']
     - ['`cursor.invalid`', '400', 'A page cursor is malformed or was issued for a different request.']
     - ['`eligibility.unavailable`', '503', 'A required eligibility check could not run. Reserved: no milestone path answers it yet.']
+    - ['`grant.lifetime-too-long`', '403', 'The task grant has more than 900 seconds left before it expires. Present a task grant that expires within 900 seconds.']
     - ['`hold.expired`', '410', 'The hold expired before confirmation. Its capacity is bookable again; start a new request.']
     - ['`hold.released`', '409', 'The claim is not an active hold. It may already be confirmed or released.']
     - ['`hook.unavailable`', '503', 'A required lifecycle hook could not run, so the request was refused rather than half-applied. Reserved: no milestone path answers it yet.']

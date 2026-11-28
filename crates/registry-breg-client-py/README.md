@@ -68,14 +68,17 @@ refused), and `body` and `key` are `bytes`. The result is a `dict` with
 `delivery_time`, `idempotency_key`, and the exact `body`. Generation and attempt
 remain decimal strings, as signed.
 
-The helper does not apply clock-skew or deduplication policy. Bound the returned
-`delivery_time` against the receiver clock. `idempotency_key` collapses automatic
+The helper refuses a delivery time more than 300 seconds from the receiver clock
+(code `stale-delivery`). Pass `max_skew_seconds` (a whole number from 1 to 3600) for
+another window, or `caller_enforced_freshness=True` to check only that the time is
+well formed and bound `delivery_time` yourself, but not both. The helper applies no
+deduplication policy. `idempotency_key` collapses automatic
 retries within one delivery generation; an effect that must remain once-only
 across operator replay uses a durable apply-once operation keyed by authenticated
 `source` plus `id`, or by an application business key, before acting on `body`.
 
 Refusal raises `BaseRegistryClientError` with kind `hook-verification` and a
-`code` from `missing-header`, `invalid-delivery-time`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version`; an
+`code` from `missing-header`, `invalid-delivery-time`, `stale-delivery`, `duplicate-header`, `body-too-large`, `invalid-key`, `malformed-signature`, `signature-mismatch`, or `unsupported-version`; an
 argument of the wrong type raises kind `invalid-request`. The message names
 the input to check and never includes a header value, body, or key.
 

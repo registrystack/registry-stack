@@ -8834,7 +8834,10 @@ async fn an_unlisted_source_is_refused_and_never_reaches_the_offline_path() {
 
 /// SEC-03. On the offline path that `unchecked-final-fifteen-minutes`
 /// selects, a grant with one second more than fifteen minutes left is refused
-/// and one with exactly fifteen minutes left books.
+/// with `grant.lifetime-too-long` and one with exactly fifteen minutes left
+/// books. The new answer follows the bounds check: a caller with no grant, or
+/// whose grant does not cover the offering, still gets
+/// `operation.not-authorized`.
 #[tokio::test]
 async fn the_offline_path_accepts_at_most_fifteen_minutes_of_remaining_lifetime() {
     let fx = fixture().await;
@@ -8849,6 +8852,70 @@ async fn the_offline_path_accepts_at_most_fifteen_minutes_of_remaining_lifetime(
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "grant.lifetime-too-long");
+
+    let a_day_left = agent_token_with_grant_exp(pinned_now().timestamp() + 86_400);
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &a_day_left,
+            "a-day-left",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "grant.lifetime-too-long");
+
+    let no_grant = token(json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    }));
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &no_grant,
+            "no-grant-order",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+
+    let mut uncovered = grant_claims();
+    uncovered["registry_grant_exp"] = json!(pinned_now().timestamp() + 86_400);
+    uncovered["registry_grant_bounds"]["permissions"] = json!([{
+        "service": "registry-other",
+        "location": "south-counter",
+        "actions": ["appointment.create"],
+    }]);
+    let mut claims = json!({
+        "sub": "principal-agent",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    claims
+        .as_object_mut()
+        .expect("claims are an object")
+        .extend(
+            uncovered
+                .as_object()
+                .expect("grant claims are an object")
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &token(claims),
+            "uncovered-order",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
 
     let at_the_cap = agent_token_with_grant_exp(pinned_now().timestamp() + 900);
     let (status, booked) = fx

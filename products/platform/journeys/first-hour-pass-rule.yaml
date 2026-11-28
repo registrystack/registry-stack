@@ -1,0 +1,136 @@
+# The first-hour pass rule for the acceptance journeys.
+#
+# One first hour is one product, one path (own-provider or rstack-dev) and one
+# reader. The rule is fixed before the first measured run. A number changes only
+# by a reviewed edit to this file that says why, never to make a measured run
+# pass.
+
+schema: registry.first-hour-pass-rule/v1
+
+notCounted:
+  - Docker installed and running.
+  - Images pulled.
+  - Product binaries installed.
+  - On the own-provider path, an identity provider the reader already runs with
+    one user, and a stock PostgreSQL server. Creating the client, scope and
+    audience for the product in that provider is counted (counter 4).
+
+endPoints:
+  t1:
+    name: first call
+    meaning: The first 2xx answer to an authenticated read.
+  t2:
+    name: the hour
+    meaning: >-
+      One write accepted, the process restarted, and the written record read
+      back. Where the product delivers hooks, one delivery received.
+
+# Any one failing makes the hour fail. Each is counted mechanically as a use of
+# an assist (a function in lib-assists.sh) or as a refusal the documented path
+# meets.
+hardConditions:
+  - id: certificate
+    text: No certificate or TLS key made by the reader.
+  - id: token-hook-or-mapper
+    text: No token hook and no custom claim mapper for a plain read.
+  - id: provisioning-sql
+    text: No SQL typed or written by the reader to provision.
+  - id: image-build
+    text: No image built locally.
+  - id: signature-verifier
+    text: No signature verifier written by the reader.
+  - id: no-refusal
+    text: >-
+      No refusal met while following the documented path exactly (a refused
+      start, a 4xx on the documented call).
+
+# Thresholds are upper bounds, except counter 10, which is a lower bound
+# written as a required count out of three planted mistakes.
+counters:
+  - id: 1
+    name: steps-to-t1
+    how: Commands the reader types, counted as the journey's step calls for the product.
+    unit: commands
+    rstackDev: 4
+    ownProvider: 10
+  - id: 2
+    name: files-touched-to-t1
+    how: >-
+      Files the reader creates or edits by hand, counted as the journey's
+      write_file and edit_file calls. Files a command writes are listed, not
+      counted.
+    unit: files
+    rstackDev: 0
+    ownProvider: 2
+  - id: 3
+    name: lines-written-to-t1
+    how: Lines the reader types into those files.
+    unit: lines
+    rstackDev: 0
+    ownProvider: 25
+  - id: 4
+    name: identity-provider-changes
+    how: >-
+      Objects created or changed in the reader's identity provider. A client, a
+      scope and an audience count. A mapper or a hook is never allowed.
+    unit: objects
+    rstackDev: 0
+    ownProvider: 3
+  - id: 5
+    name: certificates-made
+    how: Uses of a certificate or key tool by the reader.
+    unit: certificates
+    rstackDev: 0
+    ownProvider: 0
+  - id: 6
+    name: concepts-met-to-t1
+    how: >-
+      The size of the union of entries in concepts.yaml that the reader must
+      type or choose a value for. Each step declares the concepts it introduces.
+    unit: concepts
+    rstackDev: 10
+    ownProvider: 14
+  - id: 7
+    name: reader-time-to-t1-modelled
+    how: The reader-time model below, applied to the steps to T1.
+    unit: minutes
+    rstackDev: 10
+    ownProvider: 30
+  - id: 8
+    name: reader-time-to-t2-modelled
+    how: The reader-time model below, applied to the steps to T2.
+    unit: minutes
+    rstackDev: 30
+    ownProvider: 60
+  - id: 9
+    name: machine-time-to-t1
+    how: >-
+      Measured wall time of the commands, without image pulls and builds.
+      Directional only on a shared machine.
+    unit: minutes
+    rstackDev: 3
+    ownProvider: 3
+  - id: 10
+    name: errors-that-say-what-to-change
+    how: >-
+      Three planted mistakes (wrong audience, missing scope, expired token).
+      In development each answer names the setting or claim to change.
+      The value is the number of the three that do.
+    unit: of-three
+    direction: at-least
+    rstackDev: 3
+    ownProvider: 3
+
+# The model that turns counted effort into reader time. The same constants are
+# used for every run, so two runs are comparable even though neither is a
+# stopwatch reading.
+readerTimeModel:
+  typingCharactersPerMinute: 200
+  readingWordsPerMinute: 200
+  secondsPerHandWrittenLine: 30
+  secondsPerConceptFirstMet: 60
+  minutesPerRefusalMet: 5
+  minutesPerAssistUsed: 10
+
+# Pass means every hard condition holds and every counter is inside its threshold.
+pass: all-hard-conditions-and-all-counters

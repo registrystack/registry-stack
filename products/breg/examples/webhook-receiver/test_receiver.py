@@ -387,7 +387,7 @@ class SignatureContractTests(unittest.TestCase):
         ]
         verified = RECEIVER.breg.verify_hook_delivery(
             method="POST", path="/hooks/registry", body=body, key=key,
-            headers=header_pairs,
+            headers=header_pairs, caller_enforced_freshness=True,
         )
         self.assertEqual(verified["body"], body)
 

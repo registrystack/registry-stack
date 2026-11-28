@@ -337,6 +337,25 @@ fn strict_storage_configuration_and_debug_are_value_free() {
         settings(input).unwrap_err(),
         ObjectStoreError::InvalidConfiguration
     );
+    for url in [
+        "http://127.0.0.2:1234",
+        "http://[::1]:1234",
+        "http://[::ffff:127.0.0.1]:1234",
+    ] {
+        settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+    }
+    for url in [
+        "http://localhost:1234",
+        "http://storage.localhost:1234",
+        "http://0.0.0.0:1234",
+        "http://[::ffff:10.0.0.1]:1234",
+    ] {
+        assert_eq!(
+            settings(raw(url)).unwrap_err(),
+            ObjectStoreError::InvalidConfiguration,
+            "{url}"
+        );
+    }
     let accepted = settings(raw("https://storage.example")).unwrap();
     assert_eq!(
         accepted.bucket_url.as_str(),

@@ -231,8 +231,8 @@ class GeneratedOpenApiTests(unittest.TestCase):
             self.assertEqual(entry["title"], properties["title"]["const"])
             self.assertEqual(entry["description"], properties["detail"]["const"])
             self.assertEqual(entry["httpStatuses"][0], properties["status"]["const"])
-        self.assertEqual(33, len(self.contract["entries"]))
-        self.assertEqual(82, len(self.openapi["components"]["schemas"]))
+        self.assertEqual(34, len(self.contract["entries"]))
+        self.assertEqual(83, len(self.openapi["components"]["schemas"]))
 
     def test_every_operation_answers_exactly_the_problems_it_was_mapped(self) -> None:
         for key, expected in GENERATOR.OPERATION_PROBLEMS.items():
@@ -766,6 +766,20 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertIn("hold.create, hold.release, appointment.create, appointment.reschedule, appointment.cancel",
                       self.openapi["components"]["securitySchemes"]["bearerAuth"]["description"])
 
+    def test_a_grant_gated_operation_documents_the_lifetime_refusal_beside_the_bounds_refusal(self) -> None:
+        gated = {
+            key
+            for key in GENERATOR.ROUTE_HANDLERS
+            if operation(self.openapi, key)["x-scheduling-authority"]
+            in ("task-grant", "appointment-detail")
+        }
+        self.assertEqual(7, len(gated))
+        for key in gated:
+            self.assertIn("grant.lifetime-too-long", GENERATOR.OPERATION_PROBLEMS[key], key)
+            self.assertIn("operation.not-authorized", GENERATOR.OPERATION_PROBLEMS[key], key)
+        for key in set(GENERATOR.ROUTE_HANDLERS) - gated:
+            self.assertNotIn("grant.lifetime-too-long", GENERATOR.OPERATION_PROBLEMS[key], key)
+
     def test_the_document_carries_no_tag_list_and_no_timestamp(self) -> None:
         self.assertNotIn("tags", self.openapi)
         self.assertEqual("3.1.0", self.openapi["openapi"])
@@ -979,7 +993,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
                          set(problem["properties"]))
         self.assertEqual(["code", "detail", "status", "title", "traceId", "type"],
                          sorted(problem["required"]))
-        self.assertEqual(33, len(problem["properties"]["code"]["enum"]))
+        self.assertEqual(34, len(problem["properties"]["code"]["enum"]))
         httpsec = GENERATOR.production_source(ROOT, GENERATOR.HTTPSEC_SOURCE)
         http = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
         body = GENERATOR.rust_struct_fields(httpsec, "ProblemBody")

@@ -175,6 +175,34 @@ fn jwks_source_has_three_types_and_defaults_to_discovery() {
 }
 
 #[test]
+fn jwks_uri_loopback_follows_the_shared_definition() {
+    let check = |uri: &str| {
+        JwksSource::Uri {
+            uri: Url::new(uri).unwrap(),
+        }
+        .check("authentication.oidc.jwksSource", true)
+    };
+    for uri in [
+        "http://127.0.0.1:1/jwks",
+        "http://127.0.0.2:1/jwks",
+        "http://[::1]:1/jwks",
+        "http://[::ffff:127.0.0.1]:1/jwks",
+        "http://localhost:1/jwks",
+        "http://LOCALHOST:1/jwks",
+    ] {
+        check(uri).unwrap_or_else(|error| panic!("{uri}: {error:?}"));
+    }
+    for uri in [
+        "http://localhost.:1/jwks",
+        "http://issuer.localhost:1/jwks",
+        "http://0.0.0.0:1/jwks",
+        "http://[::ffff:10.0.0.1]:1/jwks",
+    ] {
+        assert!(check(uri).is_err(), "{uri}");
+    }
+}
+
+#[test]
 fn issuer_and_jwks_uri_are_checked_urls_when_read() {
     for text in [
         "https://issuer.example/a\\b".to_owned(),
@@ -1173,4 +1201,140 @@ fn url_hook_destinations_are_keyed_by_local_identifiers_and_bounded() {
             "{id}"
         );
     }
+}
+
+fn package_clients(yaml: &str) -> OidcPackageClientsConfig {
+    read_block(yaml).expect("package clients parse")
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+#[test]
+fn from_package_keyword_parses() {
+    let block = package_clients("allowedClients: from-package");
+    assert_eq!(block.allowed_clients, PackageClients::FromPackage);
+    assert_eq!(
+        serde_json::to_value(&block).expect("serialize"),
+        serde_json::json!({"allowedClients": "from-package"})
+    );
+}
+
+#[test]
+fn unrestricted_parses() {
+    let block = package_clients("allowedClients: unrestricted");
+    assert_eq!(block.allowed_clients, PackageClients::Unrestricted);
+    assert_eq!(
+        serde_json::to_value(&block).expect("serialize"),
+        serde_json::json!({"allowedClients": "unrestricted"})
+    );
+}
+
+#[test]
+fn list_parses() {
+    let block = package_clients(
+        "allowedClients: [portal, kiosk]\nassertionIssuers: {portal: [https://assert.example.test]}",
+    );
+    assert_eq!(
+        block.allowed_clients,
+        PackageClients::Listed(strings(&["portal", "kiosk"]))
+    );
+    assert_eq!(
+        block.assertion_issuers["portal"],
+        ["https://assert.example.test"]
+    );
+    block.check("authentication.oidc").expect("within bounds");
+    assert_eq!(
+        serde_json::to_value(&block).expect("serialize"),
+        serde_json::json!({
+            "allowedClients": ["portal", "kiosk"],
+            "assertionIssuers": {"portal": ["https://assert.example.test"]},
+        })
+    );
+}
+
+#[test]
+fn empty_list_is_refused() {
+    let report = read_block::<OidcPackageClientsConfig>("allowedClients: []")
+        .expect_err("an empty list is refused");
+    assert_eq!(report.diagnostics()[0].path, "/allowedClients");
+}
+
+#[test]
+fn unknown_keyword_is_refused() {
+    for refused in [
+        "allowedClients: portal",
+        "allowedClients: From-Package",
+        "allowedClients: from_package",
+        "allowedClients: 7",
+    ] {
+        let report = read_block::<OidcPackageClientsConfig>(refused).expect_err(refused);
+        assert_eq!(report.diagnostics()[0].path, "/allowedClients", "{refused}");
+    }
+}
+
+#[test]
+fn absent_member_is_refused() {
+    let report = read_block::<OidcPackageClientsConfig>("{}").expect_err("omission is refused");
+    assert!(
+        report.diagnostics()[0].message.contains("allowedClients"),
+        "{:?}",
+        report.diagnostics()
+    );
+}
+
+#[test]
+fn a_repeated_listed_client_is_refused() {
+    let report = read_block::<OidcPackageClientsConfig>("allowedClients: [portal, portal]")
+        .expect_err("repeat refused");
+    assert_eq!(report.diagnostics()[0].path, "/allowedClients/1");
+}
+
+#[test]
+fn resolve_from_package_returns_the_sorted_union() {
+    let admitted = PackageClients::FromPackage
+        .resolve(&strings(&["c3", "c1", "c2", "c3", "c1"]))
+        .expect("resolves");
+    assert_eq!(admitted.as_slice(), ["c1", "c2", "c3"]);
+}
+
+#[test]
+fn resolve_never_returns_an_empty_list() {
+    assert_eq!(
+        PackageClients::FromPackage
+            .resolve(&[])
+            .expect_err("empty package"),
+        PackageClientsError::Empty
+    );
+    assert_eq!(
+        PackageClients::Unrestricted
+            .resolve(&strings(&["c1"]))
+            .expect_err("unrestricted"),
+        PackageClientsError::Unrestricted
+    );
+    assert_eq!(
+        PackageClients::Listed(Vec::new())
+            .resolve(&strings(&["c1"]))
+            .expect_err("an unparsed empty list"),
+        PackageClientsError::Empty
+    );
+    assert!(AdmittedClients::new(Vec::new()).is_none());
+}
+
+#[test]
+fn resolve_listed_missing_a_package_client_names_the_client() {
+    let listed = PackageClients::Listed(strings(&["c1", "c2"]));
+    let error = listed
+        .resolve(&strings(&["c1", "c3", "c4"]))
+        .expect_err("c3 is missing");
+    assert_eq!(error, PackageClientsError::Missing("c3".to_owned()));
+    assert!(error.to_string().contains("c3"));
+}
+
+#[test]
+fn resolve_listed_covering_the_package_keeps_extra_clients() {
+    let listed = PackageClients::Listed(strings(&["c1", "c2", "extra"]));
+    let admitted = listed.resolve(&strings(&["c2", "c1"])).expect("covers");
+    assert_eq!(admitted.as_slice(), ["c1", "c2", "extra"]);
 }

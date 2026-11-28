@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- A task grant with more than 900 seconds left on the offline path
+  (`taskGrantStatus: unchecked-final-fifteen-minutes`) now answers 403
+  `grant.lifetime-too-long` in place of `operation.not-authorized`, so the
+  caller learns to present a grant that expires sooner. The status is
+  unchanged. An expired grant, a missing grant, and a grant that does not cover
+  the offering still answer `operation.not-authorized`, and a deployment that
+  lists status authorities never answers the new code. Clients that branch on
+  the code gain the new member in `SchedulingProblemCode`.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: `services`, `offerings`, `holidaySets`, `openings`, and `hooks` in

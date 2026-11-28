@@ -19,10 +19,17 @@ test-authorization-server = ["test-utils", "dep:sha2", "dep:url", "dep:uuid"]
 migration-pins = ["test-utils", "dep:sha2"]
 # Canonical PostgreSQL catalogs for migration replay-equivalence tests.
 postgres-catalog = ["test-utils", "dep:tokio-postgres"]
+# The token fixture corpus under `products/platform/conformance/tokens`, a test-time signer and a
+# closure-driven driver; see `TokenCorpus`.
+token-fixtures = ["test-utils", "dep:rand", "dep:serde", "dep:registry-platform-yaml"]
 
 [[test]]
 name = "test_authorization_server"
 required-features = ["test-authorization-server"]
+
+[[test]]
+name = "token_fixtures"
+required-features = ["token-fixtures"]
 
 [dependencies]
 axum.workspace = true
@@ -34,7 +41,10 @@ registry-platform-crypto = { workspace = true }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil = { workspace = true }
 registry-platform-oidc = { workspace = true }
+registry-platform-yaml = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
 reqwest.workspace = true
+serde = { workspace = true, optional = true }
 serde_json.workspace = true
 sha2 = { workspace = true, optional = true }
 thiserror.workspace = true

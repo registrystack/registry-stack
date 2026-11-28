@@ -1,0 +1,42 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "esignet-access-token",
+  "class": "negative",
+  "provider": "esignet",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "documentation",
+    "consultedOn": "2026-11-27",
+    "url": "https://docs.esignet.io/home/esignet-2.x/readme/standards.md",
+    "note": "eSignet 2.x documentation, no lab run. The access token follows RFC 9068 with sub, iss, aud, exp, iat, client_id and scope. The header typ is not stated. at+jwt is inferred from the RFC and is not documented."
+  },
+  "header": {
+    "alg": "RS256",
+    "typ": "at+jwt",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "iss": "https://esignet.example.test",
+    "aud": {
+      "bind": "audience"
+    },
+    "sub": "00000000-0000-4000-8000-000000000001",
+    "client_id": "journey-app",
+    "scope": "journey.read",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 3600
+    }
+  },
+  "omits": [
+    "azp",
+    "registry_actor_kind"
+  ],
+  "notes": "The issuer is a literal. A product trusts one configured issuer and never an eSignet issuer."
+}

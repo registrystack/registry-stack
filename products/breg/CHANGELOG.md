@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- The Rust, Node and Python hook verifiers in the BReg clients refuse a
+  delivery time more than 300 seconds from the receiver clock, either way,
+  with the new code `stale-delivery`. A receiver that passed nothing gets that
+  window. `maxSkewSeconds` (Python `max_skew_seconds`, 1 to 3600) sets another
+  window, and `callerEnforcedFreshness: true` (Python
+  `caller_enforced_freshness=True`) keeps the earlier behaviour of checking
+  only that the time is well formed. Rust callers that build
+  `BRegHookDelivery` as a struct literal add the `freshness` member
+  (`BRegHookFreshness::default()` for the window).
+- A pinned static key set (`authentication.oidc.jwksSource.type: static`)
+  follows the shared public-key rule every product uses. Members BReg does not
+  name, such as `x5c` or `ext`, and members beside `keys` no longer refuse the
+  document. A private or symmetric key member, a repeated member name, and a
+  missing or repeated `kid` are still refused, and the startup refusal names
+  the rule and the key's position. A listener origin treats an IPv4-mapped
+  loopback literal, such as `[::ffff:127.0.0.1]`, as loopback.
+
 - Refused Record file downloads use the same attachment audit operation as
   served downloads, including refusals before database access. The slot suffix
   names only a declared slot. Caller-supplied undeclared names stay out of audit.

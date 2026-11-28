@@ -101,6 +101,6 @@ proptest.workspace = true
 # dependency.
 rcgen.workspace = true
 tokio-rustls.workspace = true
-registry-platform-testing.workspace = true
+registry-platform-testing = { workspace = true, features = ["token-fixtures"] }
 tempfile.workspace = true
 serde_norway.workspace = true

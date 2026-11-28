@@ -2290,7 +2290,11 @@ impl SchedulingService {
     /// grant reaches would leave no audit entry. Each refusal is one `response`
     /// entry with a correlation of its own. What the audit gains is the
     /// attribution: the answer stays the same closed code, naming neither
-    /// the bound that failed nor whether a grant was carried at all.
+    /// the bound that failed nor whether a grant was carried at all. The one
+    /// later answer that does say a grant was carried is a current-grant
+    /// refusal for too much lifetime left, and it is given only after this
+    /// check has passed, so it tells a caller nothing about which services
+    /// and locations a grant reaches.
     async fn require_permission(
         &self,
         caller: &Caller,
@@ -2418,7 +2422,7 @@ impl SchedulingService {
             ServiceError::internal("the task-grant clock observation is not representable")
         })?;
         let verdict = if online_required && self.task_grant_status.is_none() {
-            Err(TaskGrantError::Refused)
+            GrantVerdict::Refused
         } else {
             task_grant_verdict(
                 self.task_grant_status.as_deref(),
@@ -2429,8 +2433,8 @@ impl SchedulingService {
             .await
         };
         match verdict {
-            Ok(()) => Ok(()),
-            Err(TaskGrantError::Refused) => {
+            GrantVerdict::Current => Ok(()),
+            refused @ (GrantVerdict::Refused | GrantVerdict::LifetimeTooLong) => {
                 self.record_refusal(
                     Uuid::new_v4(),
                     audit_record(
@@ -2444,13 +2448,19 @@ impl SchedulingService {
                     ),
                 )
                 .await?;
-                Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized))
+                Err(ServiceError::Problem(
+                    if refused == GrantVerdict::LifetimeTooLong {
+                        ProblemCode::GrantLifetimeTooLong
+                    } else {
+                        ProblemCode::OperationNotAuthorized
+                    },
+                ))
             }
-            Err(TaskGrantError::Unavailable) => {
+            GrantVerdict::Unavailable => {
                 tracing::warn!("the task-grant authority could not establish current status");
                 Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
             }
-            Err(TaskGrantError::Configuration) => {
+            GrantVerdict::Configuration => {
                 tracing::error!("the activated task-grant status registry became unusable");
                 Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
             }
@@ -2977,29 +2987,54 @@ impl SchedulingService {
     }
 }
 
+/// The outcome of deciding whether a task grant is current.
+#[derive(Debug, PartialEq, Eq)]
+enum GrantVerdict {
+    Current,
+    /// Expired, inactive, unlisted, or unbound.
+    Refused,
+    /// Unexpired on the offline path, with more than
+    /// `OFFLINE_TASK_GRANT_REMAINING_SECONDS` left.
+    LifetimeTooLong,
+    Unavailable,
+    Configuration,
+}
+
+impl From<Result<(), TaskGrantError>> for GrantVerdict {
+    fn from(verdict: Result<(), TaskGrantError>) -> Self {
+        match verdict {
+            Ok(()) => Self::Current,
+            Err(TaskGrantError::Refused) => Self::Refused,
+            Err(TaskGrantError::Unavailable) => Self::Unavailable,
+            Err(TaskGrantError::Configuration) => Self::Configuration,
+        }
+    }
+}
+
 /// Decide whether one verified task grant is current at `now`, in Unix
 /// seconds. Listed status authorities are authoritative for every source: a
 /// grant without the signed subjects its status binding needs, or from a
 /// source no authority is listed for, is refused and never reaches the
 /// offline path. Without them, the offline path accepts a grant only while it
-/// is unexpired with at most fifteen minutes left, and asks no authority.
+/// is unexpired with at most fifteen minutes left, and asks no authority. An
+/// unexpired grant with more left is `LifetimeTooLong`, distinct from `Refused`
+/// so the caller learns to present a shorter-lived grant.
 async fn task_grant_verdict(
     status: Option<&TaskGrantStatusRegistry>,
     subjects: Option<std::collections::BTreeMap<String, Value>>,
     grant: &GrantClaims,
     now: u64,
-) -> Result<(), TaskGrantError> {
+) -> GrantVerdict {
     match status {
         Some(status) => match subjects
             .and_then(|subjects| TaskGrantStatusBinding::from_verified(grant, subjects).ok())
         {
-            Some(binding) => status.check(&binding).await,
-            None => Err(TaskGrantError::Refused),
+            Some(binding) => status.check(&binding).await.into(),
+            None => GrantVerdict::Refused,
         },
-        None if grant.exp() > now && grant.exp() - now <= OFFLINE_TASK_GRANT_REMAINING_SECONDS => {
-            Ok(())
-        }
-        None => Err(TaskGrantError::Refused),
+        None if grant.exp() <= now => GrantVerdict::Refused,
+        None if grant.exp() - now <= OFFLINE_TASK_GRANT_REMAINING_SECONDS => GrantVerdict::Current,
+        None => GrantVerdict::LifetimeTooLong,
     }
 }
 
@@ -4771,23 +4806,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_offline_path_accepts_only_an_unexpired_grant_with_at_most_fifteen_minutes_left() {
+    async fn the_offline_path_tells_a_grant_with_too_much_lifetime_from_an_expired_one() {
         let now = u64::try_from(at(9, 0).timestamp()).expect("a representable instant");
         for (case, expires_at, expected) in [
-            ("one second left", now + 1, Ok(())),
-            ("exactly fifteen minutes left", now + 900, Ok(())),
+            ("one second left", now + 1, GrantVerdict::Current),
+            (
+                "exactly fifteen minutes left",
+                now + 900,
+                GrantVerdict::Current,
+            ),
             (
                 "one second more than fifteen minutes left",
                 now + 901,
-                Err(TaskGrantError::Refused),
+                GrantVerdict::LifetimeTooLong,
             ),
-            ("an hour left", now + 3_600, Err(TaskGrantError::Refused)),
-            (
-                "expiring at request entry",
-                now,
-                Err(TaskGrantError::Refused),
-            ),
-            ("expired", now - 60, Err(TaskGrantError::Refused)),
+            ("a day left", now + 86_400, GrantVerdict::LifetimeTooLong),
+            ("expiring at request entry", now, GrantVerdict::Refused),
+            ("expired", now - 60, GrantVerdict::Refused),
         ] {
             let grant = verified_grant(STATUS_SOURCE, expires_at, now - 600);
             for subjects in [None, Some(status_subjects())] {
@@ -4813,13 +4848,13 @@ mod tests {
         let unlisted = verified_grant("https://other-authority.test", now + 600, now);
         assert_eq!(
             task_grant_verdict(Some(&registry), Some(status_subjects()), &unlisted, now).await,
-            Err(TaskGrantError::Refused),
+            GrantVerdict::Refused,
             "an unlisted source is refused"
         );
         let unbound = verified_grant(STATUS_SOURCE, now + 600, now);
         assert_eq!(
             task_grant_verdict(Some(&registry), None, &unbound, now).await,
-            Err(TaskGrantError::Refused),
+            GrantVerdict::Refused,
             "a grant without signed subjects is refused"
         );
         assert_eq!(
@@ -4836,9 +4871,9 @@ mod tests {
         let mut active = active_answer(&grant);
         active["grant"]["subjects"] = json!({});
         for (response, expected) in [
-            (active, Ok(())),
-            (active_answer(&grant), Err(TaskGrantError::Refused)),
-            (json!({"active":false}), Err(TaskGrantError::Refused)),
+            (active, GrantVerdict::Current),
+            (active_answer(&grant), GrantVerdict::Refused),
+            (json!({"active":false}), GrantVerdict::Refused),
         ] {
             let (server, registry) =
                 listed_authority(wiremock::ResponseTemplate::new(200).set_body_json(response))
@@ -4856,6 +4891,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_listed_authority_never_answers_lifetime_too_long() {
+        let now = unix_now();
+        let grant = verified_grant(STATUS_SOURCE, now + 86_400, now);
+        for (case, response, expected) in [
+            (
+                "active",
+                wiremock::ResponseTemplate::new(200).set_body_json(active_answer(&grant)),
+                GrantVerdict::Current,
+            ),
+            (
+                "inactive",
+                wiremock::ResponseTemplate::new(200).set_body_json(json!({"active": false})),
+                GrantVerdict::Refused,
+            ),
+        ] {
+            let (_server, registry) = listed_authority(response).await;
+            assert_eq!(
+                task_grant_verdict(Some(&registry), Some(status_subjects()), &grant, now).await,
+                expected,
+                "{case}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn a_listed_authority_answer_decides_the_grant() {
         let now = unix_now();
         // An hour left: the listed path is not bounded to fifteen minutes.
@@ -4864,17 +4924,17 @@ mod tests {
             (
                 "active",
                 wiremock::ResponseTemplate::new(200).set_body_json(active_answer(&grant)),
-                Ok(()),
+                GrantVerdict::Current,
             ),
             (
                 "inactive",
                 wiremock::ResponseTemplate::new(200).set_body_json(json!({"active": false})),
-                Err(TaskGrantError::Refused),
+                GrantVerdict::Refused,
             ),
             (
                 "unavailable",
                 wiremock::ResponseTemplate::new(503),
-                Err(TaskGrantError::Unavailable),
+                GrantVerdict::Unavailable,
             ),
         ] {
             let (server, registry) = listed_authority(response).await;

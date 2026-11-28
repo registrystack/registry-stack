@@ -316,6 +316,7 @@ export type SchedulingProblemCode =
   | 'cursor.expired'
   | 'cursor.invalid'
   | 'eligibility.unavailable'
+  | 'grant.lifetime-too-long'
   | 'hold.expired'
   | 'hold.released'
   | 'hook.unavailable'

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- One rule for a static key set, in `registry-platform-oidc`
+  (`public_jwks_document`, behind `parse_static_jwks`). A key set that holds
+  a private or symmetric member (`d`, `k`, `p`, `q`, `dp`, `dq`, `qi`,
+  `oth`) is refused whatever the key type, and a repeated member name is
+  refused. Members the rule does not name (`ext`, `x5c`, `x5t`, `x5u` and
+  others) are ignored. A refusal is `OidcError::StaticKeySet` and names the
+  key position and the rule, never a `kid` or a value. The member list is
+  `registry_platform_crypto::PRIVATE_JWK_MEMBERS`.
+
 ## 0.48.0 - 2026-11-23
 
 - No user-visible product changes in this release.

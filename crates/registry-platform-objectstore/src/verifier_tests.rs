@@ -143,6 +143,25 @@ fn verifier_config_is_strict_and_redacted() {
             "{url}"
         );
     }
+    for url in [
+        "http://127.0.0.2/verify",
+        "http://[::1]/verify",
+        "http://[::ffff:127.0.0.1]/verify",
+    ] {
+        settings(raw(url)).unwrap_or_else(|error| panic!("{url}: {error:?}"));
+    }
+    for url in [
+        "http://localhost/verify",
+        "http://verifier.localhost/verify",
+        "http://0.0.0.0/verify",
+        "http://[::ffff:10.0.0.1]/verify",
+    ] {
+        assert_eq!(
+            settings(raw(url)).unwrap_err(),
+            VerifierError::InvalidConfiguration,
+            "{url}"
+        );
+    }
     // The shared block's `Url` already refuses these at decode.
     for url in [
         "https://user:secret@example/verify",

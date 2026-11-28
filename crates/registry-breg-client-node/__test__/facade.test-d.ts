@@ -138,6 +138,12 @@ verifiedHook.idempotencyKey.toUpperCase()
 verifiedHook.body.byteLength.toFixed()
 const webhookRefusal: HookVerificationRefusalCode = 'signature-mismatch'
 webhookRefusal.toUpperCase()
+const staleRefusal: HookVerificationRefusalCode = 'stale-delivery'
+staleRefusal.toUpperCase()
+verifyHookDelivery({ method: 'POST', path: '/', headers: {}, body: Buffer.from('{}'), key: Buffer.alloc(32), maxSkewSeconds: 60 })
+verifyHookDelivery({ method: 'POST', path: '/', headers: {}, body: Buffer.from('{}'), key: Buffer.alloc(32), callerEnforcedFreshness: true })
+// @ts-expect-error The window is a number of seconds.
+verifyHookDelivery({ method: 'POST', path: '/', headers: {}, body: Buffer.from('{}'), key: Buffer.alloc(32), maxSkewSeconds: '60' })
 // @ts-expect-error Hook bodies must remain exact bytes.
 verifyHookDelivery({ method: 'POST', path: '/', headers: {}, body: '{}', key: Buffer.alloc(32) })
 // @ts-expect-error Header values must be exact strings.

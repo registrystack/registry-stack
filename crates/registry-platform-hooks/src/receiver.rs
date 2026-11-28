@@ -41,6 +41,10 @@ const HEADERS: [&str; 12] = [
     "x-registry-signature",
 ];
 
+/// How far a signed delivery time may be from the receiver clock, in either
+/// direction, when the receiver names no window of its own.
+pub const DEFAULT_DELIVERY_SKEW: Duration = Duration::from_secs(300);
+
 /// How the receiver bounds the signed delivery time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryFreshness {
@@ -51,6 +55,17 @@ pub enum DeliveryFreshness {
     /// caller enforces its own clock window on
     /// [`VerifiedDelivery::delivery_time`] before acting on the body.
     CallerEnforced,
+}
+
+impl DeliveryFreshness {
+    /// The default window around `now`.
+    #[must_use]
+    pub const fn default_at(now: SystemTime) -> Self {
+        Self::Within {
+            now,
+            skew: DEFAULT_DELIVERY_SKEW,
+        }
+    }
 }
 
 /// Exact request material of one received delivery.
@@ -378,6 +393,24 @@ mod tests {
         assert!(
             verify(&headers, BODY, DeliveryFreshness::CallerEnforced).is_ok(),
             "the caller owns the clock window"
+        );
+    }
+
+    #[test]
+    fn the_default_window_is_300_seconds_in_both_directions() {
+        assert_eq!(DEFAULT_DELIVERY_SKEW, Duration::from_secs(300));
+        let headers = headers();
+        let at = |now: SystemTime| verify(&headers, BODY, DeliveryFreshness::default_at(now));
+        let delivered = delivery_instant();
+        assert!(at(delivered + Duration::from_secs(300)).is_ok());
+        assert_eq!(
+            at(delivered + Duration::from_secs(301)),
+            Err(ReceiverError::Stale)
+        );
+        assert!(at(delivered - Duration::from_secs(300)).is_ok());
+        assert_eq!(
+            at(delivered - Duration::from_secs(301)),
+            Err(ReceiverError::Stale)
         );
     }
 

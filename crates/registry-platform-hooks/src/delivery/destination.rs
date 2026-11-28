@@ -22,6 +22,7 @@ use registry_platform_httputil::destination::{
     EventDestinationRequestTemplate, MAX_DESTINATION_REQUEST_HEADER_BYTES,
     MAX_DESTINATION_TARGET_BYTES,
 };
+use registry_platform_httputil::loopback::loopback_host;
 use url::Url;
 
 use super::seams::{
@@ -305,12 +306,7 @@ pub fn url_destination_address(
     }
     let profile = match parsed.scheme() {
         "https" => DestinationProfile::ProductionHttps,
-        "http"
-            if matches!(
-                parsed.host_str(),
-                Some("127.0.0.1") | Some("localhost") | Some("[::1]")
-            ) =>
-        {
+        "http" if parsed.host_str().and_then(loopback_host).is_some() => {
             DestinationProfile::LoopbackDevelopmentHttp
         }
         _ => return Err(UrlDestinationError::InvalidBinding),
@@ -467,6 +463,40 @@ mod tests {
             "https://hooks.example/in#x",
             "ftp://hooks.example/in",
             "not a url",
+        ] {
+            assert_eq!(
+                url_destination_address(refused),
+                Err(UrlDestinationError::InvalidBinding),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn url_address_follows_the_shared_loopback_definition() {
+        for admitted in [
+            "http://127.0.0.1:9000/in",
+            "http://127.0.0.2:9000/in",
+            "http://[::1]:9000/in",
+            "http://[::ffff:127.0.0.1]:9000/in",
+            "http://localhost:9000/in",
+            "http://LOCALHOST:9000/in",
+        ] {
+            let address = url_destination_address(admitted).expect(admitted);
+            assert_eq!(
+                address.profile,
+                DestinationProfile::LoopbackDevelopmentHttp,
+                "{admitted}"
+            );
+        }
+        for refused in [
+            "http://localhost.:9000/in",
+            "http://hooks.localhost:9000/in",
+            "http://127.0.0.1.example:9000/in",
+            "http://0.0.0.0:9000/in",
+            "http://[::]:9000/in",
+            "http://10.0.0.1:9000/in",
+            "http://[::ffff:10.0.0.1]:9000/in",
         ] {
             assert_eq!(
                 url_destination_address(refused),

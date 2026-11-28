@@ -739,11 +739,7 @@ fn is_loopback_origin(url: &url::Url) -> bool {
     let Some(host) = url.host() else {
         return false;
     };
-    match host {
-        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
-        url::Host::Ipv4(ip) => ip.is_loopback(),
-        url::Host::Ipv6(ip) => ip.is_loopback(),
-    }
+    crate::loopback::loopback_host(&host.to_string()).is_some()
 }
 
 #[cfg(test)]
