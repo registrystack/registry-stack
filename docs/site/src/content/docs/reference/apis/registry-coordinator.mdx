@@ -19,7 +19,7 @@ recovering that run, operating the deployment, and taking Casework completion wa
 Every route except `/health`, `/ready`, `/v1/review-completions`, and
 `/v1/events/{workflow}/{trigger}` takes a caller access token, and the caller policy that token
 resolves to decides what the caller may do. A Casework completion authenticates with its
-completion token, and a product event with its source's delivery signature.
+Standard Webhooks signature, as does a product event.
 [API stability](../../api-stability/) states the versioning contract.
 
 [Open the Registry Coordinator API operations](../coordinator/) for every route, parameter, schema,
@@ -110,22 +110,21 @@ A start is refused before admission when:
 declares that trigger and the runtime file lists its source under `eventSources`. The body is the
 platform hook envelope, at most 1,048,576 canonical JSON bytes, above which it answers
 `413 request.body-too-large`; the admitted event value must then fit the 131,072-byte value
-profile, or it answers `413 event.too-large`. The `X-Registry-Signature` header carries the HMAC delivery signature over
-the envelope, the signed delivery headers, the method, and the exact request target; the
-`ce-*` headers must match the body and the trigger's authored source, event type, and data
-schema. The delivery time must be within 30 seconds of the Coordinator's clock, so a producer
-signs each delivery attempt afresh.
+profile, or it answers `413 event.too-large`. Send exactly one each of `webhook-id`,
+`webhook-timestamp`, and `webhook-signature`. Standard Webhooks signs the webhook ID, the Unix timestamp,
+and the exact body using the key for that trigger URL. The webhook ID must equal the envelope ID.
+The envelope must match the configured producer URI and the trigger's event type and data schema.
+The signed timestamp must be within 300 seconds of the receiver's clock in either direction.
 
 The exact source, event identity, and trigger bind admission across retries: a redelivered event
 returns the run it already admitted, and the run belongs to the authenticated source, not to a
 caller. An admitted event answers `204` with an empty body and an `X-Coordinator-Run-Id` header.
-An unknown workflow or trigger, or a signature that does not verify, answers
-`401 event.unauthenticated`, a malformed envelope `400 event.invalid`, and a source whose key is
-not configured or cannot be read `503 event.source-unavailable`. The event grants no authority for
-the calls the run then makes.
+An unknown workflow or trigger or a refused delivery answers `401 event.unauthenticated`.
+An authenticated malformed envelope answers `400 event.invalid`.
+The event grants no authority for the calls the run then makes.
 
 {/* Evidence: crates/registry-coordinator/src/event_trigger.rs, MAXIMUM_EVENT_BYTES,
-    DELIVERY_SKEW, verify_delivery, receive;
+    verify_hook_delivery, verify_delivery, receive;
     crates/registry-coordinator/src/http/admission_contracts.rs, event_path;
     crates/registry-coordinator/src/http.rs, router, http_edge. */}
 
@@ -222,16 +221,17 @@ reason answers `400 request.reason-invalid`, and an out-of-bounds cutoff or limi
 ## Review completions
 
 `POST /v1/review-completions` takes Casework's completion events for a review producer connection.
-It authenticates the sender by the `Authorization: Bearer` completion token and the
-`Registry-Recipient-Binding` header together, comparing the token in constant time, and refuses
-any other sender with `401 authentication.refused` before reading the body. Without a configured
-`completion` block on the connection, it refuses every event.
+Exactly one `Registry-Recipient-Binding` header selects the connection. Its key verifies the
+Standard Webhooks signature over the webhook ID, Unix timestamp, and exact body. Send exactly
+one each of `webhook-id`, `webhook-timestamp`, and `webhook-signature`. The timestamp must be
+within 300 seconds in either direction. An unknown binding or refused signature answers
+`401 authentication.refused`.
 
-An authenticated event is `application/json` of at most 2048 bytes, with `type`, `eventId`,
-`requestId`, `resultId`, and `completedAt`. It repeats its `eventId` as the `Idempotency-Key`
-header, and its `completedAt` is no older than 365 days and no more than five minutes ahead of the
-Coordinator's clock. Anything else answers `400 request.invalid` or
-`415 request.unsupported-media-type`.
+A body larger than 2048 bytes answers `413 request.body-too-large`. An authenticated event uses
+`application/json` and carries `type`, `eventId`, `requestId`, `resultId`, and `completedAt`.
+Its `eventId` equals `webhook-id`. Its `completedAt` can be up to 365 days old or five minutes
+ahead of the Coordinator's clock. An invalid body answers `400 request.invalid` and an
+unsupported media type answers `415 request.unsupported-media-type`.
 
 Every authentic, well-formed event answers `204`, whether or not a run waits on its request. The
 event only brings forward the next result read of a run already waiting on that request: the run
@@ -239,8 +239,7 @@ reads the result itself through the connection's producer credential. An event s
 `503 service.unavailable` asks Casework to deliver the event again.
 
 {/* Evidence: crates/registry-coordinator/src/completion.rs, receive_review_completion,
-    MAXIMUM_BODY_BYTES; crates/registry-coordinator/src/review.rs, CompletionSender::matches
-    (registry_platform_crypto::mac::constant_time_eq); products/coordinator/generated/openapi/coordinator.openapi.json,
+    MAXIMUM_BODY_BYTES, authenticate; products/coordinator/generated/openapi/coordinator.openapi.json,
     ReviewCompletion. */}
 
 ## Problem documents and codes
@@ -250,8 +249,10 @@ an RFC 9457 `application/problem+json` document with `type`, `title`, `status`, 
 and `traceId`. The `type` is the code with its dot replaced by a slash under
 `https://id.registrystack.org/problems/registry-coordinator/`. The title and detail are fixed
 sentences that belong to the code, and no member repeats a submitted value. A refusal carries
-`Cache-Control: no-store` and a `traceparent` header whose trace matches `traceId`; a `401` also
-carries `WWW-Authenticate: Bearer`, and a `503` carries `Retry-After`.
+`Cache-Control: no-store` and a `traceparent` header whose trace matches `traceId`. A `401`
+challenges with `WWW-Authenticate: Bearer` on caller routes and
+`WWW-Authenticate: Registry-Signature scheme="standard-webhooks", version="v1"` on the event and completion routes.
+A `503` carries `Retry-After`.
 
 {/* Evidence: crates/registry-coordinator/src/problem.rs; products/coordinator/README.md, Observe
     and recover; products/coordinator/generated/openapi/coordinator.openapi.json, Problem. */}

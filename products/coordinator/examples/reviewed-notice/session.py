@@ -285,15 +285,14 @@ def serve(args):
         checkpoint_cleanup(state_path, journey)
 
         coordinator_port, casework_port = fixture.free_ports(2)
-        completion_token = secrets.token_urlsafe(32)
-        receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
-        casework_url = journey.review_casework(owner, resource, casework_port, receiver, completion_token)
-        checkpoint_cleanup(state_path, journey)
         keys = journey.root / "coordinator-review-secrets"
+        fixture.private(keys / "reviewed-notice-completion-key", secrets.token_hex(32).encode("ascii"))
+        receiver = f"http://127.0.0.1:{coordinator_port}/v1/review-completions"
+        casework_url = journey.review_casework(owner, resource, casework_port, receiver, keys)
+        checkpoint_cleanup(state_path, journey)
         reviewer = journey.export(owner, "review-producer", keys)
         reader = journey.export(owner, "application-reader", keys)
         sender = journey.export(owner, "case-system", keys)
-        fixture.private(keys / "review-completion-token", completion_token)
         runtime, coordinator_url, coordinator = journey.coordinator_service(owner, "reviewed-notice", keys, {
             "applications": {"type": "breg", "baseUrl": journey.urls["breg"],
                 "profile": "follow-up-reader",
@@ -302,7 +301,7 @@ def serve(args):
                 "profile": "coordinator-producer", "producer": "coordinator",
                 "authorization": journey.authorization(reviewer, resource, ["casework:review"]),
                 "completion": {"recipientBinding": "coordinator-v1",
-                    "bearerTokenRef": "secret:file/review-completion-token"},
+                    "hmacSha256KeyRef": "secret:file/reviewed-notice-completion-key"},
                 "resultCheckSeconds": 900},
             "notices": {"type": "messaging", "baseUrl": messaging_url,
                 "authorization": journey.authorization(sender, sender["resource"], ["messaging:send"])},

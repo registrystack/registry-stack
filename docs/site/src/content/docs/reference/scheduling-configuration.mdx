@@ -186,16 +186,17 @@ The maintained example uses mounted files.
 
 A secret reference is `secret:env/NAME` with an uppercase environment name, or `secret:file/name`
 with a lowercase file name, each of at most 128 bytes.
-A resolved value is non-empty text of at most 64 KiB without NUL bytes.
+Text secrets resolve to non-empty text of at most 64 KiB without NUL bytes.
+Delivery signing keys are read as exact bytes.
 A secret file must meet the [secret file rule](../../security/hardening-checklist/#secret-files),
 for example a regular file owned by the runtime user, with mode 0400 or 0600 and exactly one hard
 link.
 Generate the audit key with `openssl rand -hex 32`.
 
-{/* Evidence: crates/registry-scheduling/src/config.rs secret_reference,
+{/* Evidence: crates/registry-scheduling/src/config.rs present_reminder_key_reference,
     a_hook_binding_secret_is_checked_against_the_enabled_providers,
     a_reminder_signing_secret_is_checked_against_the_enabled_providers;
-    crates/registry-scheduling/src/runtime.rs secret_providers. */}
+    crates/registry-scheduling/src/runtime.rs secret_providers, resolve_delivery_key. */}
 
 ## Database
 
@@ -578,30 +579,29 @@ An expired hold writes its history entry as `system` and no audit entry.
 
 ### Reminder destination
 
-`destinations.reminders` is the one place due reminder intents are delivered, as the shared hook
-envelope with `content-type: application/json` over HTTPS POST (see
-[Send reminders and appointment events](../../configure/scheduling/#send-reminders-and-appointment-events)), with
-`bearerTokenRef` as the optional bearer secret.
-The independent optional `hmacSha256KeyRef` enables the shared signed CloudEvents delivery
-contract and must resolve to a key of at least 32 bytes.
-Destinations without this key keep their unsigned behaviour.
-Signed destinations can also use bearer authentication; receiving an event does not authorise
-downstream capacity changes or message delivery.
+Scheduling POSTs due reminder intents as canonical JSON with Standard Webhooks signatures
+(see [Send reminders and appointment events](../../configure/scheduling/#send-reminders-and-appointment-events)).
+The fallback `url` and every destination in `purposes` require an `hmacSha256KeyRef` that
+resolves to 32 to 64 exact key bytes. An optional `previousHmacSha256KeyRef` adds a second
+signature after the current key's signature during rotation. Omit the previous reference when
+there is no previous key. Every current and previous key must be distinct across reminder and
+hook destinations. See [Signed hook deliveries](../delivery-signing/) for the key generation
+command, the trailing-newline warning, and the rotation procedure.
 
-`url` is the fallback endpoint.
-An optional closed `purposeUrls` block may override it for any of `confirmation`, `change`,
-`cancellation`, and `reminder`; omitted purposes keep using `url`.
-Every override must use the fallback's scheme, host, and effective port.
-For example:
+The optional `purposes` block accepts `confirmation`, `change`, `cancellation`, and `reminder`.
+Every entry requires its own `url` with the fallback's scheme, host, and effective port.
+Omitted purposes use the fallback URL and key. Configure each receiver with the key for the URL
+it serves.
 
 ```yaml
 destinations:
   reminders:
     url: https://events.example.org/scheduling
-    purposeUrls:
-      confirmation: https://events.example.org/scheduling/confirmed
-      reminder: https://events.example.org/scheduling/reminder
     hmacSha256KeyRef: secret:file/reminder-signing-key
+    purposes:
+      confirmation:
+        url: https://events.example.org/scheduling/confirmed
+        hmacSha256KeyRef: secret:file/confirmation-signing-key
 ```
 
 Each URL is one reviewed absolute endpoint without userinfo, query, or fragment and with a safe
@@ -626,7 +626,7 @@ An absent reminders destination is a supported deployment: the intents stay read
 and are set aside as local, never pretended delivered.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs ReminderDestinationConfig,
-    ReminderPurposeUrls, reminder_purpose_urls_are_typed_and_optional,
+    ReminderPurposes, reminder_purposes_are_typed_and_optional,
     invalid_reminder_purpose_urls_are_refused_without_repeating_values, valid_destination_url;
     crates/registry-scheduling/src/runtime.rs; crates/registry-platform-dispatch/src/retry.rs. */}
 
@@ -640,7 +640,8 @@ Each entry requires `url` and `hmacSha256KeyRef`.
 `attemptTimeoutMilliseconds` defaults to 5000 and is bounded from 100 through 10000, while
 `maximumAttempts` defaults to 8 and is bounded from 1 through 20.
 URLs use the same HTTPS and explicit-loopback rules as the reminder destination.
-A signing key must contain at least 32 bytes.
+The key size, rotation field, and distinct-key requirement are the same as for the
+[reminder destination](#reminder-destination).
 
 Every destination the current policy names must be configured.
 Explicit extra bindings are allowed so retained events captured under an earlier policy can finish

@@ -131,7 +131,7 @@ The guarantees hold only when you meet these obligations.
     See SCHEDULING-DEF-06.
 11. Bound request rates at your ingress.
     Scheduling keeps no request budget of its own (SCHEDULING-RES-06).
-12. Make your hook receivers tolerate duplicate events; delivery is at-least-once
+12. Deduplicate hook and reminder deliveries using `webhook-id`. Delivery is at-least-once
     (SCHEDULING-RES-07).
 13. Apply a new package to a new database when a refusal reports a pre-1.0 schema.
     No release upgrades that state in place.
@@ -269,17 +269,21 @@ it is listed with them.
 
 - Condition: a send's response is lost, or a reminder's appointment is cancelled or moved while a
   dispatcher holds the reminder.
-- Consequence: a destination that ignores the envelope `id` may see an event twice.
+- Consequence: a destination that ignores `webhook-id` may see an event twice.
   A cancel or reschedule committed between the liveness check and the send can still send a stale
   reminder, and receivers get no ordering across processes.
   One worker serves each runtime process.
-- Operator mitigation: deduplicate on the envelope `id` and treat reminders as advisory.
+- Operator mitigation: deduplicate by `webhook-id`, which is the outbox id for reminders, and
+  treat reminders as advisory. Configure a distinct signing key for each reminder and hook
+  destination, including each configured reminder purpose. See the
+  [delivery signing guide](../../reference/delivery-signing/) for destination key isolation,
+  key generation without trailing newlines, and rotation.
 - Related: SCHEDULING-SEC-24, SCHEDULING-SEC-38.
 
 {/* Evidence: products/scheduling/contracts/security-invariant-matrix.yaml SCHEDULING-SEC-24,
     SCHEDULING-SEC-38;
     crates/registry-scheduling/tests/postgres_commitments.rs
-    a_signed_reminder_uses_the_shared_event_delivery_contract. */}
+    a_signed_reminder_uses_the_standard_webhooks_delivery_contract. */}
 
 ### SCHEDULING-RES-08: an open activation race fails closed with an availability cost
 

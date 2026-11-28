@@ -113,7 +113,7 @@ class DeliveryProxy:
     def matching(self, event_type):
         with self.lock:
             return [dict(delivery) for delivery in self.deliveries
-                    if delivery["headers"].get("ce-type") == event_type and delivery["status"] == 204]
+                    if json.loads(delivery["body"]).get("type") == event_type and delivery["status"] == 204]
 
     def close(self):
         self.server.shutdown()
@@ -154,7 +154,7 @@ def write_source(journey, key_root, proxy_url, paths):
     clients = json.loads((owner / "dev-clients.yaml").read_text())
     clients["secretProviders"] = {"file": {"root": str(key_root)}}
     clients["destinations"] = {"hooks": {trigger: {"origin": proxy_url, "path": paths[trigger],
-        "hmacSha256KeyRef": "secret:file/event-key"} for trigger in ("created", "patched")}}
+        "hmacSha256KeyRef": f"secret:file/{trigger}-key"} for trigger in ("created", "patched")}}
     native.private(owner / "dev-clients.yaml", clients)
     return owner
 
@@ -169,8 +169,8 @@ def write_workflow(journey, owner, sample, data_schemas):
         "project": {"id": "event-follow-up", "version": "1"},
         "operations": {"read-current": {"uses": "breg.read-record/v1", "connection": "source"}},
         "workflow": {"input": input_schema, "deadlineSeconds": 3600, "start": "read-current",
-            "eventTriggers": {trigger: {"source": "registry", "eventType": item["headers"]["ce-type"],
-                "dataSchema": item["headers"]["ce-dataschema"],
+            "eventTriggers": {trigger: {"source": "registry", "eventType": item["body"]["type"],
+                "dataSchema": item["body"]["dataschema"],
                 "event": {"type": "object", "required": ["data"], "properties": {"data": data_schemas[trigger]}},
                 "input": {"type": "fields", "fields": {"recordId": {"type": "input", "path": "/data/recordId"}}}}
                 for trigger, item in sample.items()},
@@ -215,12 +215,8 @@ def alternate_delivery(key):
              "dataschema": "urn:example:appointment-confirmed:v1", "data": {"appointmentId": appointment_id, "state": "confirmed"},
              "causation": {"root": event_id, "hop": 0}}
     body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    headers = {"ce-specversion": "1.0", "content-type": "application/json", "accept": "application/json",
-               "ce-id": event_id, "ce-source": value["source"], "ce-type": value["type"], "ce-time": now,
-               "ce-dataschema": value["dataschema"], "x-registry-event-generation": "1", "x-registry-delivery-attempt": "1",
-               "x-registry-delivery-time": now, "idempotency-key": "sha256:" + uuid.uuid4().hex + uuid.uuid4().hex}
+    headers = webhook_headers(key, event_id, body)
     path = "/v1/events/scheduling-event-observer/confirmed"
-    headers["x-registry-signature"] = receiver.webhook_signature(key, headers, body, path)
     return {"headers": headers, "body": body, "path": path}
 
 
@@ -234,15 +230,17 @@ def wait_for(action, description, timeout=30):
     raise AssertionError(description)
 
 
+def webhook_headers(key, event_id, body):
+    timestamp = int(time.time())
+    return {"accept": "application/json", "content-type": "application/json",
+            "webhook-id": event_id, "webhook-timestamp": str(timestamp),
+            "webhook-signature": receiver.webhook_signature([key], event_id, timestamp, body)}
+
+
 def replay(key, delivery, url, *, invalid_signature=False):
-    headers = dict(delivery["headers"])
-    headers["x-registry-event-generation"] = "2"
-    headers["x-registry-delivery-attempt"] = "1"
-    headers["x-registry-delivery-time"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    headers["idempotency-key"] = "sha256:" + uuid.uuid4().hex + uuid.uuid4().hex
-    headers["x-registry-signature"] = receiver.webhook_signature(key, headers, delivery["body"], delivery["path"])
+    headers = webhook_headers(key, delivery["headers"]["webhook-id"], delivery["body"])
     if invalid_signature:
-        headers["x-registry-signature"] = "v1=" + "A" * 43
+        headers["webhook-signature"] = "v1,invalid"
     return request("POST", url + delivery["path"], body=delivery["body"], headers=headers,
                    expected=(401,) if invalid_signature else (204,))
 
@@ -284,8 +282,9 @@ def run(args):
         journey.proxies.append(proxy)
         keys = root / "coordinator-secrets"
         keys.mkdir(mode=0o700)
-        key = secrets.token_bytes(32)
-        native.private(keys / "event-key", key)
+        event_keys = {trigger: secrets.token_bytes(32) for trigger in (*paths, "confirmed")}
+        for trigger, key in event_keys.items():
+            native.private(keys / f"{trigger}-key", key)
         owner = write_source(journey, keys, proxy.url, paths)
         journey.ctl("bregctl", "check", owner)
         sample = {trigger: journey.ctl("bregctl", "hook", "sample", owner, "--event", "application-" + trigger + "-v1")["request"]
@@ -299,8 +298,13 @@ def run(args):
             "--issuer-port", journey.ports["issuer"], "--database-port", journey.ports["bregdb"], "--breg-bin", journey.bin / "breg")
         state = json.loads(Path(report["stateFile"]).read_text())
         source = f"urn:registrystack:registry:{native.SOURCE}:instance:{state['instanceId']}"
-        journey.event_sources = {"registry": {"source": source, "signingKeyRef": "secret:file/event-key"},
-            "appointments": {"source": "urn:registrystack:scheduling:synthetic:local", "signingKeyRef": "secret:file/event-key"}}
+        journey.event_sources = {
+            "registry": {"source": source, "triggers": {"event-follow-up": {
+                trigger: {"hmacSha256KeyRef": f"secret:file/{trigger}-key"} for trigger in paths}}},
+            "appointments": {"source": "urn:registrystack:scheduling:synthetic:local",
+                "triggers": {"scheduling-event-observer": {
+                    "confirmed": {"hmacSha256KeyRef": "secret:file/confirmed-key"}}}},
+        }
         project = write_workflow(journey, owner, sample, data_schemas)
         alternate = write_alternate_workflow(journey)
         reader = journey.export(owner, "application-reader", keys)
@@ -350,19 +354,19 @@ def run(args):
         journey.stop(child)
         child = journey.spawn("coordinator", runtime, "coordinator-event-restarted")
         journey.ready(child, coordinator_url)
-        _, headers, _ = replay(key, deliveries[0], coordinator_url)
+        _, headers, _ = replay(event_keys["created"], deliveries[0], coordinator_url)
         assert next(value for name, value in headers.items() if name.lower() == "x-coordinator-run-id") == created_run
-        replay(key, deliveries[0], coordinator_url, invalid_signature=True)
-        alternate = alternate_delivery(key)
+        replay(event_keys["created"], deliveries[0], coordinator_url, invalid_signature=True)
+        alternate = alternate_delivery(event_keys["confirmed"])
         _, alternate_headers, _ = request("POST", coordinator_url + alternate["path"], body=alternate["body"],
                                            headers=alternate["headers"], expected=(204,))
         alternate_run = next(value for name, value in alternate_headers.items() if name.lower() == "x-coordinator-run-id")
         result, _ = journey.drive(owner, coordinator_url, alternate_run)
         assert result["run"]["outcome"] == "event-observed"
-        _, repeated, _ = replay(key, alternate, coordinator_url)
+        _, repeated, _ = replay(event_keys["confirmed"], alternate, coordinator_url)
         assert next(value for name, value in repeated.items() if name.lower() == "x-coordinator-run-id") == alternate_run
-        source_events = {delivery["headers"]["ce-id"] for delivery in proxy.deliveries
-                         if delivery["status"] == 204 and delivery["headers"]["ce-source"] == source}
+        source_events = {delivery["headers"]["webhook-id"] for delivery in proxy.deliveries
+                         if delivery["status"] == 204 and json.loads(delivery["body"])["source"] == source}
         assert len(source_events) == 3, "exactly three committed BReg events were authenticated and accepted"
         previous_ca = journey.env.get("SSL_CERT_FILE")
         try:

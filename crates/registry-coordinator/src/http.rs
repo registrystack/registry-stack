@@ -121,6 +121,9 @@ where
         ))
     }
 }
+pub(crate) const WEBHOOK_CHALLENGE: &str =
+    "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\"";
+
 pub fn router(state: HttpState) -> Router {
     let refusals = state.store.metrics().refusal_recorder().clone();
     let ready_state = state.clone();
@@ -159,8 +162,7 @@ pub fn router(state: HttpState) -> Router {
     http_edge(routes, signed_events, refusals)
 }
 /// Every route takes at most 128 KiB, except the signed event route, which
-/// takes up to the Version 1 signable bound so every event a producer can sign
-/// reaches the verifier.
+/// takes a body of up to 1 MiB.
 fn http_edge(router: Router, signed_events: Router, refusals: Arc<RefusalRecorder>) -> Router {
     let signable = crate::event_trigger::MAXIMUM_EVENT_BYTES;
     router
@@ -858,8 +860,11 @@ mod problem_tests {
             .flat_map(|path| path.as_object().unwrap().values())
         {
             if operation.get("security").is_some() {
-                let challenge = if operation["security"][0].get("eventSource").is_some() {
-                    "Registry-Signature version=\"v1\""
+                let security = &operation["security"][0];
+                let challenge = if security.get("eventSource").is_some()
+                    || security.get("reviewCompletion").is_some()
+                {
+                    "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
                 } else {
                     "Bearer"
                 };
@@ -1549,7 +1554,7 @@ async fn retain(State(s): State<HttpState>, headers: HeaderMap, body: BoundedBod
     )
 }
 /// Casework's completion destination authenticates with the connection's
-/// completion credential and recipient binding, never a caller access token.
+/// Standard Webhooks keys selected by its recipient binding.
 async fn review_completion(
     State(s): State<HttpState>,
     headers: HeaderMap,
@@ -1901,22 +1906,26 @@ pub fn openapi() -> Value {
         }
         paths.entry(path.to_owned()).or_insert_with(|| json!({}))[method] = op;
     }
+    let mut completion_parameters = vec![json!({
+        "name":"Registry-Recipient-Binding","in":"header","required":true,
+        "description":"Selects the connection that verifies the delivery.",
+        "schema":{"type":"string","pattern":"^[!-~]{1,256}$","minLength":1,"maxLength":256}
+    })];
+    completion_parameters.extend(admission_contracts::webhook_parameters());
     paths.insert(
         registry_review_protocol::REVIEW_COMPLETIONS_PATH.into(),
         json!({"post":{
             "operationId":"receiveReviewCompletion",
             "summary":summary("receiveReviewCompletion"),
-            "description":"Casework's completion destination for a review producer connection reports that a review result exists. The event only wakes the step waiting on that request, which then reads the result with the connection's producer credential. Every authentic, well-formed event answers 204 whether or not a step waits on its request.",
+            "description":"Casework's completion destination for a review producer connection reports that a review result exists. The event only wakes the step waiting on that request, which then reads the result with the connection's producer credential. The connection key verifies the signed webhook ID, Unix timestamp and exact body within 300 seconds in either direction. Every authentic, well-formed event answers 204 whether or not a step waits on its request.",
             "security":[{"reviewCompletion":[]}],
-            "parameters":[
-                {"name":"Registry-Recipient-Binding","in":"header","required":true,"description":"The recipient binding configured for the connection's completion destination.","schema":{"type":"string","minLength":1}},
-                {"name":"Idempotency-Key","in":"header","required":true,"description":"The event identifier.","schema":{"type":"string","format":"uuid"}}
-            ],
+            "parameters":completion_parameters,
             "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReviewCompletion"}}}},
             "responses":{}
         }}),
     );
     let mut responses = problem_responses(&REVIEW_COMPLETION_PROBLEMS);
+    responses["401"]["headers"]["WWW-Authenticate"] = admission_contracts::webhook_challenge();
     responses.insert(
         "204".into(),
         json!({"description":"Authentic completion accepted"}),
@@ -1971,7 +1980,7 @@ pub fn openapi() -> Value {
     schemas["CheckNow"] = json!({"type":"object","additionalProperties":false,"required":["step"],"properties":{"step":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$","description":"The waiting step to read now, as inspect lists it under waits."}}});
     schemas["CheckNowResult"] = json!({"type":"object","required":["runId","step","nextObservationAt","observations","observationLimit"],"properties":{"runId":{"type":"string","format":"uuid"},"step":{"type":"string"},"nextObservationAt":{"type":["string","null"],"format":"date-time","description":"When the early read is due, no sooner than the read floor after the last read; null while a read is already in flight."},"observations":{"type":"integer","minimum":0},"observationLimit":{"type":"integer","minimum":1}}});
     admission_contracts::extend(&mut paths, &mut schemas);
-    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION"),"description":"Registry Coordinator HTTP contract. Refusals use the closed problem vocabulary."},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"http","scheme":"bearer","description":"The completion credential configured for a Casework review connection, presented with its recipient binding."},"eventSource":{"type":"apiKey","in":"header","name":"X-Registry-Signature","description":"The platform v1 HMAC delivery signature, bound to the canonical envelope, signed delivery headers, HTTP method and exact request target. The configured event source key is separate from caller bearer tokens."}},"schemas":schemas},"paths":paths})
+    json!({"openapi":"3.1.0","info":{"title":"Registry Coordinator","version":env!("CARGO_PKG_VERSION"),"description":"Registry Coordinator HTTP contract. Refusals use the closed problem vocabulary."},"components":{"securitySchemes":{"bearer":{"type":"http","scheme":"bearer","bearerFormat":"JWT"},"reviewCompletion":{"type":"apiKey","in":"header","name":"webhook-signature","description":"Standard Webhooks signature verified by the completion key of the connection selected by Registry-Recipient-Binding."},"eventSource":{"type":"apiKey","in":"header","name":"webhook-signature","description":"Standard Webhooks signature verified by the event key configured for the workflow and trigger in the URL."}},"schemas":schemas},"paths":paths})
 }
 
 #[cfg(test)]

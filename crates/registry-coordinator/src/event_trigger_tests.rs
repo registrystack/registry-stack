@@ -2,20 +2,20 @@
 use super::*;
 use registry_platform_authcommon::RefusalNote;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
+use registry_platform_crypto::delivery_signature::sign;
 use serde_json::json;
+use std::time::{Duration, UNIX_EPOCH};
 use uuid::Uuid;
 
 const KEY: &[u8] = &[0x5a; 32];
 const BREG_SOURCE: &str = "urn:registrystack:registry:synthetic:instance:local";
 const EVENT_TYPE: &str = "contact-created-v1";
 const DATA_SCHEMA: &str = "urn:example:contact-created:v1";
-const TARGET: &str = "/v1/events/record-follow-up/record-saved";
 
 fn source() -> EventSourceConfig {
     EventSourceConfig {
         source: ExternalId::new(BREG_SOURCE).unwrap(),
-        signing_key_ref: SecretReference::parse("secret:file/event-key").unwrap(),
+        triggers: BTreeMap::new(),
     }
 }
 fn trigger() -> EventTrigger {
@@ -45,79 +45,60 @@ fn event() -> Value {
         "causation":{"root":id,"hop":0}
     })
 }
-fn signed(
-    value: &Value,
-    target: &str,
-    generation: u32,
-    delivery_key: &str,
-) -> (Vec<u8>, HeaderMap) {
+fn keys(current: &[u8], previous: Option<&[u8]>) -> DeliveryKeys {
+    DeliveryKeys::new(
+        DeliveryKey::new(current).unwrap(),
+        previous.map(|key| DeliveryKey::new(key).unwrap()),
+    )
+    .unwrap()
+}
+
+fn signed(value: &Value) -> (Vec<u8>, HeaderMap) {
     let body = canonicalize_json(value).unwrap();
-    let mut headers = HeaderMap::new();
-    for (name, text) in [
-        ("content-type", "application/json".to_owned()),
-        ("ce-specversion", "1.0".to_owned()),
-        ("ce-id", value["id"].as_str().unwrap().to_owned()),
-        ("ce-source", value["source"].as_str().unwrap().to_owned()),
-        ("ce-type", value["type"].as_str().unwrap().to_owned()),
-        ("ce-time", value["time"].as_str().unwrap().to_owned()),
-        (
-            "ce-dataschema",
-            value["dataschema"].as_str().unwrap().to_owned(),
-        ),
-        ("x-registry-event-generation", generation.to_string()),
-        ("x-registry-delivery-attempt", "1".to_owned()),
-        (
-            "x-registry-delivery-time",
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        ),
-        ("idempotency-key", delivery_key.to_owned()),
-    ] {
-        headers.insert(name, HeaderValue::from_str(&text).unwrap());
-    }
-    sign_headers(&mut headers, &body, target);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let headers = signed_headers(
+        &keys(KEY, None),
+        value["id"].as_str().unwrap(),
+        timestamp,
+        &body,
+    );
     (body, headers)
 }
-fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers.get(name).and_then(|value| value.to_str().ok())
+
+fn signed_headers(keys: &DeliveryKeys, id: &str, timestamp: u64, body: &[u8]) -> HeaderMap {
+    let signature = sign(keys, id, timestamp, body).unwrap();
+    let mut headers = HeaderMap::new();
+    for (name, value) in [
+        ("content-type", "application/json"),
+        ("webhook-id", id),
+        ("webhook-timestamp", &timestamp.to_string()),
+        ("webhook-signature", &signature),
+    ] {
+        headers.insert(name, HeaderValue::from_str(value).unwrap());
+    }
+    headers
 }
-fn sign_headers(headers: &mut HeaderMap, body: &[u8], target: &str) {
-    let signature = sign_v1(
-        KEY,
-        SignatureFields {
-            id: header(headers, "ce-id").unwrap(),
-            source: header(headers, "ce-source").unwrap(),
-            event_type: header(headers, "ce-type").unwrap(),
-            time: header(headers, "ce-time").unwrap(),
-            data_schema: header(headers, "ce-dataschema").unwrap(),
-            generation: header(headers, "x-registry-event-generation").unwrap(),
-            attempt: header(headers, "x-registry-delivery-attempt").unwrap(),
-            delivery_time: header(headers, "x-registry-delivery-time").unwrap(),
-            method: "POST",
-            request_target: target,
-            content_type: "application/json",
-            idempotency_key: header(headers, "idempotency-key").unwrap(),
-            body,
-        },
-    )
-    .unwrap();
-    headers.insert(
-        "x-registry-signature",
-        HeaderValue::from_str(&signature).unwrap(),
-    );
-}
+
 fn verify(body: &[u8], headers: &HeaderMap) -> Result<VerifiedEvent> {
     verify_delivery(
         &source(),
-        "registry",
         &trigger(),
         "record-saved",
-        &Method::POST,
-        TARGET,
         headers,
         body,
-        KEY,
+        &keys(KEY, None),
         SystemTime::now(),
     )
+}
+
+#[test]
+fn an_event_signed_with_its_trigger_key_is_admitted() {
+    let value = event();
+    let (body, headers) = signed(&value);
+    assert_eq!(verify(&body, &headers).unwrap().value, value);
 }
 
 #[test]
@@ -126,7 +107,7 @@ fn event_authentication_challenges_the_signature_transport() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(
         response.headers()[axum::http::header::WWW_AUTHENTICATE],
-        "Registry-Signature version=\"v1\""
+        "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\""
     );
     let bearer = crate::http::problem(CoordinatorError::new("access.unauthenticated", "synthetic"));
     assert_eq!(
@@ -138,16 +119,16 @@ fn event_authentication_challenges_the_signature_transport() {
 #[test]
 fn exact_event_identity_survives_retry_replay_and_old_commit_time() {
     let value = event();
-    let (body, headers) = signed(&value, TARGET, 1, "first-delivery");
+    let (body, headers) = signed(&value);
     let first = verify(&body, &headers).unwrap();
-    let (replay_body, replay_headers) = signed(&value, TARGET, 2, "operator-replay");
+    let (replay_body, replay_headers) = signed(&value);
     let replay = verify(&replay_body, &replay_headers).unwrap();
     assert_eq!(first.key, replay.key);
     assert_eq!(first.digest, replay.digest);
     let mut alias = value.clone();
     alias["id"] = json!(value["id"].as_str().unwrap().to_ascii_uppercase());
     alias["causation"]["root"] = alias["id"].clone();
-    let (alias_body, alias_headers) = signed(&alias, TARGET, 1, "uuid-spelling-alias");
+    let (alias_body, alias_headers) = signed(&alias);
     let alias = verify(&alias_body, &alias_headers).unwrap();
     assert_eq!(
         first.key, alias.key,
@@ -160,7 +141,7 @@ fn exact_event_identity_survives_retry_replay_and_old_commit_time() {
     assert!(!first.actor.operator);
     let mut changed = value;
     changed["data"]["values"]["name"] = json!("Changed ignored projection");
-    let (body, headers) = signed(&changed, TARGET, 1, "other-delivery");
+    let (body, headers) = signed(&changed);
     let changed = verify(&body, &headers).unwrap();
     assert_eq!(changed.key, first.key);
     assert_ne!(
@@ -172,20 +153,17 @@ fn exact_event_identity_survives_retry_replay_and_old_commit_time() {
 #[test]
 fn event_ownership_follows_the_authenticated_producer_across_source_aliases() {
     let value = event();
-    let (body, headers) = signed(&value, TARGET, 1, "first-delivery");
+    let (body, headers) = signed(&value);
     let first = verify(&body, &headers).unwrap();
     let mut renamed = trigger();
     renamed.source = "renamed-registry".into();
     let replay = verify_delivery(
         &source(),
-        &renamed.source,
         &renamed,
         "record-saved",
-        &Method::POST,
-        TARGET,
         &headers,
         &body,
-        KEY,
+        &keys(KEY, None),
         SystemTime::now(),
     )
     .unwrap();
@@ -195,38 +173,18 @@ fn event_ownership_follows_the_authenticated_producer_across_source_aliases() {
     assert_eq!(first.actor.client_id, replay.actor.client_id);
     assert!(!replay.actor.operator);
 
-    assert!(
-        verify_delivery(
-            &source(),
-            "registry",
-            &renamed,
-            "record-saved",
-            &Method::POST,
-            TARGET,
-            &headers,
-            &body,
-            KEY,
-            SystemTime::now(),
-        )
-        .is_err(),
-        "the trigger must still select the configured source alias"
-    );
-
     let mut other = value;
     other["source"] = json!("urn:example:another-authenticated-producer");
     let mut other_source = source();
     other_source.source = ExternalId::new(other["source"].as_str().unwrap()).unwrap();
-    let (body, headers) = signed(&other, TARGET, 1, "other-producer");
+    let (body, headers) = signed(&other);
     let other = verify_delivery(
         &other_source,
-        "registry",
         &trigger(),
         "record-saved",
-        &Method::POST,
-        TARGET,
         &headers,
         &body,
-        KEY,
+        &keys(KEY, None),
         SystemTime::now(),
     )
     .unwrap();
@@ -254,17 +212,14 @@ fn a_conforming_alternate_product_uses_the_same_verifier() {
     trigger.source = "appointments".into();
     trigger.event_type = value["type"].as_str().unwrap().into();
     trigger.data_schema = value["dataschema"].as_str().unwrap().into();
-    let (body, headers) = signed(&value, TARGET, 1, "scheduling-delivery");
+    let (body, headers) = signed(&value);
     let verified = verify_delivery(
         &source,
-        "appointments",
         &trigger,
         "appointment-saved",
-        &Method::POST,
-        TARGET,
         &headers,
         &body,
-        KEY,
+        &keys(KEY, None),
         SystemTime::now(),
     )
     .unwrap();
@@ -272,156 +227,126 @@ fn a_conforming_alternate_product_uses_the_same_verifier() {
 }
 
 #[test]
-fn substituted_signature_destination_source_and_contract_are_refused() {
-    let value = event();
-    let (body, original) = signed(&value, TARGET, 1, "delivery");
-    for (name, replacement) in [
-        (
-            "x-registry-signature",
-            "v1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        ),
-        ("ce-source", "urn:example:another-source"),
-        ("ce-type", "another-event-v1"),
-        ("ce-dataschema", "urn:example:another-schema"),
-        ("ce-specversion", "0.3"),
-        ("x-registry-event-generation", "0"),
-        ("x-registry-delivery-attempt", "-1"),
-    ] {
-        let mut headers = original.clone();
-        headers.insert(name, HeaderValue::from_static(replacement));
-        assert!(verify(&body, &headers).is_err(), "{name}");
-    }
-    assert!(verify_delivery(
+fn a_delivery_for_another_trigger_is_refused_by_that_triggers_key() {
+    let (body, headers) = signed(&event());
+    let error = verify_delivery(
         &source(),
-        "registry",
         &trigger(),
-        "record-saved",
-        &Method::POST,
-        "/different-target",
-        &original,
+        "other-trigger",
+        &headers,
         &body,
-        KEY,
-        SystemTime::now()
+        &keys(&[0x78; 32], None),
+        SystemTime::now(),
     )
-    .is_err());
-    assert!(verify_delivery(
-        &source(),
-        "registry",
-        &trigger(),
-        "record-saved",
-        &Method::PUT,
-        TARGET,
-        &original,
+    .err()
+    .unwrap();
+    assert_eq!(error.check, Some(FailedCheck::DeliverySignature));
+}
+
+#[test]
+fn a_webhook_id_that_differs_from_the_envelope_id_is_refused() {
+    let (body, _) = signed(&event());
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let headers = signed_headers(
+        &keys(KEY, None),
+        &Uuid::new_v4().to_string(),
+        timestamp,
         &body,
-        KEY,
-        SystemTime::now()
-    )
-    .is_err());
-    let mut duplicate = original;
-    duplicate.append("ce-source", HeaderValue::from_static(BREG_SOURCE));
-    assert!(
-        verify(&body, &duplicate).is_err(),
-        "ambiguous signed headers are refused"
     );
+    assert_eq!(
+        verify(&body, &headers).err().unwrap().check,
+        Some(FailedCheck::DeliveryBinding)
+    );
+}
+
+#[test]
+fn the_event_window_is_300_seconds_in_both_directions() {
+    let timestamp = 1_800_000_000_u64;
+    let now = UNIX_EPOCH + Duration::from_secs(timestamp);
+    let value = event();
+    let body = canonicalize_json(&value).unwrap();
+    let keys = keys(KEY, None);
+    for delta in [-301, -300, 300, 301] {
+        let headers = signed_headers(
+            &keys,
+            value["id"].as_str().unwrap(),
+            timestamp.checked_add_signed(delta).unwrap(),
+            &body,
+        );
+        let result = verify_delivery(
+            &source(),
+            &trigger(),
+            "record-saved",
+            &headers,
+            &body,
+            &keys,
+            now,
+        );
+        if delta.abs() == 301 {
+            assert_eq!(
+                result.err().unwrap().check,
+                Some(FailedCheck::DeliveryFreshness)
+            );
+        } else {
+            result.unwrap();
+        }
+    }
 }
 
 #[test]
 fn a_refused_delivery_names_the_check_that_failed() {
     let value = event();
-    let (body, original) = signed(&value, TARGET, 1, "delivery");
+    let (body, original) = signed(&value);
     let refusal = |headers: &HeaderMap| verify(&body, headers).err().expect("refused");
-    for (name, replacement) in [
+    for (name, replacement, check) in [
         (
-            "x-registry-signature",
-            "v1=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "webhook-signature",
+            "v1,invalid",
+            FailedCheck::DeliverySignature,
         ),
-        ("ce-specversion", "0.3"),
-        ("x-registry-event-generation", "0"),
+        ("webhook-timestamp", "01", FailedCheck::DeliveryFreshness),
+        (
+            "content-type",
+            "application/json; charset=utf-8",
+            FailedCheck::DeliveryBinding,
+        ),
     ] {
         let mut headers = original.clone();
         headers.insert(name, HeaderValue::from_static(replacement));
-        assert_eq!(refusal(&headers).code, "event-unauthenticated", "{name}");
+        let error = refusal(&headers);
+        assert_eq!(error.code, "event-unauthenticated", "{name}");
+        assert_eq!(error.check, Some(check), "{name}");
+    }
+    for name in ["webhook-id", "webhook-timestamp", "webhook-signature"] {
+        let mut duplicate = original.clone();
+        duplicate.append(name, original[name].clone());
+        let mut missing = original.clone();
+        missing.remove(name);
+        for headers in [missing, duplicate] {
+            assert_eq!(
+                refusal(&headers).check,
+                Some(FailedCheck::DeliverySignature),
+                "{name}"
+            );
+        }
+    }
+    for (name, replacement) in [
+        ("source", "urn:example:another-source"),
+        ("type", "another-event-v1"),
+        ("dataschema", "urn:example:another-schema"),
+    ] {
+        let mut other = value.clone();
+        other[name] = json!(replacement);
+        let (body, headers) = signed(&other);
         assert_eq!(
-            refusal(&headers).check,
-            Some(FailedCheck::DeliverySignature),
+            verify(&body, &headers).err().unwrap().check,
+            Some(FailedCheck::DeliveryBinding),
             "{name}"
         );
     }
-    let mut duplicate = original.clone();
-    duplicate.append("ce-source", HeaderValue::from_static(BREG_SOURCE));
-    assert_eq!(
-        refusal(&duplicate).check,
-        Some(FailedCheck::DeliverySignature)
-    );
-    let wrong_target = verify_delivery(
-        &source(),
-        "registry",
-        &trigger(),
-        "record-saved",
-        &Method::POST,
-        "/different-target",
-        &original,
-        &body,
-        KEY,
-        SystemTime::now(),
-    )
-    .err()
-    .expect("a signature over another target is refused");
-    assert_eq!(wrong_target.check, Some(FailedCheck::DeliverySignature));
-
-    let mut stale = original.clone();
-    stale.insert(
-        "x-registry-delivery-time",
-        HeaderValue::from_static("2020-01-01T00:00:00Z"),
-    );
-    sign_headers(&mut stale, &body, TARGET);
-    assert_eq!(refusal(&stale).check, Some(FailedCheck::DeliveryFreshness));
-
-    // Authentic deliveries that name another source, type or schema.
-    for (name, replacement) in [
-        ("ce-source", "urn:example:another-source"),
-        ("ce-type", "another-event-v1"),
-        ("ce-dataschema", "urn:example:another-schema"),
-    ] {
-        let mut headers = original.clone();
-        headers.insert(name, HeaderValue::from_static(replacement));
-        sign_headers(&mut headers, &body, TARGET);
-        let error = refusal(&headers);
-        assert_eq!(error.code, "event-unauthenticated", "{name}");
-        assert_eq!(error.check, Some(FailedCheck::DeliveryBinding), "{name}");
-    }
-}
-
-#[test]
-fn a_verification_key_the_receiver_cannot_use_is_its_own_key_fault() {
-    let value = event();
-    let (body, headers) = signed(&value, TARGET, 1, "delivery");
-    let error = verify_delivery(
-        &source(),
-        "registry",
-        &trigger(),
-        "record-saved",
-        &Method::POST,
-        TARGET,
-        &headers,
-        &body,
-        b"short",
-        SystemTime::now(),
-    )
-    .err()
-    .expect("a key shorter than the signature minimum is refused");
-    assert_eq!(error.code, "event-unauthenticated");
-    assert_eq!(error.check, Some(FailedCheck::KeySourceUnavailable));
-}
-
-#[test]
-fn an_event_key_outage_answers_503_and_counts_as_a_key_source_outage() {
-    let response = event_problem(source_unavailable());
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response.extensions().get::<RefusalNote>().map(|n| n.check),
-        Some(FailedCheck::KeySourceUnavailable)
-    );
 }
 
 #[test]
@@ -441,31 +366,25 @@ fn an_event_refusal_carries_its_check_in_the_response_extensions() {
 }
 
 #[test]
-fn stale_delivery_noncanonical_body_and_header_body_disagreement_are_refused() {
+fn an_authentic_noncanonical_body_is_refused() {
     let value = event();
-    let (body, mut headers) = signed(&value, TARGET, 1, "delivery");
-    headers.insert(
-        "x-registry-delivery-time",
-        HeaderValue::from_static("2020-01-01T00:00:00Z"),
+    let (mut body, _) = signed(&value);
+    body.push(b' ');
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let headers = signed_headers(
+        &keys(KEY, None),
+        value["id"].as_str().unwrap(),
+        timestamp,
+        &body,
     );
-    sign_headers(&mut headers, &body, TARGET);
-    assert!(verify(&body, &headers).is_err());
-    let (_, mut headers) = signed(&value, TARGET, 1, "delivery");
-    let mut spaced = body.clone();
-    spaced.push(b' ');
-    sign_headers(&mut headers, &spaced, TARGET);
-    assert!(verify(&spaced, &headers).is_err());
-    let mut changed = value.clone();
-    changed["id"] = json!(Uuid::new_v4().to_string());
-    changed["causation"]["root"] = changed["id"].clone();
-    let changed = canonicalize_json(&changed).unwrap();
-    sign_headers(&mut headers, &changed, TARGET);
-    assert!(verify(&changed, &headers).is_err());
-    assert!(verify(&vec![b' '; MAXIMUM_EVENT_BYTES + 1], &headers).is_err());
+    assert_eq!(verify(&body, &headers).err().unwrap().code, "event-invalid");
 }
 
 #[test]
-fn the_intake_bound_is_the_signable_bound_and_its_refusal_names_the_limit() {
+fn the_intake_bound_is_one_mib_and_its_refusal_names_the_limit() {
     assert_eq!(
         MAXIMUM_EVENT_BYTES,
         registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
@@ -476,7 +395,7 @@ fn the_intake_bound_is_the_signable_bound_and_its_refusal_names_the_limit() {
     for index in 0..6 {
         value["data"]["values"][format!("field{index}")] = json!("x".repeat(15_000));
     }
-    let (body, headers) = signed(&value, TARGET, 1, "large-delivery");
+    let (body, headers) = signed(&value);
     assert!(body.len() > 65_536);
     verify(&body, &headers).unwrap();
     let error = verify(&vec![b' '; MAXIMUM_EVENT_BYTES + 1], &headers)
@@ -488,12 +407,12 @@ fn the_intake_bound_is_the_signable_bound_and_its_refusal_names_the_limit() {
 
 #[test]
 fn a_signed_event_over_the_value_profile_is_refused_naming_the_bound_and_fix() {
-    // Within the signable bound, but over the 131,072-byte event value profile.
+    // The body fits the intake bound and exceeds the 131,072-byte value profile.
     let mut value = event();
     for index in 0..20 {
         value["data"]["values"][format!("field{index}")] = json!("x".repeat(15_000));
     }
-    let (body, headers) = signed(&value, TARGET, 1, "oversized-value");
+    let (body, headers) = signed(&value);
     assert!(body.len() > crate::functions::MAXIMUM_VALUE_BYTES);
     assert!(body.len() <= MAXIMUM_EVENT_BYTES);
     let error = verify(&body, &headers).err().unwrap();
@@ -532,30 +451,6 @@ fn a_signed_event_over_the_value_profile_is_refused_naming_the_bound_and_fix() {
         detail.contains("project fewer or smaller fields into the event"),
         "{detail}"
     );
-}
-
-#[test]
-fn delivery_counters_follow_the_shared_receiver_grammar() {
-    let value = event();
-    for (counter, accepted) in [
-        ("1", true),
-        ("4294967296", true),
-        ("9223372036854775807", true),
-        ("01", false),
-        ("0", false),
-        ("9223372036854775808", false),
-    ] {
-        for name in ["x-registry-event-generation", "x-registry-delivery-attempt"] {
-            let (body, mut headers) = signed(&value, TARGET, 1, "delivery");
-            headers.insert(name, HeaderValue::from_static(counter));
-            sign_headers(&mut headers, &body, TARGET);
-            assert_eq!(
-                verify(&body, &headers).is_ok(),
-                accepted,
-                "{name}={counter}"
-            );
-        }
-    }
 }
 
 fn project_text() -> &'static str {
@@ -812,7 +707,7 @@ mod postgres {
             "secretProviders":{"environment":{},"file":{"root":"/private/tmp"}},
             "database":{"runtimeUrlRef":"secret:env/COORDINATOR_TEST_DATABASE_URL","migrationUrlRef":"secret:env/COORDINATOR_TEST_DATABASE_URL"},
             "namespace":namespace,
-            "eventSources":{"registry":{"source":BREG_SOURCE,"signingKeyRef":"secret:file/event-key"}},
+            "eventSources":{"registry":{"source":BREG_SOURCE,"triggers":{"record-follow-up":{"record-saved":{"hmacSha256KeyRef":"secret:file/event-key"}}}}},
             "connections":{"source":{"type":"breg","baseUrl":"http://127.0.0.1:9999","profile":"synthetic-reader",
                 "authorization":{"tokenEndpoint":"http://127.0.0.1:9998/token","clientId":"synthetic-client",
                     "clientAssertionAudience":"http://127.0.0.1:9998",
@@ -870,7 +765,7 @@ mod postgres {
         runtime.validate_workflow(&historical.workflow).unwrap();
         let original_binding = runtime.binding_digest_for(&historical.workflow).unwrap();
         let value = event();
-        let (body, headers) = signed(&value, TARGET, 1, "before-ingress-revocation");
+        let (body, headers) = signed(&value);
         let verified = verify(&body, &headers).unwrap();
         let actor = verified.actor.clone();
         let run = admit(&store, &historical, &runtime, verified)
@@ -931,7 +826,7 @@ mod postgres {
         let original = definition(project_text());
         runtime.validate_workflow(&original.workflow).unwrap();
         let value = event();
-        let (body, headers) = signed(&value, TARGET, 1, "before-alias-rename");
+        let (body, headers) = signed(&value);
         let run = admit(
             &store,
             &original,
@@ -958,19 +853,16 @@ mod postgres {
         assert_ne!(original.digest, renamed.digest);
         let store = Store::connect(&database, &namespace).await.unwrap();
         store.check_runtime_bindings(&runtime).await.unwrap();
-        let (body, headers) = signed(&value, TARGET, 2, "after-alias-rename");
+        let (body, headers) = signed(&value);
         let trigger = &renamed.workflow.event_triggers["record-saved"];
         let verify_renamed = || {
             verify_delivery(
                 &runtime.event_sources[&trigger.source],
-                &trigger.source,
                 trigger,
                 "record-saved",
-                &Method::POST,
-                TARGET,
                 &headers,
                 &body,
-                KEY,
+                &keys(KEY, None),
                 SystemTime::now(),
             )
             .unwrap()
@@ -997,17 +889,14 @@ mod postgres {
         );
         let mut conflict = value.clone();
         conflict["data"]["values"]["name"] = json!("Changed ignored projection");
-        let (conflict_body, conflict_headers) = signed(&conflict, TARGET, 3, "renamed-conflict");
+        let (conflict_body, conflict_headers) = signed(&conflict);
         let conflict = verify_delivery(
             &runtime.event_sources[&trigger.source],
-            &trigger.source,
             trigger,
             "record-saved",
-            &Method::POST,
-            TARGET,
             &conflict_headers,
             &conflict_body,
-            KEY,
+            &keys(KEY, None),
             SystemTime::now(),
         )
         .unwrap();
@@ -1023,17 +912,14 @@ mod postgres {
         other["source"] = json!("urn:example:another-authenticated-producer");
         let mut other_source = runtime.event_sources[&trigger.source].clone();
         other_source.source = ExternalId::new(other["source"].as_str().unwrap()).unwrap();
-        let (other_body, other_headers) = signed(&other, TARGET, 1, "other-producer");
+        let (other_body, other_headers) = signed(&other);
         let other = verify_delivery(
             &other_source,
-            &trigger.source,
             trigger,
             "record-saved",
-            &Method::POST,
-            TARGET,
             &other_headers,
             &other_body,
-            KEY,
+            &keys(KEY, None),
             SystemTime::now(),
         )
         .unwrap();
@@ -1086,6 +972,90 @@ mod postgres {
             .unwrap();
     }
 
+    async fn assert_one_run_for_deliveries(stages: &[(&DeliveryKeys, &[&DeliveryKeys])]) {
+        let database = std::env::var("COORDINATOR_TEST_DATABASE_URL")
+            .expect("a disposable real PostgreSQL database is required");
+        let namespace = format!("coordinator_{}", Uuid::new_v4().simple());
+        let store = Store::connect(&database, &namespace).await.unwrap();
+        store.migrate().await.unwrap();
+        let runtime = runtime(&namespace);
+        let definition = definition(project_text());
+        let value = event();
+        let body = canonicalize_json(&value).unwrap();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut prior = None;
+        for (receiver, senders) in stages {
+            for sender in *senders {
+                let headers =
+                    signed_headers(sender, value["id"].as_str().unwrap(), timestamp, &body);
+                let verified = verify_delivery(
+                    &source(),
+                    &trigger(),
+                    "record-saved",
+                    &headers,
+                    &body,
+                    receiver,
+                    SystemTime::now(),
+                )
+                .unwrap();
+                let run = admit(&store, &definition, &runtime, verified)
+                    .await
+                    .unwrap();
+                assert_eq!(*prior.get_or_insert(run), run);
+            }
+        }
+        if stages.len() > 1 {
+            let receiver = stages.last().unwrap().0;
+            let retired = stages.first().unwrap().0;
+            let headers = signed_headers(retired, value["id"].as_str().unwrap(), timestamp, &body);
+            let error = verify_delivery(
+                &source(),
+                &trigger(),
+                "record-saved",
+                &headers,
+                &body,
+                receiver,
+                SystemTime::now(),
+            )
+            .err()
+            .expect("the retired key must be refused");
+            assert_eq!(error.check, Some(FailedCheck::DeliverySignature));
+        }
+        assert_eq!(store.list_runs(100).await.unwrap().len(), 1);
+        let (client, connection) = tokio_postgres::connect(&database, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            connection.await.unwrap();
+        });
+        client
+            .batch_execute(&format!("DROP SCHEMA {namespace} CASCADE"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_repeated_webhook_id_admits_one_run() {
+        let initial = keys(KEY, None);
+        assert_one_run_for_deliveries(&[(&initial, &[&initial, &initial])]).await;
+    }
+
+    #[tokio::test]
+    async fn an_event_from_a_rotating_source_is_admitted_once_through_all_three_steps() {
+        let initial = keys(KEY, None);
+        let overlap = keys(&[0x71; 32], Some(KEY));
+        let rotated = keys(&[0x71; 32], None);
+        assert_one_run_for_deliveries(&[
+            (&initial, &[&initial]),
+            (&overlap, &[&initial, &overlap]),
+            (&rotated, &[&rotated]),
+        ])
+        .await;
+    }
+
     #[tokio::test]
     async fn event_admission_is_atomic_deduplicated_and_recovers_after_restart_and_activation() {
         let database = std::env::var("COORDINATOR_TEST_DATABASE_URL")
@@ -1096,7 +1066,7 @@ mod postgres {
         let runtime = runtime(&namespace);
         let first = definition(project_text());
         let value = event();
-        let (body, headers) = signed(&value, TARGET, 1, "first-delivery");
+        let (body, headers) = signed(&value);
         let (run, duplicate) = tokio::join!(
             admit(&store, &first, &runtime, verify(&body, &headers).unwrap()),
             admit(&store, &first, &runtime, verify(&body, &headers).unwrap())
@@ -1110,7 +1080,7 @@ mod postgres {
         assert_eq!(store.list_runs(100).await.unwrap().len(), 1);
         drop(store);
         let reopened = Store::connect(&database, &namespace).await.unwrap();
-        let (body, headers) = signed(&value, TARGET, 2, "operator-replay-after-restart");
+        let (body, headers) = signed(&value);
         let replay = admit(
             &reopened,
             &first,
@@ -1139,7 +1109,7 @@ mod postgres {
         );
         let mut conflict = value.clone();
         conflict["data"]["values"]["name"] = json!("Changed ignored projection");
-        let (body, headers) = signed(&conflict, TARGET, 2, "conflicting-generation");
+        let (body, headers) = signed(&conflict);
         let refused = admit(
             &reopened,
             &first,
@@ -1151,7 +1121,7 @@ mod postgres {
         assert_eq!(refused.code, "start-conflict");
         let mut invalid = event();
         invalid["data"]["recordId"] = json!("synthetic-invalid-input");
-        let (body, headers) = signed(&invalid, TARGET, 1, "invalid-new-event");
+        let (body, headers) = signed(&invalid);
         assert!(admit(
             &reopened,
             &first,
@@ -1180,7 +1150,7 @@ mod postgres {
         );
         client.batch_execute(&format!("CREATE FUNCTION {namespace}.reject_event_job() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic job insertion failure'; END $$; CREATE TRIGGER reject_event_job BEFORE INSERT ON {namespace}.jobs FOR EACH ROW EXECUTE FUNCTION {namespace}.reject_event_job();")).await.unwrap();
         let later = event();
-        let (body, headers) = signed(&later, TARGET, 1, "rolled-back-new-event");
+        let (body, headers) = signed(&later);
         assert!(admit(
             &reopened,
             &first,
@@ -1350,17 +1320,14 @@ mod postgres {
         let definition = proposal_hold_definition();
         let trigger = &definition.workflow.event_triggers["record-saved"];
         let verify = |value: &Value| {
-            let (body, headers) = signed(value, TARGET, 1, "proposal-delivery");
+            let (body, headers) = signed(value);
             verify_delivery(
                 &source(),
-                "registry",
                 trigger,
                 "record-saved",
-                &Method::POST,
-                TARGET,
                 &headers,
                 &body,
-                KEY,
+                &keys(KEY, None),
                 SystemTime::now(),
             )
             .unwrap()

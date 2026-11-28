@@ -20,7 +20,9 @@ use chrono::{DateTime, SecondsFormat, TimeDelta, Timelike, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_platform_audit::{AuditHashSecret, AuditKeyHasher};
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
+use registry_platform_crypto::delivery_signature::{
+    verify, DeliveryKey, DeliveryKeys, SignedContent, DELIVERY_TOLERANCE,
+};
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
@@ -2240,29 +2242,15 @@ async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_propo
         request.body, *payload,
         "the stored canonical bytes are sent"
     );
-    let header = |name: &str| {
-        request
-            .headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_else(|| panic!("missing valid {name} header"))
-    };
-    assert_eq!(header("ce-specversion"), "1.0");
-    assert_eq!(header("ce-id"), envelope.id);
-    assert_eq!(header("ce-source"), envelope.source);
-    assert_eq!(header("ce-type"), "confirmed-observer");
-    assert_eq!(header("ce-dataschema"), envelope.dataschema);
-    let payload_json: Value = serde_json::from_slice(payload).expect("the canonical envelope JSON");
-    assert_eq!(header("ce-time"), payload_json["time"]);
-    assert_eq!(header("x-registry-event-generation"), "1");
-    assert_eq!(header("x-registry-delivery-attempt"), "1");
-    assert!(!header("x-registry-delivery-time").is_empty());
-    let idempotency_key = header("idempotency-key");
-    assert!(idempotency_key.starts_with("sha256:"));
-    assert_eq!(idempotency_key.len(), 71);
-    let signature = header("x-registry-signature");
-    assert!(signature.starts_with("v1="));
-    assert_eq!(signature.len(), 46, "v1 plus one HMAC-SHA-256 tag");
+    let content = signed_webhook_content(&request.headers, &request.body);
+    assert_eq!(content.id, envelope.id);
+    verify(
+        &webhook_keys(b"0123456789abcdef0123456789abcdef"),
+        content,
+        std::time::SystemTime::now(),
+        DELIVERY_TOLERANCE,
+    )
+    .expect("the captured hook delivery verifies");
 
     let state = fx
         .admin
@@ -4925,25 +4913,25 @@ async fn outbox_row(fx: &Fixture, outbox_id: Uuid) -> (String, i32, Option<Strin
     (row.get(0), row.get(1), row.get(2), row.get(3))
 }
 
+const REMINDER_TEST_KEY: &str = "reminder-delivery-signing-key-0123456789abcdef";
+
 /// A frozen transport to a destination this test controls.
 fn transport_to(destination: &MockServer) -> Arc<ReminderTransport> {
-    // The destination declares no bearer reference, so nothing is resolved;
-    // the resolver still has to exist, and refuses to be built with no
-    // provider enabled at all.
-    let secrets = SecretResolver::new([SecretProvider::Environment], std::path::Path::new(""))
-        .expect("a resolver this destination asks nothing of");
-    Arc::new(
-        reminder_transport(
-            &ReminderDestinationConfig {
-                url: format!("{}/events", destination.uri()),
-                purpose_urls: Default::default(),
-                bearer_token_ref: None,
-                hmac_sha256_key_ref: None,
-            },
-            &secrets,
-        )
-        .expect("the configured destination compiles into a frozen transport"),
-    )
+    transport_to_origin(&destination.uri())
+}
+
+fn transport_to_origin(origin: &str) -> Arc<ReminderTransport> {
+    let secret_name =
+        format!("SCHEDULING_REMINDER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    std::env::set_var(&secret_name, REMINDER_TEST_KEY);
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("the reminder test secret resolver");
+    let config: ReminderDestinationConfig = serde_json::from_value(json!({
+        "url": format!("{origin}/events"),
+        "hmacSha256KeyRef": format!("secret:env/{secret_name}")
+    }))
+    .expect("the reminder destination configuration");
+    Arc::new(reminder_transport(&config, &secrets).expect("the reminder transport activates"))
 }
 
 /// The environment records the fixture seeds, minus the named resources: the
@@ -6909,90 +6897,126 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
     );
 }
 
-#[tokio::test]
-async fn a_signed_reminder_uses_the_shared_event_delivery_contract() {
-    const SIGNING_KEY: &str = "reminder-delivery-signing-key-0123456789abcdef";
+fn webhook_keys(bytes: &[u8]) -> DeliveryKeys {
+    DeliveryKeys::new(DeliveryKey::new(bytes).unwrap(), None).unwrap()
+}
 
-    let destination = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/events"))
-        .respond_with(ResponseTemplate::new(202))
-        .mount(&destination)
-        .await;
-    let fx = fixture().await;
-    let (appointment, _) = booked(&fx, 90, 200, "dispatch-signed").await;
-    let secret_name =
-        format!("SCHEDULING_REMINDER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
-    let bearer_name =
-        format!("SCHEDULING_REMINDER_BEARER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
-    std::env::set_var(&secret_name, SIGNING_KEY);
-    std::env::set_var(&bearer_name, "synthetic-reminder-token");
-    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
-        .expect("the scheduling reminder secret resolver");
-    let destination_config: ReminderDestinationConfig = serde_json::from_value(json!({
-        "url": format!("{}/events", destination.uri()),
-        "hmacSha256KeyRef": format!("secret:env/{secret_name}"),
-        "bearerTokenRef": format!("secret:env/{bearer_name}")
-    }))
-    .expect("the signed reminder destination configuration");
-    let transport = reminder_transport(&destination_config, &secrets)
-        .expect("the signed destination compiles into a frozen transport");
-
-    bring_intents_due(&fx, pinned_now()).await;
-    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::new(transport)))
-        .await
-        .expect("the signed dispatch pass runs");
-
-    let requests = destination
-        .received_requests()
-        .await
-        .expect("the signed reminder request");
-    let request = requests
-        .iter()
-        .find(|request| String::from_utf8_lossy(&request.body).contains(appointment.as_str()))
-        .expect("the appointment's signed reminder");
-    let event: Value = serde_json::from_slice(&request.body).expect("the canonical reminder event");
+fn signed_webhook_content<'a>(
+    headers: &'a axum::http::HeaderMap,
+    body: &'a [u8],
+) -> SignedContent<'a> {
     let header = |name: &str| {
-        request
-            .headers
+        headers
             .get(name)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_else(|| panic!("missing valid {name} header"))
     };
-    assert_eq!(header("ce-specversion"), "1.0");
-    assert_eq!(header("ce-id"), event["id"]);
-    assert_eq!(header("ce-source"), event["source"]);
-    assert_eq!(header("ce-type"), event["type"]);
-    assert_eq!(header("ce-time"), event["time"]);
-    assert_eq!(header("ce-dataschema"), event["dataschema"]);
-    assert_eq!(header("x-registry-event-generation"), "1");
-    assert_eq!(header("x-registry-delivery-attempt"), "1");
-    assert!(!header("x-registry-delivery-time").is_empty());
-    assert!(header("idempotency-key").starts_with("sha256:"));
-    assert_eq!(header("authorization"), "Bearer synthetic-reminder-token");
-    let fields = |request_target| SignatureFields {
-        id: header("ce-id"),
-        source: header("ce-source"),
-        event_type: header("ce-type"),
-        time: header("ce-time"),
-        data_schema: header("ce-dataschema"),
-        generation: header("x-registry-event-generation"),
-        attempt: header("x-registry-delivery-attempt"),
-        delivery_time: header("x-registry-delivery-time"),
-        method: "POST",
-        request_target,
-        content_type: "application/json",
-        idempotency_key: header("idempotency-key"),
-        body: &request.body,
-    };
-    let expected =
-        sign_v1(SIGNING_KEY.as_bytes(), fields("/events")).expect("the shared signature");
-    assert_eq!(header("x-registry-signature"), expected);
-    assert_ne!(
-        sign_v1(SIGNING_KEY.as_bytes(), fields("/other")).expect("the target-bound signature"),
-        expected,
-        "the exact request target is covered"
+    // The HTTP client supplies host and framing.
+    let mut names = headers
+        .keys()
+        .map(|name| name.as_str())
+        .filter(|name| !matches!(*name, "host" | "content-length"))
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "accept",
+            "content-type",
+            "webhook-id",
+            "webhook-signature",
+            "webhook-timestamp"
+        ]
     );
+    assert_eq!(header("accept"), "application/json");
+    assert_eq!(header("content-type"), "application/json");
+    SignedContent {
+        id: header("webhook-id"),
+        timestamp: header("webhook-timestamp"),
+        signature: header("webhook-signature"),
+        body,
+    }
+}
+
+#[tokio::test]
+async fn a_signed_reminder_uses_the_standard_webhooks_delivery_contract() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let transport = transport_to_origin(&format!("http://{}", listener.local_addr().unwrap()));
+    let (captured, mut requests) = tokio::sync::mpsc::channel(1);
+    let receiver = Router::new().route(
+        "/events",
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                let (respond, release) = tokio::sync::oneshot::channel();
+                captured.send((headers, body, respond)).await.unwrap();
+                release.await.unwrap()
+            },
+        ),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, receiver).await.unwrap() });
+    let fx = fixture().await;
+    let (appointment, _) = booked(&fx, 90, 200, "dispatch-signed").await;
+    let outbox_id = intent_of(&fx, &appointment, "confirmation").await;
+    let keys = webhook_keys(REMINDER_TEST_KEY.as_bytes());
+    let mut attempts = Vec::new();
+
+    for response in [StatusCode::SERVICE_UNAVAILABLE, StatusCode::ACCEPTED] {
+        make_intent_due(&fx, outbox_id).await;
+        let store = fx.store.clone();
+        let transport = Arc::clone(&transport);
+        let running = tokio::spawn(async move {
+            dispatch_due_intents(&store, SCHEDULING_ID, Some(transport)).await
+        });
+
+        let (headers, body, respond) =
+            tokio::time::timeout(Duration::from_secs(5), requests.recv())
+                .await
+                .expect("the signed reminder reaches the receiver")
+                .unwrap();
+        let lease_time: DateTime<Utc> = fx
+            .admin
+            .query_one(
+                "SELECT attempt_started_at FROM scheduling_outbox WHERE outbox_id = $1 AND state = 'leased'",
+                &[&outbox_id],
+            )
+            .await
+            .expect("read the lease during delivery")
+            .get(0);
+        respond.send(response).unwrap();
+
+        let event: Value = serde_json::from_slice(&body).expect("the canonical reminder event");
+        let content = signed_webhook_content(&headers, &body);
+        assert_eq!(content.id, outbox_id.to_string());
+        assert_eq!(content.id, event["id"]);
+        assert_eq!(content.timestamp, lease_time.timestamp().to_string());
+        verify(&keys, content, lease_time.into(), DELIVERY_TOLERANCE)
+            .expect("the captured reminder verifies");
+        attempts.push((content.id.to_owned(), body, lease_time.timestamp()));
+
+        running
+            .await
+            .unwrap()
+            .expect("the signed dispatch pass runs");
+        if response == StatusCode::SERVICE_UNAVAILABLE {
+            // Ensure a reused timestamp would fail on the second attempt.
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    assert_eq!(attempts[0].0, attempts[1].0);
+    assert_eq!(attempts[0].1, attempts[1].1);
+    assert!(attempts[0].2 < attempts[1].2);
+    let state: String = fx
+        .admin
+        .query_one(
+            "SELECT state FROM scheduling_outbox WHERE outbox_id = $1",
+            &[&outbox_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(state, "delivered");
+    server.abort();
 }
 
 /// A receiver can accept an event before the dispatcher loses the database

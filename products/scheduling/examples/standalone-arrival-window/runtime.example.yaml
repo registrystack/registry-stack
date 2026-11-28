@@ -136,7 +136,8 @@ destinations: {}
   # delivered.
   # reminders:
   #   url: https://bus.example.test/scheduling-reminders
-  #   bearerTokenRef: secret:file/reminder-bearer-token
+  #   hmacSha256KeyRef: secret:file/reminder-key
+  #   # previousHmacSha256KeyRef: secret:file/reminder-key.previous
   # URL observers declared under scheduling.yaml hooks bind here. The policy
   # carries no endpoint or secret, and retained work keeps this exact binding.
   # hooks:

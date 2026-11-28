@@ -371,11 +371,9 @@ impl NativeCoordinator {
             ("admission-key", &[0x48; 32]),
             ("audit-key", &[0x49; 32]),
             ("event-key", KEY),
+            ("revised-event-key", REVISED_KEY),
             ("client-key", fixtures::ED25519_PRIVATE_JWK.as_bytes()),
-            (
-                "review-completion-token",
-                casework.completion_token().as_bytes(),
-            ),
+            ("review-completion-key", casework.completion_key()),
         ] {
             private_file(&root.path().join(name), contents);
         }
@@ -412,12 +410,15 @@ impl NativeCoordinator {
                     },
                     "completion": {
                         "recipientBinding": casework_native_service::RECIPIENT_BINDING,
-                        "bearerTokenRef": "secret:file/review-completion-token"
+                        "hmacSha256KeyRef": "secret:file/review-completion-key"
                     },
                     "resultCheckSeconds": 900
                 }
             },
-            "eventSources": {"adapter": {"source": SOURCE, "hmacSha256KeyRef": "secret:file/event-key"}},
+            "eventSources": {"adapter": {"source": SOURCE, "triggers": {(WORKFLOW): {
+                (PRIMARY_TRIGGER): {"hmacSha256KeyRef": "secret:file/event-key"},
+                (REVISED_TRIGGER): {"hmacSha256KeyRef": "secret:file/revised-event-key"}
+            }}}},
             "deployment": {
                 "databaseId": format!("adapter-native-{suffix}"), "runtimeRole": role,
                 "packages": [{"root": package, "expectedDigest": package_digest}],

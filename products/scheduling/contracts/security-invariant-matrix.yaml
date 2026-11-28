@@ -804,25 +804,25 @@ invariants:
   - id: SCHEDULING-SEC-38
     state: enforced
     threat: >-
-      A signed reminder is accepted under a different request target or loses
-      its event identity on retry, causing forged or duplicate downstream work.
-      A purpose override sends shared delivery credentials to another origin.
+      An unauthenticated reminder or a reminder signed for a different
+      destination causes forged downstream work. A retry that loses its event
+      identity causes duplicate downstream work.
     enforcementPoint: >-
-      When reminder HMAC is configured, the shared delivery signature binds
-      method, target, content type, event metadata and canonical body. The
-      closed purpose routing selects one same-origin fixed request template
-      before rendering and signing, with the configured URL as fallback. The
-      event identity and dispatch idempotency key remain stable while attempt
-      number and canonical RFC 3339 signature time advance. Bearer authentication
-      is independent.
+      Standard Webhooks signatures bind the exact envelope bytes, the outbox id
+      and the database lease time in Unix seconds. The outbox id stays stable
+      across retries. The closed purpose routing selects one same-origin fixed
+      destination and its keys before signing. Omitted purposes use the
+      fallback. Each configured reminder and hook destination has distinct
+      current and previous signing keys.
     refusal: >-
-      Refuse unsupported key providers, undersized keys, unknown purposes,
-      cross-origin overrides and URLs outside the existing destination rules. A downstream
-      event receiver verifies its exact configured source and signature;
-      accepting an event never grants authority for a capacity mutation.
+      Refuse missing keys, unsupported key providers, invalid key lengths,
+      reused key bytes, unknown purposes, cross-origin overrides and URLs
+      outside the destination rules. The receiver verifies its configured
+      source and destination key. Accepting a delivery confers no capacity
+      mutation authority.
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
-      name: a_signed_reminder_uses_the_shared_event_delivery_contract
+      name: a_signed_reminder_uses_the_standard_webhooks_delivery_contract
   - id: SCHEDULING-SEC-39
     state: enforced
     threat: >-

@@ -448,13 +448,26 @@ async fn plan_reports_a_hook_destination_apply_cannot_sign_for() {
             "schedulingctl.activation.hook-destinations"
         );
         let message = refusals[0]["message"].as_str().unwrap();
-        assert!(message.contains("signing secret"), "{message}");
+        let path = "destinations.hooks.appointment-events.hmacSha256KeyRef";
+        let reason = if key.is_some() {
+            "9 bytes"
+        } else {
+            "the referenced secret is unavailable"
+        };
+        assert!(message.contains(path), "{message}");
+        assert!(message.contains(reason), "{message}");
+        let action = if key.is_some() {
+            "Supply 32 to 64 exact key bytes."
+        } else {
+            "Create the secret under the configured provider, or correct the name."
+        };
+        assert!(message.ends_with(action), "{message}");
         assert!(!report.to_string().contains("too-short"), "{report}");
         let refused = apply(&config).expect_err("apply refuses the same destination");
-        assert!(
-            format!("{refused:#}").contains("signing secret"),
-            "{refused:#}"
-        );
+        let message = format!("{refused:#}");
+        assert!(message.contains(path), "{message}");
+        assert!(message.contains(reason), "{message}");
+        assert!(!message.contains("too-short"), "{message}");
         assert_eq!(deployment.tables().await, 0, "apply created a table");
     }
 
@@ -463,6 +476,43 @@ async fn plan_reports_a_hook_destination_apply_cannot_sign_for() {
     assert_eq!(report["changesPending"], true, "{report}");
     assert_eq!(report["refusals"], serde_json::json!([]));
     std::env::remove_var(&key_secret);
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn plan_refuses_invalid_reminder_keys_and_keys_shared_with_observers() {
+    let deployment = Deployment::single("activation_plan_reminder_keys").await;
+    let package = deployment.package("package", POLICY);
+    let observer_secret = format!("{}_OBSERVER_KEY", deployment.audit_secret);
+    let reminder_secret = format!("{}_REMINDER_KEY", deployment.audit_secret);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(&format!(
+        "destinations:\n  hooks:\n    appointment-events:\n      url: http://127.0.0.1:9/events\n      hmacSha256KeyRef: secret:env/{observer_secret}\n  reminders:\n    url: http://127.0.0.1:9/reminders\n    hmacSha256KeyRef: secret:env/{reminder_secret}\n"
+    ));
+    std::fs::write(&config, text).unwrap();
+    let first = "destinations.reminders.hmacSha256KeyRef";
+    let second = "destinations.hooks.appointment-events.hmacSha256KeyRef";
+    std::env::set_var(&observer_secret, "k".repeat(32));
+    for (size, expected) in [
+        (31, format!("{first} has 31 bytes (trailing newline: false). Supply 32 to 64 exact key bytes.")),
+        (32, format!("{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there.")),
+    ] {
+        std::env::set_var(&reminder_secret, "k".repeat(size));
+        let report = plan(&config);
+        assert_eq!(report["changesPending"], false, "{report}");
+        let refusals = report["refusals"].as_array().unwrap();
+        assert_eq!(refusals.len(), 1, "{report}");
+        assert_eq!(refusals[0]["code"], "schedulingctl.activation.reminder-destinations");
+        assert_eq!(refusals[0]["message"], expected);
+    }
+    std::env::set_var(&reminder_secret, "r".repeat(32));
+    let report = plan(&config);
+    assert_eq!(report["changesPending"], true, "{report}");
+    assert_eq!(report["refusals"], serde_json::json!([]));
+    std::env::remove_var(&observer_secret);
+    std::env::remove_var(&reminder_secret);
+    assert_eq!(deployment.tables().await, 0, "plan created a table");
     deployment.drop().await;
 }
 

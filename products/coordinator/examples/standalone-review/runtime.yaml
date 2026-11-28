@@ -27,7 +27,7 @@ connections:
       - casework:review
     completion:
       recipientBinding: coordinator-v1
-      bearerTokenRef: secret:file/review-completion-token
+      hmacSha256KeyRef: secret:file/standalone-review-completion-key
     resultCheckSeconds: 900
 deployment:
   databaseId: standalone-review

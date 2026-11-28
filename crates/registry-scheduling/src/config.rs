@@ -89,6 +89,14 @@ pub const SCHEDULING_RUNTIME_ENVELOPE: RuntimeEnvelope = RuntimeEnvelope {
 /// Keys an earlier Scheduling runtime configuration accepted, each refused
 /// with the key that replaced it.
 pub const SCHEDULING_REMOVED_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "destinations.reminders.bearerTokenRef",
+        replacement: "Remove bearerTokenRef. Reminders are signed with destinations.reminders.hmacSha256KeyRef (Standard Webhooks).",
+    },
+    RemovedKey {
+        path: "destinations.reminders.purposeUrls",
+        replacement: "Move each purpose URL to destinations.reminders.purposes.<purpose>.url with its own hmacSha256KeyRef.",
+    },
     REMOVED_OIDC_JWKS_URI,
     REMOVED_OIDC_JWKS_SOURCE_KIND,
     RemovedKey {
@@ -318,25 +326,6 @@ fn valid_database_id(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-/// A secret reference, `secret:env/NAME` or `secret:file/name` (CFG-SEC-1),
-/// kept as written. The reader refuses any other spelling at its position
-/// without repeating it.
-fn secret_reference<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    SecretReference::deserialize(deserializer).map(|reference| reference.as_str().to_owned())
-}
-
-/// An optional member holding a secret reference; absent reads as `None`
-/// through `serde(default)`.
-fn optional_secret_reference<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    secret_reference(deserializer).map(Some)
-}
-
 /// The policy and package identity produced by one verified package load.
 #[derive(Clone, Debug)]
 pub struct LoadedSchedulingPolicy {
@@ -532,6 +521,7 @@ pub struct DestinationsConfig {
     pub hooks: BTreeMap<String, UrlHookDestinationConfig>,
 }
 
+/// Fallback destination for reminder delivery.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -541,68 +531,95 @@ pub struct ReminderDestinationConfig {
     #[serde(deserialize_with = "registry_scheduling_core::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub url: String,
-    /// Optional endpoints for individual reminder purposes. Any omitted
-    /// purpose uses `url`; every override must share that URL's origin.
+    /// Reference to 32 to 64 exact key bytes used only for this destination.
+    pub hmac_sha256_key_ref: SecretReference,
+    /// Previous signing key during rotation.
+    #[serde(default, deserialize_with = "present_reminder_key_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
+    /// Purpose-specific destinations on the fallback URL's origin.
     #[serde(default)]
-    pub purpose_urls: ReminderPurposeUrls,
-    #[serde(default, deserialize_with = "optional_secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
-    pub bearer_token_ref: Option<String>,
-    /// Optional HMAC-SHA-256 key for the shared signed event-delivery
-    /// contract. Bearer authentication, when configured, remains independent.
-    #[serde(default, deserialize_with = "optional_secret_reference")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
-    pub hmac_sha256_key_ref: Option<String>,
+    pub purposes: ReminderPurposes,
 }
 
-/// Optional endpoint overrides named for the four reminder intent purposes
-/// Scheduling emits.
+/// Destination for reminder delivery of one configured purpose.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReminderPurposeDestinationConfig {
+    #[serde(deserialize_with = "registry_scheduling_core::url")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
+    pub url: String,
+    /// Reference to 32 to 64 exact key bytes used only for this destination.
+    pub hmac_sha256_key_ref: SecretReference,
+    /// Previous signing key during rotation.
+    #[serde(default, deserialize_with = "present_reminder_key_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
+}
+
+/// Optional reminder destinations that override the fallback by purpose.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReminderPurposeUrls {
-    #[serde(default, deserialize_with = "optional_url")]
+pub struct ReminderPurposes {
+    #[serde(default, deserialize_with = "present_reminder_purpose")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Url>")
+        schemars(with = "ReminderPurposeDestinationConfig")
     )]
-    pub confirmation: Option<String>,
-    #[serde(default, deserialize_with = "optional_url")]
+    pub confirmation: Option<ReminderPurposeDestinationConfig>,
+    #[serde(default, deserialize_with = "present_reminder_purpose")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Url>")
+        schemars(with = "ReminderPurposeDestinationConfig")
     )]
-    pub change: Option<String>,
-    #[serde(default, deserialize_with = "optional_url")]
+    pub change: Option<ReminderPurposeDestinationConfig>,
+    #[serde(default, deserialize_with = "present_reminder_purpose")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Url>")
+        schemars(with = "ReminderPurposeDestinationConfig")
     )]
-    pub cancellation: Option<String>,
-    #[serde(default, deserialize_with = "optional_url")]
+    pub cancellation: Option<ReminderPurposeDestinationConfig>,
+    #[serde(default, deserialize_with = "present_reminder_purpose")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "Option<registry_platform_yaml::Url>")
+        schemars(with = "ReminderPurposeDestinationConfig")
     )]
-    pub reminder: Option<String>,
+    pub reminder: Option<ReminderPurposeDestinationConfig>,
 }
 
-impl ReminderPurposeUrls {
-    fn iter(&self) -> [(&'static str, Option<&str>); 4] {
+impl ReminderPurposes {
+    pub(crate) fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &ReminderPurposeDestinationConfig)> {
         [
-            ("confirmation", self.confirmation.as_deref()),
-            ("change", self.change.as_deref()),
-            ("cancellation", self.cancellation.as_deref()),
-            ("reminder", self.reminder.as_deref()),
+            ("confirmation", self.confirmation.as_ref()),
+            ("change", self.change.as_ref()),
+            ("cancellation", self.cancellation.as_ref()),
+            ("reminder", self.reminder.as_ref()),
         ]
+        .into_iter()
+        .filter_map(|(purpose, destination)| Some((purpose, destination?)))
     }
 }
 
-fn optional_url<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+fn present_reminder_key_reference<'de, D>(
+    deserializer: D,
+) -> Result<Option<SecretReference>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    registry_scheduling_core::url(deserializer).map(Some)
+    SecretReference::deserialize(deserializer).map(Some)
+}
+
+fn present_reminder_purpose<'de, D>(
+    deserializer: D,
+) -> Result<Option<ReminderPurposeDestinationConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    ReminderPurposeDestinationConfig::deserialize(deserializer).map(Some)
 }
 
 /// Retention periods the retention sweep enforces. Every value is deployment
@@ -894,27 +911,34 @@ impl RuntimeConfig {
                 ));
             }
         }
-        if let Some(reference) = self
-            .destinations
-            .reminders
-            .as_ref()
-            .and_then(|reminders| reminders.bearer_token_ref.as_deref())
-        {
-            references.push((
-                "destinations.reminders.bearerTokenRef".to_owned(),
-                reference,
-            ));
-        }
-        if let Some(reference) = self
-            .destinations
-            .reminders
-            .as_ref()
-            .and_then(|reminders| reminders.hmac_sha256_key_ref.as_deref())
-        {
-            references.push((
-                "destinations.reminders.hmacSha256KeyRef".to_owned(),
-                reference,
-            ));
+        if let Some(reminders) = &self.destinations.reminders {
+            let mut check =
+                |prefix: &[&str], current: &SecretReference, previous: Option<&SecretReference>| {
+                    self.check_binding_reference(
+                        findings,
+                        &[prefix, &["hmacSha256KeyRef"]].concat(),
+                        current.as_str(),
+                    );
+                    if let Some(previous) = previous {
+                        self.check_binding_reference(
+                            findings,
+                            &[prefix, &["previousHmacSha256KeyRef"]].concat(),
+                            previous.as_str(),
+                        );
+                    }
+                };
+            check(
+                &["destinations", "reminders"],
+                &reminders.hmac_sha256_key_ref,
+                reminders.previous_hmac_sha256_key_ref.as_ref(),
+            );
+            for (purpose, destination) in reminders.purposes.iter() {
+                check(
+                    &["destinations", "reminders", "purposes", purpose],
+                    &destination.hmac_sha256_key_ref,
+                    destination.previous_hmac_sha256_key_ref.as_ref(),
+                );
+            }
         }
         for (field, raw) in references {
             if let Err(error) = self.secret_providers.check_reference(&field, raw) {
@@ -927,6 +951,13 @@ impl RuntimeConfig {
                 &["destinations", "hooks", id, "hmacSha256KeyRef"],
                 destination.hmac_sha256_key_ref.as_str(),
             );
+            if let Some(reference) = &destination.previous_hmac_sha256_key_ref {
+                self.check_binding_reference(
+                    findings,
+                    &["destinations", "hooks", id, "previousHmacSha256KeyRef"],
+                    reference.as_str(),
+                );
+            }
         }
     }
 
@@ -1069,11 +1100,9 @@ impl RuntimeConfig {
                     "url",
                 ]));
             }
-            for (purpose, configured) in reminders.purpose_urls.iter() {
-                let Some(configured) = configured else {
-                    continue;
-                };
-                let segments = ["destinations", "reminders", "purposeUrls", purpose];
+            for (purpose, destination) in reminders.purposes.iter() {
+                let configured = &destination.url;
+                let segments = ["destinations", "reminders", "purposes", purpose, "url"];
                 match reminder_destination_origin_and_path(configured) {
                     None => findings.push(RuntimeConfigError::invalid_destination_url(&segments)),
                     Some(_)
@@ -1572,7 +1601,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         | ["authentication", "oidc", "issuer"]
         | ["authentication", "oidc", "jwksSource", "uri"]
         | ["destinations", "reminders", "url"]
-        | ["destinations", "reminders", "purposeUrls", _]
+        | ["destinations", "reminders", "purposes", _, "url"]
         | ["destinations", "hooks", _, "url"] => "https://deferred.invalid",
         ["taskGrantStatus", _, "sourceIssuer"]
         | ["taskGrantStatus", _, "statusResource"]
@@ -3324,30 +3353,21 @@ holdPolicy:
             ),
             (
                 "destinations",
-                serde_json::json!({"reminders": {"url": "not-a-url"}}),
+                serde_json::json!({"reminders": {"url": "not-a-url", "hmacSha256KeyRef": "secret:file/reminder"}}),
                 "config.invalid-value",
                 "/destinations/reminders/url",
             ),
             (
                 "destinations",
-                serde_json::json!({"reminders": {"url": "https://reminders.example.test/due?all=1"}}),
+                serde_json::json!({"reminders": {"url": "https://reminders.example.test/due?all=1", "hmacSha256KeyRef": "secret:file/reminder"}}),
                 "scheduling.runtime.invalid-destination-url",
                 "/destinations/reminders/url",
             ),
             (
                 "destinations",
-                serde_json::json!({"reminders": {"url": "http://reminders.example.test/due"}}),
+                serde_json::json!({"reminders": {"url": "http://reminders.example.test/due", "hmacSha256KeyRef": "secret:file/reminder"}}),
                 "scheduling.runtime.invalid-destination-url",
                 "/destinations/reminders/url",
-            ),
-            (
-                "destinations",
-                serde_json::json!({"reminders": {
-                    "url": "https://reminders.example.test/due",
-                    "bearerTokenRef": "vault:reminders"
-                }}),
-                "config.invalid-value",
-                "/destinations/reminders/bearerTokenRef",
             ),
             (
                 "destinations",
@@ -3405,34 +3425,165 @@ holdPolicy:
     }
 
     #[test]
-    fn reminder_purpose_urls_are_typed_and_optional() {
+    fn a_reminder_destination_without_a_key_is_refused_with_its_fix() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due"
+        });
+        let error = parse_runtime(&document).expect_err("a signing key is required");
+        assert_eq!(error.code(), "config.missing-key");
+        assert!(
+            error.suggested_action().contains("hmacSha256KeyRef"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_reminder_bearer_token_names_its_replacement() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due",
+            "bearerTokenRef": "secret:file/bearer"
+        });
+        let error = parse_runtime(&document).expect_err("bearer authentication was removed");
+        assert!(
+            error.suggested_action().contains("Standard Webhooks"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn reminder_purpose_urls_name_their_replacement() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due",
+            "purposeUrls": {"confirmation": "https://events.example.test/confirmed"}
+        });
+        let error = parse_runtime(&document).expect_err("purposeUrls was removed");
+        assert!(
+            error.suggested_action().contains("purposes.<purpose>.url"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_reminder_purpose_without_its_own_key_is_refused() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due",
+            "hmacSha256KeyRef": "secret:file/reminder",
+            "purposes": {"confirmation": {"url": "https://events.example.test/confirmed"}}
+        });
+        let error = parse_runtime(&document).expect_err("the confirmation needs its own key");
+        assert_eq!(error.code(), "config.missing-key");
+        assert_eq!(
+            error.pointer(),
+            "/destinations/reminders/purposes/confirmation"
+        );
+        assert!(
+            error.suggested_action().contains("hmacSha256KeyRef"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_null_previous_reminder_key_is_refused() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test/due",
+            "hmacSha256KeyRef": "secret:file/reminder",
+            "previousHmacSha256KeyRef": null
+        });
+        let error = parse_runtime(&document).expect_err("omit the previous key when absent");
+        assert_eq!(error.code(), "config.null-value");
+        assert_eq!(
+            error.pointer(),
+            "/destinations/reminders/previousHmacSha256KeyRef"
+        );
+    }
+
+    #[test]
+    fn a_hook_previous_key_naming_a_disabled_provider_is_refused_by_check() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["secretProviders"]
+            .as_object_mut()
+            .unwrap()
+            .remove("environment");
+        document["database"] = serde_json::json!({
+            "runtimeUrlRef": "secret:file/runtime",
+            "migrationUrlRef": "secret:file/migration"
+        });
+        document["destinations"]["hooks"] = serde_json::json!({"appointment-events": {
+            "url": "https://events.example.test/hooks",
+            "hmacSha256KeyRef": "secret:file/hook",
+            "previousHmacSha256KeyRef": "secret:env/HOOK_PREVIOUS"
+        }});
+        let config = parse_runtime(&document).expect("the document decodes");
+        assert_eq!(
+            config
+                .findings(None)
+                .iter()
+                .map(refusal)
+                .collect::<Vec<_>>(),
+            [(
+                "scheduling.runtime.secret-provider-disabled".to_owned(),
+                "/destinations/hooks/appointment-events/previousHmacSha256KeyRef".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn reminder_purposes_are_typed_and_optional() {
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["destinations"]["reminders"] = serde_json::json!({
             "url": "https://events.example.test:443/fallback",
-            "purposeUrls": {
-                "confirmation": "https://events.example.test/confirmed",
-                "change": "https://events.example.test/rescheduled",
-                "cancellation": "https://events.example.test/cancelled",
-                "reminder": "https://events.example.test/reminder"
+            "hmacSha256KeyRef": "secret:file/reminder",
+            "purposes": {
+                "confirmation": {"url": "https://events.example.test/confirmed", "hmacSha256KeyRef": "secret:file/purpose"},
+                "change": {"url": "https://events.example.test/rescheduled", "hmacSha256KeyRef": "secret:file/purpose"},
+                "cancellation": {"url": "https://events.example.test/cancelled", "hmacSha256KeyRef": "secret:file/purpose"},
+                "reminder": {"url": "https://events.example.test/reminder", "hmacSha256KeyRef": "secret:file/purpose"}
             }
         });
         let config = parse_runtime(&document).expect("purpose-specific URLs are accepted");
         let reminders = config.destinations.reminders.expect("reminder destination");
         assert_eq!(
-            reminders.purpose_urls.confirmation.as_deref(),
+            reminders
+                .purposes
+                .confirmation
+                .as_ref()
+                .map(|destination| destination.url.as_str()),
             Some("https://events.example.test/confirmed")
         );
         assert_eq!(
-            reminders.purpose_urls.change.as_deref(),
+            reminders
+                .purposes
+                .change
+                .as_ref()
+                .map(|destination| destination.url.as_str()),
             Some("https://events.example.test/rescheduled")
         );
         assert_eq!(
-            reminders.purpose_urls.cancellation.as_deref(),
+            reminders
+                .purposes
+                .cancellation
+                .as_ref()
+                .map(|destination| destination.url.as_str()),
             Some("https://events.example.test/cancelled")
         );
         assert_eq!(
-            reminders.purpose_urls.reminder.as_deref(),
+            reminders
+                .purposes
+                .reminder
+                .as_ref()
+                .map(|destination| destination.url.as_str()),
             Some("https://events.example.test/reminder")
         );
     }
@@ -3445,32 +3596,33 @@ holdPolicy:
             (
                 serde_json::json!({"unknown": "https://events.example.test/unknown-canary"}),
                 "config.unknown-key",
-                "/destinations/reminders/purposeUrls/unknown",
+                "/destinations/reminders/purposes/unknown",
                 "unknown-canary",
             ),
             (
-                serde_json::json!({"confirmation": "https://other.example.test/origin-canary"}),
+                serde_json::json!({"confirmation": {"url": "https://other.example.test/origin-canary", "hmacSha256KeyRef": "secret:file/purpose"}}),
                 "scheduling.runtime.reminder-destination-origin-mismatch",
-                "/destinations/reminders/purposeUrls/confirmation",
+                "/destinations/reminders/purposes/confirmation/url",
                 "other.example.test",
             ),
             (
-                serde_json::json!({"change": "https://events.example.test/path?query-canary=1"}),
+                serde_json::json!({"change": {"url": "https://events.example.test/path?query-canary=1", "hmacSha256KeyRef": "secret:file/purpose"}}),
                 "scheduling.runtime.invalid-destination-url",
-                "/destinations/reminders/purposeUrls/change",
+                "/destinations/reminders/purposes/change/url",
                 "query-canary",
             ),
             (
-                serde_json::json!({"cancellation": "https://events.example.test/a/%2Funsafe-canary"}),
+                serde_json::json!({"cancellation": {"url": "https://events.example.test/a/%2Funsafe-canary", "hmacSha256KeyRef": "secret:file/purpose"}}),
                 "scheduling.runtime.invalid-destination-url",
-                "/destinations/reminders/purposeUrls/cancellation",
+                "/destinations/reminders/purposes/cancellation/url",
                 "unsafe-canary",
             ),
         ] {
             let mut document = base.clone();
             document["destinations"]["reminders"] = serde_json::json!({
                 "url": "https://events.example.test/fallback",
-                "purposeUrls": purpose_urls
+                "hmacSha256KeyRef": "secret:file/reminder",
+            "purposes": purpose_urls
             });
             let error = RuntimeConfig::load(write_operator(root.path(), document))
                 .expect_err("the purpose URL is refused");
@@ -4590,7 +4742,7 @@ holdPolicy:
         document["identity"]["databaseId"] = serde_json::json!(" padded ");
         document["listener"]["bind"] = serde_json::json!("10.0.0.5:8100");
         document["destinations"] = serde_json::json!({
-            "reminders": {"url": "http://reminders.example.test/due"}
+            "reminders": {"url": "http://reminders.example.test/due", "hmacSha256KeyRef": "secret:file/reminder"}
         });
         write_operator(root, document)
     }
