@@ -158,7 +158,22 @@ where
     };
     let Cli { format, command } = cli;
     if let Command::Provision(args) = &command {
-        return provision(args, format);
+        let declared = match check_posture(args.posture.as_deref(), false) {
+            Ok(declared) => declared,
+            Err((code, message, action)) => {
+                return write_posture_usage(
+                    "provision",
+                    format,
+                    stdout,
+                    stderr,
+                    code,
+                    message,
+                    action,
+                )
+                .unwrap_or_else(|()| output_failed(stderr));
+            }
+        };
+        return provision(args, format, declared);
     }
     if let Command::RstackDev(args) = command {
         return registry_rstack_dev::run(args, stdout, stderr);
@@ -282,7 +297,11 @@ fn init(directory: &std::path::Path) -> Result<(), String> {
 /// Runs the shared `provision` command, which writes its own report and sets
 /// its own exit code. The global `--format` selects its report as it selects
 /// every other command's.
-fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFormat) -> ExitCode {
+fn provision(
+    args: &registry_platform_provision::ProvisionArgs,
+    format: OutputFormat,
+    declared: registry_platform_config::DeclaredPosture,
+) -> ExitCode {
     let shared = match format {
         OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
         OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
@@ -292,7 +311,8 @@ fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFo
         registry_platform_buildinfo::DISPLAY_VERSION,
         args,
         shared,
-        provision::load,
+        declared,
+        |path| provision::load(path, declared),
     )
 }
 
@@ -385,10 +405,8 @@ fn payments_command(
 fn refused(diagnostics: &[registry_platform_yaml::Diagnostic], deny_warnings: bool) -> bool {
     diagnostics
         .iter()
-        .any(|diagnostic| match diagnostic.severity {
-            registry_platform_yaml::Severity::Error => true,
-            registry_platform_yaml::Severity::Warning => deny_warnings,
-        })
+        .any(|diagnostic| diagnostic.severity == registry_platform_yaml::Severity::Error)
+        || (deny_warnings && registry_platform_config::has_denied_warnings(diagnostics))
 }
 
 /// Run `check` and write its verdict: a complete report, a refusal carrying
@@ -491,7 +509,7 @@ fn check_posture(
             "Use one of them.",
         ));
     }
-    registry_platform_config::declared(flag.or(production.then_some("production")))
+    registry_platform_config::declared_with_production_alias(flag, production)
         .map_err(|error| (error.code(), error.message(), error.suggested_action()))
 }
 

@@ -800,3 +800,23 @@ fn check_production_refuses_development_settings_and_conflicting_declarations() 
         );
     }
 }
+
+#[test]
+fn conflict_with_environment_names_the_production_flag() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
+        .args(["--format", "json", "check", "--production"])
+        .env("REGISTRY_STACK_POSTURE", "development")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["diagnostics"][0]["code"], "platform.posture.conflict",
+        "{report}"
+    );
+    assert_eq!(
+        report["diagnostics"][0]["message"],
+        "--production and REGISTRY_STACK_POSTURE declare different postures",
+        "{report}"
+    );
+}

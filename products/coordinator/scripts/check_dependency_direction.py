@@ -49,7 +49,16 @@ CLIENT_ONLY_SUPPORT = {
 # The combined Coordinator crate also publishes coordinatorctl. These helpers
 # supply product-neutral request and report handling and identity facts
 # authoring. Their forward dependencies are subject to the same boundary.
-CLI_SUPPORT = frozenset({"registry-cli-api", "registry-cli-report", "registry-thunderid-tooling"})
+# registry-rstack-dev is the development run host every product CLI links.
+# It reaches only shared platform crates and registry-cli-report, and no product.
+CLI_SUPPORT = frozenset(
+    {
+        "registry-cli-api",
+        "registry-cli-report",
+        "registry-rstack-dev",
+        "registry-thunderid-tooling",
+    }
+)
 
 # Product cores the runtime reaches only through their product client. The
 # core is in the runtime's forward closure through that client, so only the

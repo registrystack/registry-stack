@@ -82,6 +82,7 @@ pub struct JobCheckArgs {
     pub project: Option<PathBuf>,
 
     /// Exit 1 when a warning is reported.
+    /// Development posture listings do not count.
     #[arg(long)]
     pub deny_warnings: bool,
 }

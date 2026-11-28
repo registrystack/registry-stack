@@ -394,6 +394,7 @@ struct SupportingServiceCheckArgs {
     runtime_config: PathBuf,
 
     /// Exit 1 when a warning is reported.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
 
@@ -617,6 +618,7 @@ struct CheckArgs {
     #[arg(long)]
     production: bool,
     /// Exit 1 when a warning is reported.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
     /// Runtime configuration file.
@@ -7173,20 +7175,17 @@ fn apply(posture: DeclaredPosture, args: &ApplyArgs) -> Result<ApplySuccessRepor
 /// its own exit code. The global `--format` selects its report as it selects
 /// every other command's.
 fn provision(posture: DeclaredPosture, args: &ProvisionCommand, format: OutputFormat) -> ExitCode {
-    let shared = match format {
-        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
-        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
-        OutputFormat::JsonWithPosture(declared) => {
-            registry_platform_provision::cli::OutputFormat::JsonWithReport(Box::new(
-                move |report| report.with_posture(declared),
-            ))
-        }
+    let shared = if format.is_json() {
+        registry_platform_provision::cli::OutputFormat::Json
+    } else {
+        registry_platform_provision::cli::OutputFormat::Human
     };
     registry_platform_provision::run_provision(
         "bregctl",
         registry_platform_buildinfo::DISPLAY_VERSION,
         &args.shared,
         shared,
+        posture,
         |runtime_config| provision::load(posture, runtime_config, args.package.as_deref()),
     )
 }

@@ -69,7 +69,8 @@ async fn main() -> ExitCode {
             RuntimeConfig::check_status_with_posture(&check_path, arguments.environment, declared);
         let failed = unavailable
             || report.has_errors()
-            || (arguments.deny_warnings && report.warning_count() > 0);
+            || (arguments.deny_warnings
+                && registry_platform_config::has_denied_warnings(report.diagnostics()));
         match arguments.format {
             Format::Human if failed => {
                 let headline = if unavailable {
@@ -81,7 +82,7 @@ async fn main() -> ExitCode {
             }
             Format::Human => print!("{}", report.render_human()),
             Format::Json => match serde_json::to_string_pretty(
-                &serde_json::json!({"ok":!failed,"command":"check","status":if unavailable {"operational-failure"} else if failed {"domain-refusal"} else {"complete"},"apiVersion":"id.registrystack.org/formats/platform/mcp-ctl-report/v1alpha1","kind":"PlatformMcpCtlReport","version":env!("CARGO_PKG_VERSION"),"filesChecked":1,"errors":report.error_count(),"warnings":report.warning_count(),"diagnostics":report.to_json_value(),"posture":{"value":declared.posture.as_str(),"source":match declared.source {registry_platform_config::PostureSource::Flag => "flag", registry_platform_config::PostureSource::Environment => "environment", registry_platform_config::PostureSource::Default => "default"}}}),
+                &serde_json::json!({"ok":!failed,"command":"check","status":if unavailable {"operational-failure"} else if failed {"domain-refusal"} else {"complete"},"apiVersion":"id.registrystack.org/formats/platform/mcp-ctl-report/v1alpha1","kind":"PlatformMcpCtlReport","version":env!("CARGO_PKG_VERSION"),"filesChecked":1,"errors":report.error_count(),"warnings":report.warning_count(),"diagnostics":report.to_json_value(),"posture":{"value":declared.posture.as_str(),"source":declared.source.as_str()}}),
             ) {
                 Ok(json) => println!("{json}"),
                 Err(_) => {

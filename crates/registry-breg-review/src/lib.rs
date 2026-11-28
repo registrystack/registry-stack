@@ -133,7 +133,7 @@ pub fn command() -> Command {
                 .arg(
                     Arg::new("deny-warnings")
                         .long("deny-warnings")
-                        .help("Exit 1 when a warning is reported")
+                        .help("Exit 1 when a warning is reported. Development posture listings do not count.")
                         .action(ArgAction::SetTrue),
                 )
                 .arg(

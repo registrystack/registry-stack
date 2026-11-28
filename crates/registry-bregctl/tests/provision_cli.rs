@@ -160,6 +160,10 @@ fn print_sql_as_json_reports_nothing_executed() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        report["posture"],
+        serde_json::json!({"value": "production", "source": "default"})
+    );
     assert_eq!(report["command"], "provision");
     assert_eq!(report["product"], "breg");
     assert_eq!(report["executed"], false);

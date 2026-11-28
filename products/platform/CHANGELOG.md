@@ -7,6 +7,8 @@
 - A peer policy that refuses development checks each comma-separated `Registry-Posture` value in every header field. An exact `development` value after trimming whitespace marks the response as a development peer.
 - Each product module of the Rust client facade re-exports `PeerPolicy`.
 
+- Checks with `--deny-warnings` still list development-only settings accepted under a development declaration.
+
 - The TypeScript client README gives the matching `bregctl` release requirement and shows the incompatible-version diagnostic.
 
 - Generated TypeScript services export a Proposal type for each register member, such as `FacilityProposal`, with that member's Action types.

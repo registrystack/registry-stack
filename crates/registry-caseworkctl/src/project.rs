@@ -380,7 +380,9 @@ fn finish_check_with_acceptances(
         },
     };
     registry_platform_config::apply_check_acceptances(project, &mut report);
-    if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    if report.has_errors()
+        || (deny_warnings && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         return Err(report.into());
     }
     let mut checked = checked
@@ -428,7 +430,10 @@ fn check_impl(project: &Path, production: bool, deny_warnings: bool) -> Result<V
             }
         }
     }
-    if diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0) {
+    if diagnostics.has_errors()
+        || (deny_warnings
+            && registry_platform_config::has_denied_warnings(diagnostics.diagnostics()))
+    {
         return Err(diagnostics.into());
     }
     let late_check = (|| -> Result<Vec<_>> {
@@ -796,7 +801,10 @@ pub(super) fn test(project: &Path, deny_warnings: bool) -> Result<Value> {
             }
         }
     }
-    if diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0) {
+    if diagnostics.has_errors()
+        || (deny_warnings
+            && registry_platform_config::has_denied_warnings(diagnostics.diagnostics()))
+    {
         return Err(diagnostics.into());
     }
     Ok(
@@ -1140,7 +1148,9 @@ pub(super) fn check_runtime_config(
     };
     combined.extend(runtime);
     registry_platform_config::apply_check_acceptances(project, &mut combined);
-    if combined.has_errors() || (deny_warnings && combined.warning_count() > 0) {
+    if combined.has_errors()
+        || (deny_warnings && registry_platform_config::has_denied_warnings(combined.diagnostics()))
+    {
         return Err(combined.into());
     }
     let mut checked = checked

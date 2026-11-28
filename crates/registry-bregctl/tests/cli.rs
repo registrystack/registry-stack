@@ -3644,7 +3644,7 @@ fn check_reports_local_key_custody_at_the_declared_severity() {
             "error",
         ),
         (
-            &["--posture", "development"][..],
+            &["--deny-warnings", "--posture", "development"][..],
             "development",
             "flag",
             "warning",
@@ -3659,7 +3659,13 @@ fn check_reports_local_key_custody_at_the_declared_severity() {
             path(&runtime),
         ];
         arguments.extend_from_slice(flags);
-        let report = json_stdout(&bregctl(&arguments));
+        let output = bregctl(&arguments);
+        let report = json_stdout(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(i32::from(severity == "error")),
+            "{report}"
+        );
         assert_eq!(
             report["posture"],
             json!({"value": posture, "source": source})

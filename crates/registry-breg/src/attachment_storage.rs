@@ -100,12 +100,14 @@ impl Default for RawAttachmentStorageConfig {
 pub(crate) struct AttachmentStorageConfig(Option<S3Settings>);
 
 impl AttachmentStorageConfig {
-    pub(crate) fn from_raw(raw: RawAttachmentStorageConfig) -> Result<Self> {
+    pub(crate) fn from_raw(
+        raw: RawAttachmentStorageConfig,
+        peer_policy: registry_platform_httputil::PeerPolicy,
+    ) -> Result<Self> {
         match raw {
             RawAttachmentStorageConfig::Database {} => Ok(Self::default()),
             RawAttachmentStorageConfig::S3(config) => {
-                S3Settings::from_config_without_peer_policy(&config)
-                    .map(|settings| Self(Some(settings)))
+                S3Settings::from_config(&config, peer_policy).map(|settings| Self(Some(settings)))
             }
         }
     }
@@ -170,7 +172,10 @@ mod tests {
     }
 
     fn config(input: serde_json::Value) -> Result<AttachmentStorageConfig> {
-        AttachmentStorageConfig::from_raw(serde_json::from_value(input).unwrap())
+        AttachmentStorageConfig::from_raw(
+            serde_json::from_value(input).unwrap(),
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+        )
     }
 
     #[test]

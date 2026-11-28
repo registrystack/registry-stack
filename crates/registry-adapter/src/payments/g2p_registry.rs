@@ -212,12 +212,19 @@ pub trait G2pRegistryPort: Send + Sync {
 }
 
 pub struct BregG2pBridge {
+    peer_policy: registry_platform_httputil::PeerPolicy,
     resolver: Arc<SecretResolver>,
 }
 
 impl BregG2pBridge {
-    pub fn new(resolver: Arc<SecretResolver>) -> Self {
-        Self { resolver }
+    pub fn new(
+        resolver: Arc<SecretResolver>,
+        peer_policy: registry_platform_httputil::PeerPolicy,
+    ) -> Self {
+        Self {
+            resolver,
+            peer_policy,
+        }
     }
 
     fn client(&self, binding: &G2pRegistryBinding) -> Result<BaseRegistryClient, G2pError> {
@@ -231,7 +238,7 @@ impl BregG2pBridge {
         let provider = StaticToken::new(token.to_owned()).map_err(|_| G2pError::Unavailable)?;
         let url = url::Url::parse(&binding.base_url).map_err(|_| G2pError::Unavailable)?;
         BaseRegistryClient::new(
-            BaseRegistryClientConfig::new_without_peer_policy(url)
+            BaseRegistryClientConfig::new(url, self.peer_policy)
                 .with_token_provider(Arc::new(provider))
                 .with_attempt_timeout(Duration::from_secs(15))
                 .with_connect_timeout(Duration::from_secs(5))

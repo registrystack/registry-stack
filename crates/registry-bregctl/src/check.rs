@@ -201,7 +201,8 @@ pub(super) fn run(
         registry_platform_config::apply_check_acceptances(project, &mut outcome.report);
         outcome.files = outcome.report.files_checked().unwrap_or(outcome.files);
     }
-    let denied = request.deny_warnings && outcome.report.warning_count() > 0;
+    let denied = request.deny_warnings
+        && registry_platform_config::has_denied_warnings(outcome.report.diagnostics());
     let exit = if outcome.unavailable {
         OPERATIONAL_FAILURE_EXIT
     } else if outcome.report.has_errors() || denied {

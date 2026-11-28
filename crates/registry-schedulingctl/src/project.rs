@@ -313,7 +313,8 @@ fn checked_project(
 /// Whether `report` refuses what it describes: any error does, and with
 /// `deny_warnings` any warning does too.
 fn refuses(report: &Report, deny_warnings: bool) -> bool {
-    report.has_errors() || (deny_warnings && report.warning_count() > 0)
+    report.has_errors()
+        || (deny_warnings && registry_platform_config::has_denied_warnings(report.diagnostics()))
 }
 
 pub(super) fn check(

@@ -218,7 +218,10 @@ async fn every_payment_refusal_keeps_its_answer_and_is_counted_under_its_check()
             registry_platform_config::Posture::Development,
         )
         .with_development(development),
-        Arc::new(BregBridge::new(resolver.clone())),
+        Arc::new(BregBridge::new(
+            resolver.clone(),
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+        )),
         Arc::new(SyntheticProvider::new(resolver.clone(), None)),
     )
     .expect("the payment service");
@@ -228,7 +231,10 @@ async fn every_payment_refusal_keeps_its_answer_and_is_counted_under_its_check()
             deployment,
             registry_platform_config::Posture::Production,
         ),
-        Arc::new(BregG2pBridge::new(resolver.clone())),
+        Arc::new(BregG2pBridge::new(
+            resolver.clone(),
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+        )),
         Arc::new(HttpG2pProvider::new(resolver)),
     );
     let state = Arc::new(HttpState {

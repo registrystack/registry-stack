@@ -33,7 +33,7 @@ pub use registry_platform_config::{
     PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TlsTermination,
     UrlHookDestinationConfig,
 };
-use registry_platform_httputil::client::transport_protects_the_credential;
+use registry_platform_httputil::{client::transport_protects_the_credential, PeerPolicy};
 use registry_platform_objectstore::{s3::S3Settings, verifier::HttpVerifierSettings};
 use registry_platform_oidc::{
     fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm, DeclaredKinds,
@@ -701,6 +701,13 @@ impl RuntimeConfig {
         self.declared.unwrap_or(DEFAULT_POSTURE)
     }
 
+    pub fn peer_policy(&self) -> PeerPolicy {
+        match self.declared_posture().posture {
+            Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+            Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+        }
+    }
+
     /// The resolver for every secret reference this document names.
     pub fn secret_resolver(&self) -> Result<SecretResolver, RuntimeConfigError> {
         self.secret_providers
@@ -1067,7 +1074,7 @@ impl RuntimeConfig {
                 "storage.url must use HTTPS or HTTP on loopback",
                 "Write an HTTPS URL or use HTTP with a loopback host.",
             ));
-        } else if S3Settings::from_config_without_peer_policy(settings).is_err() {
+        } else if S3Settings::from_config(settings, self.peer_policy()).is_err() {
             findings.push(Finding::new(
                 "documents.runtime.invalid-object-storage",
                 "/storage",
@@ -1093,7 +1100,7 @@ impl RuntimeConfig {
                 ));
             }
             ContentVerificationConfig::Http { settings }
-                if HttpVerifierSettings::from_config_without_peer_policy(settings).is_err() =>
+                if HttpVerifierSettings::from_config(settings, self.peer_policy()).is_err() =>
             {
                 findings.push(Finding::new(
                     "documents.runtime.invalid-content-verification",

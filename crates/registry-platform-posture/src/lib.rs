@@ -53,6 +53,17 @@ pub enum PostureSource {
     Default,
 }
 
+impl PostureSource {
+    /// The stable spelling of this source in reports and logs.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Flag => "flag",
+            Self::Environment => "environment",
+            Self::Default => "default",
+        }
+    }
+}
+
 /// A posture together with the source that declared it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeclaredPosture {
@@ -69,6 +80,8 @@ pub enum PostureError {
     InvalidFlag,
     /// Two declarations disagree.
     Conflict,
+    /// The `--production` alias disagrees with the environment.
+    ProductionAliasConflict,
 }
 
 impl PostureError {
@@ -78,7 +91,9 @@ impl PostureError {
             PostureError::InvalidEnvironment | PostureError::InvalidFlag => {
                 "platform.posture.invalid-value"
             }
-            PostureError::Conflict => "platform.posture.conflict",
+            PostureError::Conflict | PostureError::ProductionAliasConflict => {
+                "platform.posture.conflict"
+            }
         }
     }
 
@@ -92,6 +107,9 @@ impl PostureError {
             PostureError::Conflict => {
                 "--posture and REGISTRY_STACK_POSTURE declare different postures"
             }
+            PostureError::ProductionAliasConflict => {
+                "--production and REGISTRY_STACK_POSTURE declare different postures"
+            }
         }
     }
 
@@ -102,7 +120,9 @@ impl PostureError {
                 "Set it to development or production, or unset it for production."
             }
             PostureError::InvalidFlag => "Pass --posture development or --posture production.",
-            PostureError::Conflict => "Declare the posture once, or give both the same value.",
+            PostureError::Conflict | PostureError::ProductionAliasConflict => {
+                "Declare the posture once, or give both the same value."
+            }
         }
     }
 }
@@ -161,6 +181,29 @@ pub fn declared(flag: Option<&str>) -> Result<DeclaredPosture, PostureError> {
     declared_from(flag, std::env::var_os(POSTURE_ENV).as_deref())
 }
 
+/// Resolve a command that also accepts `--production`. The caller checks
+/// contradictions between its own flags before resolving the environment.
+pub fn declared_from_with_production_alias(
+    flag: Option<&str>,
+    production: bool,
+    environment: Option<&OsStr>,
+) -> Result<DeclaredPosture, PostureError> {
+    let result = declared_from(flag.or(production.then_some(PRODUCTION)), environment);
+    if production && result == Err(PostureError::Conflict) {
+        Err(PostureError::ProductionAliasConflict)
+    } else {
+        result
+    }
+}
+
+/// Resolve the same command, reading its process environment once.
+pub fn declared_with_production_alias(
+    flag: Option<&str>,
+    production: bool,
+) -> Result<DeclaredPosture, PostureError> {
+    declared_from_with_production_alias(flag, production, std::env::var_os(POSTURE_ENV).as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +250,22 @@ mod tests {
             declared_from(Some("production"), env("production")),
             ok(Posture::Production, PostureSource::Flag)
         );
+    }
+
+    #[test]
+    fn conflicts_name_the_flag_used() {
+        for (flag, production, expected) in [
+            (Some(PRODUCTION), false, "--posture"),
+            (None, true, "--production"),
+        ] {
+            let error = declared_from_with_production_alias(flag, production, env(DEVELOPMENT))
+                .unwrap_err();
+            assert_eq!(error.code(), "platform.posture.conflict");
+            assert_eq!(
+                error.message(),
+                format!("{expected} and REGISTRY_STACK_POSTURE declare different postures")
+            );
+        }
     }
 
     #[test]

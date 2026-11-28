@@ -50,6 +50,7 @@ fn provision_with(
 ) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"));
     command
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("provision")
         .arg("--runtime-config")
         .arg(runtime)
@@ -142,6 +143,22 @@ fn print_sql_requires_declared_development_for_private_plaintext() {
         development.status.success(),
         "{}",
         String::from_utf8_lossy(&development.stderr)
+    );
+}
+
+#[test]
+fn provision_json_reports_the_declaration() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = runtime_file(directory.path());
+    let output = provision(
+        &runtime,
+        &["--print-sql", "--posture", "production", "--format", "json"],
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert_eq!(
+        report["posture"],
+        serde_json::json!({"value": "production", "source": "flag"})
     );
 }
 

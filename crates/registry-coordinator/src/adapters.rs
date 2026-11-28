@@ -21,7 +21,7 @@ use registry_payment_client::{
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{
     client::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenError, TokenProvider},
-    ExchangeAuthorization, ExchangeContext, FetchUrlPolicy,
+    ExchangeAuthorization, ExchangeContext, FetchUrlPolicy, PeerPolicy,
 };
 use registry_scheduling_client::{
     AdmissionRequest, AvailabilityPreviewRequest, AvailabilitySelection, CancelAppointmentRequest,
@@ -82,6 +82,7 @@ struct PaymentConnection {
 }
 
 struct TaskConnection {
+    peer_policy: PeerPolicy,
     base_url: Url,
     options: BRegRecordOptions,
     authorization: AuthorizationConfig,
@@ -93,6 +94,14 @@ pub struct HttpAdapters {
     connections: BTreeMap<String, Connection>,
     digest: String,
     config: RuntimeConfig,
+}
+
+pub(crate) fn peer_policy(posture: registry_platform_config::Posture) -> PeerPolicy {
+    use registry_platform_config::Posture;
+    match posture {
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    }
 }
 
 fn config_error() -> CoordinatorError {
@@ -141,9 +150,10 @@ fn tokens(
 fn breg_client(
     url: Url,
     tokens: Arc<dyn TokenProvider>,
+    peer_policy: PeerPolicy,
 ) -> std::result::Result<BaseRegistryClient, BaseRegistryClientError> {
     BaseRegistryClient::new(
-        BaseRegistryClientConfig::new_without_peer_policy(url)
+        BaseRegistryClientConfig::new(url, peer_policy)
             .with_token_provider(tokens)
             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
             .with_attempt_timeout(REQUEST_TIMEOUT)
@@ -177,6 +187,7 @@ impl HttpAdapters {
         event_keys: crate::event_trigger::EventKeys,
     ) -> Result<Self> {
         config.validate()?;
+        let peer_policy = peer_policy(config.posture());
         let secrets = Arc::new(
             config
                 .secret_providers
@@ -247,6 +258,7 @@ impl HttpAdapters {
                         .map_err(|_| config_error())?;
                     if auth.task_authority.is_some() {
                         Connection::BregTask(Box::new(TaskConnection {
+                            peer_policy,
                             base_url: binding.base_url.clone(),
                             options,
                             authorization: auth,
@@ -259,7 +271,7 @@ impl HttpAdapters {
                         );
                         Connection::Breg {
                             client: Box::new(
-                                breg_client(binding.base_url.clone(), tokens)
+                                breg_client(binding.base_url.clone(), tokens, peer_policy)
                                     .map_err(|_| config_error())?,
                             ),
                             options,
@@ -277,7 +289,7 @@ impl HttpAdapters {
                         None
                     };
                     let client = SchedulingClient::new(
-                        SchedulingClientConfig::new_without_peer_policy(binding.base_url.clone())
+                        SchedulingClientConfig::new(binding.base_url.clone(), peer_policy)
                             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
@@ -300,7 +312,7 @@ impl HttpAdapters {
                             .map_err(|_| config_error())?,
                     );
                     let client = MessagingClient::new(
-                        MessagingClientConfig::new_without_peer_policy(binding.base_url.clone())
+                        MessagingClientConfig::new(binding.base_url.clone(), peer_policy)
                             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
@@ -321,9 +333,10 @@ impl HttpAdapters {
                         .cloned()
                         .ok_or_else(config_error)?;
                     let client = PaymentClient::new(
-                        PaymentClientConfig::new_without_peer_policy(
+                        PaymentClientConfig::new(
                             binding.base_url.clone(),
                             payment_connection,
+                            peer_policy,
                         )
                         .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                         .with_attempt_timeout(REQUEST_TIMEOUT)
@@ -370,7 +383,7 @@ impl HttpAdapters {
                     let tokens = tokens(&auth, key, &auth.resource, &auth.scopes)
                         .map_err(|_| config_error())?;
                     let client = CaseworkClient::new(
-                        CaseworkClientConfig::new_without_peer_policy(binding.base_url.clone())
+                        CaseworkClientConfig::new(binding.base_url.clone(), peer_policy)
                             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
                             .with_attempt_timeout(REQUEST_TIMEOUT)
                             .with_connect_timeout(Duration::from_millis(
@@ -847,6 +860,7 @@ fn task_provider(
     auth: &AuthorizationConfig,
     key: &PrivateJwk,
     grant: &GrantReference,
+    peer_policy: PeerPolicy,
 ) -> std::result::Result<ExchangeAuthorization, CallOutcome> {
     let authority = auth
         .task_authority
@@ -869,7 +883,7 @@ fn task_provider(
     )
     .map_err(|error| token_failure(&error))?;
     let casework = CaseworkClient::new(
-        CaseworkClientConfig::new_without_peer_policy(authority.base_url.clone())
+        CaseworkClientConfig::new(authority.base_url.clone(), peer_policy)
             .with_maximum_mutation_retries(crate::operations::HTTP_MUTATION_RETRIES)
             .with_attempt_timeout(REQUEST_TIMEOUT)
             .with_connect_timeout(Duration::from_millis(
@@ -900,8 +914,8 @@ impl TaskConnection {
         &self,
         grant: &GrantReference,
     ) -> std::result::Result<BaseRegistryClient, CallOutcome> {
-        let provider = task_provider(&self.authorization, &self.key, grant)?;
-        breg_client(self.base_url.clone(), Arc::new(provider))
+        let provider = task_provider(&self.authorization, &self.key, grant, self.peer_policy)?;
+        breg_client(self.base_url.clone(), Arc::new(provider), self.peer_policy)
             .map_err(|_| refused("credential-configuration"))
     }
 }
@@ -1178,6 +1192,7 @@ impl AdapterSet for HttpAdapters {
                     &connection.key,
                     connection.standing.as_deref(),
                     request,
+                    peer_policy(self.config.posture()),
                 )
                 .await
             }
@@ -1611,10 +1626,11 @@ async fn scheduling_token(
     key: &PrivateJwk,
     standing: Option<&PrivateKeyJwt>,
     grant: Option<&GrantReference>,
+    peer_policy: PeerPolicy,
 ) -> std::result::Result<registry_platform_httputil::client::BearerToken, CallOutcome> {
     if auth.task_authority.is_some() {
         let grant = grant.ok_or_else(|| refused("invalid-command"))?;
-        task_provider(auth, key, grant)?
+        task_provider(auth, key, grant, peer_policy)?
             .bearer_token()
             .await
             .map_err(|error| token_failure(&error))
@@ -1687,6 +1703,7 @@ async fn scheduling_call(
     key: &PrivateJwk,
     standing: Option<&PrivateKeyJwt>,
     request: &CallRequest,
+    peer_policy: PeerPolicy,
 ) -> CallOutcome {
     match request.operation {
         Operation::ReadScheduling => {
@@ -1694,7 +1711,15 @@ async fn scheduling_call(
                 Ok(input) => input,
                 Err(_) => return refused("invalid-command"),
             };
-            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+            let token = match scheduling_token(
+                auth,
+                key,
+                standing,
+                input.grant.as_ref(),
+                peer_policy,
+            )
+            .await
+            {
                 Ok(token) => token,
                 Err(outcome) => return outcome,
             };
@@ -1709,7 +1734,15 @@ async fn scheduling_call(
                 Ok(input) => input,
                 Err(_) => return refused("invalid-command"),
             };
-            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+            let token = match scheduling_token(
+                auth,
+                key,
+                standing,
+                input.grant.as_ref(),
+                peer_policy,
+            )
+            .await
+            {
                 Ok(token) => token,
                 Err(outcome) => return outcome,
             };
@@ -1736,7 +1769,15 @@ async fn scheduling_call(
             {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+            let token = match scheduling_token(
+                auth,
+                key,
+                standing,
+                input.grant.as_ref(),
+                peer_policy,
+            )
+            .await
+            {
                 Ok(token) => token,
                 Err(outcome) => return outcome,
             };
@@ -1766,7 +1807,15 @@ async fn scheduling_call(
                 Ok(input) => input,
                 Err(_) => return refused("invalid-command"),
             };
-            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+            let token = match scheduling_token(
+                auth,
+                key,
+                standing,
+                input.grant.as_ref(),
+                peer_policy,
+            )
+            .await
+            {
                 Ok(token) => token,
                 Err(outcome) => return outcome,
             };
@@ -1789,10 +1838,11 @@ async fn scheduling_call(
             if auth.task_authority.is_none() || !valid_key(idempotency_key) {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .create_hold(
                     SchedulingAuth::new(&token),
@@ -1813,10 +1863,11 @@ async fn scheduling_call(
             if auth.task_authority.is_none() || request.idempotency_key.is_some() {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .release_hold(SchedulingAuth::new(&token), &input.hold_id)
                 .await
@@ -1842,10 +1893,11 @@ async fn scheduling_call(
             {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .create_appointment(
                     SchedulingAuth::new(&token),
@@ -1869,10 +1921,11 @@ async fn scheduling_call(
             if auth.task_authority.is_none() || !valid_key(idempotency_key) {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .reschedule_appointment(
                     SchedulingAuth::new(&token),
@@ -1897,10 +1950,11 @@ async fn scheduling_call(
             if auth.task_authority.is_none() || !valid_key(idempotency_key) {
                 return refused("invalid-command");
             }
-            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
-                Ok(token) => token,
-                Err(outcome) => return outcome,
-            };
+            let token =
+                match scheduling_token(auth, key, None, Some(&input.grant), peer_policy).await {
+                    Ok(token) => token,
+                    Err(outcome) => return outcome,
+                };
             match client
                 .cancel_appointment(
                     SchedulingAuth::new(&token),

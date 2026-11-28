@@ -112,6 +112,7 @@ pub struct Args {
 #[derive(clap::Subcommand, Debug)]
 enum Entry {
     Check {
+        /// Refuse unaccepted warnings. Development posture listings do not count.
         #[arg(long)]
         deny_warnings: bool,
         #[arg(long)]
@@ -823,7 +824,9 @@ fn check(
         .and_then(|project| plan::check(&project));
     let (report, exit) = match outcome {
         Ok(report) => {
-            let refused = report.has_errors() || (deny_warnings && report.warning_count() > 0);
+            let refused = report.has_errors()
+                || (deny_warnings
+                    && registry_platform_config::has_denied_warnings(report.diagnostics()));
             (report, u8::from(refused))
         }
         Err(error) => match error.downcast::<Report>() {

@@ -2152,7 +2152,7 @@ fn check_reports_insecure_issuer_http_in_both_postures() {
     for (flags, expected_exit, severity) in [
         (&[][..], ExitCode::from(1), "error"),
         (
-            &["--posture", "development"][..],
+            &["--deny-warnings", "--posture", "development"][..],
             ExitCode::SUCCESS,
             "warning",
         ),
@@ -2250,7 +2250,7 @@ fn job_check_lists_private_transport_in_development_and_refuses_it_in_production
         (&[][..], ExitCode::from(1), "error"),
         (&["--posture", "production"][..], ExitCode::from(1), "error"),
         (
-            &["--posture", "development"][..],
+            &["--deny-warnings", "--posture", "development"][..],
             ExitCode::SUCCESS,
             "warning",
         ),
@@ -2631,4 +2631,42 @@ fn check_reports_an_operational_error_when_its_report_cannot_be_written() {
         String::from_utf8_lossy(&stderr).contains("output"),
         "{stderr:?}"
     );
+}
+
+#[test]
+fn conflict_with_environment_names_the_production_flag() {
+    for arguments in [
+        &[
+            "--format",
+            "json",
+            "check",
+            "/nonexistent/project",
+            "--production",
+        ][..],
+        &[
+            "--format",
+            "json",
+            "payments",
+            "check",
+            "/nonexistent/payments.yaml",
+            "--production",
+        ][..],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_adapterctl"))
+            .args(arguments)
+            .env("REGISTRY_STACK_POSTURE", "development")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report["diagnostics"][0]["code"], "platform.posture.conflict",
+            "{report}"
+        );
+        assert_eq!(
+            report["diagnostics"][0]["message"],
+            "--production and REGISTRY_STACK_POSTURE declare different postures",
+            "{report}"
+        );
+    }
 }

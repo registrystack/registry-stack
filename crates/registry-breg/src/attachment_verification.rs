@@ -92,11 +92,14 @@ impl Default for RawAttachmentVerificationConfig {
 pub(crate) struct AttachmentVerificationConfig(Option<HttpVerifierSettings>);
 
 impl AttachmentVerificationConfig {
-    pub(crate) fn from_raw(raw: RawAttachmentVerificationConfig) -> Result<Self> {
+    pub(crate) fn from_raw(
+        raw: RawAttachmentVerificationConfig,
+        peer_policy: registry_platform_httputil::PeerPolicy,
+    ) -> Result<Self> {
         match raw {
             RawAttachmentVerificationConfig::Disabled {} => Ok(Self::default()),
             RawAttachmentVerificationConfig::Http(config) => {
-                HttpVerifierSettings::from_config_without_peer_policy(&config)
+                HttpVerifierSettings::from_config(&config, peer_policy)
                     .map(|settings| Self(Some(settings)))
             }
         }
@@ -228,10 +231,13 @@ mod tests {
         json!({"type":"http", "url":endpoint, "authorizationRef":"secret:file/token", "policyId":"scanner-rules-2026-09"})
     }
     fn activate(input: serde_json::Value, files: &SecretFile) -> AttachmentVerification {
-        AttachmentVerificationConfig::from_raw(serde_json::from_value(input).unwrap())
-            .unwrap()
-            .activate(&files.resolver())
-            .unwrap()
+        AttachmentVerificationConfig::from_raw(
+            serde_json::from_value(input).unwrap(),
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+        )
+        .unwrap()
+        .activate(&files.resolver())
+        .unwrap()
     }
     fn http(value: AttachmentVerification) -> Arc<HttpAttachmentVerifier> {
         let AttachmentVerification::Http(value) = value else {
@@ -249,7 +255,8 @@ mod tests {
         ] {
             assert_eq!(
                 AttachmentVerificationConfig::from_raw(
-                    serde_json::from_value(raw(endpoint)).unwrap()
+                    serde_json::from_value(raw(endpoint)).unwrap(),
+                    registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
                 )
                 .unwrap_err(),
                 AttachmentVerificationError::InvalidConfiguration
@@ -281,10 +288,11 @@ mod tests {
         ] {
             let mut input = raw("https://verification-canary.example/verify");
             input[key] = value;
-            assert!(
-                AttachmentVerificationConfig::from_raw(serde_json::from_value(input).unwrap())
-                    .is_err()
-            );
+            assert!(AttachmentVerificationConfig::from_raw(
+                serde_json::from_value(input).unwrap(),
+                registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+            )
+            .is_err());
         }
         // The timeout is bounded at decode.
         for timeout in [0, 60_001] {

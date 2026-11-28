@@ -13,6 +13,7 @@ pub(crate) const DOWNLOAD_CONTENT_DISPOSITION: &str = "attachment";
 
 /// The audit identity of a Record file read. Only a declared slot may be
 /// supplied: an unknown caller-supplied name is represented by `None`.
+#[cfg(feature = "runtime")]
 pub(crate) fn record_attachment_operation_id(record_get: &str, slot: Option<&str>) -> String {
     match slot {
         Some(slot) => format!("{record_get}:attachment:{slot}"),

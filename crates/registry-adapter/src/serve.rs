@@ -1172,47 +1172,14 @@ pub(crate) fn load_serve_configuration(
                 setting
             }));
         }
-        for setting in payments.posture.settings() {
-            runtime.posture.record(setting.clone());
-        }
     }
-    let source = match declared.source {
-        registry_platform_config::PostureSource::Flag => "flag",
-        registry_platform_config::PostureSource::Environment => "environment",
-        registry_platform_config::PostureSource::Default => "default",
-    };
-    tracing::info!(
-        posture = declared.posture.as_str(),
-        posture_source = source,
-        development_settings = runtime.posture.settings().len(),
-        explicit_production_settings = runtime.posture.explicit_settings().len(),
-        "posture declared"
-    );
-    let file = runtime_path.to_string_lossy();
-    for setting in runtime.posture.explicit_settings() {
-        let line = setting.report_line(Some(&file));
-        tracing::info!(
-            setting_code = line.code,
-            pointer = line.pointer.as_deref().unwrap_or(""),
-            file = line.file.as_deref().unwrap_or(""),
-            line = line.line,
-            column = line.column,
-            "explicit production setting in use"
-        );
-    }
-    for diagnostic in diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.code.split('.').nth(1) == Some("posture"))
-    {
-        tracing::warn!(
-            error_code = diagnostic.code,
-            pointer = diagnostic.path,
-            file = diagnostic
-                .source
-                .as_ref()
-                .map_or("", |source| source.file.as_str()),
-            "development-only setting in use; production refuses it"
-        );
+    if let Some((payments, file)) = payments.as_ref().zip(payments_path) {
+        let file = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+        runtime
+            .posture
+            .log_startup_with_files(&path, &[(&payments.posture, &file)]);
+    } else {
+        runtime.posture.log_startup_with_files(&path, &[]);
     }
     Ok((runtime, payments, readiness_posture))
 }

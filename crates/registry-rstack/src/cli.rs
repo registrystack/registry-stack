@@ -213,6 +213,7 @@ enum DevCommand {
         #[arg(value_name = "PROJECT")]
         project: PathBuf,
         /// Refuse an unaccepted warning.
+        /// Development posture listings do not count.
         #[arg(long)]
         deny_warnings: bool,
     },
@@ -284,6 +285,7 @@ enum IdentityCommand {
         #[arg(long = "facts", value_name = "FILE")]
         facts: Vec<PathBuf>,
         /// Exit 1 when any unaccepted warning is reported.
+        /// Development posture listings do not count.
         #[arg(long)]
         deny_warnings: bool,
     },

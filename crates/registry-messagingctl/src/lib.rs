@@ -436,6 +436,7 @@ struct CheckArgs {
     #[arg(long, requires = "runtime_config")]
     environment: bool,
     /// Exit 1 when a warning is reported.
+    /// Development posture listings do not count.
     #[arg(long)]
     deny_warnings: bool,
 }
@@ -924,6 +925,7 @@ fn provision(
         registry_platform_buildinfo::DISPLAY_VERSION,
         args,
         shared,
+        declared,
         |path| provision::load(path, declared),
     )
 }
@@ -1349,7 +1351,10 @@ fn config_refusal(error: &RuntimeConfigError) -> Outcome {
 fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
     if let Some(path) = &args.dev_state {
         return match dev::check_session_file(path) {
-            Ok(report) if args.deny_warnings && report.warning_count() > 0 => {
+            Ok(report)
+                if args.deny_warnings
+                    && registry_platform_config::has_denied_warnings(report.diagnostics()) =>
+            {
                 Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &report)
             }
             Ok(report) => Outcome::new(
@@ -1376,7 +1381,10 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
                 if args.project.is_some() {
                     registry_platform_config::apply_check_acceptances(root, &mut warnings);
                 }
-                if warnings.has_errors() || (args.deny_warnings && warnings.warning_count() > 0) {
+                if warnings.has_errors()
+                    || (args.deny_warnings
+                        && registry_platform_config::has_denied_warnings(warnings.diagnostics()))
+                {
                     return Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &warnings);
                 }
                 match package_report(&loaded) {
@@ -1468,7 +1476,9 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
     if let Some(root) = &args.project {
         registry_platform_config::apply_check_acceptances(root, &mut report);
     }
-    let denied = report.has_errors() || (args.deny_warnings && report.warning_count() > 0);
+    let denied = report.has_errors()
+        || (args.deny_warnings
+            && registry_platform_config::has_denied_warnings(report.diagnostics()));
     if denied {
         let exit = if runtime.unavailable {
             OPERATIONAL_FAILURE_EXIT
@@ -3675,6 +3685,36 @@ audit:
             report["filesChecked"],
             1 + load_project(&directory).unwrap().files.len()
         );
+
+        let original = std::fs::read_to_string(&runtime_config).unwrap();
+        let development = original.replace(
+            "database:\n",
+            "database:\n  transport: private-network-plaintext\n",
+        );
+        std::fs::write(&runtime_config, development).unwrap();
+        let (exit, report) = json_run(&[
+            OsStr::new("check"),
+            OsStr::new("--project"),
+            directory.as_os_str(),
+            OsStr::new("--runtime-config"),
+            runtime_config.as_os_str(),
+            OsStr::new("--deny-warnings"),
+            OsStr::new("--posture"),
+            OsStr::new("development"),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| {
+                    finding["code"] == "platform.posture.database-private-plaintext"
+                        && finding["severity"] == "warning"
+                }),
+            "{report}"
+        );
+        std::fs::write(&runtime_config, original).unwrap();
 
         // Alone, the file is checked against the package its package.root
         // names, which this machine does not hold.

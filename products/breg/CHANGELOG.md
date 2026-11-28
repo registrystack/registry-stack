@@ -3,6 +3,12 @@
 ## Unreleased
 
 - The published runtime schema types each `authentication.oidc.issuers` key as a local identifier (`propertyNames: {$ref: LocalId}`), as the other products' issuer maps do.
+
+- BReg accepts development attachment storage and verifier responses when the runtime declares development.
+
+- Production BReg returns HTTP 401 with `platform.task-grant.development-assertion`
+  for a signed development task assertion.
+
 - `bregctl status` reports an error with code `breg.activation.posture-mismatch` from the database state row and exits 1 on mismatch.
 - The JSON status report for a posture mismatch carries `ok: false` and `status: domain-refusal`. It includes available activation ledger details.
 - `bregctl doctor` includes the recorded posture mismatch alongside startup refusals for maintenance or a different active digest.

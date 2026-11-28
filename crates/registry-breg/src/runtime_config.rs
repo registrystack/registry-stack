@@ -1480,13 +1480,20 @@ impl RuntimeConfig {
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
         let database = DatabaseConfig::from_raw(raw.database)?;
+        let peer_policy = match posture.posture() {
+            Posture::Production => registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+            Posture::Development => registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
+        };
         validate_attachment_attempt_budget(&raw.attachment_storage, &raw.attachment_verification)?;
-        let attachment_storage =
-            crate::attachment_storage::AttachmentStorageConfig::from_raw(raw.attachment_storage)
-                .map_err(|_| RuntimeConfigError::InvalidAttachmentStorage)?;
+        let attachment_storage = crate::attachment_storage::AttachmentStorageConfig::from_raw(
+            raw.attachment_storage,
+            peer_policy,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidAttachmentStorage)?;
         let attachment_verification =
             crate::attachment_verification::AttachmentVerificationConfig::from_raw(
                 raw.attachment_verification,
+                peer_policy,
             )
             .map_err(|_| RuntimeConfigError::InvalidAttachmentVerification)?;
         let field_encryption = crate::field_encryption::FieldEncryptionConfig::from_raw(
@@ -1527,10 +1534,6 @@ impl RuntimeConfig {
         if let Some(metrics) = &metrics_listener {
             metrics.validate_separate_binding(&listener)?;
         }
-        let peer_policy = match posture.posture() {
-            Posture::Production => registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
-            Posture::Development => registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
-        };
         Ok(Self {
             posture,
             peer_policy,
@@ -5102,6 +5105,86 @@ mod tests {
             .unwrap();
             assert_eq!(config.peer_policy(), expected, "{posture:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn attachment_clients_follow_the_runtime_posture() {
+        use crate::attachment_verification::AttachmentVerification;
+        use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+        use registry_platform_objectstore::{ObjectStoreError, Verdict, VerifierError};
+        use sha2::{Digest, Sha256};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let app = axum::Router::new()
+                .route(
+                    "/verify",
+                    axum::routing::post(|| async {
+                        (
+                            [("registry-posture", "development")],
+                            axum::Json(serde_json::json!({"verdict":"approved"})),
+                        )
+                    }),
+                )
+                .fallback(|| async {
+                    (
+                        [("registry-posture", "development")],
+                        "<VersioningConfiguration></VersioningConfiguration>",
+                    )
+                });
+            axum::serve(listener, app).await.unwrap();
+        });
+        let secrets = tempfile::tempdir().unwrap();
+        let credential = secrets.path().join("attachment-peer");
+        std::fs::write(&credential, "synthetic-attachment-peer").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let runtime = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml")
+            .replace("/var/lib/breg/secrets", secrets.path().to_str().unwrap());
+        let runtime = format!(
+            "{runtime}\nattachmentStorage:\n  type: s3\n  url: {endpoint}\n  bucket: synthetic-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-peer\n  secretAccessKeyRef: secret:file/attachment-peer\nattachmentVerification:\n  type: http\n  url: {endpoint}/verify\n  authorizationRef: secret:file/attachment-peer\n  policyId: synthetic-policy\n"
+        );
+        let bytes = b"synthetic attachment".to_vec();
+        let digest = hex::encode(Sha256::digest(&bytes));
+        for posture in [Posture::Production, Posture::Development] {
+            let runtime = super::parse_runtime_config(
+                &runtime,
+                DeclaredPosture {
+                    posture,
+                    source: PostureSource::Flag,
+                },
+            )
+            .unwrap();
+            let storage = runtime
+                .activate_attachment_storage("synthetic-registry")
+                .await;
+            let AttachmentVerification::Http(verifier) =
+                runtime.activate_attachment_verification().unwrap()
+            else {
+                panic!("the configured verifier must be active");
+            };
+            let verdict = verifier
+                .verify(&digest, "application/pdf", bytes.clone())
+                .await;
+            match posture {
+                Posture::Production => {
+                    assert!(
+                        matches!(storage, Err(ObjectStoreError::DevelopmentPeer)),
+                        "{storage:?}"
+                    );
+                    assert_eq!(verdict, Err(VerifierError::DevelopmentPeer));
+                }
+                Posture::Development => {
+                    assert!(storage.is_ok(), "{storage:?}");
+                    assert_eq!(verdict, Ok(Verdict::Approved));
+                }
+            }
+        }
+        server.abort();
     }
 
     #[tokio::test]

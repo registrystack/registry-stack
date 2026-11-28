@@ -277,18 +277,18 @@ pub fn activate_verifier(
     development: Option<&DevelopmentWitness>,
     max_content_bytes: u64,
     resolver: &SecretResolver,
+    peer_policy: registry_platform_httputil::PeerPolicy,
 ) -> Result<Arc<dyn VerdictSource>, VerifierActivationError> {
     match config.get(development)? {
         ContentVerificationConfig::Disabled {} => Ok(Arc::new(DisabledVerifier)),
         ContentVerificationConfig::Http { settings } => {
-            let verifier = HttpVerifierSettings::from_config_without_peer_policy(settings)?
-                .activate(
-                    VerifierNamespace {
-                        binding_domain: HTTP_BINDING_DOMAIN,
-                        max_content_bytes,
-                    },
-                    resolver,
-                )?;
+            let verifier = HttpVerifierSettings::from_config(settings, peer_policy)?.activate(
+                VerifierNamespace {
+                    binding_domain: HTTP_BINDING_DOMAIN,
+                    max_content_bytes,
+                },
+                resolver,
+            )?;
             Ok(Arc::new(verifier))
         }
     }

@@ -17,6 +17,60 @@ use wiremock::{
 };
 
 #[tokio::test]
+async fn runtime_breg_client_follows_the_declared_peer_policy() {
+    use registry_coordinator::runtime::RuntimeConfig;
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+
+    let issuer = issuer().await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/records/applications/{RECORD}")))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("Registry-Posture", "development")
+            .insert_header("traceparent", TRACE)
+            .insert_header("etag", "\"breg-record-000000000001\"")
+            .insert_header("link", "<https://id.registrystack.org/profiles/registry-record/v1>; rel=\"profile\", </v1/schemas/application>; rel=\"describedby\"")
+            .set_body_json(record(true, "synthetic@example.test")))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime.yaml");
+    support::write_runtime(
+        &runtime,
+        &config(root.path(), &issuer, &server.uri(), &server.uri()),
+    );
+
+    for posture in [Posture::Production, Posture::Development] {
+        let runtime = RuntimeConfig::load_with_posture(
+            &runtime,
+            DeclaredPosture {
+                posture,
+                source: PostureSource::Flag,
+            },
+        )
+        .unwrap();
+        let adapters = HttpAdapters::new(&runtime).unwrap();
+        let outcome = adapters
+            .call(&CallRequest {
+                operation_contract: None,
+                connection: "applications".into(),
+                operation: Operation::ReadRecord,
+                input: json!({"collection":"applications", "recordId":RECORD}),
+                idempotency_key: None,
+            })
+            .await;
+        match posture {
+            Posture::Production => assert!(matches!(
+                outcome, CallOutcome::Refused { code } if code == "invalid-response"
+            )),
+            Posture::Development => assert!(matches!(outcome, CallOutcome::Success(_))),
+        }
+    }
+    issuer.stop().await;
+}
+
+#[tokio::test]
 async fn breg_transient_http_failures_are_retryable_without_retrying_inside_an_attempt() {
     let issuer = issuer().await;
     for (status, response) in [408, 429, 500, 503, 599].into_iter().flat_map(|status| {

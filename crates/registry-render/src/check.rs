@@ -23,7 +23,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
-use registry_platform_config::{DeclaredPosture, PostureSource};
+use registry_platform_config::DeclaredPosture;
 use registry_platform_yaml::{Diagnostic, NodeValue, Reader, Report, Severity, Source};
 use serde::Serialize;
 
@@ -157,11 +157,7 @@ impl From<DeclaredPosture> for PostureMember {
     fn from(declared: DeclaredPosture) -> Self {
         Self {
             value: declared.posture.as_str(),
-            source: match declared.source {
-                PostureSource::Default => "default",
-                PostureSource::Environment => "environment",
-                PostureSource::Flag => "flag",
-            },
+            source: declared.source.as_str(),
         }
     }
 }
@@ -281,7 +277,10 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
     }
     let exit = if unavailable {
         OPERATIONAL_FAILURE_EXIT
-    } else if report.has_errors() || (request.deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (request.deny_warnings
+            && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         DOMAIN_REFUSAL_EXIT
     } else {
         0

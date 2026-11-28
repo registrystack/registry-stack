@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::AUTHORIZATION;
-use axum::http::Request;
+use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use registry_platform_authcommon::{
@@ -172,6 +172,7 @@ impl AuthenticationError {
             error: self,
             check,
             remedy: None,
+            development_assertion: false,
         }
     }
 }
@@ -187,6 +188,7 @@ pub(crate) struct Refusal {
     /// refusal log line. It is fixed text, never a caller value, and never
     /// reaches the response.
     remedy: Option<&'static str>,
+    development_assertion: bool,
 }
 
 impl Refusal {
@@ -538,7 +540,7 @@ impl RegistryAuthenticator {
         if let Some(grant) = &grant {
             grant
                 .verify_context(verified, &rules.audience, self.peer_policy)
-                .map_err(|error| invalid_claims(grant_context_check(error)))?;
+                .map_err(grant_context_check)?;
             task_grant_token_lifetime(verified.claims.iat, verified.claims.exp, now, rules.leeway)
                 .map_err(invalid_claims)?;
         }
@@ -674,7 +676,7 @@ pub(crate) async fn authenticate_request(
     let (claims, scope_claim) = match authenticator.authenticate_checked(token).await {
         Ok(verified) => verified,
         Err(refusal) => {
-            return authentication_refused(refusal.note());
+            return refusal.response();
         }
     };
     let claims = match request
@@ -1170,22 +1172,52 @@ fn mapped_scalar_claim(
 /// The check a task grant refused by its token context failed. A token with
 /// no usable verified client fails the client check, and a grant bound to
 /// another client or resource fails its binding.
-fn grant_context_check(error: GrantContextError) -> FailedCheck {
-    match error {
+fn grant_context_check(error: GrantContextError) -> Refusal {
+    let check = match error {
         GrantContextError::MissingVerifiedClient | GrantContextError::InvalidVerifiedClient => {
             FailedCheck::TokenClient
         }
         GrantContextError::ClientMismatch | GrantContextError::ResourceMismatch => {
             FailedCheck::TaskGrantBinding
         }
+        GrantContextError::DevelopmentAssertion => {
+            return Refusal {
+                development_assertion: true,
+                ..invalid_claims(FailedCheck::TaskGrantClaims)
+            };
+        }
         _ => FailedCheck::TaskGrantClaims,
+    };
+    invalid_claims(check)
+}
+
+impl Refusal {
+    /// The 401 for this refusal: its own code for a task grant issued in
+    /// development, the uniform authentication refusal otherwise. Both name
+    /// the `Bearer` scheme in `WWW-Authenticate`.
+    fn response(self) -> Response {
+        if self.development_assertion {
+            let mut response = crate::correlation::problem_response(
+                StatusCode::UNAUTHORIZED,
+                "Development task assertion",
+                "A production registry refuses task assertions issued in development.",
+                registry_platform_oidc::DEVELOPMENT_ASSERTION_CODE,
+            );
+            response.headers_mut().insert(
+                axum::http::header::WWW_AUTHENTICATE,
+                registry_platform_httpsec::bearer_challenge(),
+            );
+            return crate::correlation::attach_refusal_note(response, self.note());
+        }
+        authentication_refused(self.note())
     }
 }
 
-/// The 401 for a missing or refused credential. The answer is the same for
-/// every check, so a caller learns nothing about which one failed: it names
-/// the `Bearer` scheme in `WWW-Authenticate` and nothing about why. The note,
-/// with its remedy, reaches only the recording layer.
+/// The uniform 401 for a missing credential or a general authentication
+/// refusal. The answer is the same for every check, so a caller learns
+/// nothing about which one failed: it names the `Bearer` scheme in
+/// `WWW-Authenticate` and nothing about why. The note, with its remedy,
+/// reaches only the recording layer.
 pub(crate) fn authentication_refused(note: RefusalNote) -> Response {
     let mut response = crate::api::refusal_problem_with_note(
         crate::problem::ProblemCode::AuthenticationRefused,
@@ -1222,8 +1254,19 @@ mod tests {
                 FailedCheck::TaskGrantBinding,
             ),
         ] {
-            assert_eq!(grant_context_check(error), check, "{error:?}");
+            assert_eq!(
+                grant_context_check(error),
+                invalid_claims(check),
+                "{error:?}"
+            );
         }
+    }
+
+    #[test]
+    fn a_development_assertion_preserves_the_task_grant_claims_metric_label() {
+        let refusal = grant_context_check(GrantContextError::DevelopmentAssertion);
+        assert_eq!(refusal.check, FailedCheck::TaskGrantClaims);
+        assert_eq!(refusal.response().status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
@@ -1362,6 +1405,7 @@ mod tests {
                 "ProblemCode::AuthenticationRefused in artifacts.rs",
                 "ProblemCode::AuthenticationRefused in auth.rs",
                 "ProblemCode::AuthenticationRefused in mod.rs",
+                "StatusCode::UNAUTHORIZED in auth.rs",
             ]
         );
     }

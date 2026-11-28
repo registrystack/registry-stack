@@ -89,6 +89,7 @@ cursorKeyRef: secret:file/cursor-key
 fn ctl(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_adapterctl"))
         .args(arguments)
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .unwrap()
 }
@@ -131,6 +132,10 @@ fn print_sql_as_json_reports_nothing_executed() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        report["posture"],
+        serde_json::json!({"value": "production", "source": "default"})
+    );
     assert_eq!(report["command"], "provision");
     assert_eq!(report["product"], "adapter");
     assert_eq!(report["executed"], false);
@@ -193,4 +198,77 @@ fn both_administrator_flags_are_refused() {
         );
         assert!(output.stdout.is_empty(), "{arguments:?}");
     }
+}
+
+#[test]
+fn provision_refuses_invalid_and_conflicting_posture_declarations() {
+    for (flag, environment, code) in [
+        ("staging", None, "platform.posture.invalid-value"),
+        (
+            "production",
+            Some("development"),
+            "platform.posture.conflict",
+        ),
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_adapterctl"));
+        command.env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(environment) = environment {
+            command.env("REGISTRY_STACK_POSTURE", environment);
+        }
+        let output = command
+            .args([
+                "--format",
+                "json",
+                "provision",
+                "--runtime-config",
+                "/nonexistent/runtime.yaml",
+                "--print-sql",
+                "--posture",
+                flag,
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["diagnostics"][0]["code"], code, "{report}");
+    }
+}
+
+#[test]
+fn provision_print_applies_the_declared_posture_to_the_runtime() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let contents = std::fs::read_to_string(&runtime).unwrap().replace(
+        "database:\n",
+        "database:\n  transport: private-network-plaintext\n",
+    );
+    std::fs::write(&runtime, contents).unwrap();
+
+    let arguments = [
+        "provision",
+        "--runtime-config",
+        runtime.as_str(),
+        "--print-sql",
+        "--posture",
+    ];
+    let production = ctl(&[arguments.as_slice(), &["production"]].concat());
+    assert_eq!(production.status.code(), Some(1));
+    assert!(production.stdout.is_empty());
+    let refusal = String::from_utf8(production.stderr).unwrap();
+    assert!(
+        refusal.contains("platform.posture.database-private-plaintext"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("/database/transport"), "{refusal}");
+
+    let development = ctl(&[arguments.as_slice(), &["development"]].concat());
+    assert_eq!(
+        development.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&development.stderr)
+    );
+    assert!(String::from_utf8(development.stdout)
+        .unwrap()
+        .contains("CREATE ROLE"));
 }

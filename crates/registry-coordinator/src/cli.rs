@@ -5,7 +5,7 @@ use crate::{
     runtime::RuntimeConfig, scenarios, CoordinatorError, Result,
 };
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use registry_platform_config::{declared, DeclaredPosture, Posture, PostureSource};
+use registry_platform_config::{declared_with_production_alias, DeclaredPosture, PostureSource};
 use registry_platform_httputil::{validate_response_headers, PeerPolicy, ResponseHeaderError};
 use serde_json::{json, Value};
 use std::{
@@ -165,6 +165,7 @@ enum Command {
         explain: bool,
         #[arg(long)]
         /// Refuse warnings, including checks deferred until environment values are supplied.
+        /// Development posture listings do not count.
         deny_warnings: bool,
         #[arg(long)]
         /// Substitute runtime environment expressions; secret values are never resolved.
@@ -497,7 +498,9 @@ fn check(
         exit_code = exit_code.max(project_exit);
         registry_platform_config::apply_check_acceptances(path, &mut report);
     }
-    if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    if report.has_errors()
+        || (deny_warnings && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         return Err(CoordinatorError::from_report(report).with_exit(exit_code));
     }
     let mut result = match loaded.map(|(definition, _)| definition) {
@@ -941,10 +944,7 @@ async fn execute(
     explicit_settings: &mut Option<Vec<registry_cli_report::ExplicitSettingLine>>,
 ) -> Result<Value> {
     // Every typed command reads the service through the declared posture.
-    let peer = match declared.posture {
-        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
-        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
-    };
+    let peer = crate::adapters::peer_policy(declared.posture);
     match &cli.command {
         Command::RstackDev(_) => unreachable!("development runner handles its own output"),
         Command::Api(_) | Command::Connection { .. } => {
@@ -1397,12 +1397,7 @@ pub async fn run() -> std::process::ExitCode {
             "Use one of them.",
         );
     }
-    let posture_flag = if production {
-        posture_flag.or(Some("production"))
-    } else {
-        posture_flag
-    };
-    let declared = match declared(posture_flag) {
+    let declared = match declared_with_production_alias(posture_flag, production) {
         Ok(declared) => declared,
         Err(error) => {
             return posture_error(error.code(), error.message(), error.suggested_action())
@@ -1876,11 +1871,7 @@ fn with_posture(mut value: Value, declared: DeclaredPosture) -> Value {
     }
     value["posture"] = json!({
         "value": declared.posture.as_str(),
-        "source": match declared.source {
-            PostureSource::Flag => "flag",
-            PostureSource::Environment => "environment",
-            PostureSource::Default => "default",
-        },
+        "source": declared.source.as_str(),
     });
     value
 }

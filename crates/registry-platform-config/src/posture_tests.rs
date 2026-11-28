@@ -512,8 +512,12 @@ impl tracing::Subscriber for Collect {
 }
 
 fn logged(report: &PostureReport) -> Vec<Logged> {
+    capture_startup(|| report.log_startup())
+}
+
+fn capture_startup(log: impl FnOnce()) -> Vec<Logged> {
     let events = Arc::new(Mutex::new(Vec::new()));
-    tracing::subscriber::with_default(Collect(events.clone()), || report.log_startup());
+    tracing::subscriber::with_default(Collect(events.clone()), log);
     let events = events.lock().unwrap().clone();
     events
 }
@@ -557,6 +561,23 @@ fn startup_logs_the_posture_a_warning_per_development_setting_and_each_explicit_
         "adapter.posture.example-unrestricted"
     );
     assert_eq!(events[2].fields["pointer"], "/serve/allowedClients");
+}
+
+#[test]
+fn startup_logs_the_file_on_each_development_setting() {
+    let mut report = PostureReport::new(declared(Posture::Development));
+    report.record(found(&PLAINTEXT, Some("/database/transport")));
+    let mut additional = PostureReport::new(declared(Posture::Development));
+    additional.record(found(&PLAINTEXT, Some("/secondary/transport")));
+    let runtime = Path::new("/etc/registry/runtime.yaml");
+    let secondary = Path::new("/etc/registry/secondary.yaml");
+    let events = capture_startup(|| {
+        report.log_startup_with_files(runtime, &[(&additional, secondary)]);
+    });
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].fields["development_settings"], "2");
+    assert_eq!(events[1].fields["file"], runtime.display().to_string());
+    assert_eq!(events[2].fields["file"], secondary.display().to_string());
 }
 
 #[test]
@@ -782,4 +803,15 @@ fn the_stated_schema_is_the_inner_schema_with_the_explicit_codes() {
         serde_json::json!(["platform.posture.example-lenient"])
     );
     assert!(schema.get("x-registry-development-only").is_none());
+}
+
+#[test]
+fn deny_warnings_refuses_only_unaccepted_warnings_outside_posture() {
+    let platform = Diagnostic::warning("platform.posture.dev", "", "dev", "change it");
+    let product = Diagnostic::warning("example.posture.dev", "", "dev", "change it");
+    let ordinary = Diagnostic::warning("example.check.warning", "", "warning", "change it");
+    let mut accepted = ordinary.clone();
+    accepted.accepted_reason = Some("Reviewed by the operator.".to_owned());
+    assert!(!has_denied_warnings(&[platform, product, accepted]));
+    assert!(has_denied_warnings(&[ordinary]));
 }

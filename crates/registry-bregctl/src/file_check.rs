@@ -202,11 +202,16 @@ pub(crate) fn run(
             report,
             DOMAIN_REFUSAL_EXIT,
         ),
-        Ok(report) if request.deny_warnings && report.warning_count() > 0 => (
-            Some("bregctl check refused the file: --deny-warnings refuses a warning."),
-            report,
-            DOMAIN_REFUSAL_EXIT,
-        ),
+        Ok(report)
+            if request.deny_warnings
+                && registry_platform_config::has_denied_warnings(report.diagnostics()) =>
+        {
+            (
+                Some("bregctl check refused the file: --deny-warnings refuses a warning."),
+                report,
+                DOMAIN_REFUSAL_EXIT,
+            )
+        }
         Ok(report) => (None, report, 0),
         Err(Failure::Refused(report)) => (
             Some("bregctl check refused the file."),

@@ -267,7 +267,9 @@ impl<'a> CheckOptions<'a> {
 fn check_exit(report: &Report, unavailable: bool, deny_warnings: bool) -> u8 {
     if unavailable {
         UNAVAILABLE_EXIT
-    } else if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+    } else if report.has_errors()
+        || (deny_warnings && registry_platform_config::has_denied_warnings(report.diagnostics()))
+    {
         1
     } else {
         0

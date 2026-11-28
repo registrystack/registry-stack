@@ -17,7 +17,7 @@ use registry_platform_config::SecretResolver;
 use registry_platform_crypto::delivery_signature::DeliveryKeyError;
 use registry_platform_dispatch::postgres::PooledClient;
 use registry_platform_hooks::delivery::{
-    activate_url_hook_destinations, hook_audit_entry, insert_delivery,
+    activate_url_hook_destinations, hook_audit_entry, insert_delivery, verify_active_package,
     ActivatedUrlHookDestinations, DeliveryAuditRecord, DeliveryCapture, DeliveryConfig,
     DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliveryOutcome, DeliverySeams,
     DeliveryService, DeliveryWorker, HookHandlerBinding, NoLocalHandler, ProposalApplication,
@@ -698,29 +698,6 @@ struct SchedulingDeliverySeams {
     identity: HookRuntimeIdentity,
 }
 
-async fn verify_hook_activation(
-    transaction: &Transaction<'_>,
-    identity: &HookRuntimeIdentity,
-) -> Result<(), DeliveryError> {
-    transaction
-        .execute(
-            "SELECT set_config('lock_timeout', $1::text, true)",
-            &[&format!("{IDENTITY_LOCK_TIMEOUT_MS}ms")],
-        )
-        .await
-        .map_err(|_| DeliveryError::Unavailable)?;
-    registry_platform_activation::check_active_package(
-        transaction,
-        &activation_layout(),
-        &identity.database_id,
-        &identity.package_digest,
-        identity.posture,
-    )
-    .await
-    .map(drop)
-    .map_err(|_| DeliveryError::Unavailable)
-}
-
 #[async_trait::async_trait]
 impl DeliverySeams for SchedulingDeliverySeams {
     type Destination = SharedUrlDestination;
@@ -738,7 +715,15 @@ impl DeliverySeams for SchedulingDeliverySeams {
     /// The activation record must still name the package this worker was
     /// started with, for this database.
     async fn verify_transaction(&self, transaction: &Transaction<'_>) -> Result<(), DeliveryError> {
-        verify_hook_activation(transaction, &self.identity).await
+        verify_active_package(
+            transaction,
+            &activation_layout(),
+            &self.identity.database_id,
+            &self.identity.package_digest,
+            self.identity.posture,
+            IDENTITY_LOCK_TIMEOUT_MS,
+        )
+        .await
     }
 
     fn destination(&self, logical_destination_id: &str) -> Option<Self::Destination> {

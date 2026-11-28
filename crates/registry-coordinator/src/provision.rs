@@ -40,6 +40,7 @@ pub(crate) async fn run(
             registry_platform_buildinfo::DISPLAY_VERSION,
             &args,
             format,
+            declared,
             |path| load(path, declared),
         )
     })

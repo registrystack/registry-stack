@@ -253,6 +253,17 @@ pub(crate) struct PreparedPayments {
     deployment: String,
 }
 
+pub(super) fn payment_peer_policy(
+    posture: registry_platform_config::Posture,
+) -> registry_platform_httputil::PeerPolicy {
+    use registry_platform_config::Posture;
+    use registry_platform_httputil::PeerPolicy;
+    match posture {
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    }
+}
+
 impl PreparedPayments {
     pub(crate) async fn prepare(
         runtime: &AdapterRuntimeConfig,
@@ -260,14 +271,7 @@ impl PreparedPayments {
         provider_pack_paths: &[PathBuf],
     ) -> Result<Self, ServeError> {
         let posture = loaded.posture.posture();
-        let peer_policy = match posture {
-            registry_platform_config::Posture::Production => {
-                registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
-            }
-            registry_platform_config::Posture::Development => {
-                registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer
-            }
-        };
+        let peer_policy = payment_peer_policy(posture);
         validate_payments(&loaded)?;
         let config = loaded.config;
         let development = loaded.development;
@@ -431,7 +435,7 @@ impl PreparedPayments {
         }
         let g2p = G2pService::new(
             g2p_store,
-            Arc::new(BregG2pBridge::new(resolver.clone())),
+            Arc::new(BregG2pBridge::new(resolver.clone(), peer_policy)),
             Arc::new(g2p_provider),
         );
         let g2p = if let Some(mapping) = packs.mapping.clone() {
@@ -443,7 +447,7 @@ impl PreparedPayments {
         let service = PaymentService::new(
             config,
             store,
-            Arc::new(BregBridge::new(resolver.clone())),
+            Arc::new(BregBridge::new(resolver.clone(), peer_policy)),
             Arc::new(
                 // The development-only simulator is the only admitted collection
                 // provider. Its connector applies no peer posture policy. A
