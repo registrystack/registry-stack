@@ -46,6 +46,7 @@ async fn a_review_stored_by_an_earlier_release_is_refused_naming_the_removed_mem
 
     let project = decode(&project_value(false, false));
     let candidate = ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         database_id: "authority-closure-tests",
         package_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         project: &project,
@@ -88,6 +89,7 @@ async fn a_decided_review_stored_by_an_earlier_release_refuses_activation() {
 
     let project = decode(&project_value(false, false));
     let candidate = ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         database_id: "authority-closure-tests",
         package_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         project: &project,
@@ -225,6 +227,7 @@ async fn accepted_plain_policy_does_not_pin_another_policys_optional_provider_ca
     let project = decode(&value);
     project.check().unwrap();
     let candidate = ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         database_id: "authority-closure-tests",
         package_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         project: &project,
@@ -246,6 +249,7 @@ async fn accepted_plain_policy_does_not_pin_another_policys_optional_provider_ca
         json!("replacement-status");
     let changed = decode(&value);
     let candidate = ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         project: &changed,
         ..candidate
     };
@@ -287,6 +291,7 @@ async fn assignment_roles_stay_pinned_and_activation_refuses_changed_deciding_au
     ));
     assert_eq!(f.holders().await, before);
     let candidate = ActivationCandidate {
+        posture: registry_platform_config::Posture::Production,
         database_id: "authority-closure-tests",
         package_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         project: &changed,

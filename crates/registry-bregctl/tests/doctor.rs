@@ -179,7 +179,7 @@ fn doctor_names_a_missing_package_root_distinctly_from_other_configuration_cause
             "apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1\n\
 kind: BRegRuntimeConfig\n\
 listener:\n  bind: 127.0.0.1:0\n\
-identity:\n  environment: development\n  instanceId: generic-registry-1\n  databaseId: generic-registry-db-1\n  databaseInitializationEnvironment: development\n\
+identity:\n  environment: development\n  instanceId: generic-registry-1\n  databaseId: generic-registry-db-1\n\
 secretProviders:\n  file:\n    root: {secrets}\n\
 database:\n  runtimeUrlRef: secret:file/runtime-database-url\n  migrationUrlRef: secret:file/migration-database-url\n  pool:\n    maximumConnections: 8\n  roles:\n    migration: registry_migration\n    runtime: registry_runtime\n\
 package:\n  root: {missing}\n\

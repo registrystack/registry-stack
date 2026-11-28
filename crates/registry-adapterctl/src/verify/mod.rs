@@ -103,6 +103,10 @@ fn record_wait(
 
 #[derive(Debug, Args)]
 pub struct VerifyArgs {
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long, value_name = "POSTURE")]
+    pub posture: Option<String>,
+
     /// Authored adapter project: its directory (holding `project.yaml`)
     /// or the `project.yaml` file itself. The profile and pack are read
     /// beside the project either way.
@@ -172,7 +176,10 @@ fn refused_now(report: Report, files: usize) -> VerifyFailure {
 
 /// Verify one project live. The reading half mirrors `check` exactly;
 /// any refusal it reports stops before the first dial.
-pub(crate) fn run(args: &VerifyArgs) -> Result<VerifyRun, VerifyFailure> {
+pub(crate) fn run(
+    args: &VerifyArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<VerifyRun, VerifyFailure> {
     // `--live` is the only mode: clap refuses its absence, and a caller
     // reaching the library without it gets the same refusal, not a
     // silent offline pass.
@@ -230,8 +237,14 @@ pub(crate) fn run(args: &VerifyArgs) -> Result<VerifyRun, VerifyFailure> {
     // The runtime reads through the shared loader with substitution on:
     // the command dials real destinations, so `${NAME}` expressions
     // must hold real values before anything connects.
-    let runtime =
-        crate::check::read_runtime(&args.runtime, true, &mut report, &mut files).map_err(io)?;
+    let runtime = crate::check::read_runtime_in_posture(
+        &args.runtime,
+        true,
+        &mut report,
+        &mut files,
+        declared,
+    )
+    .map_err(io)?;
 
     // A document the reader refuses stops the run: the drive needs
     // parsed values, and the report still names everything to fix.

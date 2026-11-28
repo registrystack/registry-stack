@@ -15,7 +15,6 @@ identity:
   environment: example
   instanceId: local-directory
   databaseId: local-directory-db
-  databaseInitializationEnvironment: example
 secretProviders:
   file:
     root: /var/lib/breg/secrets

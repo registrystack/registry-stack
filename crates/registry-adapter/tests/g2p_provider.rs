@@ -1293,3 +1293,62 @@ fn write_secret(path: std::path::PathBuf, value: &[u8]) {
     std::fs::write(&path, value).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
+
+async fn observe_marked_peer(
+    policy: registry_platform_httputil::PeerPolicy,
+) -> Result<registry_adapter::payments::provider_mapping::ProviderHttpResponse, G2pProviderError> {
+    let router = Router::new().route(
+        "/v2/payouts/reference",
+        get(|| async {
+            (
+                [("registry-posture", "development")],
+                axum::Json(json!({"status": "pending", "detail": "opaque-provider-response"})),
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let secrets = tempfile::tempdir().unwrap();
+    write_secret(secrets.path().join("provider-token"), b"test-only-bearer");
+    let resolver = Arc::new(SecretResolver::new([SecretProvider::File], secrets.path()).unwrap());
+    let provider = HttpG2pProvider::new(resolver).with_peer_policy(policy);
+    let binding = binding(
+        &origin,
+        G2pHttpAuth::Bearer {
+            credential_identity: "peer-test".to_owned(),
+            credential_ref: SecretReference::new("secret:file/provider-token").unwrap(),
+        },
+    );
+    let pack = pin();
+    let intent = snapshot(binding.clone(), pack.clone())
+        .provider_intent(&instruction())
+        .unwrap();
+    let request = PreparedProviderRequest {
+        provider_pack: pack,
+        role: PaymentEndpointRole::DisbursementStatus,
+        method: PaymentHttpMethod::Get,
+        path: "/v2/payouts/reference".to_owned(),
+        query: BTreeMap::new(),
+        headers: BTreeMap::new(),
+        body: None,
+    };
+    let result = provider.observe(&binding, &intent, &request).await;
+    server.abort();
+    result
+}
+
+#[tokio::test]
+async fn production_refuses_a_development_marked_provider_response_opaquely() {
+    let result =
+        observe_marked_peer(registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer).await;
+    assert!(matches!(result, Err(G2pProviderError::Unavailable)));
+}
+
+#[tokio::test]
+async fn development_accepts_a_development_marked_provider_response() {
+    let result = observe_marked_peer(registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer)
+        .await
+        .unwrap();
+    assert_eq!(result.status, 200);
+}

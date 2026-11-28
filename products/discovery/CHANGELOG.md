@@ -7,6 +7,8 @@
 - BREAKING: `discoveryctl --allow-loopback` is removed and the runtime refuses loopback URLs in production. Migration: Use --posture development for local catalogs, and publish https URLs for production.
 - BREAKING: `/ready` gains `posture` and `developmentSettings`. Migration: No change for probes that read the status code.
 - BREAKING: Development responses carry `Registry-Posture: development` and production refuses development peers. Migration: Point production runtimes at production peers.
+- `discoveryctl package` names a development-marked provider as the cause when it refuses one in production.
+- `discoveryctl check --runtime-config` exits 3 when it cannot read the package file it verifies.
 
 ## 0.47.0 - 2026-11-21
 

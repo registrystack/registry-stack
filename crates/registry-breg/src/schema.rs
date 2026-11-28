@@ -319,8 +319,7 @@ mod tests {
             "identity": {
                 "environment": "production",
                 "instanceId": "registry-primary",
-                "databaseId": "registry-db",
-                "databaseInitializationEnvironment": "production"
+                "databaseId": "registry-db"
             },
             "secretProviders": {
                 "environment": {},
@@ -395,7 +394,14 @@ mod tests {
         mutate(&mut instance);
         let raw = serde_json::to_string(&instance).expect("the mutated runtime is JSON");
         assert!(
-            parse_runtime_config(&raw).is_err(),
+            parse_runtime_config(
+                &raw,
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Production,
+                    source: registry_platform_config::PostureSource::Default
+                }
+            )
+            .is_err(),
             "{label}: parser accepted the representative invalid runtime"
         );
         assert!(

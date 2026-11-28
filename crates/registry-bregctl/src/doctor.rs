@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use registry_breg::package::PackageError;
 use registry_breg::postgres::DatabaseConnectionCause;
 use registry_breg::runtime_config::load_runtime_config;
 use registry_breg::startup::{check_loaded, CheckedStartup, StartupError};
@@ -31,12 +32,15 @@ pub(crate) struct DoctorRefusal {
     pub(crate) runtime_configuration: bool,
 }
 
-/// A passing doctor decision plus the non-fatal operator warning derived from
-/// the same runtime configuration startup checked.
+/// The dependencies and refresh timings verified by a passing doctor check.
 pub(crate) struct DoctorSuccess {
     pub(crate) checked: CheckedStartup,
-    pub(crate) insecure_http_warning: Option<&'static str>,
     pub(crate) external_refresh_timings: Vec<registry_breg::runtime_config::ExternalRefreshTiming>,
+}
+
+pub(crate) enum Outcome {
+    Checked(DoctorSuccess),
+    PostureMismatch(registry_platform_config::Posture),
 }
 
 /// Run the startup dependency check without binding a listener, keeping only
@@ -44,7 +48,10 @@ pub(crate) struct DoctorSuccess {
 /// preparation opens and intentionally owns no parallel readiness logic; the
 /// audit destination is checked as writable rather than opened, so doctor runs
 /// beside a serving process that holds it.
-pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal> {
+pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
+    runtime_config: &Path,
+) -> Result<Outcome, DoctorRefusal> {
     if !runtime_config.is_absolute() {
         return Err(DoctorRefusal {
             diagnostics: vec![diagnostic(
@@ -56,14 +63,10 @@ pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal>
         });
     }
 
-    let config = load_runtime_config(runtime_config).map_err(|cause| DoctorRefusal {
+    let config = load_runtime_config(runtime_config, posture).map_err(|cause| DoctorRefusal {
         diagnostics: crate::runtime_config_diagnostics(&cause),
         runtime_configuration: true,
     })?;
-    let insecure_http_warning = config
-        .authentication()
-        .oidc()
-        .insecure_http_startup_diagnostic();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -75,9 +78,13 @@ pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal>
             )],
             runtime_configuration: false,
         })?;
-    let checked = runtime
-        .block_on(check_loaded(config.clone()))
-        .map_err(startup_refusal)?;
+    let checked = match runtime.block_on(check_loaded(config.clone())) {
+        Ok(checked) => checked,
+        Err(StartupError::PostureMismatch { recorded, .. }) => {
+            return Ok(Outcome::PostureMismatch(recorded));
+        }
+        Err(error) => return Err(startup_refusal(error)),
+    };
     let package = config.load_active_package().map_err(|_| DoctorRefusal {
         diagnostics: vec![diagnostic(
             "startup.package.refused",
@@ -97,11 +104,10 @@ pub(crate) fn run(runtime_config: &Path) -> Result<DoctorSuccess, DoctorRefusal>
         });
     }
     let external_refresh_timings = config.external_refresh_timings(package.registry());
-    Ok(DoctorSuccess {
+    Ok(Outcome::Checked(DoctorSuccess {
         checked,
-        insecure_http_warning,
         external_refresh_timings,
-    })
+    }))
 }
 
 /// Preserve the runtime check's safe field diagnosis in doctor's compiler
@@ -237,6 +243,13 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
     // inside the one package check instead of collapsing every package fault
     // into the same sentence; both vocabularies are value free.
     if let StartupError::PackageRefused(cause) = error {
+        if matches!(cause, PackageError::DeploymentIdentity) {
+            return diagnostic(
+                "breg.posture.placeholder-identity",
+                "package",
+                "Replace canonicalBaseIri and rebuild the package, start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+            );
+        }
         return diagnostic(
             "startup.package.refused",
             "package",
@@ -288,6 +301,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         }
         StartupError::DatabaseConnection(cause) => database_connection_diagnostic(cause),
         StartupError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
+        StartupError::PostureMismatch { recorded, .. } => (
+            registry_breg::migration::POSTURE_MISMATCH_CODE,
+            "database",
+            registry_breg::migration::posture_mismatch_message(recorded),
+        ),
         StartupError::DatabaseUnready => (
             "startup.database.unready",
             "database",
@@ -403,11 +421,6 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "fieldEncryption",
             "the field-encryption key state was refused: an active package with encrypted fields requires a configured fieldEncryption provider that answers, and a stored key row the provider can unwrap",
         ),
-        StartupError::FieldEncryptionCustody => (
-            "startup.field-encryption.custody-refused",
-            "fieldEncryption",
-            "the field-encryption data-key custody was refused: a databaseInitializationEnvironment other than local requires the transit provider; localFile data keys are development-only",
-        ),
         StartupError::Listener => (
             "startup.listener.refused",
             "listener",
@@ -506,7 +519,6 @@ mod tests {
                 "the event destination bindings were refused".to_owned(),
             ),
             StartupError::FieldEncryption,
-            StartupError::FieldEncryptionCustody,
             StartupError::ReviewBindings,
         ];
 
@@ -782,11 +794,6 @@ mod tests {
                 "fieldEncryption",
             ),
             (
-                StartupError::FieldEncryptionCustody,
-                "startup.field-encryption.custody-refused",
-                "fieldEncryption",
-            ),
-            (
                 StartupError::ReviewBindings,
                 "startup.review-bindings.refused",
                 "reviewBindings",
@@ -1048,7 +1055,7 @@ mod tests {
             &format!(
                 "apiVersion: {RUNTIME_CONFIG_API_VERSION}\nkind: {RUNTIME_CONFIG_KIND}\nlistenr: {{}}\naudt: {{}}\n"
             ),
-            |_| None,
+            |_| None, registry_platform_config::DeclaredPosture { posture: registry_platform_config::Posture::Production, source: registry_platform_config::PostureSource::Default }
         )
         .expect_err("unknown keys are refused");
         let refusal = startup_refusal(StartupError::RuntimeConfig(refused));

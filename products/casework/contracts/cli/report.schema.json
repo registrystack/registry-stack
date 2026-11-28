@@ -2675,6 +2675,29 @@
           },
           "type": "array"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "project": {
           "type": "string"
         },
@@ -3158,6 +3181,29 @@
         },
         "output": {
           "type": "string"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "product": {
           "type": "string"
@@ -3864,6 +3910,29 @@
         "packageDigest": {
           "$ref": "#/$defs/Digest"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "runtimeConfig": {
           "type": "string"
         },
@@ -3945,6 +4014,29 @@
         },
         "plan": {
           "$ref": "#/$defs/ActivationPlan"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "runtimeConfig": {
           "type": "string"
@@ -4049,6 +4141,29 @@
         "ok": {
           "type": "boolean"
         },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
         "runtimeConfig": {
           "type": "string"
         },
@@ -4151,6 +4266,29 @@
         },
         "ok": {
           "type": "boolean"
+        },
+        "posture": {
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "enum": [
+                "flag",
+                "environment",
+                "default"
+              ]
+            },
+            "value": {
+              "enum": [
+                "development",
+                "production"
+              ]
+            }
+          },
+          "required": [
+            "value",
+            "source"
+          ],
+          "type": "object"
         },
         "runtimeConfig": {
           "type": "string"

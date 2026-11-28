@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-20"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 persona:
   - operator
@@ -112,8 +112,10 @@ An administrator that is not a superuser becomes a member of the roles it create
 
 The facade journals every request and, when it serves a write, keeps idempotency state in
 PostgreSQL.
-Serving needs TLS to PostgreSQL, even on loopback: `database.testOnlyPlaintext` is refused outside
-test builds.
+The database transport defaults to `verified-tls`. Use `database.transport: loopback-plaintext`
+for a Unix socket, numeric loopback address or `localhost`.
+Use `private-network-plaintext` only in development. The runtime refuses
+`database.testOnlyPlaintext` outside test builds.
 Without a configured root, the system roots verify the server.
 When the certificate comes from a private CA, name that CA with
 `database.caBundleRef`.
@@ -880,17 +882,24 @@ The facade listener answers two probes without authentication, for load balancer
 orchestrators:
 
 - `GET /health` answers 200 `{"status":"ok"}` and does no work.
-- `GET /ready` answers 200 `{"status":"ready"}` when the journal migrations match the binary
+- `GET /ready` answers 200 when the journal migrations match the binary
   and the runtime role holds its journal privileges, and 503 `{"status":"not-ready"}` otherwise.
   It reads the journal store and never contacts a source.
 
-The bodies are fixed and do not vary with the project. They tell a caller that an Adapter is
-listening and whether its journal is usable, and nothing more. Because `/health` and `/ready`
+A successful readiness body contains `status: ready`, `posture` and
+`developmentSettings`. Each development setting has a `code` and `pointer`.
+In development, the facade, payment, metrics and job hook listeners add
+`Registry-Posture: development` to every response.
+Each new PostgreSQL request journal row carries the posture declared by the facade process.
+
+Because `/health` and `/ready`
 belong to the listener, a project operation whose path is one of them is unserved, with the
 reason code `adapter.operation.reserved-facade-path` in the effective contract.
 
 {/* Evidence: crates/registry-adapter/src/facade.rs;
     crates/registry-adapter/src/journal.rs ready;
+    crates/registry-adapter/src/journal.rs append_in_posture;
+    crates/registry-adapter/tests/postgres_journal_retention_served.rs served_journal_rows_include_the_declared_posture;
     crates/registry-adapter/tests/health_routes.rs;
     crates/registry-adapter-engine/src/load.rs ReservedFacadePath. */}
 

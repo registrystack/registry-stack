@@ -586,7 +586,9 @@ async fn assert_profile_successor(auditor: Option<Value>, kind: ProfileSuccessor
     .unwrap();
     let transaction = begin_record_transaction(
         &mut runtime,
-        RegistryLockKey::derive(&successor.manifest().package_id).unwrap(),
+        RegistryLockKey::derive(&successor.manifest().package_id)
+            .unwrap()
+            .for_posture(successor.posture()),
         Duration::from_secs(5),
         &upgraded,
         &claims,

@@ -804,7 +804,7 @@ identity:
   environment: production
   instanceId: {INSTANCE}
   databaseId: {DATABASE}
-  databaseInitializationEnvironment: production
+
 secretProviders:
   environment: {{}}
   file:

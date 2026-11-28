@@ -2527,6 +2527,30 @@
       "ReadyStatus": {
         "description": "Probe answer. Members beside status may be added.",
         "properties": {
+          "developmentSettings": {
+            "items": {
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "posture": {
+            "enum": [
+              "development",
+              "production"
+            ],
+            "type": "string"
+          },
           "status": {
             "enum": [
               "ready"
@@ -2535,7 +2559,9 @@
           }
         },
         "required": [
-          "status"
+          "status",
+          "posture",
+          "developmentSettings"
         ],
         "type": "object"
       },

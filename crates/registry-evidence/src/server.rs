@@ -158,6 +158,7 @@ fn build_app_with_tracker_at(
     let rate_limiter = runtime.rate_limiter();
     let source_diagnostics = runtime.source_diagnostics();
     let declared_scope = runtime.declared_scope();
+    let posture = runtime.posture().posture();
     let state = Arc::new(ServerState {
         runtime,
         maximum_request_bytes,
@@ -217,7 +218,7 @@ fn build_app_with_tracker_at(
         Metrics::new(rate_limiter, source_diagnostics).with_declared_scope(declared_scope),
     );
     (
-        response_layers(routes, Arc::clone(&metrics)),
+        response_layers(routes, Arc::clone(&metrics), posture),
         evaluations,
         metrics,
     )
@@ -273,12 +274,16 @@ impl Drop for ActiveEvaluation {
     }
 }
 
-fn response_layers(routes: Router, metrics: Arc<Metrics>) -> Router {
+fn response_layers(
+    routes: Router,
+    metrics: Arc<Metrics>,
+    posture: registry_platform_config::Posture,
+) -> Router {
     routes
         .layer(from_fn(add_no_store))
         .layer(registry_platform_httpsec::corp_conditional())
         .layer(
-            registry_platform_httpsec::security_headers_without_posture(CspBuilder::restrictive())
+            registry_platform_httpsec::security_headers(CspBuilder::restrictive(), posture)
                 .without_hsts(),
         )
         // Outermost, so that every response including both fallbacks carries a
@@ -353,10 +358,11 @@ where
         }
     }
     let (stop_metrics, metrics_stopped) = tokio::sync::watch::channel(());
+    let posture = startup_runtime.posture().posture();
     let metrics_server = metrics_listener.map(|listener| {
         let mut stopped = metrics_stopped;
         tokio::spawn(async move {
-            axum::serve(listener, observability::metrics_app(metrics))
+            axum::serve(listener, observability::metrics_app(metrics, posture))
                 .with_graceful_shutdown(async move {
                     // A dropped sender also ends the wait, so the metrics
                     // listener cannot outlive a failed evidence listener.
@@ -987,7 +993,11 @@ async fn openapi(request: Request<Body>) -> Response {
 async fn ready(State(state): State<Arc<ServerState>>, request: Request<Body>) -> Response {
     let operation = operation_id(request.extensions());
     match tokio::time::timeout(state.request_timeout, state.runtime.ready()).await {
-        Ok(true) => static_json_response(StatusCode::OK, r#"{"status":"ready"}"#),
+        Ok(true) => {
+            let mut body = state.runtime.posture().ready_member();
+            body.insert("status".to_owned(), serde_json::Value::from("ready"));
+            axum::Json(body).into_response()
+        }
         Ok(false) | Err(_) => {
             problem_response(ProblemCode::ServiceUnavailable, "not-ready", &operation)
         }
@@ -1658,6 +1668,7 @@ mod tests {
         let app = response_layers(
             Router::new().route("/probe", get(|| async { StatusCode::NO_CONTENT })),
             Arc::new(Metrics::default()),
+            registry_platform_config::Posture::Production,
         );
         let response = app
             .oneshot(
@@ -1743,6 +1754,7 @@ mod tests {
             response_layers(
                 Router::new().route("/", get(problem_probe)),
                 Arc::new(Metrics::default()),
+                registry_platform_config::Posture::Production,
             )
         };
         assert_problem_trace(

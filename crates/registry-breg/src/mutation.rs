@@ -2383,6 +2383,11 @@ impl std::fmt::Debug for ProposalGuardFailure {
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum MutationError {
+    #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
+    PostureMismatch {
+        recorded: registry_platform_config::Posture,
+        declared: registry_platform_config::Posture,
+    },
     #[error("mutation request is invalid")]
     InvalidRequest,
     /// The same refusal as [`MutationError::InvalidRequest`], located at one
@@ -2532,6 +2537,7 @@ impl MutationError {
             | Self::FieldEncryptionUnavailable
             | Self::IngestionRefusal(_)
             | Self::MigrationLockHeld
+            | Self::PostureMismatch { .. }
             | Self::PackagePinMismatch(_) => None,
         }
     }

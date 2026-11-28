@@ -65,16 +65,18 @@ pub struct ResourceServerOptions {
 }
 
 impl ResourceServerOptions {
-    /// Validates resource admission settings without constructing a verifier,
-    /// acquiring credentials, or opening a socket.
+    /// Validates resource admission settings for production without
+    /// constructing a verifier, acquiring credentials, or opening a socket.
     pub fn validate(&self) -> Result<(), ResourceServerError> {
-        validate_options(self, None)
+        self.validate_with_posture(registry_platform_config::Posture::Production)
     }
+
+    /// Validates resource admission settings under the declared posture.
     pub fn validate_with_posture(
         &self,
         posture: registry_platform_config::Posture,
     ) -> Result<(), ResourceServerError> {
-        validate_options(self, Some(posture))
+        validate_options(self, posture)
     }
 }
 
@@ -294,14 +296,21 @@ pub enum ResourceServerError {
 }
 
 impl ResourceServer {
+    /// The production resource server: [`Self::new_with_posture`] with
+    /// [`registry_platform_config::Posture::Production`].
     pub fn new(
         options: &ResourceServerOptions,
         verifier: TokenVerifier,
         hasher: AuditKeyHasher,
         limits: RateLimitOptions,
     ) -> Result<Self, ResourceServerError> {
-        options.validate()?;
-        Self::build(options, verifier, hasher, limits)
+        Self::new_with_posture(
+            options,
+            verifier,
+            hasher,
+            limits,
+            registry_platform_config::Posture::Production,
+        )
     }
 
     pub fn new_with_posture(
@@ -507,7 +516,7 @@ impl ResourceServer {
 
 fn validate_options(
     options: &ResourceServerOptions,
-    posture: Option<registry_platform_config::Posture>,
+    posture: registry_platform_config::Posture,
 ) -> Result<(), ResourceServerError> {
     let Ok(resource) = Url::parse(&options.resource) else {
         return Err(ResourceServerError::Resource);
@@ -518,7 +527,7 @@ fn validate_options(
     let Ok(issuer) = Url::parse(&options.issuer) else {
         return Err(ResourceServerError::Issuer);
     };
-    if (posture == Some(registry_platform_config::Posture::Production)
+    if (posture == registry_platform_config::Posture::Production
         && (options.allow_insecure_http || issuer.scheme() != "https"))
         || !valid_issuer_url(&issuer, options.allow_insecure_http)
     {
@@ -539,13 +548,8 @@ fn validate_options(
     Ok(())
 }
 
-fn valid_protected_url(url: &Url, posture: Option<registry_platform_config::Posture>) -> bool {
-    use registry_platform_config::Posture;
-    let http_allowed = match posture {
-        Some(Posture::Development) => true,
-        Some(Posture::Production) => false,
-        None => loopback(url),
-    };
+fn valid_protected_url(url: &Url, posture: registry_platform_config::Posture) -> bool {
+    let http_allowed = posture == registry_platform_config::Posture::Development;
     url.host().is_some()
         && url.query().is_none()
         && url.fragment().is_none()

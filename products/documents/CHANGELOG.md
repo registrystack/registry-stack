@@ -21,6 +21,8 @@
   deliveries. The previous reference is outside the binding a pending delivery
   pins. Startup refuses a previous key equal to the current key.
 
+- Activation refusals name their path as a JSON pointer, such as `/database/runtimeUrlRef`, `/identity/databaseId` and `/arguments`. Earlier releases used dotted names for some.
+
 - BREAKING: An undeclared posture is production.
   Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
 

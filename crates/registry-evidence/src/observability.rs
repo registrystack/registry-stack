@@ -908,11 +908,15 @@ fn labels(key: &SeriesKey) -> [(&'static str, &'static str); 4] {
 /// are operator material, and the public evidence contract does not describe
 /// them. Every other path on this listener is unserved rather than delegated
 /// back to the evidence routes.
-pub(crate) fn metrics_app(metrics: Arc<Metrics>) -> Router {
+pub(crate) fn metrics_app(
+    metrics: Arc<Metrics>,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         .route("/metrics", get(render_metrics))
         .fallback(metrics_route_absent)
         .with_state(metrics)
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 async fn render_metrics(State(metrics): State<Arc<Metrics>>) -> Response {
@@ -1123,7 +1127,10 @@ mod tests {
             Arc::clone(&limiter),
             Arc::new(SourceDiagnostics::new(["source-a"])),
         ));
-        let server = axum_test::TestServer::new(metrics_app(metrics));
+        let server = axum_test::TestServer::new(metrics_app(
+            metrics,
+            registry_platform_config::Posture::Production,
+        ));
 
         let response = server.get("/metrics").await;
         response.assert_status_ok();

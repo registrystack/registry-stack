@@ -430,6 +430,7 @@ async fn the_audit_journal_records_both_operations_and_leaks_no_session_secret()
     ];
     forbidden.extend(jwk_parts);
     for entry in &entries {
+        assert_eq!(entry["posture"], "production");
         assert_json_absent_strings(entry, &forbidden).expect("no secret reaches the journal");
     }
     assert!(!text.contains("user-1"), "principals are pseudonymized");

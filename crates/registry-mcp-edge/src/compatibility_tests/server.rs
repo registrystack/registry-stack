@@ -108,7 +108,7 @@ async fn application(resource: &str) -> Router {
     ));
     let profile =
         AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![8; 32])).expect("profile");
-    let resource_server = ResourceServer::new(
+    let resource_server = ResourceServer::new_with_posture(
         &options,
         token_verifier(&options, fetcher),
         profile.key_hasher(),
@@ -122,6 +122,7 @@ async fn application(resource: &str) -> Router {
                 burst: 10,
             },
         },
+        registry_platform_config::Posture::Development,
     )
     .expect("resource server");
     router(

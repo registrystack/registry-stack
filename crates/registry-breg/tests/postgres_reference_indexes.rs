@@ -440,7 +440,9 @@ async fn a_selective_reference_filter_uses_the_reference_index() {
         pool.clone(),
         registry.clone(),
         active.clone(),
-        RegistryLockKey::derive(&active.package_id).expect("bounded lock key"),
+        RegistryLockKey::derive(&active.package_id)
+            .expect("bounded lock key")
+            .for_posture(package.verified.posture()),
         Duration::from_secs(2),
         registry_breg::audit::test_support::capturing(
             AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).expect("keyed audit"),
@@ -488,7 +490,7 @@ struct PublishedPackage {
 
 fn publish_and_load(
     prepared: registry_breg::package::PreparedPackage,
-    context: PackageLoadContext<'_>,
+    context: PackageLoadContext,
 ) -> PublishedPackage {
     let root = tempfile::Builder::new()
         .prefix("registry-reference-index-package-")
@@ -564,9 +566,9 @@ fn build_request(
     }
 }
 
-fn local_context() -> PackageLoadContext<'static> {
+fn local_context() -> PackageLoadContext {
     PackageLoadContext {
-        database_initialization_environment: "local",
+        posture: registry_platform_config::Posture::Development,
     }
 }
 

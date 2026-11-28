@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -151,6 +151,17 @@ Publishing a new message ID alone does not clear the old delivery, and the Adapt
 
 A job compiler loads a pack, an `AdapterJob` definition and an `AdapterJobRuntimeConfig`.
 The runtime config is the job's own file, distinct from the facade's `AdapterRuntimeConfig`.
+Job commands default to production and accept `--posture development` or
+`REGISTRY_STACK_POSTURE=development` for development runs.
+The job store defaults to verified TLS. Set `store.transport: loopback-plaintext`
+for a Unix socket, numeric loopback address or `localhost`.
+In development the job store also accepts `private-network-plaintext`.
+A PostgreSQL source on a Unix socket, numeric loopback or `localhost` can use
+`tls: {type: loopback-plaintext}` in either posture.
+
+{/* Evidence: crates/registry-adapter-job/src/main.rs load_runtime;
+    crates/registry-adapter-job/src/store.rs build_pool_in_posture;
+    crates/registry-adapter-job/src/postgres_source.rs PostgresSourceTls::LoopbackPlaintext. */}
 The compiler exposes the job's source route as a runnable program with no listener, no database requirement for the route, no OIDC issuer and no inbound Record shape.
 The exchange starts with a null body and the job cursor under a closed property name, bounded by the job profile's page deadline.
 The engine is the listener-free `registry-adapter-engine` crate, shared by the job host, the facade and the Evidence host.
@@ -522,7 +533,7 @@ It does not time out a partly sent request head, cap open connections, or count 
 Do not expose the loopback plaintext listener directly or change it to a non-loopback bind.
 The host does not expose non-loopback plaintext ingress.
 
-`development-loopback` and port `0` are only for local development and tests.
+Use `tlsTermination: loopback-plaintext` to let the hook listener bind port `0`.
 When port `0` is selected, the host writes one startup line to standard error as `adapter.job.hook-listening address=<loopback-address>:<assigned-port>`.
 Standard output remains reserved for command reports.
 

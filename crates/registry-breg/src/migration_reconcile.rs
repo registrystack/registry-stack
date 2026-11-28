@@ -193,6 +193,11 @@ pub enum ReconcileError {
     /// the refusal so a caller can report what it found without acting.
     #[error("migration reconciliation refuses to execute an unresolved outcome")]
     NotExecutable(ReconcileOutcome),
+    #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
+    PostureMismatch {
+        recorded: registry_platform_config::Posture,
+        declared: registry_platform_config::Posture,
+    },
     #[error("migration reconciliation storage is unavailable")]
     Unavailable,
 }
@@ -231,6 +236,9 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::EmptyPlan
             | MigrationError::SchemaFingerprintMismatch { .. }
             | MigrationError::FieldPatternSyntaxRefused { .. } => Self::PackageBinding,
+            MigrationError::PostureMismatch { recorded, declared } => {
+                Self::PostureMismatch { recorded, declared }
+            }
             MigrationError::MigrationLockHeld => Self::NotExecutable(ReconcileOutcome::InProgress),
             MigrationError::ApplyFailed
             | MigrationError::SchemaFingerprintMismatchAfterMaintenance { .. }
@@ -372,14 +380,21 @@ async fn reconcile_under_lock(
     }
     // The pinned target is the activation the failed apply recorded; one the
     // ledger does not hold open is not the target that apply pinned.
-    let Some(activation_id) = connection
+    let Some(activation) = connection
         .in_flight_activation(&ledger.package_digest)
         .await?
-        .map(|activation| activation.activation_id)
     else {
         report.unresolvable_reason = Some(UNRESOLVABLE_TARGET_DIFFERS);
         return Ok(report);
     };
+    if activation.posture != ledger.posture {
+        return Err(MigrationError::PostureMismatch {
+            recorded: activation.posture,
+            declared: ledger.posture,
+        }
+        .into());
+    }
+    let activation_id = activation.activation_id;
     ledger.activation_id = activation_id;
     let ledger = &ledger;
     let target = &target_package_identity(request.target_package, database_id, activation_id);

@@ -27,8 +27,9 @@ use registry_breg::hooks::{
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationPlan, MutationRequest, MutationTransaction};
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
-    ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
+    initialize_compiled_registry_state_with_posture_for_test, install_compiled_schema,
+    ClaimContext, ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity,
+    RowBoundaryContext,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_platform_audit::AuditProfile;
@@ -95,11 +96,12 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs delivery state with the compiled schema");
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("migration initializes active package identity with empty history");
@@ -120,7 +122,8 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
-        .expect("test lock identity is bounded");
+        .expect("test lock identity is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
@@ -150,8 +153,6 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     assert_eq!(service.list(0).await, Err(HookDeliveryError::Unavailable));
     assert_eq!(service.list(101).await, Err(HookDeliveryError::Unavailable));
 
-    receiver.enqueue(ResponsePlan::Status(500)).await;
-    receiver.enqueue(ResponsePlan::Status(204)).await;
     let first = create_event(
         &database,
         &coordinator,
@@ -171,6 +172,41 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     )
     .await;
 
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state SET posture = 'production' WHERE singleton",
+            &[],
+        )
+        .await
+        .unwrap();
+    let guard_refused = matches!(
+        registry_breg::postgres::begin_record_transaction(
+            &mut mutation_client,
+            lock_key,
+            Duration::from_secs(2),
+            &identity,
+            &claims,
+        )
+        .await,
+        Err(registry_breg::postgres::PostgresKernelError::RegistryUnavailable),
+    );
+    let delivery = service.deliver_once().await;
+    assert_eq!(
+        (guard_refused, delivery, receiver.count().await),
+        (true, Err(HookDeliveryError::Unavailable), 0)
+    );
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state SET posture = 'development' WHERE singleton",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    receiver.enqueue(ResponsePlan::Status(500)).await;
+    receiver.enqueue(ResponsePlan::Status(204)).await;
     let (worker_a, worker_b) = tokio::join!(service.deliver_once(), service.deliver_once());
     let outcomes = [
         worker_a.expect("first worker returns a closed outcome"),
@@ -1580,11 +1616,12 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs hook delivery state");
-    let original_identity = initialize_compiled_registry_state_for_test(
+    let original_identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("migration initializes active package identity with empty history");
@@ -1599,7 +1636,8 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
-        .expect("test lock identity is bounded");
+        .expect("test lock identity is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
@@ -1719,11 +1757,12 @@ async fn real_postgres_adding_a_previous_key_keeps_retained_delivery_deliverable
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .unwrap();
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .unwrap();
@@ -1733,7 +1772,9 @@ async fn real_postgres_adding_a_previous_key_keeps_retained_delivery_deliverable
     let original = Arc::new(fixture.activate(&compiled));
     let pool = database.runtime_config.build_pool().unwrap();
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into()).unwrap();
-    let lock_key = RegistryLockKey::derive("webhook-delivery-registry").unwrap();
+    let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
+        .unwrap()
+        .for_posture(registry_platform_config::Posture::Development);
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
@@ -1819,11 +1860,12 @@ async fn real_postgres_webhook_worker_records_its_last_success_on_an_idle_iterat
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs hook delivery state");
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("migration initializes active package identity with empty history");
@@ -1845,7 +1887,8 @@ async fn real_postgres_webhook_worker_records_its_last_success_on_an_idle_iterat
         identity,
         "webhook-delivery-instance",
         RegistryLockKey::derive("webhook-delivery-registry")
-            .expect("test lock identity is bounded"),
+            .expect("test lock identity is bounded")
+            .for_posture(registry_platform_config::Posture::Development),
         Duration::from_secs(2),
         database.audit(audit_profile),
     );
@@ -1878,11 +1921,12 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs hook delivery state");
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("migration initializes active package identity with empty history");
@@ -1897,7 +1941,8 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
-        .expect("test lock identity is bounded");
+        .expect("test lock identity is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
@@ -2083,11 +2128,12 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs delivery state with the compiled schema");
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("migration initializes active package identity with empty history");
@@ -2107,7 +2153,8 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
-        .expect("test lock identity is bounded");
+        .expect("test lock identity is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
@@ -2244,11 +2291,12 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs delivery state with the compiled schema");
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("migration initializes active package identity with empty history");
@@ -2263,7 +2311,8 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5b; 32].into())
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
-        .expect("test lock identity is bounded");
+        .expect("test lock identity is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
@@ -3053,8 +3102,9 @@ impl DestinationFixture {
         compiled: &CompiledRegistry,
         previous: &str,
     ) -> ActivatedEventDestinationRegistry {
-        parse_runtime_config(&self.runtime_config(&format!(
-            r#"destinations:
+        parse_runtime_config(
+            &self.runtime_config(&format!(
+                r#"destinations:
   hooks:
     {DESTINATION_ID}:
       origin: https://localhost:{}/
@@ -3074,8 +3124,13 @@ impl DestinationFixture {
         attemptTimeoutMilliseconds: 2000
         maximumAttempts: 2
 "#,
-            self.receiver_port,
-        )))
+                self.receiver_port,
+            )),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
         .expect("strict pinned-loopback HTTPS config parses")
         .activate_event_destinations(compiled)
         .expect("exact destination inventory and TLS material activate")
@@ -3087,10 +3142,16 @@ impl DestinationFixture {
         &self,
         compiled: &registry_breg::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
-        parse_runtime_config(&self.runtime_config(""))
-            .expect("a deployment without destinations parses")
-            .activate_event_destinations(compiled)
-            .expect("an empty destination inventory matches a local-only package")
+        parse_runtime_config(
+            &self.runtime_config(""),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("a deployment without destinations parses")
+        .activate_event_destinations(compiled)
+        .expect("an empty destination inventory matches a local-only package")
     }
 
     fn runtime_config(&self, event_destinations: &str) -> String {
@@ -3109,7 +3170,6 @@ identity:
   environment: local
   instanceId: webhook-delivery-instance
   databaseId: webhook-delivery-database
-  databaseInitializationEnvironment: local
 secretProviders:
   file:
     root: {}
@@ -3428,11 +3488,12 @@ async fn runtime_prunes_old_terminal_hooks_and_keeps_recent_and_pending_work() {
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs delivery state with the compiled schema");
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("migration initializes active package identity with empty history");
@@ -3447,7 +3508,8 @@ async fn runtime_prunes_old_terminal_hooks_and_keeps_recent_and_pending_work() {
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
-        .expect("test lock identity is bounded");
+        .expect("test lock identity is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),
@@ -3661,11 +3723,12 @@ async fn exercise_terminal_metadata_horizons(check_dead_letter: bool) {
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
         .expect("migration installs delivery state with the compiled schema");
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &compiled,
         registry_state_test_identity(),
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("migration initializes active package identity with empty history");
@@ -3680,7 +3743,8 @@ async fn exercise_terminal_metadata_horizons(check_dead_letter: bool) {
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x6b; 32].into())
         .expect("test owns a keyed audit profile");
     let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
-        .expect("test lock identity is bounded");
+        .expect("test lock identity is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let coordinator = MutationTransaction::new_with_event_destinations(
         lock_key,
         Duration::from_secs(2),

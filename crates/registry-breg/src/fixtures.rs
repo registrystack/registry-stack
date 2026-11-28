@@ -7347,7 +7347,7 @@ journeys:
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                database_initialization_environment: "local",
+                posture: registry_platform_config::Posture::Development,
             },
         )
         .expect("planner package verifies");
@@ -7466,7 +7466,7 @@ journeys:
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                database_initialization_environment: "local",
+                posture: registry_platform_config::Posture::Development,
             },
         )
         .unwrap();
@@ -8285,7 +8285,7 @@ journeys:
         let package = load_package(
             &package_root,
             &PackageLoadContext {
-                database_initialization_environment: "local",
+                posture: registry_platform_config::Posture::Development,
             },
         )
         .expect("fixture package rederives and verifies");

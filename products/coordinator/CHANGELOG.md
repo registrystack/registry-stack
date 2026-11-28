@@ -29,9 +29,12 @@
 - BREAKING: Audit lines carry `posture`.
   Migration: Audit readers with a closed line parser accept the posture member.
 
-- Development responses carry `Registry-Posture: development`. The Coordinator Rust client and `coordinatorctl doctor` running in production posture refuse that mark.
+- Development responses carry `Registry-Posture: development`. The Coordinator Rust client refuses that mark, and every typed `coordinatorctl` command refuses it when it runs as production. The refusal code is `coordinator.command.development-peer`. `coordinatorctl api` passes the response through unchecked.
 
-- BREAKING: Set `database.transport` to `loopback-plaintext` for PostgreSQL on the same host in either posture. This replaces the local plaintext database behavior selected by the former listener mode.
+- `/v1/doctor` carries a required `findings` member. It holds the `platform.activation.posture-mismatch` entry when the activation ledger records the other posture.
+
+- BREAKING: Local plaintext PostgreSQL needs `database.transport`. This replaces the local plaintext database behavior selected by the former listener mode.
+  Migration: Set `database.transport: loopback-plaintext` for PostgreSQL on the same host, in either posture.
 
 - BREAKING: The shared `platform.database.*` codes report transport configuration refusals.
   Migration: Update scripts that match the old codes.

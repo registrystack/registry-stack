@@ -129,7 +129,7 @@ impl Fixture {
         let verified = load_package(
             &package,
             &PackageLoadContext {
-                database_initialization_environment: "local",
+                posture: registry_platform_config::Posture::Development,
             },
         )
         .expect("published package loads");
@@ -157,7 +157,9 @@ impl Fixture {
             pool.clone(),
             registry.clone(),
             active.clone(),
-            RegistryLockKey::derive(&active.package_id).expect("bounded lock key"),
+            RegistryLockKey::derive(&active.package_id)
+                .expect("bounded lock key")
+                .for_posture(verified.posture()),
             Duration::from_secs(2),
             registry_breg::audit::test_support::capturing(
                 AuditProfile::production_from_secret_bytes(vec![0x42; 32].into())

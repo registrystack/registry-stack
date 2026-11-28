@@ -24,7 +24,7 @@ use tokio_postgres::Socket;
 
 /// Every schema version, in the order it is applied. Each later
 /// migration takes the next number.
-pub(crate) const MIGRATIONS: [(i64, &str); 5] = [
+pub(crate) const MIGRATIONS: [(i64, &str); 6] = [
     (100, include_str!("store/migrations/0100_job_items.sql")),
     (101, include_str!("store/migrations/0101_rescan_active.sql")),
     (102, include_str!("store/migrations/0102_held_items.sql")),
@@ -35,6 +35,10 @@ pub(crate) const MIGRATIONS: [(i64, &str); 5] = [
     (
         104,
         include_str!("store/migrations/0104_revision_possibly_admitted.sql"),
+    ),
+    (
+        105,
+        include_str!("store/migrations/0105_last_pass_posture.sql"),
     ),
 ];
 
@@ -381,7 +385,25 @@ pub const LEASE_MARGIN_SECONDS: u64 = 60;
 /// An unresolvable reference, an invalid URL, or an unbuildable pool
 /// refuses, naming the block and never the URL.
 pub fn build_pool(config: &JobStoreConfig, resolver: &SecretResolver) -> Result<Pool, StoreError> {
+    build_pool_in_posture(config, resolver, None)
+}
+
+pub fn build_pool_in_posture(
+    config: &JobStoreConfig,
+    resolver: &SecretResolver,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
+) -> Result<Pool, StoreError> {
+    use registry_platform_config::{DatabaseHost, DatabaseTransport};
     let invalid = |what: &str| StoreError::Pool(format!("store: {what}"));
+    let database = config.database_config();
+    let transport_error = |error: registry_platform_config::DatabaseTransportError| {
+        let (message, action) =
+            registry_adapter_engine::job_sources::job_store_transport_diagnostic(&error);
+        invalid(&format!("{}: {message}; next: {action}", error.code()))
+    };
+    database
+        .check(cfg!(feature = "postgres-test"))
+        .map_err(transport_error)?;
     let reference = &config.runtime_url_ref;
     let protected = resolver
         .resolve(reference.as_str())
@@ -393,19 +415,28 @@ pub fn build_pool(config: &JobStoreConfig, resolver: &SecretResolver) -> Result<
     if postgres.get_user().is_none() || postgres.get_dbname().is_none() {
         return Err(invalid("the connection url names no user or database"));
     }
-    #[cfg(feature = "postgres-test")]
-    let pool = if config.test_only_plaintext {
+    let hosts: Vec<_> = postgres
+        .get_hosts()
+        .iter()
+        .map(|host| match host {
+            tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
+            #[cfg(unix)]
+            tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
+        })
+        .chain(
+            postgres
+                .get_hostaddrs()
+                .iter()
+                .map(|ip| DatabaseHost::Tcp(ip.to_string())),
+        )
+        .collect();
+    let transport = database
+        .plaintext_permitted(&hosts, development)
+        .map_err(transport_error)?;
+    let pool = if config.test_only_plaintext || transport != DatabaseTransport::VerifiedTls {
         postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
         build_verified_pool(postgres, tokio_postgres::NoTls, 4)
     } else {
-        postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-        build_verified_pool(postgres, tls_connector(config, resolver)?, 4)
-    };
-    #[cfg(not(feature = "postgres-test"))]
-    let pool = {
-        if config.test_only_plaintext {
-            return Err(invalid("plaintext connections are refused in this build"));
-        }
         postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
         build_verified_pool(postgres, tls_connector(config, resolver)?, 4)
     };
@@ -1425,6 +1456,8 @@ pub struct JobStateRow {
     pub lease_expires: Option<SystemTime>,
     /// When the last pass ran.
     pub last_pass_at: Option<SystemTime>,
+    /// The declaration of the process that recorded the latest pass.
+    pub last_pass_posture: Option<registry_platform_config::Posture>,
     /// Why the last pass stopped, value-free.
     pub last_pass_stop: Option<String>,
     /// When the last rescan pass ran.
@@ -1450,7 +1483,7 @@ pub async fn read_state(
     let row = client
         .query_opt(
             "SELECT position, projection_digest, lease_expires, last_pass_at, last_pass_stop, \
-             last_rescan_at, rescan_active, idle_streak, error_streak \
+             last_rescan_at, rescan_active, idle_streak, error_streak, last_pass_posture \
              FROM adapter_job_state WHERE job_id = $1",
             &[&job_id],
         )
@@ -1465,6 +1498,9 @@ pub async fn read_state(
         rescan_active: row.get(6),
         idle_streak: row.get(7),
         error_streak: row.get(8),
+        last_pass_posture: row
+            .get::<_, Option<&str>>(9)
+            .and_then(registry_platform_config::Posture::parse),
     }))
 }
 
@@ -1581,6 +1617,12 @@ pub enum RescanProgress {
     Ended,
 }
 
+/// The process declaration and time recorded when a pass settles.
+pub struct PassFinished {
+    pub at: SystemTime,
+    pub posture: registry_platform_config::Posture,
+}
+
 /// Settle a completed pass: save the page's next cursor, or clear the
 /// position at a finite end, stamp the pass, count the pass into the
 /// schedule streaks, and release the lease. A rescan pass that ends its
@@ -1599,7 +1641,7 @@ pub async fn complete_pass(
     position: Option<&Value>,
     idle: bool,
     rescan: RescanProgress,
-    now: SystemTime,
+    finished: PassFinished,
 ) -> Result<(), StoreError> {
     // A rescan traversal stays in progress while pages remain: the
     // marker clears and the delay clock starts only at its end.
@@ -1628,16 +1670,17 @@ pub async fn complete_pass(
              last_rescan_at = CASE WHEN $4 THEN $3 ELSE last_rescan_at END, \
              rescan_active = $5, \
              idle_streak = CASE WHEN $6 THEN idle_streak + 1 ELSE 0 END, \
-             error_streak = 0 \
+             error_streak = 0, last_pass_posture = $8 \
              WHERE job_id = $1 AND lease_epoch = $7",
             &[
                 &job_id,
                 &position,
-                &now,
+                &finished.at,
                 &rescan_finished,
                 &rescan_continues,
                 &idle,
                 &token,
+                &finished.posture.as_str(),
             ],
         )
         .await?;
@@ -1659,15 +1702,21 @@ pub async fn stop_pass(
     job_id: &str,
     token: i64,
     stop_code: &str,
-    now: SystemTime,
+    finished: PassFinished,
 ) -> Result<(), StoreError> {
     let stopped = client
         .execute(
             "UPDATE adapter_job_state SET \
              last_pass_at = $3, last_pass_stop = $4, lease_expires = NULL, \
-             error_streak = error_streak + 1, idle_streak = 0 \
+             error_streak = error_streak + 1, idle_streak = 0, last_pass_posture = $5 \
              WHERE job_id = $1 AND lease_epoch = $2",
-            &[&job_id, &token, &now, &stop_code],
+            &[
+                &job_id,
+                &token,
+                &finished.at,
+                &stop_code,
+                &finished.posture.as_str(),
+            ],
         )
         .await?;
     if stopped != 1 {

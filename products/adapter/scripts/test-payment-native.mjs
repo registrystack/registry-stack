@@ -70,7 +70,7 @@ async function startSimulator() {
   handles.push(simulator); await ready(`http://127.0.0.1:${simulatorPort}/healthz`, simulator);
 }
 async function startAdapter() {
-  adapter = start(join(binaries, 'adapter'), ['serve', '--runtime-config', runtimePath, '--payments-config', paymentsPath], join(root, `adapter-${handles.length}.log`));
+  adapter = start(join(binaries, 'adapter'), ['serve', '--runtime-config', runtimePath, '--payments-config', paymentsPath, '--posture', 'development'], join(root, `adapter-${handles.length}.log`));
   handles.push(adapter); await ready(`${collectionPath}/${randomUUID()}`, adapter, [401]);
 }
 async function restartAdapter() { await adapter.stop(); await startAdapter(); }
@@ -117,7 +117,7 @@ async function independentStores(originalConfiguration) {
     runtime.database.runtimeUrlRef = `secret:file/${kind}-runtime`;
     runtime.database.migrationUrlRef = `secret:file/${kind}-migration`;
     const path = join(root, `${kind}-runtime.yaml`); await privateFile(path, runtime);
-    const process = start(join(binaries, 'adapter'), ['serve', '--runtime-config', path, '--payments-config', configPath], join(root, `${kind}.log`));
+    const process = start(join(binaries, 'adapter'), ['serve', '--runtime-config', path, '--payments-config', configPath, '--posture', 'development'], join(root, `${kind}.log`));
     handles.push(process);
     const route = `${origin}/v1/payments/licence-fees/collections`;
     await ready(`${route}/${randomUUID()}`, process, [401]);

@@ -146,7 +146,7 @@ fn package_example(ports: Option<[u16; 3]>) -> Packaged {
     let candidate = temporary.path().join("candidate");
     assert_success(
         &evidencectl()
-            .args(["package"])
+            .args(["package", "--posture", "development"])
             .arg(&project)
             .arg("--target")
             .arg(&target)
@@ -468,7 +468,13 @@ fn the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_s
     let runtime = packaged.candidate.join("runtime.yaml");
     let activated = Command::new(&evidence)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .args(["authority", "activate", "--runtime-config"])
+        .args([
+            "authority",
+            "activate",
+            "--posture",
+            "development",
+            "--runtime-config",
+        ])
         .arg(&runtime)
         .arg("--document")
         .arg(packaged.candidate.join("compiled-authority.yaml"))
@@ -479,7 +485,7 @@ fn the_packaged_example_answers_a_hit_and_an_identical_miss_and_audits_neither_s
     let log = fs::File::create(packaged.project.join("evidence.log")).expect("service log");
     let child = Command::new(&evidence)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
-        .args(["serve", "--runtime-config"])
+        .args(["serve", "--posture", "development", "--runtime-config"])
         .arg(&runtime)
         .stdout(log.try_clone().expect("log handle"))
         .stderr(log)

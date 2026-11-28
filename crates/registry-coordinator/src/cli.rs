@@ -643,17 +643,7 @@ async fn remote(
     path: &str,
     body: Option<Value>,
     key: Option<&str>,
-) -> Result<Value> {
-    remote_with_peer_policy(service, method, path, body, key, None).await
-}
-
-async fn remote_with_peer_policy(
-    service: &Service,
-    method: reqwest::Method,
-    path: &str,
-    body: Option<Value>,
-    key: Option<&str>,
-    peer_policy: Option<PeerPolicy>,
+    peer_policy: PeerPolicy,
 ) -> Result<Value> {
     let mut url = service.url.clone().ok_or_else(|| {
         CoordinatorError::new(
@@ -723,10 +713,9 @@ async fn remote_with_peer_policy(
         )
         .suggest("Check that --url reaches the running Coordinator service, then inspect the original run before repeating the command.")
     })?;
-    if let Some(policy) = peer_policy {
-        validate_response_headers(response.headers(), policy).map_err(|error| match error {
+    validate_response_headers(response.headers(), peer_policy).map_err(|error| match error {
             ResponseHeaderError::DevelopmentPeer => CoordinatorError::new(
-                "service-refused",
+                "development-peer",
                 "The Coordinator declared development and this command runs as production.",
             )
             .suggest("Use a production Coordinator, or declare development with --posture development or REGISTRY_STACK_POSTURE=development."),
@@ -736,7 +725,6 @@ async fn remote_with_peer_policy(
             )
             .suggest("Check that --url names the Coordinator service origin."),
         })?;
-    }
     let status = response.status();
     let bytes = registry_platform_httputil::read_bounded(response, 1_048_576)
         .await
@@ -864,6 +852,11 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
     })
 }
 async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
+    // Every typed command reads the service through the declared posture.
+    let peer = match declared.posture {
+        Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+    };
     match &cli.command {
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
@@ -916,7 +909,7 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
         }
         Command::Workflow { workflow, service } => {
             if !crate::definition::valid_name(workflow) { return Err(CoordinatorError::new("input-invalid", "supply a bounded workflow identifier")); }
-            remote(service, reqwest::Method::GET, &format!("/v1/workflows/{workflow}"), None, None).await
+            remote(service, reqwest::Method::GET, &format!("/v1/workflows/{workflow}"), None, None, peer).await
         }
         Command::Start {
             workflow,
@@ -934,6 +927,7 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
                 "/v1/runs",
                 Some(json!({"workflow":workflow,"workflowRevision":workflow_revision,"input":input})),
                 Some(&key),
+                peer,
             )
             .await
         }
@@ -944,6 +938,7 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
                 &format!("/v1/runs/{run}"),
                 None,
                 None,
+                peer,
             )
             .await
         }
@@ -987,6 +982,7 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
                 &query,
                 None,
                 None,
+                peer,
             )
             .await
         }
@@ -997,6 +993,7 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
                 &format!("/v1/runs/{run}/inspect"),
                 None,
                 None,
+                peer,
             )
             .await
         }
@@ -1014,6 +1011,7 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
                 &format!("/v1/runs/{run}/{action}"),
                 Some(json!({"reason":reason})),
                 None,
+                peer,
             )
             .await
         }
@@ -1024,15 +1022,12 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
                 &format!("/v1/runs/{run}/check"),
                 Some(json!({"step":step})),
                 None,
+                peer,
             )
             .await
         }
         Command::Doctor { service } => {
-            let peer_policy = match declared.posture {
-                Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
-                Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
-            };
-            remote_with_peer_policy(service, reqwest::Method::GET, "/v1/doctor", None, None, Some(peer_policy)).await
+            remote(service, reqwest::Method::GET, "/v1/doctor", None, None, peer).await
         }
         Command::RestoreHold { reason, service } | Command::ReleaseRestoreHold { reason, service } => {
             remote(
@@ -1045,11 +1040,12 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
                 },
                 Some(json!({"reason":reason})),
                 None,
+                peer,
             )
             .await
         }
-        Command::ReleaseAdmissionHold { recovery_reference, admission_history_complete, prior_deployment_fenced, service } => remote(service,reqwest::Method::POST,"/v1/release-admission-hold",Some(json!({"recoveryReference":recovery_reference,"admissionHistoryComplete":admission_history_complete,"priorDeploymentFenced":prior_deployment_fenced})),None).await,
-        Command::CompleteExecutionRecovery { recovery_reference, execution_history_complete, prior_deployment_fenced, service } => remote(service,reqwest::Method::POST,"/v1/complete-execution-recovery",Some(json!({"recoveryReference":recovery_reference,"executionHistoryComplete":execution_history_complete,"priorDeploymentFenced":prior_deployment_fenced})),None).await,
+        Command::ReleaseAdmissionHold { recovery_reference, admission_history_complete, prior_deployment_fenced, service } => remote(service,reqwest::Method::POST,"/v1/release-admission-hold",Some(json!({"recoveryReference":recovery_reference,"admissionHistoryComplete":admission_history_complete,"priorDeploymentFenced":prior_deployment_fenced})),None,peer).await,
+        Command::CompleteExecutionRecovery { recovery_reference, execution_history_complete, prior_deployment_fenced, service } => remote(service,reqwest::Method::POST,"/v1/complete-execution-recovery",Some(json!({"recoveryReference":recovery_reference,"executionHistoryComplete":execution_history_complete,"priorDeploymentFenced":prior_deployment_fenced})),None,peer).await,
         Command::Retain { before, limit, service } => {
             remote(
                 service,
@@ -1057,6 +1053,7 @@ async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
                 "/v1/retention",
                 Some(json!({"before":before,"limit":limit})),
                 None,
+                peer,
             )
             .await
         }

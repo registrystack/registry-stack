@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use registry_platform_config::{
     ConfigBlockError, ConfigBlockErrorKind, DeclaredPosture, ListenerBind, LoadedRuntimeConfig,
-    PackageConfig, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    PackageConfig, PackageErrorKind, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
 };
 use registry_platform_yaml::{escape_pointer_segment, BoundedU64, Diagnostic, RetiredApiVersion};
 use serde::Deserialize;
@@ -248,11 +248,13 @@ fn read_runtime(
     }
     let package_fields_resolved =
         !check.defers("/package/root") && !check.defers("/package/expectedDigest");
-    let mut config = check.loaded.take().filter(|_| {
-        !diagnostics
+    let has_errors = |diagnostics: &[Diagnostic]| {
+        diagnostics
             .iter()
             .any(|d| d.severity == registry_platform_yaml::Severity::Error)
-    });
+    };
+    let mut config = check.loaded.take().filter(|_| !has_errors(&diagnostics));
+    let mut unavailable = check.unavailable;
     if let (Some(loaded), Some(is_loopback_host)) = (config.as_mut(), package_loopback_host) {
         if package_fields_resolved && loaded.config.package.root.exists() {
             let index_path = loaded.config.package.root.join(crate::INDEX_FILE);
@@ -261,21 +263,33 @@ fn read_runtime(
                     crate::record_index_posture(&index, &mut loaded.posture, is_loopback_host);
                     diagnostics.extend(loaded.posture.diagnostics(&index_path));
                 }
-                Err(error) => diagnostics.push(check.error_at(
-                    RUNTIME_KIND,
-                    "discovery.runtime.package-refused",
-                    "/package/root",
-                    error.to_string(),
-                    "Verify the deployed package and its expected digest, or rebuild it with discoveryctl package.",
-                )),
+                Err(error) => {
+                    // A file that could not be read says nothing about the
+                    // package, so it is an unavailable input, not a refusal.
+                    unavailable |= matches!(
+                        &error,
+                        crate::StartupError::Package(package)
+                            if matches!(package.kind(), PackageErrorKind::Io { .. })
+                    );
+                    diagnostics.push(check.error_at(
+                        RUNTIME_KIND,
+                        "discovery.runtime.package-refused",
+                        "/package/root",
+                        error.to_string(),
+                        "Verify the deployed package and its expected digest, or rebuild it with discoveryctl package.",
+                    ));
+                }
             }
         }
     }
+    // The configuration is returned only when nothing was found, the
+    // package included.
+    let config = config.filter(|_| !has_errors(&diagnostics));
     (
         config,
         RuntimeCheck {
             diagnostics,
-            unavailable: check.unavailable,
+            unavailable,
         },
     )
 }

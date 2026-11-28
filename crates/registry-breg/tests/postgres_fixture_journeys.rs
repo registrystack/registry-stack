@@ -15,6 +15,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+const DEVELOPMENT_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
 use axum::Router;
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{
@@ -33,7 +39,7 @@ use registry_breg::package::{
     VerifiedPackage, FIXTURE_JOURNEYS_PATH,
 };
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    initialize_compiled_registry_state_with_posture_for_test, install_compiled_schema,
     managed_schema_fingerprint, provision_postgis_prerequisites, spatial_bbox_role,
     ExpectedManagedCatalog, RegistryStateTestIdentity,
 };
@@ -177,7 +183,8 @@ async fn fixture_import_uses_real_ingestion_and_leaves_no_open_authority() {
     let database = TestDatabase::create(8).await;
     let idp = MockIdp::start().await;
     let config_path = package.write_runtime_config(&database, &idp);
-    let config = load_runtime_config(&config_path).expect("runtime config loads");
+    let config =
+        load_runtime_config(&config_path, DEVELOPMENT_POSTURE).expect("runtime config loads");
     let prepared_database = prepare_schema_test_database_with_connection_configs_for_test(
         &config,
         &package.prepared,
@@ -253,7 +260,7 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
             .await
             .expect("closed managed schema fingerprint computes");
     let package = package_fixture(&project_source, &schema_fingerprint);
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &registry,
@@ -262,6 +269,7 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
             database_id: DATABASE_ID,
             label: &package.revision,
         },
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("administrator activates the exact verified package identity");
@@ -271,10 +279,13 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
 
     let idp = MockIdp::start().await;
     let config_path = package.write_runtime_config(&database, &idp);
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("verified startup constructs the authenticated fixture runtime");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        DEVELOPMENT_POSTURE,
+    )
+    .await
+    .expect("verified startup constructs the authenticated fixture runtime");
     let audit_path = package.directory.join("audit").join("audit.jsonl");
 
     let suite = validate_fixture_journeys(JOURNEY_SOURCE, &registry).expect("journeys preflight");
@@ -350,7 +361,7 @@ async fn fixture_test_accepts_the_real_runtime_row_local_constraint_refusal() {
         &schema_fingerprint,
         COMPARE_CONSTRAINT_JOURNEY_SOURCE,
     );
-    initialize_compiled_registry_state_for_test(
+    initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         &registry,
@@ -359,6 +370,7 @@ async fn fixture_test_accepts_the_real_runtime_row_local_constraint_refusal() {
             database_id: DATABASE_ID,
             label: &package.revision,
         },
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("administrator activates the exact verified package identity");
@@ -367,10 +379,13 @@ async fn fixture_test_accepts_the_real_runtime_row_local_constraint_refusal() {
 
     let idp = MockIdp::start().await;
     let config_path = package.write_runtime_config(&database, &idp);
-    let prepared =
-        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
-            .await
-            .expect("verified startup constructs the authenticated fixture runtime");
+    let prepared = prepare_with_connection_config_for_test(
+        &config_path,
+        database.runtime_config.clone(),
+        DEVELOPMENT_POSTURE,
+    )
+    .await
+    .expect("verified startup constructs the authenticated fixture runtime");
     let suite = validate_fixture_journeys(COMPARE_CONSTRAINT_JOURNEY_SOURCE, &registry)
         .expect("constraint journeys preflight");
     let tokens = (0..3).map(|_| operator_token(&idp, true)).collect();
@@ -449,7 +464,8 @@ async fn production_schema_test_setup_failures_identify_configuration_without_se
             );
             fs::write(&config_path, source).expect("extra destination config writes");
         }
-        let config = load_runtime_config(&config_path).expect("runtime config shape is valid");
+        let config = load_runtime_config(&config_path, DEVELOPMENT_POSTURE)
+            .expect("runtime config shape is valid");
         let prepared_database = prepare_schema_test_database_with_connection_configs_for_test(
             &config,
             &package.prepared,
@@ -545,7 +561,7 @@ reviewAuthorities:
             fs::write(path, source).unwrap();
         };
         append_bindings(&path);
-        let config = load_runtime_config(&path).unwrap();
+        let config = load_runtime_config(&path, DEVELOPMENT_POSTURE).unwrap();
         let database_for_test = prepare_schema_test_database_with_connection_configs_for_test(
             &config,
             &package.prepared,
@@ -560,7 +576,7 @@ reviewAuthorities:
             install_compiled_schema(&migration, &compiled, &serving.runtime_role)
                 .await
                 .unwrap();
-            initialize_compiled_registry_state_for_test(
+            initialize_compiled_registry_state_with_posture_for_test(
                 &migration,
                 &serving.runtime_role,
                 &compiled,
@@ -569,6 +585,7 @@ reviewAuthorities:
                     database_id: DATABASE_ID,
                     label: &package.revision,
                 },
+                registry_platform_config::Posture::Development,
             )
             .await
             .unwrap();
@@ -576,8 +593,21 @@ reviewAuthorities:
             task.abort();
             let serving_path = package.write_runtime_config(&serving, &idp);
             append_bindings(&serving_path);
-            let serve = prepare_with_connection_config_for_test(&serving_path, serving.runtime_config.clone()).await.err().unwrap();
-            let doctor = check_with_connection_config_for_test(&serving_path, serving.runtime_config.clone()).await.unwrap_err();
+            let serve = prepare_with_connection_config_for_test(
+                &serving_path,
+                serving.runtime_config.clone(),
+                DEVELOPMENT_POSTURE,
+            )
+            .await
+            .err()
+            .unwrap();
+            let doctor = check_with_connection_config_for_test(
+                &serving_path,
+                serving.runtime_config.clone(),
+                DEVELOPMENT_POSTURE,
+            )
+            .await
+            .unwrap_err();
             for error in [serve, doctor] {
                 assert!(matches!(error, StartupError::EventDestinations(ref message) if message == &repeated), "{error:?}");
             }
@@ -612,8 +642,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let first = TestDatabase::create(8).await;
     let first_config_path = package.write_runtime_config(&first, &idp);
-    let first_config =
-        load_runtime_config(&first_config_path).expect("strict runtime config loads");
+    let first_config = load_runtime_config(&first_config_path, DEVELOPMENT_POSTURE)
+        .expect("strict runtime config loads");
     let first_database = prepare_schema_test_database_with_connection_configs_for_test(
         &first_config,
         &package.prepared,
@@ -648,8 +678,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let second = TestDatabase::create(8).await;
     let second_config_path = package.write_runtime_config(&second, &idp);
-    let second_config =
-        load_runtime_config(&second_config_path).expect("second strict runtime config loads");
+    let second_config = load_runtime_config(&second_config_path, DEVELOPMENT_POSTURE)
+        .expect("second strict runtime config loads");
     let second_database = prepare_schema_test_database_with_connection_configs_for_test(
         &second_config,
         &package.prepared,
@@ -682,7 +712,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
         .await
         .expect("administrator can create a dirty managed object");
     let dirty_config_path = package.write_runtime_config(&dirty, &idp);
-    let dirty_config = load_runtime_config(&dirty_config_path).expect("dirty runtime config loads");
+    let dirty_config = load_runtime_config(&dirty_config_path, DEVELOPMENT_POSTURE)
+        .expect("dirty runtime config loads");
     assert!(
         prepare_schema_test_database_with_connection_configs_for_test(
             &dirty_config,
@@ -697,8 +728,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let wrong_role = TestDatabase::create(8).await;
     let wrong_role_config_path = package.write_runtime_config(&wrong_role, &idp);
-    let wrong_role_config =
-        load_runtime_config(&wrong_role_config_path).expect("wrong-role runtime config loads");
+    let wrong_role_config = load_runtime_config(&wrong_role_config_path, DEVELOPMENT_POSTURE)
+        .expect("wrong-role runtime config loads");
     assert!(
         prepare_schema_test_database_with_connection_configs_for_test(
             &wrong_role_config,
@@ -713,8 +744,9 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let claim_mismatch = TestDatabase::create(8).await;
     let claim_mismatch_config_path = package.write_runtime_config(&claim_mismatch, &idp);
-    let claim_mismatch_config = load_runtime_config(&claim_mismatch_config_path)
-        .expect("claim-mismatch runtime config loads");
+    let claim_mismatch_config =
+        load_runtime_config(&claim_mismatch_config_path, DEVELOPMENT_POSTURE)
+            .expect("claim-mismatch runtime config loads");
     let claim_mismatch_database = prepare_schema_test_database_with_connection_configs_for_test(
         &claim_mismatch_config,
         &package.prepared,
@@ -742,8 +774,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
     let substituted = TestDatabase::create(8).await;
     let substituted_config_path = package.write_runtime_config(&substituted, &idp);
-    let substituted_config =
-        load_runtime_config(&substituted_config_path).expect("substituted runtime config loads");
+    let substituted_config = load_runtime_config(&substituted_config_path, DEVELOPMENT_POSTURE)
+        .expect("substituted runtime config loads");
     let substituted_database = prepare_schema_test_database_with_connection_configs_for_test(
         &substituted_config,
         &package.prepared,
@@ -775,8 +807,8 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
     );
     let terminal = TestDatabase::create(8).await;
     let terminal_config_path = terminal_package.write_runtime_config(&terminal, &idp);
-    let terminal_config =
-        load_runtime_config(&terminal_config_path).expect("terminal runtime config loads");
+    let terminal_config = load_runtime_config(&terminal_config_path, DEVELOPMENT_POSTURE)
+        .expect("terminal runtime config loads");
     let terminal_database = prepare_schema_test_database_with_connection_configs_for_test(
         &terminal_config,
         &terminal_package.prepared,
@@ -836,7 +868,8 @@ async fn public_spatial_fixture_schema_test_runs_through_the_production_executor
     .await
     .expect("administrator provisions spatial schema-test prerequisites");
     let config_path = package.write_spatial_runtime_config(&database, &idp);
-    let config = load_runtime_config(&config_path).expect("spatial runtime config loads");
+    let config = load_runtime_config(&config_path, DEVELOPMENT_POSTURE)
+        .expect("spatial runtime config loads");
     let schema_test_database = prepare_schema_test_database_with_connection_configs_for_test(
         &config,
         &package.prepared,
@@ -1105,7 +1138,7 @@ fn package_fixture_with_modules(
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            database_initialization_environment: "production",
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .expect("package closure rederives into VerifiedPackage");
@@ -1169,7 +1202,7 @@ fn spatial_package_fixture(project: &[u8], schema_fingerprint: &str) -> PackageF
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .expect("spatial package closure rederives into VerifiedPackage");
@@ -1217,7 +1250,6 @@ identity:
   environment: production
   instanceId: {INSTANCE_ID}
   databaseId: {DATABASE_ID}
-  databaseInitializationEnvironment: production
 secretProviders:
   file:
     root: {}
@@ -1314,7 +1346,6 @@ identity:
   environment: local
   instanceId: {QUICKSTART_INSTANCE_ID}
   databaseId: {QUICKSTART_DATABASE_ID}
-  databaseInitializationEnvironment: local
 secretProviders:
   file:
     root: {}

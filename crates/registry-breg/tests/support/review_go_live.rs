@@ -479,9 +479,12 @@ async fn activation_blocked_application_remains_counted_without_queue_age() {
     let id = submitted(&fixture, "activation-metrics-canary").await;
     approve(&fixture, &authority).await;
     let _ = activate(&fixture, &source, &authority).await;
-    let response = registry_breg::metrics::metrics_app(Arc::new(
-        registry_breg::metrics::Metrics::with_pool_for_test(fixture.pool.clone()),
-    ))
+    let response = registry_breg::metrics::metrics_app(
+        Arc::new(registry_breg::metrics::Metrics::with_pool_for_test(
+            fixture.pool.clone(),
+        )),
+        registry_platform_config::Posture::Production,
+    )
     .oneshot(
         axum::http::Request::builder()
             .uri("/metrics")

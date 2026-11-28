@@ -203,13 +203,16 @@ fn literal_text(fixture: &TokenFixture, claim: &str) -> Option<String> {
 
 async fn observe(case: FixtureCase, secrets: &Secrets) -> Outcome {
     let shape = Shape::of(&case);
-    let config = RuntimeConfig::loader()
-        .parse_str::<RuntimeConfig>(&shape.runtime_yaml(&case, &secrets.root), |_| None)
-        .expect("the runtime file for this row parses")
-        .config;
+    let loaded = RuntimeConfig::loader(registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    })
+    .parse_str::<RuntimeConfig>(&shape.runtime_yaml(&case, &secrets.root), |_| None)
+    .expect("the runtime file for this row parses");
+    let config = loaded.config;
     let resolver = secret_resolver(&config).expect("the secret providers resolve");
     let (verifier, keys): (_, Arc<JwksFetcher>) = config
-        .oidc_verifier(&resolver)
+        .oidc_verifier(&resolver, loaded.development.as_ref())
         .await
         .expect("the verifier profile builds");
     let authenticator = CaseworkAuthenticator::new(

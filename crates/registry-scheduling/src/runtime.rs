@@ -1524,16 +1524,9 @@ mod tests {
 
     #[test]
     fn production_reminder_transport_accepts_only_loopback_plaintext() {
-        let secrets =
-            SecretResolver::new([registry_platform_config::SecretProvider::Environment], "")
-                .unwrap();
+        let (_directory, secrets) = reminder_secrets(&[("current", &TEST_CURRENT[..])]);
         for (host, accepted) in [("127.0.0.1", true), ("10.0.0.5", false)] {
-            let destination = ReminderDestinationConfig {
-                url: format!("http://{host}:8080/reminders"),
-                purpose_urls: Default::default(),
-                bearer_token_ref: None,
-                hmac_sha256_key_ref: None,
-            };
+            let destination = reminder_destination(&format!("http://{host}:8080"));
             assert_eq!(reminder_transport(&destination, &secrets).is_ok(), accepted);
         }
     }

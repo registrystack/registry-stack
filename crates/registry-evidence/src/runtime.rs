@@ -500,6 +500,7 @@ pub enum SourceFreshnessIssue {
 
 /// All runtime state is derived from one captured immutable package.
 pub struct EvidenceRuntime {
+    posture: registry_platform_config::PostureReport,
     kernel: OfflineKernel,
     runtime_config: RuntimeConfig,
     authenticator: Arc<dyn RuntimeAuthenticator>,
@@ -704,12 +705,23 @@ async fn assemble<A>(
 
     let rate_limiter = rate_limiter(&bundle)?;
 
+    let peer_policy = match runtime_document.posture.posture() {
+        registry_platform_config::Posture::Production => {
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+        }
+        registry_platform_config::Posture::Development => {
+            registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer
+        }
+    };
     let authenticator = match authenticator_override {
         Some(authenticator) => authenticator,
-        None => Arc::new(Authenticator::from_config(
-            &bundle.config.authentication,
-            issuer_trust_roots(&bundle, &runtime_document)?,
-        )),
+        None => Arc::new(
+            Authenticator::from_config(
+                &bundle.config.authentication,
+                issuer_trust_roots(&bundle, &runtime_document)?,
+            )
+            .with_peer_policy(peer_policy),
+        ),
     };
 
     Ok(Startup {
@@ -753,9 +765,12 @@ async fn dependencies_ready(
 
 impl EvidenceRuntime {
     /// Capture and initialize the complete Version 1 deployment at one revision.
-    pub async fn initialize(runtime_path: &Path) -> Result<Self, RuntimeInitializationError> {
-        let deployment =
-            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
+    pub async fn initialize(
+        runtime_path: &Path,
+        declared: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self, RuntimeInitializationError> {
+        let deployment = DeploymentInputs::load(runtime_path, declared)
+            .map_err(|_| RuntimeInitializationError::Bundle)?;
         Self::initialize_internal(deployment, None).await
     }
 
@@ -773,8 +788,22 @@ impl EvidenceRuntime {
         runtime_path: &Path,
         authenticator: Authenticator,
     ) -> Result<Self, RuntimeInitializationError> {
-        let deployment =
-            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
+        let deployment = DeploymentInputs::load(
+            runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .map_err(|_| RuntimeInitializationError::Bundle)?;
+        Self::initialize_from_with_authenticator(deployment, authenticator).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn initialize_from_with_authenticator(
+        deployment: DeploymentInputs,
+        authenticator: Authenticator,
+    ) -> Result<Self, RuntimeInitializationError> {
         Self::initialize_internal(deployment, Some(Arc::new(authenticator))).await
     }
 
@@ -783,8 +812,14 @@ impl EvidenceRuntime {
         runtime_path: &Path,
         authenticator: Arc<dyn RuntimeAuthenticator>,
     ) -> Result<Self, RuntimeInitializationError> {
-        let deployment =
-            DeploymentInputs::load(runtime_path).map_err(|_| RuntimeInitializationError::Bundle)?;
+        let deployment = DeploymentInputs::load(
+            runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .map_err(|_| RuntimeInitializationError::Bundle)?;
         Self::initialize_internal(deployment, Some(authenticator)).await
     }
 
@@ -792,17 +827,20 @@ impl EvidenceRuntime {
         deployment: DeploymentInputs,
         authenticator_override: Option<Arc<dyn RuntimeAuthenticator>>,
     ) -> Result<Self, RuntimeInitializationError> {
+        let posture = deployment.runtime().posture.clone();
+        let value = posture.posture();
         let startup = assemble(
             deployment,
             authenticator_override,
-            async |destination, secret, key_version| {
-                EvidenceAuditLog::initialize(destination, secret, key_version)
+            async move |destination, secret, key_version| {
+                EvidenceAuditLog::initialize(destination, secret, key_version, value)
                     .await
                     .map_err(|error| RuntimeInitializationError::Audit((&error).into()))
             },
         )
         .await?;
         Ok(Self {
+            posture,
             kernel: startup.kernel,
             runtime_config: startup.runtime_config,
             authenticator: startup.authenticator,
@@ -818,6 +856,10 @@ impl EvidenceRuntime {
 
     pub fn bundle(&self) -> &Bundle {
         self.kernel.bundle()
+    }
+
+    pub fn posture(&self) -> &registry_platform_config::PostureReport {
+        &self.posture
     }
 
     pub fn runtime_config(&self) -> &RuntimeConfig {

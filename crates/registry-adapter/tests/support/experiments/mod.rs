@@ -306,7 +306,6 @@ database:
 oidc:
   issuer: {ISSUER}
   audience: {AUDIENCE}
-  allowInsecureHttp: true
   jwksSource:
     type: static
     documentRef: secret:env/EXPERIMENT_JWKS

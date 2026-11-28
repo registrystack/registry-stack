@@ -128,6 +128,25 @@ use statistics_lifecycle::{
 };
 use test_lifecycle::{TestLifecycleError, TestLifecycleRequest};
 
+use registry_platform_config::{declared, DeclaredPosture, Posture, PostureSource};
+
+const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
+
+const DEV_POSTURE: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Development,
+    source: PostureSource::Default,
+};
+
+#[derive(Debug, Default, Args)]
+struct PostureArgs {
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    flag: Option<String>,
+}
+
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 const USAGE_EXIT: u8 = 2;
 const OPERATIONAL_FAILURE_EXIT: u8 = 3;
@@ -140,6 +159,7 @@ pub const CTL_REPORT_KIND: &str = "BRegCtlReport";
 /// Write one `--format json` report. Every command writes its report through
 /// here, so no command names the format itself and none can leave it out.
 fn write_ctl_report<T: Serialize + ?Sized>(
+    format: OutputFormat,
     stdout: &mut dyn Write,
     report: &T,
 ) -> serde_json::Result<()> {
@@ -162,6 +182,10 @@ fn write_ctl_report<T: Serialize + ?Sized>(
     let report =
         registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
             .map_err(|error| serde_json::Error::io(io::Error::other(error)))?;
+    let report = match format {
+        OutputFormat::JsonWithPosture(posture) => report.with_posture(posture),
+        _ => report,
+    };
     serde_json::to_writer_pretty(stdout, &report)
 }
 // Keep ctl-authored project and module source capture aligned with the
@@ -202,7 +226,7 @@ enum Command {
         #[command(subcommand)]
         command: registry_cli_api::ConnectionCommand,
     },
-    /// Run the production Base Registry Engine service with the selected runtime.
+    /// Run Base Registry Engine with the selected runtime.
     Serve(ServeArgs),
     /// Operate the optional citizen-facing MCP gateway.
     Mcp(McpArgs),
@@ -303,6 +327,9 @@ struct ServeArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// BReg runtime executable for an unmanaged installation.
     #[arg(long, hide = true, env = "BREG_BIN", value_name = "BINARY")]
     breg_bin: Option<PathBuf>,
@@ -394,6 +421,9 @@ struct FieldEncryptionPreflightArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Absolute directory of the verified successor package the operator
     /// plans to apply.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
@@ -405,6 +435,9 @@ struct FieldEncryptionEraseHistoryArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Absolute owner-only JSON erase-history request file.
     ///
@@ -432,6 +465,9 @@ struct EvidenceRetentionEraseArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
     /// RFC 3339 expiry cutoff, no later than the current time.
     #[arg(long)]
     before: String,
@@ -454,6 +490,9 @@ struct IdempotencyRetentionEraseArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
     /// RFC 3339 cutoff, no later than the current time; responses whose horizon passed before it are dropped.
     #[arg(long)]
     before: String,
@@ -478,6 +517,9 @@ struct ExternalProjectionTargetArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
     /// Indexed external projection ID declared by the active package.
     #[arg(long, value_name = "ID")]
     projection: String,
@@ -553,6 +595,9 @@ struct CheckArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
+
+    #[command(flatten)]
+    posture: PostureArgs,
     /// Fill `${NAME}` expressions in the runtime file from the process environment and
     /// check the values they produce. Without it, each expression is checked by syntax
     /// and position only.
@@ -675,6 +720,9 @@ struct GenerateArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: Option<PathBuf>,
 
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Access profile: required for evidence-source; optional exact selection for odrl.
     #[arg(long)]
     access_profile: Option<String>,
@@ -762,6 +810,9 @@ struct DoctorArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 }
 
 #[derive(Debug, Args)]
@@ -813,17 +864,13 @@ struct PackageArgs {
     revision: Option<String>,
 }
 
-/// The `package` command line: the package inputs plus the hidden `--local`
-/// switch for native local owners that package their own loopback session.
 #[derive(Debug, Args)]
 struct PackageCommandArgs {
     #[command(flatten)]
     package: PackageArgs,
 
-    /// Skip the refusals for identity a deployable package must not carry,
-    /// such as the reserved placeholder `canonicalBaseIri`.
-    #[arg(long, hide = true)]
-    local: bool,
+    #[command(flatten)]
+    posture: PostureArgs,
 }
 
 #[derive(Debug, Args)]
@@ -834,6 +881,9 @@ struct TestArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Absolute schema-test credential binding document. Required unless --fingerprint-only is given.
     #[arg(
@@ -865,6 +915,9 @@ struct ApplyArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Absolute target package directory.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
     package: PathBuf,
@@ -891,6 +944,9 @@ struct PlanArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Absolute target package directory.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
@@ -920,6 +976,9 @@ struct StatusArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 }
 
 #[derive(Debug, Args)]
@@ -927,6 +986,9 @@ struct VerifyArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 }
 
 #[derive(Debug, Args)]
@@ -990,6 +1052,9 @@ struct AttachmentCleanupArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 }
 
 #[derive(Debug, Args)]
@@ -997,6 +1062,9 @@ struct ProposalRetentionListArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Limit the value-free listing to one compiled Action.
     #[arg(long, value_name = "ACTION")]
@@ -1016,6 +1084,9 @@ struct ProposalRetentionExactArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Compiled Action identifier.
     #[arg(long, value_name = "ACTION")]
@@ -1051,6 +1122,9 @@ struct ReviewRecoveryExactArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Compiled Action identifier.
     #[arg(long, value_name = "ACTION")]
@@ -1107,6 +1181,9 @@ struct InstanceClaimStatusArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 }
 
 #[derive(Debug, Args)]
@@ -1114,6 +1191,9 @@ struct InstanceClaimAdoptArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Acknowledge that every other copy of this Registry, including the
     /// database the claim names today when it is another one, no longer serves
@@ -1131,6 +1211,9 @@ struct ImportAuthorityOpenArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Record type the authority admits creates for.
     #[arg(long = "record-type", value_name = "ID")]
@@ -1171,6 +1254,9 @@ struct ImportAuthorityCloseArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Identifier `import-authority open` reported.
     #[arg(long, value_name = "UUID")]
     authority_id: String,
@@ -1189,6 +1275,9 @@ struct ImportAuthorityRuntimeArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 }
 
 #[derive(Debug, Args)]
@@ -1208,6 +1297,9 @@ struct HookListArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Maximum number of value-free delivery rows to return.
     #[arg(long, value_name = "COUNT", default_value_t = 50)]
     limit: u16,
@@ -1218,6 +1310,9 @@ struct HookDrainArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Maximum local attempts to start, from 1 to 1000.
     #[arg(long, value_name = "COUNT", default_value_t = 100, value_parser = clap::value_parser!(u16).range(1..=1000))]
@@ -1233,6 +1328,9 @@ struct HookReplayArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Stable event UUID shown by `hook list`.
     #[arg(long, value_name = "UUID")]
@@ -1252,6 +1350,9 @@ struct HookDiscardArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Stable event UUID shown by `hook list`.
     #[arg(long, value_name = "UUID")]
@@ -1521,6 +1622,8 @@ struct DataImportArgs {
 
 #[derive(Debug, Args)]
 struct DataExportArgs {
+    #[command(flatten)]
+    posture: PostureArgs,
     /// Absolute closed package directory used only for deterministic planning.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
     package: PathBuf,
@@ -1623,6 +1726,9 @@ struct MigrationExplainArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 }
 
 #[derive(Debug, Args)]
@@ -1630,6 +1736,9 @@ struct MigrationReconcileArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Absolute directory of the verified package the failed activation pinned.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
@@ -1658,6 +1767,9 @@ struct MigrationDraftArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Absolute reviewed-migrations directory the draft is written under.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
     output: PathBuf,
@@ -1676,6 +1788,9 @@ struct HistoryEraseArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Absolute owner-only JSON erasure request file.
     ///
@@ -1698,6 +1813,9 @@ struct HistoryRebaselineArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: PostureArgs,
 
     /// Absolute owner-only JSON rebaseline request file.
     ///
@@ -1724,6 +1842,9 @@ struct DiffArgs {
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: Option<PathBuf>,
 
+    #[command(flatten)]
+    posture: PostureArgs,
+
     /// Closed package inspected for integrity only, without activation authority.
     #[arg(long, value_name = "DIRECTORY")]
     package: Option<PathBuf>,
@@ -1735,6 +1856,23 @@ enum OutputFormat {
     #[default]
     Human,
     Json,
+    #[value(skip)]
+    #[serde(skip)]
+    JsonWithPosture(DeclaredPosture),
+}
+
+impl OutputFormat {
+    fn is_json(self) -> bool {
+        matches!(self, Self::Json | Self::JsonWithPosture(_))
+    }
+
+    fn with_posture(self, posture: DeclaredPosture) -> Self {
+        if self.is_json() {
+            Self::JsonWithPosture(posture)
+        } else {
+            self
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -2163,6 +2301,8 @@ enum SuggestedAction {
     CorrectActionTestInput,
     CorrectActionHandler,
     VerifyTimerOperator,
+    #[serde(untagged)]
+    PostureRecovery(&'static str),
 }
 
 #[derive(Serialize)]
@@ -2296,6 +2436,8 @@ struct PackageSuccessReport {
     package_digest: String,
     registry_revision: String,
     package_files: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     #[serde(skip_serializing_if = "Option::is_none")]
     revision: Option<String>,
 }
@@ -2368,6 +2510,8 @@ enum PlanActivation {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusSuccessReport {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     ok: bool,
     command: &'static str,
     package_id: String,
@@ -2705,6 +2849,7 @@ struct CapturedAssets {
 
 #[derive(Clone, Debug)]
 struct CapturedPackageCandidate {
+    posture_diagnostics: Vec<registry_platform_yaml::Diagnostic>,
     compiled: CompiledRegistry,
     compiler_source_revision: String,
     from_package_digest: Option<String>,
@@ -2867,7 +3012,153 @@ where
         }
     };
 
-    let format = cli.format;
+    let posture_flag = match &cli.command {
+        Command::Serve(args) => Some(args.posture.flag.as_deref()),
+        Command::Check(args) => Some(args.posture.flag.as_deref()),
+        Command::Package(args) => Some(args.posture.flag.as_deref()),
+        Command::Test(args) => Some(args.posture.flag.as_deref()),
+        Command::Apply(args) => Some(args.posture.flag.as_deref()),
+        Command::Plan(args) => Some(args.posture.flag.as_deref()),
+        Command::Status(args) => Some(args.posture.flag.as_deref()),
+        Command::Doctor(args) => Some(args.posture.flag.as_deref()),
+        Command::Verify(args) => Some(args.posture.flag.as_deref()),
+        Command::Diff(args) => Some(args.posture.flag.as_deref()),
+        Command::Migration(MigrationArgs {
+            command: MigrationCommand::Explain(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Migration(MigrationArgs {
+            command: MigrationCommand::Reconcile(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Migration(MigrationArgs {
+            command: MigrationCommand::Draft(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::History(HistoryArgs {
+            command: HistoryCommand::Erase(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::History(HistoryArgs {
+            command: HistoryCommand::Rebaseline(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Hook(HookArgs {
+            command: HookCommand::List(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Hook(HookArgs {
+            command: HookCommand::Drain(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Hook(HookArgs {
+            command: HookCommand::Replay(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Hook(HookArgs {
+            command: HookCommand::Discard(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ProposalRetention(ProposalRetentionArgs {
+            command: ProposalRetentionCommand::List(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ProposalRetention(ProposalRetentionArgs {
+            command: ProposalRetentionCommand::DryRun(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ProposalRetention(ProposalRetentionArgs {
+            command: ProposalRetentionCommand::Erase(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ProposalRetention(ProposalRetentionArgs {
+            command: ProposalRetentionCommand::CleanupAttachments(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ReviewRecovery(ReviewRecoveryArgs {
+            command: ReviewRecoveryCommand::Resubmit(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ReviewRecovery(ReviewRecoveryArgs {
+            command: ReviewRecoveryCommand::Close(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ReviewRecovery(ReviewRecoveryArgs {
+            command: ReviewRecoveryCommand::RetryApplication(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::EvidenceRetention(EvidenceRetentionArgs {
+            command: EvidenceRetentionCommand::EraseExpired(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::IdempotencyRetention(IdempotencyRetentionArgs {
+            command: IdempotencyRetentionCommand::EraseExpired(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ExternalProjection(ExternalProjectionArgs {
+            command: ExternalProjectionCommand::Inspect(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ExternalProjection(ExternalProjectionArgs {
+            command: ExternalProjectionCommand::Purge(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ImportAuthority(ImportAuthorityArgs {
+            command: ImportAuthorityCommand::Open(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ImportAuthority(ImportAuthorityArgs {
+            command: ImportAuthorityCommand::Close(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ImportAuthority(ImportAuthorityArgs {
+            command: ImportAuthorityCommand::CloseExpired(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::ImportAuthority(ImportAuthorityArgs {
+            command: ImportAuthorityCommand::List(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::InstanceClaim(InstanceClaimArgs {
+            command: InstanceClaimCommand::Status(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::InstanceClaim(InstanceClaimArgs {
+            command: InstanceClaimCommand::Adopt(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::FieldEncryption(FieldEncryptionArgs {
+            command: FieldEncryptionCommand::Preflight(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::FieldEncryption(FieldEncryptionArgs {
+            command: FieldEncryptionCommand::EraseHistory(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Data(DataArgs {
+            command: DataCommand::Export(args),
+        }) => Some(args.posture.flag.as_deref()),
+        Command::Generate(args) => Some(args.posture.flag.as_deref()),
+        Command::Provision(args) => Some(args.shared.posture.as_deref()),
+        Command::Timer(args) => Some(args.posture_flag()),
+        Command::Dev(args) => Some(args.posture_flag()),
+        _ => None,
+    };
+    let force_production = matches!(&cli.command, Command::Check(args) if args.production);
+    let is_dev = matches!(&cli.command, Command::Dev(_));
+    let (posture, format) = if let Some(flag) = posture_flag {
+        if force_production && flag == Some("development") {
+            return write_posture_usage(
+                "platform.posture.conflict",
+                "--production and --posture development contradict each other",
+                "Use one of them.",
+                cli.format,
+                stdout,
+                stderr,
+            );
+        }
+        let posture = match declared(flag.or(force_production.then_some("production"))) {
+            Ok(posture) => posture,
+            Err(error) => {
+                return write_posture_usage(
+                    error.code(),
+                    error.message(),
+                    error.suggested_action(),
+                    cli.format,
+                    stdout,
+                    stderr,
+                )
+            }
+        };
+        let posture = if is_dev && posture.posture == Posture::Production {
+            if posture.source != PostureSource::Default {
+                return write_posture_usage(
+                    "platform.posture.conflict",
+                    "bregctl dev is a development command and contradicts the declared production posture",
+                    "Start it with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+                    cli.format, stdout, stderr,
+                );
+            }
+            DEV_POSTURE
+        } else {
+            posture
+        };
+        (posture, cli.format.with_posture(posture))
+    } else {
+        (DEFAULT_POSTURE, cli.format)
+    };
     let result = match cli.command {
         Command::Api(args) => {
             if format_explicit {
@@ -2889,7 +3180,7 @@ where
             if let registry_cli_api::ConnectionCommand::Check(args) = &command {
                 return match registry_cli_api::run_connection_check(
                     &args.file,
-                    matches!(format, OutputFormat::Json),
+                    format.is_json(),
                     args.deny_warnings,
                 ) {
                     Ok(code) => ExitCode::from(code),
@@ -2915,7 +3206,7 @@ where
             };
         }
         Command::Serve(args) => {
-            return serve(args, format, format_explicit, stdout, stderr);
+            return serve(posture, args, format, format_explicit, stdout, stderr);
         }
         Command::Mcp(args) => {
             return supporting_service(
@@ -3053,7 +3344,7 @@ where
                 runtime_config: args.runtime_config.as_deref(),
                 environment: args.environment,
             };
-            return check::run(&request, format, stdout, stderr);
+            return check::run(posture, &request, format, stdout, stderr);
         }
         Command::Module(args) => match args.command {
             ModuleCommand::Add(args) => match args.module {
@@ -3081,8 +3372,8 @@ where
                     }
                 };
                 return write_result(
-                    if format == OutputFormat::Json {
-                        write_ctl_report(stdout, &json!({"ok":true,"command":"project concepts","model":from,"concepts":names})).map_err(io::Error::other)
+                    if format.is_json() {
+                        write_ctl_report(format, stdout, &json!({"ok":true,"command":"project concepts","model":from,"concepts":names})).map_err(io::Error::other)
                     } else {
                         writeln!(stdout, "{}", names.join("\n"))
                     },
@@ -3097,7 +3388,7 @@ where
                 };
             }
         },
-        Command::Generate(args) => generate_requested(&args),
+        Command::Generate(args) => generate_requested(posture, &args),
         Command::Explain(args) => {
             return match explain(
                 args.subject,
@@ -3110,57 +3401,59 @@ where
             };
         }
         Command::Diff(args) => {
-            return match diff(&args) {
+            return match diff(posture, &args) {
                 Ok(report) => write_diff_success(&report, format, stdout, stderr),
                 Err(failure) => write_failure(&failure, format, stdout, stderr),
             };
         }
         Command::Package(args) => {
-            return match package(&args.package, !args.local) {
+            return match package(&args.package, posture) {
                 Ok(report) => write_package_success(&report, format, stdout, stderr),
                 Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Test(args) if args.fingerprint_only => {
-            return match measure_schema_fingerprint(&args) {
+            return match measure_schema_fingerprint(posture, &args) {
                 Ok(report) => write_schema_fingerprint(&report, format, stdout, stderr),
                 Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Test(args) => {
-            return match test(&args) {
+            return match test(posture, &args) {
                 Ok(report) => write_schema_test_success(&report, format, stdout, stderr),
                 Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Apply(args) => {
-            return match apply(&args) {
+            return match apply(posture, &args) {
                 Ok(report) => write_apply_success(&report, format, stdout, stderr),
                 Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
         Command::Plan(args) => {
-            return match plan(&args) {
+            return match plan(posture, &args) {
                 Ok(report) => write_plan_success(&report, format, stdout, stderr),
                 Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
             };
         }
-        Command::Provision(args) => return provision(&args, format),
+        Command::Provision(args) => return provision(posture, &args, format),
         Command::Status(args) => {
-            return match status(&args) {
+            return match status(posture, &args) {
                 Ok(report) => write_status_success(&report, format, stdout, stderr),
                 Err(failure) => write_failure(&failure, format, stdout, stderr),
             };
         }
         Command::Timer(args) => {
-            return timer_operator_lifecycle::run(args, format, stdout, stderr);
+            return timer_operator_lifecycle::run(posture, args, format, stdout, stderr);
         }
         Command::Doctor(args) => {
-            return match doctor::run(&args.runtime_config) {
-                Ok(success) => write_doctor_success(
+            return match doctor::run(posture, &args.runtime_config) {
+                Ok(doctor::Outcome::PostureMismatch(recorded)) => {
+                    write_doctor_posture_finding(recorded, format, stdout, stderr)
+                }
+                Ok(doctor::Outcome::Checked(success)) => write_doctor_success(
                     &success.checked.postgres_advisories,
                     success.checked.role_mode,
-                    success.insecure_http_warning,
                     &success.checked.unbound_review_authorities,
                     &success.checked.unavailable_external_projections,
                     &success.checked.external_projections,
@@ -3200,20 +3493,20 @@ where
             };
         }
         Command::Verify(args) => {
-            return match verify(&args) {
+            return match verify(posture, &args) {
                 Ok(report) => write_verify_success(&report, format, stdout, stderr),
                 Err(failure) => write_failure(&failure, format, stdout, stderr),
             };
         }
         Command::Migration(args) => match args.command {
             MigrationCommand::Explain(args) => {
-                return match migration_explain(&args) {
+                return match migration_explain(posture, &args) {
                     Ok(report) => write_migration_explain_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
             }
             MigrationCommand::Reconcile(args) => {
-                return match migration_reconcile(&args) {
+                return match migration_reconcile(posture, &args) {
                     Ok(report) => {
                         write_migration_reconcile_success(&report, format, stdout, stderr)
                     }
@@ -3221,7 +3514,7 @@ where
                 };
             }
             MigrationCommand::Draft(args) => {
-                return match migration_draft(&args) {
+                return match migration_draft(posture, &args) {
                     Ok(report) => write_migration_draft_success(&report, format, stdout, stderr),
                     Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                 };
@@ -3229,13 +3522,13 @@ where
         },
         Command::History(args) => match args.command {
             HistoryCommand::Erase(args) => {
-                return match history_erase(&args) {
+                return match history_erase(posture, &args) {
                     Ok(report) => write_history_erase_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
             }
             HistoryCommand::Rebaseline(args) => {
-                return match history_rebaseline(&args) {
+                return match history_rebaseline(posture, &args) {
                     Ok(report) => write_history_rebaseline_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 };
@@ -3255,7 +3548,7 @@ where
                 };
             }
             DataCommand::Export(args) => {
-                return match data_export(&args) {
+                return match data_export(posture, &args) {
                     Ok(report) => write_data_export_success(&report, format, stdout, stderr),
                     Err(refusal) => write_refusal(&refusal, format, stdout, stderr),
                 };
@@ -3297,19 +3590,19 @@ where
                     Ok(report) => write_hook_sample_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                HookCommand::List(args) => match hook_list(&args) {
+                HookCommand::List(args) => match hook_list(posture, &args) {
                     Ok(report) => write_hook_list_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                HookCommand::Drain(args) => match hook_drain(&args) {
+                HookCommand::Drain(args) => match hook_drain(posture, &args) {
                     Ok(report) => write_hook_drain_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                HookCommand::Replay(args) => match hook_replay(&args) {
+                HookCommand::Replay(args) => match hook_replay(posture, &args) {
                     Ok(report) => write_hook_replay_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                HookCommand::Discard(args) => match hook_discard(&args) {
+                HookCommand::Discard(args) => match hook_discard(posture, &args) {
                     Ok(report) => write_hook_discard_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
@@ -3325,12 +3618,13 @@ where
                     runtime.block_on(registry_breg::action_evidence_maintenance::erase_expired(
                         &args.runtime_config,
                         &args.before,
+                        posture,
                     ))
                 });
             return match outcome {
                 Ok(erased) => {
-                    let result = if format == OutputFormat::Json {
-                        write_ctl_report(&mut *stdout, &json!({"ok":true,"command":"evidence-retention erase-expired","erased":erased}))
+                    let result = if format.is_json() {
+                        write_ctl_report(format, &mut *stdout, &json!({"ok":true,"command":"evidence-retention erase-expired","erased":erased}))
                             .map_err(io::Error::other).and_then(|()| writeln!(stdout))
                     } else {
                         render_report(
@@ -3356,12 +3650,13 @@ where
                     runtime.block_on(registry_breg::idempotency_retention::erase_expired(
                         &args.runtime_config,
                         &args.before,
+                        posture,
                     ))
                 });
             return match outcome {
                 Ok(erased) => {
-                    let result = if format == OutputFormat::Json {
-                        write_ctl_report(&mut *stdout, &json!({"ok":true,"command":"idempotency-retention erase-expired","erased":erased}))
+                    let result = if format.is_json() {
+                        write_ctl_report(format, &mut *stdout, &json!({"ok":true,"command":"idempotency-retention erase-expired","erased":erased}))
                             .map_err(io::Error::other).and_then(|()| writeln!(stdout))
                     } else {
                         render_report(
@@ -3419,17 +3714,18 @@ where
             let outcome = runtime.block_on(async {
                 match &args.command {
                     ExternalProjectionCommand::Inspect(_) => {
-                        maintenance::inspect(path, projection).await
+                        maintenance::inspect(path, projection, posture).await
                     }
                     ExternalProjectionCommand::Purge(_) => {
-                        maintenance::purge(path, projection).await
+                        maintenance::purge(path, projection, posture).await
                     }
                 }
             });
             return match outcome {
                 Ok(scope) => {
-                    let result = if format == OutputFormat::Json {
+                    let result = if format.is_json() {
                         write_ctl_report(
+                            format,
                             &mut *stdout,
                             &json!({"ok":true,"command":command,"scope":scope}),
                         )
@@ -3467,6 +3763,7 @@ where
                 ),
             };
             return match review_recovery::recover(
+                posture,
                 operation,
                 &args.runtime_config,
                 &args.action_id,
@@ -3493,26 +3790,32 @@ where
         }
         Command::ProposalRetention(args) => {
             return match args.command {
-                ProposalRetentionCommand::List(args) => match proposal_retention_list(&args) {
-                    Ok(report) => {
-                        write_proposal_retention_list_success(&report, format, stdout, stderr)
+                ProposalRetentionCommand::List(args) => {
+                    match proposal_retention_list(posture, &args) {
+                        Ok(report) => {
+                            write_proposal_retention_list_success(&report, format, stdout, stderr)
+                        }
+                        Err(failure) => write_failure(&failure, format, stdout, stderr),
                     }
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
-                },
-                ProposalRetentionCommand::DryRun(args) => match proposal_retention_dry_run(&args) {
-                    Ok(report) => {
-                        write_proposal_retention_dry_run_success(&report, format, stdout, stderr)
+                }
+                ProposalRetentionCommand::DryRun(args) => {
+                    match proposal_retention_dry_run(posture, &args) {
+                        Ok(report) => write_proposal_retention_dry_run_success(
+                            &report, format, stdout, stderr,
+                        ),
+                        Err(failure) => write_failure(&failure, format, stdout, stderr),
                     }
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
-                },
-                ProposalRetentionCommand::Erase(args) => match proposal_retention_erase(&args) {
-                    Ok(report) => {
-                        write_proposal_retention_erase_success(&report, format, stdout, stderr)
+                }
+                ProposalRetentionCommand::Erase(args) => {
+                    match proposal_retention_erase(posture, &args) {
+                        Ok(report) => {
+                            write_proposal_retention_erase_success(&report, format, stdout, stderr)
+                        }
+                        Err(failure) => write_failure(&failure, format, stdout, stderr),
                     }
-                    Err(failure) => write_failure(&failure, format, stdout, stderr),
-                },
+                }
                 ProposalRetentionCommand::CleanupAttachments(args) => {
-                    match proposal_retention::cleanup_attachments(&args.runtime_config) {
+                    match proposal_retention::cleanup_attachments(posture, &args.runtime_config) {
                         Ok(outcome) => write_attachment_cleanup_success(
                             &AttachmentCleanupSuccessReport {
                                 ok: true,
@@ -3540,21 +3843,25 @@ where
             let (command, outcome) = match args.command {
                 ImportAuthorityCommand::Open(args) => (
                     "import-authority open",
-                    import_authority_lifecycle::open(&import_authority_lifecycle::OpenArguments {
-                        runtime_config: &args.runtime_config,
-                        entity: &args.entity,
-                        profile: &args.profile,
-                        max_items: args.max_items,
-                        expires_in: &args.expires_in,
-                        input_sha256: &args.input_sha256,
-                        operator_reference: &args.operator_reference,
-                        reason: &args.reason,
-                    })
+                    import_authority_lifecycle::open(
+                        posture,
+                        &import_authority_lifecycle::OpenArguments {
+                            runtime_config: &args.runtime_config,
+                            entity: &args.entity,
+                            profile: &args.profile,
+                            max_items: args.max_items,
+                            expires_in: &args.expires_in,
+                            input_sha256: &args.input_sha256,
+                            operator_reference: &args.operator_reference,
+                            reason: &args.reason,
+                        },
+                    )
                     .map(|authority| vec![authority]),
                 ),
                 ImportAuthorityCommand::Close(args) => (
                     "import-authority close",
                     import_authority_lifecycle::close(
+                        posture,
                         &import_authority_lifecycle::CloseArguments {
                             runtime_config: &args.runtime_config,
                             authority_id: &args.authority_id,
@@ -3566,11 +3873,11 @@ where
                 ),
                 ImportAuthorityCommand::CloseExpired(args) => (
                     "import-authority close-expired",
-                    import_authority_lifecycle::close_expired(&args.runtime_config),
+                    import_authority_lifecycle::close_expired(posture, &args.runtime_config),
                 ),
                 ImportAuthorityCommand::List(args) => (
                     "import-authority list",
-                    import_authority_lifecycle::list(&args.runtime_config),
+                    import_authority_lifecycle::list(posture, &args.runtime_config),
                 ),
             };
             return match outcome {
@@ -3588,7 +3895,7 @@ where
         Command::InstanceClaim(args) => {
             return match args.command {
                 InstanceClaimCommand::Status(args) => {
-                    match instance_claim_lifecycle::status(&args.runtime_config) {
+                    match instance_claim_lifecycle::status(posture, &args.runtime_config) {
                         Ok(status) => write_instance_claim_status(&status, format, stdout, stderr),
                         Err(error) => write_failure(
                             &instance_claim_failure("instance-claim status", error),
@@ -3607,7 +3914,7 @@ where
                             stderr,
                         );
                     }
-                    match instance_claim_lifecycle::adopt(&args.runtime_config) {
+                    match instance_claim_lifecycle::adopt(posture, &args.runtime_config) {
                         Ok(adoption) => {
                             write_instance_claim_adoption(&adoption, format, stdout, stderr)
                         }
@@ -3637,7 +3944,7 @@ where
                     }
                 }
                 FieldEncryptionCommand::Preflight(args) => {
-                    match field_encryption_preflight(&args) {
+                    match field_encryption_preflight(posture, &args) {
                         Ok(report) => write_field_encryption_preflight_success(
                             &report, format, stdout, stderr,
                         ),
@@ -3645,7 +3952,7 @@ where
                     }
                 }
                 FieldEncryptionCommand::EraseHistory(args) => {
-                    match field_encryption_erase_history(&args) {
+                    match field_encryption_erase_history(posture, &args) {
                         Ok(report) => write_field_encryption_erase_history_success(
                             &report, format, stdout, stderr,
                         ),
@@ -3662,7 +3969,46 @@ where
     }
 }
 
+fn write_posture_usage(
+    code: &str,
+    message: &str,
+    action: &str,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let result = if format.is_json() {
+        write_ctl_report(
+            format,
+            stdout,
+            &json!({
+                "ok": false,
+                "command": "usage",
+                "status": registry_cli_report::Status::UsageError.as_str(),
+                "diagnostics": [{
+                    "severity": "error",
+                    "artifact": "command-arguments",
+                    "path": "posture",
+                    "code": code,
+                    "message": message,
+                    "suggestedAction": action,
+                }],
+            }),
+        )
+        .map_err(io::Error::other)
+        .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(stderr, "error[{code}]: {message}\n  next: {action}")
+    };
+    ExitCode::from(if result.is_ok() {
+        USAGE_EXIT
+    } else {
+        OPERATIONAL_FAILURE_EXIT
+    })
+}
+
 fn serve(
+    posture: DeclaredPosture,
     args: ServeArgs,
     format: OutputFormat,
     format_explicit: bool,
@@ -3683,7 +4029,11 @@ fn serve(
             }
         };
     let mut command = ProcessCommand::new(binary);
-    command.arg("--runtime-config").arg(args.runtime_config);
+    command
+        .arg("--runtime-config")
+        .arg(args.runtime_config)
+        .arg("--posture")
+        .arg(posture.posture.as_str());
     replace_with_service(command, "breg", stderr)
 }
 
@@ -3738,7 +4088,7 @@ fn supporting_service(
                 .arg("--format")
                 .arg(match format {
                     OutputFormat::Human => "human",
-                    OutputFormat::Json => "json",
+                    OutputFormat::Json | OutputFormat::JsonWithPosture(_) => "json",
                 });
             if args.deny_warnings {
                 command.arg("--deny-warnings");
@@ -3770,8 +4120,8 @@ fn reject_service_format(
         SuggestedAction::CorrectCommandUsage,
     );
     match format {
-        OutputFormat::Json => {
-            let result = write_ctl_report(&mut *stdout, &report)
+        OutputFormat::Json | OutputFormat::JsonWithPosture(_) => {
+            let result = write_ctl_report(format, &mut *stdout, &report)
                 .map_err(io::Error::other)
                 .and_then(|()| writeln!(stdout));
             if result.is_err() {
@@ -3823,9 +4173,11 @@ fn replace_with_service(
 }
 
 fn proposal_retention_list(
+    posture: DeclaredPosture,
     args: &ProposalRetentionListArgs,
 ) -> Result<ProposalRetentionListSuccessReport, FailureReport> {
     let outcome = proposal_retention::list(
+        posture,
         &args.runtime_config,
         args.action_id.as_deref(),
         args.after_cursor.as_deref(),
@@ -3840,9 +4192,11 @@ fn proposal_retention_list(
 }
 
 fn proposal_retention_dry_run(
+    posture: DeclaredPosture,
     args: &ProposalRetentionExactArgs,
 ) -> Result<ProposalRetentionDryRunSuccessReport, FailureReport> {
     let outcome = proposal_retention::dry_run(
+        posture,
         &args.runtime_config,
         &args.action_id,
         &args.proposal_id,
@@ -3857,9 +4211,11 @@ fn proposal_retention_dry_run(
 }
 
 fn proposal_retention_erase(
+    posture: DeclaredPosture,
     args: &ProposalRetentionExactArgs,
 ) -> Result<ProposalRetentionEraseSuccessReport, FailureReport> {
     let outcome = proposal_retention::erase(
+        posture,
         &args.runtime_config,
         &args.action_id,
         &args.proposal_id,
@@ -4018,7 +4374,7 @@ fn external_projection_failure(
             "external-projection.migration-authority.refused",
             "external projection maintenance requires the configured migration authority: database.migrationUrlRef must connect as database.roles.migration, without administrative authority, owning the registry schemas",
         ),
-        Error::NotReady => migration(
+        Error::NotReady | Error::PostureMismatch { .. } => migration(
             "external-projection.not-ready",
             "the database is not ready for the active package, or its activation changed after the command opened it. Nothing was changed. Run `bregctl doctor` to name the cause, then rerun the command",
         ),
@@ -4266,7 +4622,7 @@ fn import_authority_failure(
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::RetryAfterMigrationLockReleases,
         ),
-        ImportAuthorityCliError::Authority(ImportAuthorityError::Unavailable) => (
+        ImportAuthorityCliError::Authority(ImportAuthorityError::Unavailable | ImportAuthorityError::PostureMismatch { .. }) => (
             diagnostic(
                 "import-authority.unavailable",
                 "importAuthority",
@@ -4311,7 +4667,7 @@ fn instance_claim_failure(command: &'static str, error: InstanceClaimCliError) -
             DiagnosticArtifact::CommandArguments,
             SuggestedAction::CorrectCommandUsage,
         ),
-        InstanceClaimCliError::Claim(InstanceClaimError::Unavailable) => (
+        InstanceClaimCliError::Claim(InstanceClaimError::Unavailable | InstanceClaimError::PostureMismatch { .. }) => (
             diagnostic(
                 "instance-claim.unavailable",
                 "instanceClaim",
@@ -4371,9 +4727,9 @@ fn write_instance_claim_status(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
+    let result = if format.is_json() {
         let body = json!({"ok": true, "command": "instance-claim status", "instanceClaim": status});
-        write_ctl_report(&mut *stdout, &body)
+        write_ctl_report(format, &mut *stdout, &body)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -4411,9 +4767,9 @@ fn write_instance_claim_adoption(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
+    let result = if format.is_json() {
         let body = json!({"ok": true, "command": "instance-claim adopt", "adoption": adoption});
-        write_ctl_report(&mut *stdout, &body)
+        write_ctl_report(format, &mut *stdout, &body)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -4444,14 +4800,14 @@ fn write_import_authority_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
+    let result = if format.is_json() {
         let body = match command {
             "import-authority open" | "import-authority close" => {
                 json!({"ok": true, "command": command, "authority": authorities.first()})
             }
             _ => json!({"ok": true, "command": command, "authorities": authorities}),
         };
-        write_ctl_report(&mut *stdout, &body)
+        write_ctl_report(format, &mut *stdout, &body)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -4508,7 +4864,10 @@ fn import_authority_pairs(
     pairs
 }
 
-fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, FailureReport> {
+fn history_erase(
+    posture: DeclaredPosture,
+    args: &HistoryEraseArgs,
+) -> Result<HistoryEraseSuccessReport, FailureReport> {
     if !args.acknowledge_irreversible {
         return Err(FailureReport {
             ok: false,
@@ -4524,10 +4883,13 @@ fn history_erase(args: &HistoryEraseArgs) -> Result<HistoryEraseSuccessReport, F
             )],
         });
     }
-    let outcome = history_erasure_lifecycle::run(HistoryErasureLifecycleRequest {
-        runtime_config: &args.runtime_config,
-        request_file: &args.request_file,
-    })
+    let outcome = history_erasure_lifecycle::run(
+        posture,
+        HistoryErasureLifecycleRequest {
+            runtime_config: &args.runtime_config,
+            request_file: &args.request_file,
+        },
+    )
     .map_err(history_erasure_lifecycle_failure)?;
     Ok(HistoryEraseSuccessReport {
         ok: true,
@@ -4667,12 +5029,16 @@ fn history_erasure_lifecycle_failure(error: HistoryErasureLifecycleError) -> Fai
 }
 
 fn history_rebaseline(
+    posture: DeclaredPosture,
     args: &HistoryRebaselineArgs,
 ) -> Result<HistoryRebaselineSuccessReport, FailureReport> {
-    let outcome = history_rebaseline_lifecycle::run(HistoryRebaselineLifecycleRequest {
-        runtime_config: &args.runtime_config,
-        request_file: &args.request_file,
-    })
+    let outcome = history_rebaseline_lifecycle::run(
+        posture,
+        HistoryRebaselineLifecycleRequest {
+            runtime_config: &args.runtime_config,
+            request_file: &args.request_file,
+        },
+    )
     .map_err(history_rebaseline_lifecycle_failure)?;
     Ok(HistoryRebaselineSuccessReport {
         ok: true,
@@ -4829,14 +5195,17 @@ fn history_rebaseline_lifecycle_failure(error: HistoryRebaselineLifecycleError) 
 }
 
 fn field_encryption_preflight(
+    posture: DeclaredPosture,
     args: &FieldEncryptionPreflightArgs,
 ) -> Result<FieldEncryptionPreflightSuccessReport, FailureReport> {
-    let outcome =
-        field_encryption_lifecycle::run_preflight(FieldEncryptionPreflightLifecycleRequest {
+    let outcome = field_encryption_lifecycle::run_preflight(
+        posture,
+        FieldEncryptionPreflightLifecycleRequest {
             runtime_config: &args.runtime_config,
             package: &args.package,
-        })
-        .map_err(field_encryption_preflight_failure)?;
+        },
+    )
+    .map_err(field_encryption_preflight_failure)?;
     let collisions = field_encryption_preflight_collisions(&outcome.report);
     let row_limits = field_encryption_preflight_row_limits(&outcome.report);
     if !collisions.is_empty() || !row_limits.is_empty() {
@@ -5085,9 +5454,11 @@ fn field_encryption_preflight_failure(
 }
 
 fn field_encryption_erase_history(
+    posture: DeclaredPosture,
     args: &FieldEncryptionEraseHistoryArgs,
 ) -> Result<FieldEncryptionEraseHistorySuccessReport, FailureReport> {
     let outcome = field_encryption_lifecycle::run_erase_history(
+        posture,
         FieldEncryptionEraseHistoryLifecycleRequest {
             runtime_config: &args.runtime_config,
             request_file: &args.request_file,
@@ -5349,8 +5720,11 @@ fn hook_sample(args: &HookSampleArgs) -> Result<HookSampleSuccessReport, Failure
     })
 }
 
-fn hook_list(args: &HookListArgs) -> Result<HookListSuccessReport, FailureReport> {
-    let outcome = hook_lifecycle::list(&args.runtime_config, args.limit)
+fn hook_list(
+    posture: DeclaredPosture,
+    args: &HookListArgs,
+) -> Result<HookListSuccessReport, FailureReport> {
+    let outcome = hook_lifecycle::list(posture, &args.runtime_config, args.limit)
         .map_err(|error| hook_lifecycle_failure("hook list", error))?;
     Ok(HookListSuccessReport {
         ok: true,
@@ -5359,8 +5733,12 @@ fn hook_list(args: &HookListArgs) -> Result<HookListSuccessReport, FailureReport
     })
 }
 
-fn hook_drain(args: &HookDrainArgs) -> Result<HookDrainSuccessReport, FailureReport> {
+fn hook_drain(
+    posture: DeclaredPosture,
+    args: &HookDrainArgs,
+) -> Result<HookDrainSuccessReport, FailureReport> {
     let outcome = hook_lifecycle::drain(
+        posture,
         &args.runtime_config,
         args.max_attempts,
         args.timeout_seconds,
@@ -5373,8 +5751,12 @@ fn hook_drain(args: &HookDrainArgs) -> Result<HookDrainSuccessReport, FailureRep
     })
 }
 
-fn hook_replay(args: &HookReplayArgs) -> Result<HookReplaySuccessReport, FailureReport> {
+fn hook_replay(
+    posture: DeclaredPosture,
+    args: &HookReplayArgs,
+) -> Result<HookReplaySuccessReport, FailureReport> {
     let outcome = hook_lifecycle::replay(
+        posture,
         &args.runtime_config,
         &args.event_id,
         &args.delivery_id,
@@ -5388,8 +5770,12 @@ fn hook_replay(args: &HookReplayArgs) -> Result<HookReplaySuccessReport, Failure
     })
 }
 
-fn hook_discard(args: &HookDiscardArgs) -> Result<HookDiscardSuccessReport, FailureReport> {
+fn hook_discard(
+    posture: DeclaredPosture,
+    args: &HookDiscardArgs,
+) -> Result<HookDiscardSuccessReport, FailureReport> {
     let outcome = hook_lifecycle::discard(
+        posture,
         &args.runtime_config,
         &args.event_id,
         &args.delivery_id,
@@ -5535,18 +5921,24 @@ fn data_import(args: &DataImportArgs) -> Result<DataImportSuccessReport, Refusal
     })
 }
 
-fn data_export(args: &DataExportArgs) -> Result<DataExportSuccessReport, Refusal> {
-    let outcome = data_lifecycle::run_export(DataExportRequest {
-        package: &args.package,
-        breg_url: &args.breg_url,
-        access_token_file: &args.access_token_file,
-        entity: &args.entity,
-        profile: &args.profile,
-        fields: &args.fields,
-        output: &args.output,
-        checkpoint: &args.checkpoint,
-        max_pages: args.max_pages,
-    })
+fn data_export(
+    posture: DeclaredPosture,
+    args: &DataExportArgs,
+) -> Result<DataExportSuccessReport, Refusal> {
+    let outcome = data_lifecycle::run_export(
+        posture,
+        DataExportRequest {
+            package: &args.package,
+            breg_url: &args.breg_url,
+            access_token_file: &args.access_token_file,
+            entity: &args.entity,
+            profile: &args.profile,
+            fields: &args.fields,
+            output: &args.output,
+            checkpoint: &args.checkpoint,
+            max_pages: args.max_pages,
+        },
+    )
     .map_err(|error| data_lifecycle_refusal("data export", "data.export", error))?;
     Ok(DataExportSuccessReport {
         ok: true,
@@ -6004,7 +6396,7 @@ fn data_lifecycle_failure(
     }
 }
 
-fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
+fn diff(posture: DeclaredPosture, args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
     let (candidate, candidate_source) =
         compile_with_source(&args.project, ProfileArg::Authoring, "diff")?;
     let (baseline_registry, baseline_revision, baseline_assurance) =
@@ -6017,6 +6409,7 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
                 // packaged migration baseline, the schema the successor plan
                 // runs over.
                 let (predecessor, registry) = inspect_runtime_predecessor_rehearsal_baseline(
+                    posture,
                     runtime_path,
                 )
                 .map_err(|error| match error {
@@ -6103,12 +6496,8 @@ fn diff(args: &DiffArgs) -> Result<DiffSuccessReport, FailureReport> {
     })
 }
 
-/// Build a package from a schema-tested candidate. A `deployment` package
-/// also applies the refusals for identity a deployable package must not
-/// carry; native local owners (`bregctl dev` and `rstack dev`), packaging for
-/// their own loopback sessions, pass `false`. The command line reaches that
-/// mode only through the hidden `bregctl package --local`.
-fn package(args: &PackageArgs, deployment: bool) -> Result<PackageSuccessReport, Refusal> {
+/// Build a package from a schema-tested candidate under the declared posture.
+fn package(args: &PackageArgs, posture: DeclaredPosture) -> Result<PackageSuccessReport, Refusal> {
     // The receipt names the fingerprint its rehearsal reached, so an operator who
     // does not restate it still packages against that exact managed catalogue.
     let schema_fingerprint = match &args.schema_fingerprint {
@@ -6116,7 +6505,11 @@ fn package(args: &PackageArgs, deployment: bool) -> Result<PackageSuccessReport,
         None => package_lifecycle::receipt_schema_fingerprint(&args.test_receipt)
             .map_err(|error| package_lifecycle_refusal(error, &args.candidate.project))?,
     };
-    let prepared = prepare_candidate(&args.candidate, schema_fingerprint, "package", deployment)?;
+    let mut candidate = capture_candidate(&args.candidate, "package", false, Some(posture))?;
+    let diagnostics = std::mem::take(&mut candidate.posture_diagnostics);
+    let prepared = candidate
+        .prepare(schema_fingerprint)
+        .map_err(|error| candidate_package_error("package", error))?;
     let receipt = package_lifecycle::validate_test_receipt(
         &args.test_receipt,
         &prepared,
@@ -6133,6 +6526,7 @@ fn package(args: &PackageArgs, deployment: bool) -> Result<PackageSuccessReport,
         registry_revision: outcome.registry_revision,
         package_files: outcome.package_files,
         revision: outcome.revision,
+        diagnostics,
     })
 }
 
@@ -6154,18 +6548,21 @@ fn package_lifecycle_refusal(error: PackageLifecycleError, project: &Path) -> Re
     }
 }
 
-fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
+fn test(posture: DeclaredPosture, args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
     let (Some(credentials), Some(output)) = (&args.credentials, &args.output) else {
         unreachable!("clap requires --credentials and --output unless --fingerprint-only is set")
     };
     let output = test_lifecycle::preflight_output(output).map_err(test_lifecycle_failure)?;
-    let candidate = capture_candidate(&args.candidate, "test", true, false)?;
-    let outcome = match test_lifecycle::run(TestLifecycleRequest {
-        candidate,
-        runtime_config: &args.runtime_config,
-        credentials,
-        output,
-    }) {
+    let candidate = capture_candidate(&args.candidate, "test", true, None)?;
+    let outcome = match test_lifecycle::run(
+        posture,
+        TestLifecycleRequest {
+            candidate,
+            runtime_config: &args.runtime_config,
+            credentials,
+            output,
+        },
+    ) {
         Ok(outcome) => outcome,
         Err(TestLifecycleError::JourneyDocument(report)) => {
             return Err(Refusal::Document(DocumentRefusal {
@@ -6206,10 +6603,13 @@ fn test(args: &TestArgs) -> Result<SchemaTestSuccessReport, Refusal> {
 
 /// Measure the fresh-install schema fingerprint a reviewed migration declares
 /// as its target, without the fixture run or receipt of a full schema test.
-fn measure_schema_fingerprint(args: &TestArgs) -> Result<SchemaFingerprintReport, Refusal> {
-    let candidate = capture_candidate(&args.candidate, "test", false, false)?;
-    let measurement =
-        test_lifecycle::measure(candidate, &args.runtime_config).map_err(test_lifecycle_failure)?;
+fn measure_schema_fingerprint(
+    posture: DeclaredPosture,
+    args: &TestArgs,
+) -> Result<SchemaFingerprintReport, Refusal> {
+    let candidate = capture_candidate(&args.candidate, "test", false, None)?;
+    let measurement = test_lifecycle::measure(posture, candidate, &args.runtime_config)
+        .map_err(test_lifecycle_failure)?;
     Ok(SchemaFingerprintReport {
         ok: true,
         command: "test",
@@ -6274,24 +6674,13 @@ fn capture_rehearsal_baseline(
     })
 }
 
-fn prepare_candidate(
-    args: &PackageCandidateArgs,
-    schema_fingerprint: String,
-    command: &'static str,
-    deployment: bool,
-) -> Result<PreparedPackage, Refusal> {
-    capture_candidate(args, command, false, deployment)?
-        .prepare(schema_fingerprint)
-        .map_err(|error| candidate_package_error(command, error).into())
-}
-
-/// Capture and compile the candidate project. A `deployment` capture also
-/// applies the refusals for identity a deployable package must not carry.
+/// Capture and compile the candidate project. Packaging checks the project
+/// identity against the declared posture.
 fn capture_candidate(
     args: &PackageCandidateArgs,
     command: &'static str,
     rehearse_successor: bool,
-    deployment: bool,
+    package_posture: Option<DeclaredPosture>,
 ) -> Result<CapturedPackageCandidate, Refusal> {
     let capture_failure = |diagnostic| {
         source_failure(
@@ -6304,9 +6693,16 @@ fn capture_candidate(
     let selected_project = canonicalize_project_path(&args.project).map_err(&capture_failure)?;
     let source = capture_resolved_project_source(&selected_project).map_err(capture_failure)?;
     let compiled = compile_captured_project(&source, ProfileArg::Production, command)?;
-    if deployment {
-        refuse_deployment_identity(&source, command)?;
-    }
+    let posture_diagnostics = if let Some(declared) = package_posture {
+        if declared.posture == Posture::Production {
+            refuse_deployment_identity(&source, command)?;
+        }
+        let mut report = registry_platform_config::PostureReport::new(declared);
+        registry_breg::compiler::record_project_posture(&mut report, &source.project);
+        report.diagnostics(&selected_project.join("registry.yaml"))
+    } else {
+        Vec::new()
+    };
     let identity = compiled.package().ok_or_else(|| {
         candidate_failure(
             command,
@@ -6459,6 +6855,7 @@ fn capture_candidate(
         None => (None, PackageMigrationPlanInput::InitialCompiledDdl),
     };
     let candidate = CapturedPackageCandidate {
+        posture_diagnostics,
         compiled,
         from_package_digest,
         compiler_source_revision,
@@ -6541,15 +6938,18 @@ fn reviewed_plan_refusal(error: PackageError, reviewed_changes: &str) -> (&'stat
     (code, message)
 }
 
-fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, Refusal> {
-    let outcome = apply_lifecycle::run(ApplyLifecycleRequest {
-        runtime_config: &args.runtime_config,
-        package: &args.package,
-        initial: args.initial,
-        backups: &args.backups,
-        operator_reference: args.operator_reference.as_deref(),
-        expected_digest: args.expected_digest.as_deref(),
-    })
+fn apply(posture: DeclaredPosture, args: &ApplyArgs) -> Result<ApplySuccessReport, Refusal> {
+    let outcome = apply_lifecycle::run(
+        posture,
+        ApplyLifecycleRequest {
+            runtime_config: &args.runtime_config,
+            package: &args.package,
+            initial: args.initial,
+            backups: &args.backups,
+            operator_reference: args.operator_reference.as_deref(),
+            expected_digest: args.expected_digest.as_deref(),
+        },
+    )
     .map_err(|error| lifecycle_refusal("apply", error))?;
     Ok(ApplySuccessReport {
         ok: true,
@@ -6568,27 +6968,32 @@ fn apply(args: &ApplyArgs) -> Result<ApplySuccessReport, Refusal> {
 /// Runs the shared `provision` command, which writes its own report and sets
 /// its own exit code. The global `--format` selects its report as it selects
 /// every other command's.
-fn provision(args: &ProvisionCommand, format: OutputFormat) -> ExitCode {
+fn provision(posture: DeclaredPosture, args: &ProvisionCommand, format: OutputFormat) -> ExitCode {
     let shared = match format {
         OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
-        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+        OutputFormat::Json | OutputFormat::JsonWithPosture(_) => {
+            registry_platform_provision::cli::OutputFormat::Json
+        }
     };
     registry_platform_provision::run_provision(
         "bregctl",
         registry_platform_buildinfo::DISPLAY_VERSION,
         &args.shared,
         shared,
-        |runtime_config| provision::load(runtime_config, args.package.as_deref()),
+        |runtime_config| provision::load(posture, runtime_config, args.package.as_deref()),
     )
 }
 
-fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, Refusal> {
-    let outcome = apply_lifecycle::plan(PlanLifecycleRequest {
-        runtime_config: &args.runtime_config,
-        package: &args.package,
-        backups: &args.backups,
-        expected_digest: args.expected_digest.as_deref(),
-    })
+fn plan(posture: DeclaredPosture, args: &PlanArgs) -> Result<PlanSuccessReport, Refusal> {
+    let outcome = apply_lifecycle::plan(
+        posture,
+        PlanLifecycleRequest {
+            runtime_config: &args.runtime_config,
+            package: &args.package,
+            backups: &args.backups,
+            expected_digest: args.expected_digest.as_deref(),
+        },
+    )
     .map_err(|error| lifecycle_refusal("plan", error))?;
     Ok(PlanSuccessReport {
         ok: true,
@@ -6612,14 +7017,24 @@ fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, Refusal> {
     })
 }
 
-fn status(args: &StatusArgs) -> Result<StatusSuccessReport, FailureReport> {
-    let status = apply_lifecycle::status(&args.runtime_config)
+fn status(
+    posture: DeclaredPosture,
+    args: &StatusArgs,
+) -> Result<StatusSuccessReport, FailureReport> {
+    let status = apply_lifecycle::status(posture, &args.runtime_config)
         .map_err(status_lifecycle_failure)?
         .ok_or_else(|| status_lifecycle_failure(ApplyLifecycleError::Uninitialized))?;
     let active = status.active_entry().cloned();
+    let diagnostics = active
+        .as_ref()
+        .filter(|entry| entry.posture != posture.posture)
+        .map(|entry| activation_posture_finding(entry.posture))
+        .into_iter()
+        .collect();
     Ok(StatusSuccessReport {
         ok: true,
         command: "status",
+        diagnostics,
         package_id: status.identity.package_id,
         database_id: status.identity.database_id,
         active_package_digest: status.identity.package_digest,
@@ -7296,7 +7711,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
         ApplyLifecycleError::TargetPackage(PackageError::DeploymentIdentity) => (
             "apply.package.deployment-identity-refused",
             "package",
-            "the activation package carries a local-only identity; replace canonicalBaseIri, rerun schema-test, and rebuild the deployment package. Nothing was changed",
+            "breg.posture.placeholder-identity: replace canonicalBaseIri, rerun schema-test, and rebuild the production package. For development, start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development. Nothing was changed",
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::CorrectPackageBuild,
         ),
@@ -7355,13 +7770,6 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             "apply.field-encryption.configuration-refused",
             "fieldEncryption.provider",
             "the field-encryption key provider is required and must resolve for this package",
-            DiagnosticArtifact::RuntimeConfiguration,
-            SuggestedAction::CorrectRuntimeConfiguration,
-        ),
-        ApplyLifecycleError::FieldEncryptionCustody => (
-            "apply.field-encryption.custody-refused",
-            "fieldEncryption.provider",
-            "a local-file field-encryption key is allowed only for local database initialization",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
@@ -7549,6 +7957,23 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 DiagnosticArtifact::VerifiedPackage,
                 SuggestedAction::CorrectPackageBuild,
             ),
+            registry_breg::migration::MigrationError::PostureMismatch { recorded, .. } => {
+                let mut failure = source_failure(
+                    command,
+                    diagnostic(
+                        registry_breg::migration::POSTURE_MISMATCH_CODE,
+                        "database",
+                        registry_breg::migration::posture_mismatch_message(recorded),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::PostureRecovery(registry_breg::migration::posture_mismatch_action(recorded)),
+                );
+                failure.diagnostics[0].related.push(ToolRelatedDiagnostic {
+                    file: None, line: None, column: None, path: "database".to_owned(),
+                    message: registry_breg::migration::posture_mismatch_action(recorded).to_owned(),
+                });
+                return failure;
+            }
             registry_breg::migration::MigrationError::PackageBinding => (
                 "apply.package.refused",
                 "package",
@@ -7908,8 +8333,11 @@ fn candidate_artifact(command: &'static str) -> DiagnosticArtifact {
     }
 }
 
-fn verify(args: &VerifyArgs) -> Result<VerifySuccessReport, FailureReport> {
-    let inspected = inspect_runtime_package(&args.runtime_config)
+fn verify(
+    posture: DeclaredPosture,
+    args: &VerifyArgs,
+) -> Result<VerifySuccessReport, FailureReport> {
+    let inspected = inspect_runtime_package(posture, &args.runtime_config)
         .map_err(|error| inspection_failure("verify", "verify", error))?;
     let registry = inspected.registry();
     Ok(VerifySuccessReport {
@@ -7936,9 +8364,10 @@ fn verify(args: &VerifyArgs) -> Result<VerifySuccessReport, FailureReport> {
 }
 
 fn migration_explain(
+    posture: DeclaredPosture,
     args: &MigrationExplainArgs,
 ) -> Result<MigrationExplainSuccessReport, FailureReport> {
-    let inspected = inspect_runtime_package(&args.runtime_config)
+    let inspected = inspect_runtime_package(posture, &args.runtime_config)
         .map_err(|error| inspection_failure("migration explain", "migration.explain", error))?;
     Ok(MigrationExplainSuccessReport {
         ok: true,
@@ -7949,15 +8378,21 @@ fn migration_explain(
     })
 }
 
-fn migration_draft(args: &MigrationDraftArgs) -> Result<MigrationDraftSuccessReport, Refusal> {
-    let drafted = migration_draft::run(&migration_draft::DraftRequest {
-        project: &args.project,
-        baseline_package: &args.baseline_package,
-        runtime_config: &args.runtime_config,
-        output: &args.output,
-        module: &args.module,
-        id: &args.id,
-    })?;
+fn migration_draft(
+    posture: DeclaredPosture,
+    args: &MigrationDraftArgs,
+) -> Result<MigrationDraftSuccessReport, Refusal> {
+    let drafted = migration_draft::run(
+        posture,
+        &migration_draft::DraftRequest {
+            project: &args.project,
+            baseline_package: &args.baseline_package,
+            runtime_config: &args.runtime_config,
+            output: &args.output,
+            module: &args.module,
+            id: &args.id,
+        },
+    )?;
     Ok(MigrationDraftSuccessReport {
         ok: true,
         command: migration_draft::COMMAND,
@@ -7972,14 +8407,18 @@ fn migration_draft(args: &MigrationDraftArgs) -> Result<MigrationDraftSuccessRep
 }
 
 fn migration_reconcile(
+    posture: DeclaredPosture,
     args: &MigrationReconcileArgs,
 ) -> Result<MigrationReconcileSuccessReport, FailureReport> {
-    let outcome = reconcile_lifecycle::run(ReconcileLifecycleRequest {
-        runtime_config: &args.runtime_config,
-        package: &args.package,
-        operator_reference: &args.operator_reference,
-        execute: args.execute,
-    })
+    let outcome = reconcile_lifecycle::run(
+        posture,
+        ReconcileLifecycleRequest {
+            runtime_config: &args.runtime_config,
+            package: &args.package,
+            operator_reference: &args.operator_reference,
+            execute: args.execute,
+        },
+    )
     .map_err(reconcile_lifecycle_failure)?;
     migration_reconcile_report(outcome)
 }
@@ -8146,7 +8585,7 @@ fn reconcile_lifecycle_failure(error: ReconcileLifecycleError) -> FailureReport 
                     SuggestedAction::RestorePreActivationBackup,
                 ),
             },
-            ReconcileError::Unavailable => (
+            ReconcileError::Unavailable | ReconcileError::PostureMismatch { .. } => (
                 "migration.reconcile.unavailable",
                 "database",
                 "the Registry migration state is unavailable",
@@ -8944,15 +9383,18 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
     })
 }
 
-fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
+fn generate_requested(
+    posture: DeclaredPosture,
+    args: &GenerateArgs,
+) -> Result<SuccessReport, FailureReport> {
     if args.artifact == ArtifactSelector::Odrl {
         return generate_odrl(args);
     }
     if args.artifact == ArtifactSelector::IdentityFacts {
-        return generate_identity_facts(args);
+        return generate_identity_facts(posture, args);
     }
     if args.artifact == ArtifactSelector::ExternalSourceFacts {
-        return generate_external_source_facts(args);
+        return generate_external_source_facts(posture, args);
     }
     if args.runtime_config.is_some() {
         return Err(source_failure(
@@ -9065,7 +9507,10 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
 
 /// Verify the operator's pinned packs and checked bindings without acquiring
 /// records, and export only logical capabilities and configuration digests.
-fn generate_external_source_facts(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
+fn generate_external_source_facts(
+    posture: DeclaredPosture,
+    args: &GenerateArgs,
+) -> Result<SuccessReport, FailureReport> {
     let fail = |code: &str, message: &str, artifact, action| {
         source_failure(
             "generate",
@@ -9120,7 +9565,7 @@ fn generate_external_source_facts(args: &GenerateArgs) -> Result<SuccessReport, 
             SuggestedAction::RetryArtifactGeneration,
         )
     };
-    let config = registry_breg::runtime_config::load_runtime_config(runtime_path)
+    let config = registry_breg::runtime_config::load_runtime_config(runtime_path, posture)
         .map_err(|error| runtime_config_failure("generate", error))?;
     let profile = profile(args.production);
     let (compiled, project) = compile_with_source(&args.project, profile, "generate")?;
@@ -9214,7 +9659,10 @@ fn generate_external_source_facts(args: &GenerateArgs) -> Result<SuccessReport, 
 /// Write the identity facts of the registry project and runtime configuration.
 /// The report names the output file and counts; it carries no value read from
 /// either input.
-fn generate_identity_facts(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
+fn generate_identity_facts(
+    posture: DeclaredPosture,
+    args: &GenerateArgs,
+) -> Result<SuccessReport, FailureReport> {
     let fail = |code: &str, message: &str, artifact, action| FailureReport {
         ok: false,
         command: "generate",
@@ -9266,7 +9714,7 @@ fn generate_identity_facts(args: &GenerateArgs) -> Result<SuccessReport, Failure
             SuggestedAction::CorrectCommandUsage,
         ));
     }
-    let config = registry_breg::runtime_config::load_runtime_config(runtime_config)
+    let config = registry_breg::runtime_config::load_runtime_config(runtime_config, posture)
         .map_err(|error| runtime_config_failure("generate", error))?;
     let profile = profile(args.production);
     let (compiled, source) = compile_with_source(&args.project, profile, "generate")?;
@@ -9836,7 +10284,10 @@ fn refuse_deployment_identity(
     source: &CapturedProjectSource,
     command: &'static str,
 ) -> Result<(), FailureReport> {
-    let diagnostics = registry_breg::compiler::deployment_diagnostics(&source.project);
+    let mut diagnostics = registry_breg::compiler::deployment_diagnostics(&source.project);
+    for diagnostic in &mut diagnostics {
+        diagnostic.message.push_str(". Replace canonicalBaseIri, start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.");
+    }
     if diagnostics.is_empty() {
         return Ok(());
     }
@@ -12407,8 +12858,8 @@ fn write_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -12429,7 +12880,7 @@ fn write_action_test_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
+    let result = if format.is_json() {
         serde_json::to_value(report)
             .map_err(io::Error::other)
             .and_then(|value| canonicalize_json(&value).map_err(io::Error::other))
@@ -13181,8 +13632,8 @@ fn write_examples_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    if format == OutputFormat::Json {
-        let result = write_ctl_report(&mut *stdout, report)
+    if format.is_json() {
+        let result = write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout));
         return write_result(result, stderr);
@@ -13272,8 +13723,8 @@ fn write_dev_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13374,7 +13825,6 @@ fn write_dev_success(
 fn write_doctor_success(
     advisories: &[registry_breg::postgres::BaselineAdvisory],
     role_mode: registry_breg::postgres::RoleMode,
-    insecure_http_warning: Option<&'static str>,
     unbound_review_authorities: &[String],
     unavailable_external_projections: &BTreeMap<String, String>,
     external_projections: &[registry_breg::startup::ExternalProjectionStatus],
@@ -13396,14 +13846,6 @@ fn write_doctor_success(
             observed: ObservedNumbers(advisory.observed()),
         })
         .collect::<Vec<_>>();
-    if let Some(message) = insecure_http_warning {
-        doctor_advisories.push(DoctorAdvisory {
-            code: "authentication.insecure-http".to_owned(),
-            severity: "warning",
-            message,
-            observed: ObservedNumbers(&[]),
-        });
-    }
     for message in &review_messages {
         doctor_advisories.push(DoctorAdvisory {
             code: "proposal.submit.review-authority-unbound".to_owned(),
@@ -13501,8 +13943,8 @@ fn write_doctor_success(
         role_mode: role_mode.as_str(),
         advisories: doctor_advisories,
     };
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, &report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, &report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13628,8 +14070,8 @@ fn write_field_encryption_keygen_success(
         command: "field-encryption keygen",
         output: &outcome.output.display().to_string(),
     };
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, &report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, &report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13654,8 +14096,8 @@ fn write_field_encryption_preflight_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13749,8 +14191,8 @@ fn write_field_encryption_erase_history_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13894,8 +14336,8 @@ fn write_verify_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13946,8 +14388,8 @@ fn write_package_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -13965,6 +14407,16 @@ fn write_package_success(
             &fields,
             stdout,
         )
+        .and_then(|()| {
+            for diagnostic in &report.diagnostics {
+                writeln!(
+                    stderr,
+                    "warning[{}]: {}",
+                    diagnostic.code, diagnostic.message
+                )?;
+            }
+            Ok(())
+        })
     };
     write_result(result, stderr)
 }
@@ -13975,8 +14427,8 @@ fn write_schema_test_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14009,8 +14461,8 @@ fn write_schema_fingerprint(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14033,8 +14485,8 @@ fn write_apply_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14072,8 +14524,8 @@ fn write_plan_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14216,19 +14668,62 @@ fn push_timer_activation_previews(previews: &[TimerActivationPreview], lines: &m
     }
 }
 
+fn activation_posture_finding(recorded: Posture) -> registry_platform_yaml::Diagnostic {
+    use registry_breg::migration::{
+        posture_mismatch_action, posture_mismatch_message, POSTURE_MISMATCH_CODE,
+    };
+    registry_platform_yaml::Diagnostic::warning(
+        POSTURE_MISMATCH_CODE,
+        "database",
+        posture_mismatch_message(recorded),
+        posture_mismatch_action(recorded),
+    )
+}
+
+fn write_doctor_posture_finding(
+    recorded: Posture,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let finding = activation_posture_finding(recorded);
+    let result = if format.is_json() {
+        write_ctl_report(
+            format,
+            &mut *stdout,
+            &json!({
+                "ok": true, "command": "doctor", "diagnostics": [finding],
+            }),
+        )
+        .map_err(io::Error::other)
+        .and_then(|()| writeln!(stdout))
+    } else {
+        writeln!(
+            stdout,
+            "{}",
+            registry_platform_yaml::Report::new(vec![finding]).render_human()
+        )
+    };
+    write_result(result, stderr)
+}
+
 fn write_status_success(
     report: &StatusSuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
         let lead = if report.maintenance_status == "ready" {
-            "The database runs its active package and is ready.".to_owned()
+            if report.diagnostics.is_empty() {
+                "The database runs its active package and is ready.".to_owned()
+            } else {
+                "The database reports an active package.".to_owned()
+            }
         } else {
             format!(
                 "The database is in maintenance: an activation it pinned is {}. Retry the same `bregctl apply --package DIR`, or assess it with `bregctl migration reconcile`.",
@@ -14276,7 +14771,17 @@ fn write_status_success(
             }
             lines.pairs_at(1, &fields);
         }
-        stdout.write_all(lines.finish().as_bytes())
+        stdout.write_all(lines.finish().as_bytes()).and_then(|()| {
+            if report.diagnostics.is_empty() {
+                Ok(())
+            } else {
+                writeln!(
+                    stdout,
+                    "{}",
+                    registry_platform_yaml::Report::new(report.diagnostics.clone()).render_human()
+                )
+            }
+        })
     };
     write_result(result, stderr)
 }
@@ -14297,8 +14802,8 @@ fn write_migration_explain_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14319,8 +14824,8 @@ fn write_migration_draft_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14371,8 +14876,8 @@ fn write_migration_reconcile_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14456,8 +14961,8 @@ fn write_history_erase_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14540,8 +15045,8 @@ fn write_history_rebaseline_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14599,8 +15104,8 @@ fn write_data_validate_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14638,8 +15143,8 @@ fn write_data_import_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14681,8 +15186,8 @@ fn write_data_export_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14719,8 +15224,8 @@ fn write_data_run_list_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14775,8 +15280,8 @@ fn write_data_run_cancel_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14804,8 +15309,8 @@ fn write_statistics_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14857,8 +15362,8 @@ fn write_hook_sample_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14892,8 +15397,8 @@ fn write_hook_list_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14928,8 +15433,8 @@ fn write_hook_drain_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14969,8 +15474,8 @@ fn write_hook_replay_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -14993,8 +15498,8 @@ fn write_hook_discard_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -15017,8 +15522,8 @@ fn write_proposal_retention_list_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -15057,8 +15562,8 @@ fn write_proposal_retention_dry_run_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -15102,8 +15607,8 @@ fn write_attachment_cleanup_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -15131,8 +15636,8 @@ fn write_proposal_retention_erase_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -15164,8 +15669,8 @@ fn write_review_recovery_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -15337,8 +15842,8 @@ fn write_diff_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
-        write_ctl_report(&mut *stdout, report)
+    let result = if format.is_json() {
+        write_ctl_report(format, &mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -15427,9 +15932,10 @@ fn write_document_failure(
         DOMAIN_REFUSAL_EXIT
     };
     let status = registry_cli_report::Status::from_exit(exit).as_str();
-    let result = if format == OutputFormat::Json {
+    let result = if format.is_json() {
         let written = if refusal.command == "explain" {
             write_ctl_report(
+                format,
                 &mut *stdout,
                 &DocumentFailureReport {
                     ok: false,
@@ -15440,6 +15946,7 @@ fn write_document_failure(
             )
         } else {
             write_ctl_report(
+                format,
                 &mut *stdout,
                 &DocumentFailureReport {
                     ok: false,
@@ -15501,12 +16008,12 @@ fn write_failure_with_exit(
     stderr: &mut dyn Write,
     exit: u8,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
+    let result = if format.is_json() {
         serde_json::to_value(report)
             .map_err(io::Error::other)
             .and_then(|mut value| {
                 value["status"] = json!(registry_cli_report::Status::from_exit(exit).as_str());
-                write_ctl_report(&mut *stdout, &value).map_err(io::Error::other)
+                write_ctl_report(format, &mut *stdout, &value).map_err(io::Error::other)
             })
             .and_then(|()| writeln!(stdout))
     } else {
@@ -17781,7 +18288,7 @@ mod tests {
             let mut stderr = Vec::new();
 
             assert_eq!(
-                write_doctor_success(&[], RoleMode::Split, None, &[], &BTreeMap::new(), &[], &[], &[], format, &mut stdout, &mut stderr),
+                write_doctor_success(&[], RoleMode::Split, &[], &BTreeMap::new(), &[], &[], &[], format, &mut stdout, &mut stderr),
                 ExitCode::SUCCESS
             );
             assert_eq!(
@@ -17800,7 +18307,6 @@ mod tests {
             write_doctor_success(
                 &[],
                 RoleMode::Single,
-                None,
                 &[],
                 &BTreeMap::new(),
                 &[],
@@ -17828,7 +18334,6 @@ mod tests {
             write_doctor_success(
                 &[],
                 RoleMode::Single,
-                None,
                 &[],
                 &BTreeMap::new(),
                 &[],
@@ -17865,7 +18370,6 @@ mod tests {
             write_doctor_success(
                 &advisories,
                 RoleMode::Split,
-                None,
                 &[],
                 &BTreeMap::new(),
                 &[],
@@ -17908,7 +18412,6 @@ mod tests {
             write_doctor_success(
                 &advisories,
                 RoleMode::Split,
-                None,
                 &[],
                 &BTreeMap::new(),
                 &[],
@@ -17969,7 +18472,6 @@ mod tests {
                 write_doctor_success(
                     &[],
                     RoleMode::Split,
-                    None,
                     &["local-review".into()],
                     &BTreeMap::new(),
                     &[],
@@ -17991,7 +18493,7 @@ mod tests {
             ] {
                 assert!(text.contains(expected), "{text}");
             }
-            if format == OutputFormat::Json {
+            if format.is_json() {
                 let report: Value = serde_json::from_slice(&stdout).unwrap();
                 assert_eq!(report["ok"], true);
                 assert_eq!(report["advisories"][0]["severity"], "warning");
@@ -18012,7 +18514,6 @@ mod tests {
                 write_doctor_success(
                     &[],
                     RoleMode::Split,
-                    None,
                     &[],
                     &unavailable,
                     &[],
@@ -18037,7 +18538,7 @@ mod tests {
             ] {
                 assert!(text.contains(expected), "{text}");
             }
-            if format == OutputFormat::Json {
+            if format.is_json() {
                 let report: Value = serde_json::from_slice(&stdout).unwrap();
                 assert_eq!(report["ok"], true);
                 assert_eq!(report["advisories"][0]["severity"], "warning");
@@ -18072,7 +18573,6 @@ mod tests {
                 write_doctor_success(
                     &[],
                     RoleMode::Split,
-                    None,
                     &[],
                     &BTreeMap::new(),
                     &projections,
@@ -18096,7 +18596,7 @@ mod tests {
             ] {
                 assert!(text.contains(expected), "{text}");
             }
-            if format == OutputFormat::Json {
+            if format.is_json() {
                 let report: Value = serde_json::from_slice(&stdout).unwrap();
                 assert_eq!(report["ok"], true);
                 let advisories = report["advisories"].as_array().unwrap();
@@ -18142,7 +18642,6 @@ mod tests {
             write_doctor_success(
                 &[],
                 RoleMode::Split,
-                None,
                 &[],
                 &BTreeMap::new(),
                 &[],
@@ -18192,7 +18691,6 @@ mod tests {
             write_doctor_success(
                 &[],
                 RoleMode::Split,
-                None,
                 &[],
                 &BTreeMap::new(),
                 &[],
@@ -18220,34 +18718,28 @@ mod tests {
     }
 
     #[test]
-    fn doctor_reports_the_plain_http_issuer_opt_in_as_a_value_free_advisory() {
-        const WARNING: &str =
-            "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration";
-        for format in [OutputFormat::Human, OutputFormat::Json] {
+    fn doctor_reports_an_activation_posture_mismatch_as_a_finding() {
+        use registry_breg::migration::{posture_mismatch_action, posture_mismatch_message};
+        for recorded in [Posture::Production, Posture::Development] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
-            assert_eq!(
-                write_doctor_success(
-                    &[],
-                    RoleMode::Split,
-                    Some(WARNING),
-                    &[],
-                    &BTreeMap::new(),
-                    &[],
-                    &[],
-                    &[],
-                    format,
-                    &mut stdout,
-                    &mut stderr,
-                ),
-                ExitCode::SUCCESS
+            let exit = write_doctor_posture_finding(
+                recorded,
+                OutputFormat::Json,
+                &mut stdout,
+                &mut stderr,
             );
-            let output = plain(&stdout);
-            assert!(output.contains("authentication.insecure-http"), "{output}");
-            // Human output wraps long messages, so compare whitespace-collapsed text.
-            let unwrapped = output.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(unwrapped.contains(WARNING), "{output}");
-            assert!(!output.contains("identity.example"), "{output}");
+            assert_eq!(exit, ExitCode::SUCCESS);
+            let report: Value = serde_json::from_slice(&stdout).unwrap();
+            assert_eq!(report["status"], "complete");
+            let diagnostic = &report["diagnostics"][0];
+            assert_eq!(diagnostic["code"], "breg.activation.posture-mismatch");
+            assert_eq!(diagnostic["severity"], "warning");
+            assert_eq!(diagnostic["message"], posture_mismatch_message(recorded));
+            assert_eq!(
+                diagnostic["suggestedAction"],
+                posture_mismatch_action(recorded)
+            );
             assert!(stderr.is_empty());
         }
     }
@@ -18577,7 +19069,7 @@ accessProfiles:
             },
             "package",
             false,
-            true,
+            Some(DEFAULT_POSTURE),
         )
         .unwrap_or_else(|_| panic!("capture includes governed journeys through the selected root"));
         assert_eq!(
@@ -18620,9 +19112,11 @@ accessProfiles:
         // unchanged.
         compile(&project, ProfileArg::Production, "dev")
             .unwrap_or_else(|_| panic!("the dev compile accepts the placeholder"));
-        assert!(capture_candidate(&args, "test", false, false).is_ok());
+        assert!(capture_candidate(&args, "test", false, None).is_ok());
 
-        let Err(Refusal::Tool(refused)) = capture_candidate(&args, "package", false, true) else {
+        let Err(Refusal::Tool(refused)) =
+            capture_candidate(&args, "package", false, Some(DEFAULT_POSTURE))
+        else {
             panic!("a deployment capture refuses the placeholder");
         };
         let codes = refused
@@ -18630,7 +19124,7 @@ accessProfiles:
             .iter()
             .map(|diagnostic| diagnostic.code.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(codes, ["breg.registry.canonical-base-iri-reserved"]);
+        assert_eq!(codes, ["breg.posture.placeholder-identity"]);
     }
 
     #[test]
@@ -18638,8 +19132,15 @@ accessProfiles:
         // No command reads runtime.example.yaml, so this is what holds the
         // example to the grammar the runtime accepts.
         let raw = std::str::from_utf8(INIT_RUNTIME_EXAMPLE).expect("the example is UTF-8");
-        registry_breg::runtime_config::parse_runtime_config_with_env(raw, |_| None)
-            .expect("the initialized runtime example parses");
+        registry_breg::runtime_config::parse_runtime_config_with_env(
+            raw,
+            |_| None,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Default,
+            },
+        )
+        .expect("the initialized runtime example parses");
     }
 
     /// Deterministic ancestor-swap regressions for the authoring, module lock,
@@ -19914,32 +20415,22 @@ fn history_maintenance_reports_a_held_migration_lock_as_in_progress() {
 #[cfg(test)]
 #[test]
 fn apply_reports_actionable_field_encryption_provider_failures() {
-    for (error, code, message_fragment) in [
-        (
-            ApplyLifecycleError::FieldEncryptionConfiguration,
-            "apply.field-encryption.configuration-refused",
-            "provider is required",
-        ),
-        (
-            ApplyLifecycleError::FieldEncryptionCustody,
-            "apply.field-encryption.custody-refused",
-            "only for local database initialization",
-        ),
-    ] {
-        let report = apply_lifecycle_failure(error);
-        let diagnostic = &report.diagnostics[0];
-        assert_eq!(diagnostic.code, code);
-        assert_eq!(diagnostic.path, "fieldEncryption.provider");
-        assert_eq!(
-            diagnostic.artifact,
-            DiagnosticArtifact::RuntimeConfiguration
-        );
-        assert_eq!(
-            diagnostic.suggested_action,
-            SuggestedAction::CorrectRuntimeConfiguration
-        );
-        assert!(diagnostic.message.contains(message_fragment));
-    }
+    let report = apply_lifecycle_failure(ApplyLifecycleError::FieldEncryptionConfiguration);
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(
+        diagnostic.code,
+        "apply.field-encryption.configuration-refused"
+    );
+    assert_eq!(diagnostic.path, "fieldEncryption.provider");
+    assert_eq!(
+        diagnostic.artifact,
+        DiagnosticArtifact::RuntimeConfiguration
+    );
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::CorrectRuntimeConfiguration
+    );
+    assert!(diagnostic.message.contains("provider is required"));
 }
 
 #[cfg(test)]

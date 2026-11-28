@@ -377,13 +377,8 @@ fn finish_check_with_acceptances(
     Ok(checked)
 }
 
-pub(super) fn test(project: &Path) -> Result<Value> {
-    let checked = checked_project(
-        project,
-        true,
-        false,
-        registry_scheduling::config::DEFAULT_POSTURE,
-    )?;
+pub(super) fn test(project: &Path, declared: DeclaredPosture) -> Result<Value> {
+    let checked = checked_project(project, true, false, declared)?;
     if checked.fixtures.is_empty() {
         let mut diagnostic = Diagnostic::error(
             NO_FIXTURES_CODE,
@@ -1389,7 +1384,7 @@ mod tests {
     #[test]
     fn test_reports_per_fixture_and_per_case_outcomes_with_the_proof_boundary() {
         let (_root, project) = initialized("standalone-exact-time");
-        let report = test(&project).unwrap();
+        let report = test(&project, registry_scheduling::config::DEFAULT_POSTURE).unwrap();
         assert_eq!(report["command"], "test");
         assert_eq!(report["diagnostics"], json!([]));
         assert_eq!(report["filesChecked"], 5);
@@ -1438,7 +1433,7 @@ mod tests {
             "because: The hall opens on Saturday mornings.",
             "because: \"  \"",
         );
-        let error = test(&project).unwrap_err();
+        let error = test(&project, registry_scheduling::config::DEFAULT_POSTURE).unwrap_err();
         assert_eq!(
             refusals(&project, &error),
             ["scheduling.yaml:46 /openings/hall-hours/because scheduling.project.invalid-because"]
@@ -1489,7 +1484,7 @@ mod tests {
         // calendar refusal abort the whole command: it reports that
         // fixture as failed and names the calendar problem, the same way
         // any other fixture failure is reported.
-        let tested = test(&project).unwrap();
+        let tested = test(&project, registry_scheduling::config::DEFAULT_POSTURE).unwrap();
         let fixture = tested["fixtures"]
             .as_array()
             .unwrap()
@@ -1588,7 +1583,7 @@ mod tests {
         }
         // An empty directory and a missing one are the same authoring gap.
         for _ in 0..2 {
-            let error = test(&project).unwrap_err();
+            let error = test(&project, registry_scheduling::config::DEFAULT_POSTURE).unwrap_err();
             assert_eq!(
                 refusals(&project, &error),
                 ["fixtures  scheduling.fixture.none"]

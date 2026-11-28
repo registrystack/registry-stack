@@ -83,18 +83,20 @@ fn runtime(
     std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let mut config = include_str!("../../../products/breg/examples/minimal/runtime.example.yaml")
         .replace("/var/lib/breg/secrets", root.path().to_str().unwrap())
-        .replace("environment: example", "environment: local")
-        .replace(
-            "databaseInitializationEnvironment: example",
-            "databaseInitializationEnvironment: local",
-        );
+        .replace("environment: example", "environment: local");
     if let Some(port) = port {
-        config.push_str(&format!("\ndestinations:\n  hooks:\n    observer:\n      origin: http://127.0.0.1:{port}/\n      path: /events\n      networkProfile: loopback-development-http\n      dnsFamily: dual-stack-strict\n      allowedPrivateCidrs: []\n      hmacSha256KeyRef: secret:file/observer-key\n      classificationCeiling: internal\n      deliveryCeilings:\n        attemptTimeoutMilliseconds: 1000\n        maximumAttempts: 2\n"));
+        config.push_str(&format!("\ndestinations:\n  hooks:\n    observer:\n      origin: http://127.0.0.1:{port}/\n      path: /events\n      networkProfile: loopback-http\n      dnsFamily: dual-stack-strict\n      allowedPrivateCidrs: []\n      hmacSha256KeyRef: secret:file/observer-key\n      classificationCeiling: internal\n      deliveryCeilings:\n        attemptTimeoutMilliseconds: 1000\n        maximumAttempts: 2\n"));
     }
-    let destinations = registry_breg::runtime_config::parse_runtime_config(&config)
-        .unwrap()
-        .activate_event_destinations(registry)
-        .unwrap();
+    let destinations = registry_breg::runtime_config::parse_runtime_config(
+        &config,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
+    .unwrap()
+    .activate_event_destinations(registry)
+    .unwrap();
     (root, Arc::new(destinations))
 }
 fn audit() -> registry_breg::audit::RegistryAudit {

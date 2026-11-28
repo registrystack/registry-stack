@@ -4,7 +4,7 @@
 
 mod baseline;
 pub(crate) mod cancellation;
-mod catalog;
+pub(crate) mod catalog;
 mod config;
 mod context;
 pub(crate) mod external_label_acquisition;
@@ -41,8 +41,10 @@ pub use catalog::{
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use catalog::{
-    initialize_compiled_registry_state_for_test, initialize_registry_state_for_catalog_test,
-    test_activation_id, test_package_digest, RegistryStateTestIdentity,
+    initialize_compiled_registry_state_for_test,
+    initialize_compiled_registry_state_with_posture_for_test,
+    initialize_registry_state_for_catalog_test, test_activation_id, test_package_digest,
+    RegistryStateTestIdentity,
 };
 pub(crate) use catalog::{
     pre_1_0_attachment_verification_present, registry_state_shape, runtime_grants_missing,

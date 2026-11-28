@@ -30,7 +30,6 @@ def breg_runtime(h, name, package, origin, casework):
             "environment": "acceptance",
             "instanceId": "reviewed-evidence-" + name,
             "databaseId": "reviewed-evidence-" + name,
-            "databaseInitializationEnvironment": "acceptance",
         },
         "package": {"root": str(package)},
         "secretProviders": {"file": {"root": str(h.secret_root)}},

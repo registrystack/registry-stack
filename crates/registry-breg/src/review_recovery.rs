@@ -36,6 +36,10 @@ const OPERATOR_CLOSED: &str = "operator-closed";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReviewRecoveryError {
+    PostureMismatch {
+        recorded: registry_platform_config::Posture,
+        declared: registry_platform_config::Posture,
+    },
     /// Configuration, package, database identity, or lock verification failed.
     Unavailable,
     /// No review or application exists for this exact Proposal version.
@@ -153,11 +157,19 @@ pub struct ReviewRecoveryOperatorService {
 }
 
 impl ReviewRecoveryOperatorService {
-    pub async fn from_runtime_config(path: &Path) -> Result<Self> {
-        ProposalRetentionOperatorService::from_runtime_config(path)
+    pub async fn from_runtime_config(
+        path: &Path,
+        posture: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self> {
+        ProposalRetentionOperatorService::from_runtime_config(path, posture)
             .await
             .map(|verified| Self { verified })
-            .map_err(|_| ReviewRecoveryError::Unavailable)
+            .map_err(|error| match error {
+                ProposalRetentionError::PostureMismatch { recorded, declared } => {
+                    ReviewRecoveryError::PostureMismatch { recorded, declared }
+                }
+                _ => ReviewRecoveryError::Unavailable,
+            })
     }
 
     #[cfg(feature = "postgres-test")]

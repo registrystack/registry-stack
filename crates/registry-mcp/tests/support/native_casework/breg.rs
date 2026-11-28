@@ -129,7 +129,7 @@ impl Breg {
                 "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1",
                 "kind":"BRegRuntimeConfig",
                 "listener":{"bind":address.to_string()},
-                "identity":{"environment":"test","instanceId":"native-staff-proof","databaseId":format!("native-staff-{prefix}"),"databaseInitializationEnvironment":"test"},
+                "identity":{"environment":"test","instanceId":"native-staff-proof","databaseId":format!("native-staff-{prefix}")},
                 "secretProviders":{"file":{"root":root}},
                 "database":{
                     "runtimeUrlRef":format!("secret:file/{prefix}-runtime-url"),

@@ -1402,7 +1402,7 @@ fn event_destinations(
         "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1",
         "kind":"BRegRuntimeConfig",
         "listener":{"bind":"127.0.0.1:8080"},
-        "identity":{"environment":"local", "instanceId":"facility-test", "databaseId":"facility-test", "databaseInitializationEnvironment":"local"},
+        "identity":{"environment":"local", "instanceId":"facility-test", "databaseId":"facility-test"},
         "secretProviders":{"file":{"root":root}},
         "database":{
             "runtimeUrlRef":"secret:file/database-url", "migrationUrlRef":"secret:file/migration-url",
@@ -1427,8 +1427,14 @@ fn event_destinations(
         }}},
         "operationalTimeouts":{"httpRequestMilliseconds":10000,"shutdownGraceMilliseconds":30000,"recordLockMilliseconds":5000,"migrationLockMilliseconds":30000,"migrationStatementMilliseconds":60000}
     });
-    registry_breg::runtime_config::parse_runtime_config(&config.to_string())
-        .expect("normal destination configuration parses")
-        .activate_event_destinations(registry)
-        .expect("exact logical destination activates")
+    registry_breg::runtime_config::parse_runtime_config(
+        &config.to_string(),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("normal destination configuration parses")
+    .activate_event_destinations(registry)
+    .expect("exact logical destination activates")
 }

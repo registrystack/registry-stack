@@ -10,9 +10,11 @@ use registry_platform_audit::{
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    sha256_uri, ConfigBlockError, ConfigBlockErrorKind, MetricsBindError, PackageConfig,
-    PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
+    sha256_uri, ConfigBlockError, ConfigBlockErrorKind, DatabaseTransportError, DeclaredPosture,
+    DevelopmentOnlyRefused, DevelopmentSetting, DevelopmentWitness, FoundSetting,
+    LoadedRuntimeConfig, MetricsBindError, PackageConfig, PackageDigestMismatch, PackageError,
+    PackageErrorKind, PackageLimits, PostureReport, RemovedKey, RuntimeConfigLoader,
+    RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver, SettingOrigin,
     VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
@@ -549,6 +551,37 @@ pub struct OidcConfig {
     pub delegated_staff_readers: Option<BTreeMap<String, DelegatedStaffReaderConfig>>,
 }
 
+static UNRESTRICTED_CLIENTS: DevelopmentSetting = DevelopmentSetting {
+    code: "casework.posture.unrestricted-clients",
+    key: "allowedClients",
+    summary: "every client the issuer admits is accepted",
+    production: "List the clients the deployment admits.",
+};
+
+const ALLOWED_CLIENTS_POINTER: &str = "/authentication/oidc/allowedClients";
+
+fn unrestricted_clients_setting(check: &RuntimeFileCheck<RuntimeConfig>) -> Option<FoundSetting> {
+    let clients = &check.loaded.as_ref()?.config.authentication.oidc.clients;
+    if !clients.allowed_clients.is_empty() {
+        return None;
+    }
+    let source = check
+        .error_at(RUNTIME_CONFIG_KIND, "", ALLOWED_CLIENTS_POINTER, "", "")
+        .source;
+    let position = source.and_then(|source| {
+        Some(registry_platform_yaml::Position {
+            line: source.line?,
+            column: source.column?,
+        })
+    });
+    Some(FoundSetting {
+        setting: &UNRESTRICTED_CLIENTS,
+        pointer: Some(ALLOWED_CLIENTS_POINTER.to_owned()),
+        position,
+        origin: SettingOrigin::Combination,
+    })
+}
+
 fn optional_delegated_staff_readers<'de, D>(
     deserializer: D,
 ) -> Result<Option<BTreeMap<String, DelegatedStaffReaderConfig>>, D::Error>
@@ -753,17 +786,41 @@ impl AuditConfig {
 impl RuntimeConfig {
     /// Load and validate the operator document, reading the authored project
     /// and its package beside it.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
-        let loaded = Self::loader().load::<Self>(path.as_ref())?;
+    pub fn load(
+        path: impl AsRef<Path>,
+        declared: DeclaredPosture,
+    ) -> Result<LoadedRuntimeConfig<Self>, RuntimeConfigError> {
+        let loaded = Self::load_file(path.as_ref(), declared)?;
         loaded.config.check()?;
-        Ok(loaded.config)
+        Ok(loaded)
+    }
+
+    /// Decode and enforce posture before any package or dependency is opened.
+    pub fn load_file(
+        path: &Path,
+        declared: DeclaredPosture,
+    ) -> Result<LoadedRuntimeConfig<Self>, RuntimeConfigError> {
+        // The offline reader with substitutions enabled decodes once under the
+        // same file rules and leaves the decision to the combined report.
+        let mut check = Self::loader(declared).check_offline::<Self>(path, true, stand_in_for);
+        let setting = unrestricted_clients_setting(&check);
+        let Some(mut loaded) = check.loaded.take() else {
+            return Err(RuntimeConfigError::ReadReport(Report::new(
+                check.diagnostics,
+            )));
+        };
+        if let Some(setting) = setting {
+            loaded.posture.record(setting);
+        }
+        loaded.posture.decide(path)?;
+        Ok(loaded)
     }
 
     /// The shared runtime configuration loader under Casework's envelope,
     /// removed keys, and retired apiVersions.
     #[must_use]
-    pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new_without_posture(CASEWORK_RUNTIME_ENVELOPE)
+    pub const fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(CASEWORK_RUNTIME_ENVELOPE, declared)
             .removed_keys(CASEWORK_REMOVED_KEYS)
             .retired_api_versions(CASEWORK_RETIRED_RUNTIME_API_VERSIONS)
             .require_trusted_ownership()
@@ -1134,24 +1191,11 @@ impl RuntimeConfig {
 
     fn check_oidc(&self, findings: &mut Vec<RuntimeConfigError>) {
         let oidc = &self.authentication.oidc;
-        if let Err(error) = oidc.provider.check_without_posture(
-            "authentication.oidc",
-            self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
-        ) {
+        if let Err(error) = oidc.provider.check("authentication.oidc") {
             findings.push(error.into());
         }
         if let Err(error) = oidc.clients.check("authentication.oidc") {
             findings.push(error.into());
-        }
-        // `allowedClients: unrestricted` admits every client the issuer
-        // verifies, so the deployment would accept a token minted for an
-        // unrelated application in the same realm. Development loopback keeps
-        // that convenience; a deployment behind an operator-controlled
-        // terminator must name the clients it admits.
-        if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
-            && oidc.clients.allowed_clients.is_empty()
-        {
-            findings.push(RuntimeConfigError::AllowedClientsRequired);
         }
         for (path, value) in [
             ("authentication.oidc.scopeClaim", &oidc.scope_claim),
@@ -1258,9 +1302,8 @@ impl RuntimeConfig {
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             findings.push(RuntimeConfigError::InvalidDatabaseReference);
         }
-        #[cfg(not(feature = "postgres-test"))]
-        if self.database.test_only_plaintext {
-            findings.push(RuntimeConfigError::PlaintextDatabase);
+        if let Err(error) = self.database.check(cfg!(feature = "postgres-test")) {
+            findings.push(RuntimeConfigError::DatabaseTransport(error));
         }
     }
 
@@ -1579,11 +1622,10 @@ impl RuntimeConfig {
     pub async fn oidc_verifier(
         &self,
         secrets: &SecretResolver,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
+        let profile = self.verifier_profile(witness)?;
         let provider = &self.authentication.oidc.provider;
-        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
         let network =
             IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
                 .map_err(|_| RuntimeConfigError::Oidc)?;
@@ -1631,17 +1673,7 @@ impl RuntimeConfig {
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
-        Ok((self.verifier_profile(), std::sync::Arc::new(fetcher)))
-    }
-
-    fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.authentication
-            .oidc
-            .provider
-            .allow_insecure_http
-            .then_some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-            )
+        Ok((profile, std::sync::Arc::new(fetcher)))
     }
 
     /// The access-token verifier profile this deployment's OIDC settings
@@ -1670,8 +1702,17 @@ impl RuntimeConfig {
             .collect()
     }
 
-    pub(crate) fn verifier_profile(&self) -> TokenVerifierConfig {
-        TokenVerifierConfig::access_token_profile(
+    pub(crate) fn verifier_profile(
+        &self,
+        witness: Option<&DevelopmentWitness>,
+    ) -> Result<TokenVerifierConfig, DevelopmentOnlyRefused> {
+        let clients = &self.authentication.oidc.clients;
+        if clients.allowed_clients.is_empty() && witness.is_none() {
+            return Err(DevelopmentOnlyRefused {
+                setting: &UNRESTRICTED_CLIENTS,
+            });
+        }
+        Ok(TokenVerifierConfig::access_token_profile(
             self.authentication.oidc.provider.issuer.to_string(),
             vec![self.authentication.oidc.provider.audience.clone()],
             vec![
@@ -1681,8 +1722,8 @@ impl RuntimeConfig {
             access_token_typ_set(CASEWORK_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(self.authentication.oidc.clients.allowed_clients.clone())
-        .with_assertion_issuers(self.authentication.oidc.clients.assertion_issuers.clone())
+        .with_allowed_clients(clients.allowed_clients.clone())
+        .with_assertion_issuers(clients.assertion_issuers.clone())
         .with_denied_kids(
             self.authentication
                 .oidc
@@ -1697,7 +1738,7 @@ impl RuntimeConfig {
                 .oidc
                 .maximum_token_lifetime_seconds
                 .map(Duration::from_secs),
-        )
+        ))
     }
 }
 
@@ -1865,11 +1906,20 @@ pub fn check_runtime(
     path: &Path,
     project: Option<&CaseworkProject>,
     substitute: bool,
+    declared: DeclaredPosture,
 ) -> RuntimeCheck {
-    let check =
-        RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
+    let check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+        path,
+        substitute,
+        stand_in_for,
+    );
     let mut diagnostics = Vec::new();
     if let Some(loaded) = &check.loaded {
+        if let Some(setting) = unrestricted_clients_setting(&check) {
+            let mut posture = PostureReport::new(declared);
+            posture.record(setting);
+            diagnostics.extend(posture.diagnostics(path));
+        }
         diagnostics.extend(
             loaded
                 .config
@@ -1896,15 +1946,21 @@ pub fn check_runtime(
 /// file breaks, each at its position. `None` for a refusal of the package or
 /// of a dependency, which its message alone describes.
 #[must_use]
-pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report> {
-    if let RuntimeConfigError::Load(error) = error {
-        return Some(Report::new(error.diagnostics().to_vec()));
+pub fn startup_report(
+    path: &Path,
+    error: &RuntimeConfigError,
+    declared: DeclaredPosture,
+) -> Option<Report> {
+    if let Some(diagnostics) = error.load_diagnostics() {
+        return Some(Report::new(diagnostics.to_vec()));
     }
     if !error.in_file() {
         return None;
     }
-    let check = RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, true, stand_in_for);
-    let config = &check.loaded.as_ref()?.config;
+    let check =
+        RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(path, true, stand_in_for);
+    let loaded = check.loaded.as_ref()?;
+    let config = &loaded.config;
     let package = config.capture_package_after_verification(|| {}).ok();
     let mut diagnostics: Vec<Diagnostic> = config
         .findings(package.as_ref().map(LoadedCaseworkPackage::project))
@@ -1953,7 +2009,6 @@ fn reads_deferred_value(
         RuntimeConfigError::InvalidListener => &["/listener"],
         RuntimeConfigError::InvalidMetricsListener(_) => &["/metricsListener/networkExposure"],
         RuntimeConfigError::MetricsListenerSharesSocket(_) => &["/listener/bind"],
-        RuntimeConfigError::AllowedClientsRequired => &["/listener/tlsTermination"],
         RuntimeConfigError::Block(error) if error.field().starts_with("authentication.oidc.") => {
             &["/listener/tlsTermination"]
         }
@@ -1977,7 +2032,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
     let segments: Vec<&str> = pointer.split('/').skip(1).collect();
     match segments.as_slice() {
         ["listener", "bind"] => "127.0.0.1:8100",
-        ["listener", "tlsTermination"] => "development-loopback",
+        ["listener", "tlsTermination"] => "loopback-plaintext",
         ["listener", "networkExposure"] => "private-address",
         ["metricsListener", "bind"] => "127.0.0.1:9100",
         ["metricsListener", "networkExposure"] => "private-address",
@@ -2006,13 +2061,18 @@ mod tests {
     use registry_platform_config::write_package;
     use serde_json::json;
 
+    const TEST_POSTURE: DeclaredPosture = DeclaredPosture {
+        posture: registry_platform_config::Posture::Development,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
     const STANDALONE: &str =
         include_str!("../../../products/casework/examples/standalone-decision/casework.yaml");
     const SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["summary","reference"],"properties":{"summary":{"type":"string","maxLength":160},"reference":{"type":"string","maxLength":120}}}"#;
 
     fn read_operator(value: &serde_json::Value, directory: &Path) -> RuntimeConfig {
         let path = write_operator(value, directory);
-        RuntimeConfig::loader()
+        RuntimeConfig::loader(TEST_POSTURE)
             .load::<RuntimeConfig>(&path)
             .unwrap()
             .config
@@ -2056,7 +2116,7 @@ mod tests {
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-        RuntimeConfig::loader()
+        RuntimeConfig::loader(TEST_POSTURE)
             .load::<serde_json::Value>(&path)
             .expect("an owner-writable runtime in a private directory loads");
     }
@@ -2069,7 +2129,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
-        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        let result = RuntimeConfig::loader(TEST_POSTURE).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
@@ -2085,7 +2145,7 @@ mod tests {
         std::fs::create_dir(&writable).unwrap();
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
         let path = write_ownership_test_runtime(&writable);
-        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        let result = RuntimeConfig::loader(TEST_POSTURE).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         assert_unsafe_runtime(
@@ -2097,12 +2157,94 @@ mod tests {
         json!({
             "apiVersion":RUNTIME_CONFIG_API_VERSION,"kind":RUNTIME_CONFIG_KIND,
             "identity":{"databaseId":"test"},"package":{"root":package},
-            "listener":{"bind":"127.0.0.1:8100","tlsTermination":"development-loopback","networkExposure":"private-address"},
+            "listener":{"bind":"127.0.0.1:8100","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
             "secretProviders":{"file":{"root":directory.join("secrets")}},
             "database":{"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/migration-url"},
             "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
             "audit":{"path":directory.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
         })
+    }
+
+    #[test]
+    fn client_admission_follows_posture_on_each_listener() {
+        use registry_platform_config::{Posture, PostureSource};
+        let root = tempfile::tempdir().unwrap();
+        let production = DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Flag,
+        };
+        let mut value = operator_value(root.path(), root.path());
+        for listener in [
+            "loopback-plaintext",
+            "development-loopback",
+            "operator-controlled-upstream",
+        ] {
+            value["listener"]["tlsTermination"] = json!(listener);
+            let path = write_operator(&value, root.path());
+            let error = RuntimeConfig::load_file(&path, production).unwrap_err();
+            assert_eq!(error.code(), "casework.posture.unrestricted-clients");
+            let loaded = RuntimeConfig::load_file(&path, TEST_POSTURE).unwrap();
+            assert_eq!(
+                loaded.posture.ready_member()["developmentSettings"],
+                json!([{
+                    "code": "casework.posture.unrestricted-clients",
+                    "pointer": ALLOWED_CLIENTS_POINTER,
+                }])
+            );
+            assert!(matches!(
+                loaded.config.verifier_profile(None),
+                Err(refused) if refused.setting.code == UNRESTRICTED_CLIENTS.code
+            ));
+            assert!(loaded
+                .config
+                .verifier_profile(loaded.development.as_ref())
+                .is_ok());
+
+            let logs = registry_platform_testing::CapturedDiagnosticLogs::default();
+            tracing::dispatcher::with_default(&logs.subscriber(), || loaded.posture.log_startup());
+            let log = logs.text();
+            assert!(log.contains("posture declared"), "{log}");
+            assert!(
+                log.contains("casework.posture.unrestricted-clients"),
+                "{log}"
+            );
+        }
+    }
+
+    #[test]
+    fn loopback_issuer_http_needs_no_setting_in_production() {
+        use registry_platform_config::{Posture, PostureSource};
+        let root = tempfile::tempdir().unwrap();
+        let production = DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Flag,
+        };
+        let mut value = operator_value(root.path(), root.path());
+        value["authentication"]["oidc"]["issuer"] = json!("http://127.0.0.1:8091");
+        value["authentication"]["oidc"]["allowedClients"] = json!(["test-client"]);
+        for listener in [
+            "loopback-plaintext",
+            "development-loopback",
+            "operator-controlled-upstream",
+        ] {
+            value["listener"]["tlsTermination"] = json!(listener);
+            let path = write_operator(&value, root.path());
+            let loaded = RuntimeConfig::load_file(&path, production).unwrap();
+            assert!(loaded.config.findings(None).is_empty());
+        }
+    }
+
+    #[cfg(not(feature = "postgres-test"))]
+    #[test]
+    fn ordinary_builds_refuse_the_test_only_database_transport() {
+        let root = tempfile::tempdir().unwrap();
+        let mut value = operator_value(root.path(), root.path());
+        value["database"]["testOnlyPlaintext"] = json!(true);
+        let config = read_operator(&value, root.path());
+        let findings = config.findings(None);
+        assert!(findings.iter().any(|finding| finding.code()
+            == "platform.database.test-only-plaintext"
+            && finding.pointer() == "/database/testOnlyPlaintext"));
     }
 
     /// Resolve the verifier of a runtime file whose static key set is `document`.
@@ -2120,11 +2262,12 @@ mod tests {
         let mut value = operator_value(root.path(), root.path());
         value["authentication"]["oidc"]["jwksSource"] =
             json!({"type":"static", "documentRef":"secret:file/jwks"});
+        value["authentication"]["oidc"]["allowedClients"] = json!(["test-client"]);
         let config = read_operator(&value, root.path());
         let resolver =
             SecretResolver::new([registry_platform_config::SecretProvider::File], &secrets)
                 .unwrap();
-        config.oidc_verifier(&resolver).await.map(|_| ())
+        config.oidc_verifier(&resolver, None).await.map(|_| ())
     }
 
     fn public_rsa_key(kid: &str) -> serde_json::Value {
@@ -2241,22 +2384,6 @@ mod tests {
         assert!(
             action.contains("metricsListener.networkExposure: container-private"),
             "{action}"
-        );
-    }
-
-    #[test]
-    fn runtime_reads_the_explicit_http_issuer_opt_in() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut value = operator_value(directory.path(), directory.path());
-        value["authentication"]["oidc"]["issuer"] = json!("http://identity.example.test");
-        value["authentication"]["oidc"]["allowInsecureHttp"] = json!(true);
-        let config = read_operator(&value, directory.path());
-        assert!(config.authentication.oidc.provider.allow_insecure_http);
-        assert_eq!(
-            config.insecure_http_startup_diagnostic(),
-            Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-            )
         );
     }
 
@@ -2492,8 +2619,12 @@ mod tests {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
         const SECRET: &[u8] = b"canary-casework-oidc-test-secret";
         let directory = tempfile::tempdir().unwrap();
-        let config = read_operator(value, directory.path());
-        let mut profile = config.verifier_profile();
+        let path = write_operator(value, directory.path());
+        let loaded = RuntimeConfig::load_file(&path, TEST_POSTURE).unwrap();
+        let config = loaded.config;
+        let mut profile = config
+            .verifier_profile(loaded.development.as_ref())
+            .unwrap();
         profile.allowed_algorithms = vec![Algorithm::HS256];
         let keys = std::sync::Arc::new(JwksFetcher::new_static(
             serde_json::from_value(json!({"keys": [{
@@ -2576,7 +2707,7 @@ mod tests {
         let mut value = operator_value(directory.path(), directory.path());
         value["authentication"]["oidc"]["revokedKeyIds"] = json!([]);
         let path = write_operator(&value, directory.path());
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(TEST_POSTURE)
             .load::<RuntimeConfig>(&path)
             .unwrap_err()
             .to_string();
@@ -2590,7 +2721,7 @@ mod tests {
         value["authentication"]["oidc"]["revokedKeyIds"] =
             json!((0..129).map(|n| format!("signing-{n}")).collect::<Vec<_>>());
         let path = write_operator(&value, directory.path());
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(TEST_POSTURE)
             .load::<RuntimeConfig>(&path)
             .unwrap_err()
             .to_string();
@@ -2601,7 +2732,7 @@ mod tests {
         let mut value = operator_value(directory.path(), directory.path());
         value["authentication"]["oidc"]["maximumTokenLifetimeSeconds"] = json!(0);
         let path = write_operator(&value, directory.path());
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(TEST_POSTURE)
             .load::<RuntimeConfig>(&path)
             .unwrap_err()
             .to_string();
@@ -2625,6 +2756,7 @@ mod tests {
         value["database"]["caBundleRef"] = json!("secret:file/db-ca");
         value["authentication"]["oidc"]["jwksSource"] =
             json!({"type":"static", "documentRef":"secret:file/jwks"});
+        value["authentication"]["oidc"]["allowedClients"] = json!(["test-client"]);
         value["taskAuthority"] = json!({"issuer":"https://casework.example.test","exchangeAudience":"urn:example:exchange","signingKeyRef":"secret:file/signer","statusClients":{}});
         value["contextProviders"] = json!({"facility":{
             "baseUrl":"https://registry.example.test", "statusProfile":"review-status",
@@ -2717,7 +2849,7 @@ mod tests {
             .any(RuntimeConfigError::is_identifier_collision));
         let path = write_operator(&value, directory.path());
         let text = std::fs::read_to_string(&path).unwrap();
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, TEST_POSTURE);
         let collisions = check
             .diagnostics
             .iter()
@@ -2755,7 +2887,7 @@ mod tests {
             "registry_main": {"url": "https://completion.example.test/reviews"}
         });
         let path = write_operator(&value, directory.path());
-        assert!(check_runtime(&path, None, false)
+        assert!(check_runtime(&path, None, false, TEST_POSTURE)
             .diagnostics
             .iter()
             .all(|diagnostic| !diagnostic.code.ends_with("-id-collision")));
@@ -2766,10 +2898,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let check = |bind: &str| {
             let mut value = operator_value(directory.path(), directory.path());
+            value["authentication"]["oidc"]["allowedClients"] = json!(["test-client"]);
             value["listener"]["bind"] = json!("${CASEWORK_OFFLINE_CHECK_UNSET_BIND}");
             value["metricsListener"] = json!({"bind": bind});
             let path = write_operator(&value, directory.path());
-            check_runtime(&path, None, false)
+            check_runtime(&path, None, false, TEST_POSTURE)
                 .diagnostics
                 .iter()
                 .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
@@ -2835,7 +2968,7 @@ mod tests {
         let mut value = operator_value(directory.path(), directory.path());
         value["contextProviders"] = json!({ "registry-main": binding.clone() });
         let path = write_operator(&value, directory.path());
-        assert!(check_runtime(&path, None, false)
+        assert!(check_runtime(&path, None, false, TEST_POSTURE)
             .diagnostics
             .iter()
             .all(|diagnostic| diagnostic.code != "casework.runtime.invalid-context-provider"));
@@ -2880,7 +3013,7 @@ mod tests {
             assert!(message.contains(rule), "{message}");
             assert!(!message.contains("response"), "{message}");
             let path = write_operator(&value, directory.path());
-            let check = check_runtime(&path, None, false);
+            let check = check_runtime(&path, None, false, TEST_POSTURE);
             let diagnostic = check
                 .diagnostics
                 .iter()
@@ -2928,7 +3061,7 @@ mod tests {
                 .expect("the member exists")
                 .remove("clientAssertionAudience");
             let path = write_operator(&value, directory.path());
-            let check = check_runtime(&path, None, false);
+            let check = check_runtime(&path, None, false, TEST_POSTURE);
             let diagnostic = check
                 .diagnostics
                 .iter()
@@ -2951,7 +3084,7 @@ mod tests {
         document["authentication"]["oidc"]["audience"] =
             json!("${CASEWORK_CONFIG_SUBSTITUTION_AUDIENCE}");
         let path = write_operator(&document, temp.path());
-        let config = RuntimeConfig::loader()
+        let config = RuntimeConfig::loader(TEST_POSTURE)
             .load_with::<RuntimeConfig>(&path, |name| {
                 (name == "CASEWORK_CONFIG_SUBSTITUTION_AUDIENCE")
                     .then(|| "urn:example:substituted".to_owned())
@@ -2965,7 +3098,7 @@ mod tests {
 
         document["database"]["runtimeUrlRef"] = json!("${CASEWORK_CONFIG_SUBSTITUTION_REFERENCE}");
         let path = write_operator(&document, temp.path());
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(TEST_POSTURE)
             .load_with::<RuntimeConfig>(&path, |name| match name {
                 "CASEWORK_CONFIG_SUBSTITUTION_AUDIENCE" => {
                     Some("urn:example:substituted".to_owned())
@@ -3015,7 +3148,8 @@ mod tests {
         let mut document = operator_value(&package, temp.path());
         document["package"]["expectedDigest"] = json!(&expected);
 
-        let error = RuntimeConfig::load(write_operator(&document, temp.path())).unwrap_err();
+        let error =
+            RuntimeConfig::load(write_operator(&document, temp.path()), TEST_POSTURE).unwrap_err();
         assert_eq!(error.code(), "casework.package.digest-mismatch");
         assert_eq!(error.pointer(), "/package/expectedDigest");
         assert_eq!(
@@ -3088,6 +3222,8 @@ mod tests {
 pub enum RuntimeConfigError {
     #[error(transparent)]
     Load(#[from] registry_platform_config::RuntimeConfigError),
+    #[error("the Casework runtime configuration was refused")]
+    ReadReport(Report),
     #[error(transparent)]
     Block(#[from] ConfigBlockError),
     /// A secret reference of a member under a map keyed by an operator-chosen
@@ -3160,10 +3296,6 @@ pub enum RuntimeConfigError {
         "authentication.oidc.humanIdentity.claim must differ from every accessProfiles.PROFILE_ID.principalClaim in casework.yaml"
     )]
     PrincipalClaimConflict,
-    #[error(
-        "authentication.oidc.allowedClients must name every client the deployment admits under operator-controlled-upstream; unrestricted admits every client the issuer verifies"
-    )]
-    AllowedClientsRequired,
     #[error("{path} {reason}")]
     InvalidTaskAuthority {
         path: String,
@@ -3202,8 +3334,10 @@ pub enum RuntimeConfigError {
         "reviewCompletionDestinations must configure every destination casework.yaml trustedProducers.PRODUCER_ID.completion.destinationId names"
     )]
     UnconfiguredReviewCompletionDestination,
-    #[error("plaintext PostgreSQL is test-only")]
-    PlaintextDatabase,
+    #[error(transparent)]
+    DatabaseTransport(DatabaseTransportError),
+    #[error(transparent)]
+    DevelopmentOnly(#[from] DevelopmentOnlyRefused),
     #[error("the OIDC issuer could not be initialized")]
     Oidc,
     #[error("the static OIDC signing keys could not be loaded: {0}")]
@@ -3232,20 +3366,24 @@ impl RuntimeConfigError {
             Self::InvalidOidcClaim { path, .. } => path,
             Self::PrincipalClaimConflict => "authentication.oidc.humanIdentity.claim",
             Self::Oidc => "authentication.oidc",
-            Self::AllowedClientsRequired => "authentication.oidc.allowedClients",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener.bind",
             Self::InvalidMetricsListener(_) | Self::MetricsListenerSharesSocket(_) => {
                 "metricsListener.bind"
             }
             Self::InvalidDatabaseReference => "database",
-            Self::PlaintextDatabase => "database.testOnlyPlaintext",
+            Self::DatabaseTransport(DatabaseTransportError::TestOnlyPlaintext) => {
+                "database.testOnlyPlaintext"
+            }
+            Self::DatabaseTransport(_) => "database.transport",
+            Self::DevelopmentOnly(_) => "authentication.oidc.allowedClients",
             Self::InvalidAuditDestination(error) => audit_field(error),
             Self::InvalidContextProviders => "contextProviders",
             Self::UnconfiguredReviewCompletionDestination => "reviewCompletionDestinations",
             Self::PackageDigest(_) => "package.expectedDigest",
             // Located by `pointer` itself.
             Self::Load(_)
+            | Self::ReadReport(_)
             | Self::BindingSecret { .. }
             | Self::InvalidReviewCompletionDestination { .. }
             | Self::InvalidContextProvider { .. }
@@ -3269,6 +3407,7 @@ impl RuntimeConfigError {
     pub fn pointer(&self) -> String {
         match self {
             Self::Load(error) => error.deciding_diagnostic().path.clone(),
+            Self::ReadReport(report) => report.diagnostics()[0].path.clone(),
             Self::BindingSecret { pointer, .. }
             | Self::InvalidReviewCompletionDestination { pointer, .. }
             | Self::InvalidContextProvider { pointer, .. }
@@ -3291,6 +3430,7 @@ impl RuntimeConfigError {
     pub fn code(&self) -> &str {
         match self {
             Self::Load(error) => &error.deciding_diagnostic().code,
+            Self::ReadReport(report) => &report.diagnostics()[0].code,
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).0,
             Self::InvalidApiVersion => "casework.runtime.unsupported-api-version",
             Self::InvalidKind => "casework.runtime.wrong-kind",
@@ -3312,7 +3452,6 @@ impl RuntimeConfigError {
             }
             Self::InvalidOidcClaim { .. } => "casework.runtime.invalid-oidc-claim",
             Self::PrincipalClaimConflict => "casework.runtime.principal-claim-conflict",
-            Self::AllowedClientsRequired => "casework.runtime.allowed-clients-required",
             Self::InvalidTaskAuthority { .. } => "casework.runtime.invalid-task-authority",
             Self::InvalidDelegatedStaffReader { .. } => {
                 "casework.runtime.invalid-delegated-staff-reader"
@@ -3327,7 +3466,8 @@ impl RuntimeConfigError {
             Self::UnconfiguredReviewCompletionDestination => {
                 "casework.runtime.unconfigured-review-completion-destination"
             }
-            Self::PlaintextDatabase => "casework.runtime.plaintext-database",
+            Self::DatabaseTransport(error) => error.code(),
+            Self::DevelopmentOnly(error) => error.setting.code,
             Self::Oidc => "casework.runtime-dependency.unavailable",
             Self::OidcJwksSecret(_) => "casework.runtime.unreadable-jwks-secret",
         }
@@ -3338,6 +3478,7 @@ impl RuntimeConfigError {
     pub fn suggested_action(&self) -> String {
         let action = match self {
             Self::Load(error) => return error.deciding_diagnostic().suggested_action.clone(),
+            Self::ReadReport(report) => return report.diagnostics()[0].suggested_action.clone(),
             Self::Block(error) | Self::BindingSecret { error, .. } => block_finding(error).1,
             Self::InvalidApiVersion => {
                 "Write apiVersion: id.registrystack.org/formats/casework/runtime/v1alpha1."
@@ -3370,7 +3511,7 @@ impl RuntimeConfigError {
             }
             Self::Invalid => "Correct the runtime configuration as the message describes.",
             Self::InvalidListener => {
-                "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
+                "Bind to a loopback address under loopback-plaintext; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
             }
             Self::InvalidMetricsListener(cause) | Self::MetricsListenerSharesSocket(cause) => {
                 return cause.remedy("metricsListener.networkExposure");
@@ -3380,9 +3521,6 @@ impl RuntimeConfigError {
             }
             Self::PrincipalClaimConflict => {
                 "Name a humanIdentity.claim that no accessProfiles.PROFILE_ID.principalClaim in casework.yaml uses."
-            }
-            Self::AllowedClientsRequired => {
-                "List every client identifier this deployment admits in authentication.oidc.allowedClients, then retry."
             }
             Self::InvalidTaskAuthority { action, .. }
             | Self::InvalidDelegatedStaffReader { action, .. } => action,
@@ -3402,9 +3540,8 @@ impl RuntimeConfigError {
             Self::UnconfiguredReviewCompletionDestination => {
                 "Add a reviewCompletionDestinations entry for each destination casework.yaml trustedProducers.PRODUCER_ID.completion.destinationId names."
             }
-            Self::PlaintextDatabase => {
-                "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
-            }
+            Self::DatabaseTransport(error) => error.suggested_action(),
+            Self::DevelopmentOnly(_) => "List the clients the deployment admits. For a laptop or test run, start it with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
             Self::Oidc => {
                 "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
             }
@@ -3413,6 +3550,15 @@ impl RuntimeConfigError {
             }
         };
         action.to_owned()
+    }
+
+    /// Positioned diagnostics from the governed runtime file reader.
+    pub fn load_diagnostics(&self) -> Option<&[Diagnostic]> {
+        match self {
+            Self::Load(error) => Some(error.diagnostics()),
+            Self::ReadReport(report) => Some(report.diagnostics()),
+            _ => None,
+        }
     }
 
     /// Whether this refusal is a rule the runtime file itself breaks, which
@@ -3424,6 +3570,7 @@ impl RuntimeConfigError {
         !matches!(
             self,
             Self::Load(_)
+                | Self::ReadReport(_)
                 | Self::Project(_)
                 | Self::PolicyUnreadable
                 | Self::Package(_)

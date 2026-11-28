@@ -20,6 +20,30 @@
   `hmacSha256KeyRef`. The job sends two `v1,<base64>` entries, current first.
   Remove the previous reference after Coordinator holds the new key.
 
+- BREAKING: an undeclared posture is production.
+  Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `check` without a declared posture reports development settings as errors.
+  Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: the payment simulator collection provider is development only.
+  Migration: Collections run under development until a live collection provider is accepted.
+- BREAKING: `loopback-plaintext` is the listener spelling for loopback placement.
+  Migration: Write `tlsTermination: loopback-plaintext`. Both `development-loopback` and `loopback-plaintext` relax the hook-listener port rule in either posture for loopback placement.
+- BREAKING: issuer `allowInsecureHttp: true` is development only.
+  Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
+- BREAKING: production refuses `oidc.jwksSource.type: test-issuer`.
+  Migration: Configure a production issuer or declare development for test runs.
+- Development deployments can reach a database container using `transport: private-network-plaintext`.
+- A payment reservation whose integrity check fails leaves the idempotency key available.
+- BREAKING: the pool refusal gains the code `platform.database.test-only-plaintext`.
+  Migration: Update scripts that match the old codes.
+- BREAKING: `/ready` gains `posture` and `developmentSettings`.
+  Migration: No change for probes that read the status code.
+- BREAKING: development responses carry `Registry-Posture: development` and production refuses marked payment peer responses.
+  Migration: Point production runtimes at production peers.
+- The facade and job store accept loopback PostgreSQL plaintext in either posture.
+  PostgreSQL job sources accept `tls.type: loopback-plaintext` for loopback hosts.
+- Adapter startup records each explicit `anonymousHttps: operator-approved` acknowledgement.
+
 - A secret file the Adapter or an Adapter job refuses names the failed
   check and its fix. A link below the secret root now loads, so the hint
   that a link reads as a missing file is gone.

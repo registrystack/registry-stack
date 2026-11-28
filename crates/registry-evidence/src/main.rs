@@ -62,6 +62,7 @@ use registry_evidence::{
     },
 };
 use registry_platform_audit::{require_audit_under, AuditError, PersistentRootFault};
+use registry_platform_config::{declared, DeclaredPosture, Posture, PostureSource};
 use registry_platform_crypto::{
     canonicalize_json, parse_json_strict, LocalJwkSigner, PrivateJwk, TransitInitializationError,
 };
@@ -222,7 +223,39 @@ async fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let cli = Cli::parse();
-    match run(cli).await {
+    let flag = match &cli.command {
+        Command::Authority { command } => match command {
+            registry_evidence::cli::AuthorityCommand::Activate { posture, .. }
+            | registry_evidence::cli::AuthorityCommand::History { posture, .. } => Some(posture),
+        },
+        Command::Check { posture, .. }
+        | Command::Evaluate { posture, .. }
+        | Command::BundleCheck { posture, .. }
+        | Command::Serve { posture, .. }
+        | Command::PrepareLocalRelyingProcedure { posture, .. }
+        | Command::LocalAuditLastOperation { posture, .. } => Some(posture),
+        _ => None,
+    };
+    let declared = if let Some(flag) = flag {
+        match declared(flag.as_deref()) {
+            Ok(declared) => declared,
+            Err(error) => {
+                eprintln!(
+                    "{}: {} {}",
+                    error.code(),
+                    error.message(),
+                    error.suggested_action()
+                );
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Default,
+        }
+    };
+    match run(cli, declared).await {
         Ok(code) => code,
         Err(error) => {
             eprintln!("evidence: {error}");
@@ -231,7 +264,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
+async fn run(cli: Cli, declared: DeclaredPosture) -> Result<ExitCode, CommandError> {
     match cli.command {
         Command::Authority { command } => {
             use registry_evidence::{authority, cli::AuthorityCommand};
@@ -240,8 +273,9 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                     runtime_config,
                     document,
                     operator_reference,
+                    ..
                 } => (runtime_config, Some(document), operator_reference),
-                AuthorityCommand::History { runtime_config } => (runtime_config, None, None),
+                AuthorityCommand::History { runtime_config, .. } => (runtime_config, None, None),
             };
             // Operator inspection and authority activation need the closed
             // configuration, not source extracts, credentials or a signer.
@@ -252,20 +286,21 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                         .read_to_end(&mut bytes)
                 })
                 .map_err(|_| CommandError::Cli(CliError("runtime configuration is unavailable")))?;
-            let runtime =
-                registry_evidence::config::RuntimeConfig::parse_yaml_with(&bytes, |name| {
-                    std::env::var(name).ok()
-                })
-                .map_err(
-                    |error| match error.in_file(&runtime_path.display().to_string()) {
-                        ConfigError::Refused(report) => CommandError::Refused(report),
-                        error => CommandError::Deployment(
-                            "runtime authority binding is invalid",
-                            ArtifactFault::new(runtime_path.display().to_string(), error.fault()),
-                        ),
-                    },
-                )?
-                .config;
+            let runtime = registry_evidence::config::RuntimeConfig::parse_yaml_with(
+                &bytes,
+                declared,
+                |name| std::env::var(name).ok(),
+            )
+            .map_err(
+                |error| match error.in_file(&runtime_path.display().to_string()) {
+                    ConfigError::Refused(report) => CommandError::Refused(report),
+                    error => CommandError::Deployment(
+                        "runtime authority binding is invalid",
+                        ArtifactFault::new(runtime_path.display().to_string(), error.fault()),
+                    ),
+                },
+            )?
+            .config;
             let binding = runtime
                 .authority
                 .as_ref()
@@ -317,6 +352,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                             destination,
                             secret.expose_secret().to_vec(),
                             bundle.config.audit.hash_key_version.get(),
+                            declared.posture,
                         )
                         .await
                         .map_err(|error| {
@@ -388,7 +424,9 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             require_runtime_dependencies,
             require_audit_under: audit_root,
             without_audit_lock,
+            ..
         } => Ok(run_check(CheckRequest {
+            declared,
             runtime_config,
             format,
             deny_warnings,
@@ -405,9 +443,10 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             case,
             explain,
             explain_format,
+            ..
         } => {
             let deployment =
-                DeploymentInputs::load(&runtime_config).map_err(deployment_load_error)?;
+                DeploymentInputs::load(&runtime_config, declared).map_err(deployment_load_error)?;
             let (bundle, _runtime) = deployment.into_parts();
             let bundle = Arc::new(bundle);
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
@@ -469,6 +508,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             runtime_config,
             authority_document,
             json,
+            ..
         } => {
             let bundle_path = bundle;
             let bundle = match Bundle::load(&bundle_path).map_err(deployment_load_error) {
@@ -533,45 +573,51 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             if let Some(path) = authority_document {
                 read_bundle_authority(&path, bundle.as_ref())?;
             }
-            if let Some(path) = runtime_config {
-                let checked = registry_evidence::check::check_runtime_bindings_file(&path, &bundle);
-                if checked.has_errors() {
-                    let report = checked.report();
-                    if json {
-                        let document = CheckReport {
-                            ok: false,
-                            command: "bundle-check",
-                            status: "domain-refusal",
-                            api_version: CHECK_REPORT_API_VERSION,
-                            kind: CHECK_REPORT_KIND,
-                            package_digest: None,
-                            requirements: None,
-                            files_checked: report.files_checked().unwrap_or(1),
-                            diagnostics: report.to_json_value(),
-                        };
-                        println!(
-                            "{}",
-                            serde_json::to_string(&document).map_err(|_| {
-                                CliError("bundle check report could not be written")
-                            })?
-                        );
-                    } else {
-                        eprint!("{}", report.render_human());
-                    }
-                    return Ok(ExitCode::FAILURE);
+            let checked = if let Some(path) = runtime_config {
+                registry_evidence::check::check_runtime_bindings_file(&path, &bundle, declared)
+            } else {
+                registry_evidence::check::check_bundle_posture(&bundle, declared)
+            };
+            let report = checked.report();
+            if checked.has_errors() {
+                if json {
+                    let document = CheckReport {
+                        ok: false,
+                        command: "bundle-check",
+                        status: "domain-refusal",
+                        api_version: CHECK_REPORT_API_VERSION,
+                        kind: CHECK_REPORT_KIND,
+                        package_digest: None,
+                        requirements: None,
+                        files_checked: report.files_checked().unwrap_or(1),
+                        diagnostics: report.to_json_value(),
+                    };
+                    println!(
+                        "{}",
+                        serde_json::to_string(&document)
+                            .map_err(|_| CliError("bundle check report could not be written"))?
+                    );
+                } else {
+                    eprint!("{}", report.render_human());
                 }
+                return Ok(ExitCode::FAILURE);
             }
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
             let _source_plans = compile_bundle_source_plans(&bundle)?;
             if json {
-                println!("{}", package_digest_report(&bundle)?);
+                let mut document = package_digest_report(&bundle)?;
+                document["diagnostics"] = report.to_json_value();
+                println!("{document}");
             } else {
                 println!(
                     "Evidence package {} passed check ({} requirements)",
                     bundle.package_digest(),
                     bundle.config.requirements.len()
                 );
+                if report.warning_count() > 0 {
+                    eprint!("{}", report.render_human());
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -682,7 +728,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Serve { runtime_config } => {
+        Command::Serve { runtime_config, .. } => {
             install_operational_logging();
             // Installed before anything is loaded or served, so a failure to
             // install a handler refuses startup.
@@ -690,7 +736,8 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // The inputs are loaded here rather than inside the runtime so a
             // refused configuration reports its diagnostics, not only a class.
             let deployment =
-                DeploymentInputs::load(&runtime_config).map_err(deployment_load_error)?;
+                DeploymentInputs::load(&runtime_config, declared).map_err(deployment_load_error)?;
+            deployment.runtime().posture.log_startup();
             let runtime = Arc::new(
                 EvidenceRuntime::initialize_from(deployment)
                     .await
@@ -756,9 +803,10 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         Command::PrepareLocalRelyingProcedure {
             runtime_config,
             input,
-        } => prepare_local_relying_procedure_command(&runtime_config, &input).await,
-        Command::LocalAuditLastOperation { runtime_config } => {
-            local_audit_last_operation_command(&runtime_config)
+            ..
+        } => prepare_local_relying_procedure_command(&runtime_config, &input, declared).await,
+        Command::LocalAuditLastOperation { runtime_config, .. } => {
+            local_audit_last_operation_command(&runtime_config, declared)
         }
     }
 }
@@ -831,6 +879,7 @@ fn discovery_config_invalid(error: ConfigError) -> CommandError {
 
 /// One `evidence check` invocation.
 struct CheckRequest {
+    declared: DeclaredPosture,
     runtime_config: PathBuf,
     format: OutputFormat,
     deny_warnings: bool,
@@ -876,7 +925,11 @@ struct CheckReport<'a> {
 /// (or a warning was reported under `--deny-warnings`), and 3 when something
 /// the check depends on could not be read or reached.
 async fn run_check(request: CheckRequest) -> ExitCode {
-    let mut check = check_runtime_file(&request.runtime_config, request.environment);
+    let mut check = check_runtime_file(
+        &request.runtime_config,
+        request.environment,
+        request.declared,
+    );
     let mut accepted = None;
     if let Some(bundle) = check.bundle().cloned() {
         let bundle = Arc::new(bundle);
@@ -924,7 +977,9 @@ async fn run_check(request: CheckRequest) -> ExitCode {
     }
     if let Some(proof) = &request.dependencies {
         if !check.has_errors() && !check.is_unavailable() {
-            if let Err(error) = prove_runtime_dependencies(&request.runtime_config, proof).await {
+            if let Err(error) =
+                prove_runtime_dependencies(&request.runtime_config, proof, request.declared).await
+            {
                 push_dependency_error(&mut check, error);
             }
         }
@@ -1039,11 +1094,13 @@ fn run_check_policy(
 async fn prove_runtime_dependencies(
     runtime_config: &Path,
     proof: &DependencyProof,
+    declared: DeclaredPosture,
 ) -> Result<(), CommandError> {
     // The inputs are captured once. Every proof below, and the runtime the
     // dependency check initializes, reads this capture rather than the
     // pathname again, so what passed is what gets opened.
-    let deployment = DeploymentInputs::load(runtime_config).map_err(deployment_load_error)?;
+    let deployment =
+        DeploymentInputs::load(runtime_config, declared).map_err(deployment_load_error)?;
     let runtime = deployment.runtime().clone();
     let bundle = Arc::new(deployment.bundle().clone());
     let source_plans = compile_source_plans(&bundle, &runtime)?;
@@ -1479,9 +1536,10 @@ const LOCAL_AUDIT_NO_OPERATION_EXIT_CODE: u8 = 3;
 async fn prepare_local_relying_procedure_command(
     runtime_path: &Path,
     input_path: &Path,
+    declared: DeclaredPosture,
 ) -> Result<ExitCode, CommandError> {
-    let deployment =
-        DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
+    let deployment = DeploymentInputs::load(runtime_path, declared)
+        .map_err(|_| LOCAL_RELYING_PROCEDURE_FAILED)?;
     let input_bytes = read_owner_only_input(
         input_path,
         MAX_LOCAL_REQUEST_BYTES,
@@ -1563,8 +1621,12 @@ fn write_canonical_json_line<T: serde::Serialize>(
 /// status. The view is written only after every retained file and its native
 /// entries have parsed, so stdout can never contain a partial operation.
 /// A `stdout` destination retains nothing locally and is refused.
-fn local_audit_last_operation_command(runtime_path: &Path) -> Result<ExitCode, CommandError> {
-    let deployment = DeploymentInputs::load(runtime_path).map_err(|_| LOCAL_AUDIT_FAILED)?;
+fn local_audit_last_operation_command(
+    runtime_path: &Path,
+    declared: DeclaredPosture,
+) -> Result<ExitCode, CommandError> {
+    let deployment =
+        DeploymentInputs::load(runtime_path, declared).map_err(|_| LOCAL_AUDIT_FAILED)?;
     if deployment.bundle().config.assurance_profile != AssuranceProfile::Local {
         return Err(LOCAL_AUDIT_FAILED.into());
     }
@@ -5214,9 +5276,15 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let missing = directory.path().join("absent-publication.yaml");
 
-        let error = run(render_discovery_description_cli(&missing))
-            .await
-            .expect_err("a configuration that is not there cannot be read");
+        let error = run(
+            render_discovery_description_cli(&missing),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+        )
+        .await
+        .expect_err("a configuration that is not there cannot be read");
 
         assert_eq!(error, CommandError::Cli(DISCOVERY_CONFIG_UNREADABLE));
         let rendered = error.to_string();
@@ -5250,7 +5318,7 @@ mod tests {
             let path = directory.path().join(name);
             fs::write(&path, document).expect("configuration is written");
 
-            let error = run(render_discovery_description_cli(&path))
+            let error = run(render_discovery_description_cli(&path), DeclaredPosture { posture: Posture::Production, source: PostureSource::Default })
                 .await
                 .expect_err("a document that is not Evidence configuration is refused");
 
@@ -5321,9 +5389,15 @@ mod tests {
         let path = directory.path().join("unprojectable-publication.yaml");
         fs::write(&path, &document).expect("configuration is written");
 
-        let error = run(render_discovery_description_cli(&path))
-            .await
-            .expect_err("a publication the shared profile refuses is not compiled");
+        let error = run(
+            render_discovery_description_cli(&path),
+            DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Default,
+            },
+        )
+        .await
+        .expect_err("a publication the shared profile refuses is not compiled");
 
         let CommandError::Refused(report) = &error else {
             panic!("an unprojectable publication reports the reader's diagnostics: {error}");

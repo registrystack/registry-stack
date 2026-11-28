@@ -1,5 +1,6 @@
 #![cfg(feature = "postgres-test")]
 
+use registry_platform_config::{DeclaredPosture, Posture, PostureReport, PostureSource};
 use std::{
     collections::BTreeMap,
     env,
@@ -27,7 +28,7 @@ use registry_casework_core::*;
 
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::{
-    probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH},
+    probe::{HEALTH_PATH, READY_PATH},
     FetchUrlPolicy,
 };
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
@@ -466,6 +467,36 @@ async fn app_with_project_options(
     Arc<Mutex<SourceReviewability>>,
     tokio_postgres::Client,
 ) {
+    app_with_posture(
+        idp,
+        project,
+        delegated_barrier,
+        strict_delegation_client,
+        runtime_audit,
+        PostureReport::new(DeclaredPosture {
+            posture: Posture::Production,
+            source: PostureSource::Flag,
+        }),
+    )
+    .await
+}
+
+async fn app_with_posture(
+    idp: &MockIdp,
+    project: CaseworkProject,
+    delegated_barrier: Option<Arc<DelegatedSourceBarrier>>,
+    strict_delegation_client: bool,
+    runtime_audit: Option<CaseworkAudit>,
+    posture: PostureReport,
+) -> (
+    axum::Router,
+    CaseworkService,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    Arc<AtomicU8>,
+    Arc<Mutex<SourceReviewability>>,
+    tokio_postgres::Client,
+) {
     let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
         .expect("CASEWORK_REVIEW_TEST_DATABASE_URL is required for review HTTP tests");
     let schema = format!("review_http_{}", Uuid::new_v4().simple());
@@ -492,7 +523,7 @@ async fn app_with_project_options(
         test_only_plaintext: true,
         transport: None,
     };
-    PostgresStore::connect_migration(&database_config, &secrets)
+    PostgresStore::connect_migration(&database_config, &secrets, None)
         .expect("migration store")
         .with_audit(registry_casework::CaseworkAudit::capture().0)
         .migrate()
@@ -522,7 +553,7 @@ async fn app_with_project_options(
         )
         .await
         .expect("bind reviewer membership to test issuer");
-    let store = PostgresStore::connect_runtime(&database_config, &secrets)
+    let store = PostgresStore::connect_runtime(&database_config, &secrets, None)
         .expect("runtime store")
         .with_audit(runtime_audit.unwrap_or_else(|| CaseworkAudit::capture().0));
     project.check().expect("review HTTP project");
@@ -578,6 +609,7 @@ async fn app_with_project_options(
     .expect("review HTTP service");
     (
         router(HttpState {
+            posture,
             service: service.clone(),
             authenticator: Arc::new(authenticator),
             project: Arc::new(project),
@@ -908,7 +940,13 @@ fn create_http_request(body: &ReviewCreateRequest, token: Option<&str>) -> Reque
 async fn health_and_ready_answer_the_shared_probe_bodies_without_a_token() {
     let idp = MockIdp::start().await;
     let (app, _service, _revoked, _changed, _failure, _source_state) = app(&idp).await;
-    for (path, expected) in [(HEALTH_PATH, HEALTH_BODY), (READY_PATH, READY_BODY)] {
+    for (path, expected) in [
+        (HEALTH_PATH, json!({"status":"ok"})),
+        (
+            READY_PATH,
+            json!({"status":"ready","posture":"production","developmentSettings":[]}),
+        ),
+    ] {
         let response = app
             .clone()
             .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
@@ -920,8 +958,73 @@ async fn health_and_ready_answer_the_shared_probe_bodies_without_a_token() {
             "application/json",
             "{path}"
         );
+        assert!(!response.headers().contains_key("Registry-Posture"));
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
-        assert_eq!(body.as_ref(), expected.as_bytes(), "{path}");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            expected,
+            "{path}"
+        );
+    }
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn development_ready_lists_the_settings_and_marks_each_http_response() {
+    let idp = MockIdp::start().await;
+    let temp = tempfile::tempdir().unwrap();
+    let runtime = temp.path().join("runtime.yaml");
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/casework/examples/canonical-review/runtime.example.yaml"
+        ),
+        &runtime,
+    )
+    .unwrap();
+    let loaded = registry_casework::RuntimeConfig::load_file(
+        &runtime,
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        },
+    )
+    .unwrap();
+    let (app, ..) = app_with_posture(
+        &idp,
+        project(&idp.issuer()),
+        None,
+        false,
+        None,
+        loaded.posture,
+    )
+    .await;
+    for path in [READY_PATH, HEALTH_PATH, "/absent"] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers()["Registry-Posture"],
+            "development",
+            "{path}"
+        );
+        if path == READY_PATH {
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({
+                    "status": "ready",
+                    "posture": "development",
+                    "developmentSettings": [{
+                        "code": "casework.posture.unrestricted-clients",
+                        "pointer": "/authentication/oidc/allowedClients",
+                    }],
+                })
+            );
+        }
     }
     idp.stop().await;
 }
@@ -5868,6 +5971,12 @@ async fn separate_human_source_credentials_bind_before_empty_inbox_and_guard_mut
         SOURCE_AUDIENCE.into(),
     )]));
     let state = HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        ),
         service: separate_service,
         authenticator: Arc::new(authenticator),
         project: Arc::new(project.clone()),

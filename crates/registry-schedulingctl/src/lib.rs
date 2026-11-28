@@ -69,7 +69,7 @@ enum Command {
     /// print effective defaults.
     Check(CheckArgs),
     /// Run every fixture's replay cases offline.
-    Test(ProjectArgs),
+    Test(TestArgs),
     /// Explain the checked policy offline: what the runtime would publish.
     Explain(ProjectArgs),
     /// Write the checked policy into a new package directory the runtime verifies.
@@ -147,6 +147,19 @@ struct ProjectArgs {
     /// Authored scheduling project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct TestArgs {
+    /// Authored scheduling project directory.
+    #[arg(value_name = "PROJECT")]
+    project: PathBuf,
+    #[arg(
+        long,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -349,6 +362,7 @@ where
     let (flag, production) = match &command {
         Command::Serve(args) => (Some(&args.posture), false),
         Command::Check(args) => (Some(&args.posture), args.production),
+        Command::Test(args) => (Some(&args.posture), false),
         Command::Provision(args) => (Some(&args.posture), false),
         Command::Plan(args) | Command::Status(args) => (Some(&args.posture), false),
         Command::Apply(args) => (Some(&args.posture), false),
@@ -572,7 +586,7 @@ fn run(cli: Cli, declared: DeclaredPosture) -> Result<Value> {
                 None => checked,
             }
         }
-        Command::Test(args) => project::test(&args.project),
+        Command::Test(args) => project::test(&args.project, declared),
         Command::Explain(args) => project::explain(&args.project),
         Command::Package(args) => match args.output {
             Some(output) => project::package(&args.project, &output, args.revision.as_deref()),
@@ -942,18 +956,22 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
         .chain()
         .find_map(|cause| cause.downcast_ref::<activation::Refusal>())
     {
+        let (path, suggested_action) = match refusal {
+            StoreError::PostureMismatch { action, .. } => ("/database", *action),
+            _ => (
+                "database",
+                "Run the command the message names, or correct what it names, then retry.",
+            ),
+        };
         return (
             DOMAIN_REFUSAL_EXIT,
             json!({
                 "severity": "error",
                 "code": activation::refusal_code(refusal),
                 "artifact": "database",
-                "path": "database",
+                "path": path,
                 "message": format!("{error:#}"),
-                "suggestedAction": match refusal {
-                    StoreError::PostureMismatch { action, .. } => *action,
-                    _ => "Run the command the message names, or correct what it names, then retry.",
-                },
+                "suggestedAction": suggested_action,
             }),
         );
     }

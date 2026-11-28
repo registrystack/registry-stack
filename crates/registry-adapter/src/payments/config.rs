@@ -76,7 +76,7 @@ pub struct PaymentBinding {
     #[cfg_attr(feature = "schema", schemars(range(min = 0, max = 6)))]
     #[serde(deserialize_with = "currency_scale")]
     pub currency_scale: u8,
-    pub provider: CollectionProvider,
+    pub provider: registry_platform_config::Gated<CollectionProvider>,
     pub provider_credential_ref: SecretReference,
     pub provider_credential_identity: String,
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 86_400)))]
@@ -136,6 +136,26 @@ enum CollectionProviderWire<'a> {
         status_base_url: &'a str,
         settings: &'a Value,
     },
+}
+
+static ADAPTER_PAYMENT_SIMULATOR: registry_platform_config::DevelopmentSetting =
+    registry_platform_config::DevelopmentSetting {
+        code: "adapter.posture.payment-simulator",
+        key: "provider",
+        summary: "Collections are sent to a synthetic simulator",
+        production: "Remove the simulator collection connection from the production configuration.",
+    };
+
+impl registry_platform_config::DevelopmentClass for CollectionProvider {
+    const SETTINGS: &'static [&'static registry_platform_config::DevelopmentSetting] =
+        &[&ADAPTER_PAYMENT_SIMULATOR];
+
+    fn development_setting(&self) -> Option<&'static registry_platform_config::DevelopmentSetting> {
+        match self {
+            Self::Simulator { .. } => Some(&ADAPTER_PAYMENT_SIMULATOR),
+            Self::Mifos { .. } | Self::Http { .. } => None,
+        }
+    }
 }
 
 impl Serialize for CollectionProvider {
@@ -257,7 +277,27 @@ fn replay_window<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u6
 }
 
 impl PaymentsConfig {
-    pub fn validate(&self) -> Result<(), ConfigError> {
+    pub fn validate(
+        &self,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
+    ) -> Result<(), ConfigError> {
+        self.validate_connections(development, false)
+    }
+
+    /// Validate the readable parts of an offline file. The loader reports
+    /// every development-only provider that the check cannot inspect.
+    pub fn validate_for_check(
+        &self,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
+    ) -> Result<(), ConfigError> {
+        self.validate_connections(development, true)
+    }
+
+    fn validate_connections(
+        &self,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
+        offline: bool,
+    ) -> Result<(), ConfigError> {
         if (self.connections.is_empty() && self.disbursements.is_empty())
             || self.connections.len() > 64
             || self.disbursements.len() > 64
@@ -283,7 +323,13 @@ impl PaymentsConfig {
             {
                 return Err(ConfigError::INVALID);
             }
-            connection.binding.validate()?;
+            let binding = &connection.binding;
+            binding.validate_members()?;
+            match binding.provider(development) {
+                Ok(provider) => binding.validate_collection_provider(provider)?,
+                Err(_) if offline => {}
+                Err(error) => return Err(error),
+            }
         }
         for connection in &self.disbursements {
             if !ids.insert(&connection.id) {
@@ -296,16 +342,22 @@ impl PaymentsConfig {
 }
 
 impl PaymentBinding {
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        if !text(&self.provider_credential_identity, 128)
-            || !(1..=86_400).contains(&self.replay_window_seconds)
-        {
-            return Err(ConfigError::INVALID);
-        }
+    pub fn validate(
+        &self,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
+    ) -> Result<(), ConfigError> {
+        self.validate_members()?;
+        self.validate_collection_provider(self.provider(development)?)
+    }
+
+    fn validate_collection_provider(
+        &self,
+        provider: &CollectionProvider,
+    ) -> Result<(), ConfigError> {
         // Collections are simulation-only: the Mifos and mapped HTTP arms
         // remain parseable for retained attempts but cannot back a new
         // connection until a live collection provider is verified.
-        match &self.provider {
+        match provider {
             CollectionProvider::Simulator { connection } if self.simulation => {
                 connection.validate().map_err(|_| ConfigError::INVALID)?;
             }
@@ -314,6 +366,15 @@ impl PaymentBinding {
             | CollectionProvider::Http { .. } => {
                 return Err(ConfigError::COLLECTION_SIMULATION_ONLY);
             }
+        }
+        Ok(())
+    }
+
+    fn validate_members(&self) -> Result<(), ConfigError> {
+        if !text(&self.provider_credential_identity, 128)
+            || !(1..=86_400).contains(&self.replay_window_seconds)
+        {
+            return Err(ConfigError::INVALID);
         }
         if self.provider_pack.as_ref().is_some_and(|pin| {
             pin.id.is_empty()
@@ -351,8 +412,20 @@ impl PaymentBinding {
         Ok(())
     }
 
-    pub fn revision(&self) -> Result<String, ConfigError> {
-        let connector = match &self.provider {
+    pub fn provider(
+        &self,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
+    ) -> Result<&CollectionProvider, ConfigError> {
+        self.provider
+            .get(development)
+            .map_err(|_| ConfigError(ADAPTER_PAYMENT_SIMULATOR.code))
+    }
+
+    pub fn revision(
+        &self,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
+    ) -> Result<String, ConfigError> {
+        let connector = match self.provider(development)? {
             CollectionProvider::Simulator { .. } => {
                 registry_payment_simulator_connector::CONNECTOR_VERSION
             }
@@ -368,30 +441,15 @@ impl PaymentBinding {
         Ok(registry_platform_config::sha256_uri(&canonical))
     }
 
-    #[must_use]
-    pub const fn connector_kind(&self) -> ConnectorKind {
-        match &self.provider {
+    pub fn connector_kind(
+        &self,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
+    ) -> Result<ConnectorKind, ConfigError> {
+        Ok(match self.provider(development)? {
             CollectionProvider::Simulator { .. } => ConnectorKind::SimulatorP2gV1,
             CollectionProvider::Mifos { .. } => ConnectorKind::MifosPhEeLegacyV1,
             CollectionProvider::Http { .. } => ConnectorKind::AdapterPaymentHttpV1,
-        }
-    }
-
-    #[must_use]
-    pub const fn simulator(&self) -> Option<&SimulatorConnection> {
-        match &self.provider {
-            CollectionProvider::Simulator { connection } => Some(connection),
-            CollectionProvider::Mifos { .. } => None,
-            CollectionProvider::Http { .. } => None,
-        }
-    }
-
-    pub fn simulator_mut(&mut self) -> Option<&mut SimulatorConnection> {
-        match &mut self.provider {
-            CollectionProvider::Simulator { connection } => Some(connection),
-            CollectionProvider::Mifos { .. } => None,
-            CollectionProvider::Http { .. } => None,
-        }
+        })
     }
 }
 

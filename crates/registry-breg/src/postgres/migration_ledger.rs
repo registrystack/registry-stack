@@ -132,6 +132,7 @@ pub(crate) struct MigrationLedgerStep {
 /// target reuses the id its first attempt recorded.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MigrationLedgerEntry {
+    pub posture: registry_platform_config::Posture,
     pub activation_id: Uuid,
     pub package_digest: String,
     pub predecessor_package_digest: Option<String>,
@@ -342,6 +343,9 @@ pub(crate) async fn install_migration_ledger(
                  role_mode text NOT NULL
                      CONSTRAINT registry_migrations_role_mode_closed
                      CHECK (role_mode IN ('single', 'split')),
+                 posture text NOT NULL DEFAULT 'production'
+                     CONSTRAINT registry_migrations_posture_closed
+                     CHECK (posture IN ('development', 'production')),
                  runtime_role text NOT NULL
                      CONSTRAINT registry_migrations_runtime_role_nonempty
                      CHECK (runtime_role <> ''),
@@ -481,6 +485,7 @@ pub(crate) async fn ensure_migration_statement_capacity(
 /// the roles it was started with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InFlightActivation {
+    pub posture: registry_platform_config::Posture,
     pub activation_id: Uuid,
     pub role_mode: String,
     pub runtime_role: String,
@@ -495,8 +500,9 @@ pub(crate) async fn in_flight_activation(
 ) -> Result<Option<InFlightActivation>> {
     let row = client
         .query_opt(
-            "SELECT activation_id, role_mode, runtime_role
-             FROM registry_internal.registry_migrations
+            "SELECT activation_id, role_mode, runtime_role,
+                    coalesce(to_jsonb(m) ->> 'posture', 'production')
+             FROM registry_internal.registry_migrations m
              WHERE package_digest = $1
                AND outcome IN ('applying', 'failed')",
             &[&package_digest],
@@ -504,6 +510,7 @@ pub(crate) async fn in_flight_activation(
         .await?;
     row.map(|row| {
         Ok(InFlightActivation {
+            posture: super::catalog::recorded_posture(row.try_get(3)?)?,
             activation_id: row.try_get(0)?,
             role_mode: row.try_get(1)?,
             runtime_role: row.try_get(2)?,
@@ -525,12 +532,12 @@ pub(crate) async fn record_started(
                  activation_id, apply_order, package_digest, predecessor_package_digest,
                  registry_revision, plan_kind, migration_kind, statement_checksums,
                  artifact_paths, artifact_checksums, outcome, operator_reference_hash,
-                 role_mode, runtime_role, backup_references
+                 role_mode, runtime_role, backup_references, posture
              ) VALUES (
                  $1,
                  (SELECT COALESCE(max(apply_order), 0) + 1
                   FROM registry_internal.registry_migrations),
-                 $2, $3, $4, $5, $6, $7, $8, $9, 'applying', $10, $11, $12, $13::text::jsonb
+                 $2, $3, $4, $5, $6, $7, $8, $9, 'applying', $10, $11, $12, $13::text::jsonb, $14
              )
              ON CONFLICT DO NOTHING",
             &[
@@ -547,6 +554,7 @@ pub(crate) async fn record_started(
                 &entry.role_mode.as_str(),
                 &entry.runtime_role,
                 &entry.backup_references_json(),
+                &entry.posture.as_str(),
             ],
         )
         .await?;
@@ -593,7 +601,7 @@ pub(crate) async fn verify_resumable(
     let row = client
         .query_opt(
             "SELECT 1
-             FROM registry_internal.registry_migrations
+             FROM registry_internal.registry_migrations m
              WHERE activation_id = $1
                AND package_digest = $2
                AND predecessor_package_digest IS NOT DISTINCT FROM $3
@@ -604,6 +612,7 @@ pub(crate) async fn verify_resumable(
                AND artifact_checksums = $8
                AND role_mode = $9
                AND runtime_role = $10
+               AND coalesce(to_jsonb(m) ->> 'posture', 'production') = $11
                AND outcome IN ('applying', 'failed')
              FOR UPDATE",
             &[
@@ -617,6 +626,7 @@ pub(crate) async fn verify_resumable(
                 &artifact_checksums,
                 &entry.role_mode.as_str(),
                 &entry.runtime_role,
+                &entry.posture.as_str(),
             ],
         )
         .await?;
@@ -897,6 +907,7 @@ pub(crate) async fn record_applied(
            AND predecessor_package_digest IS NOT DISTINCT FROM $3
            AND role_mode = $4
            AND runtime_role = $5
+           AND coalesce(to_jsonb(registry_migrations) ->> 'posture', 'production') = $6
            AND outcome IN ('applying', 'failed')
            {closure}"
     );
@@ -909,6 +920,7 @@ pub(crate) async fn record_applied(
                 &entry.predecessor_package_digest,
                 &entry.role_mode.as_str(),
                 &entry.runtime_role,
+                &entry.posture.as_str(),
             ],
         )
         .await?;
@@ -1005,6 +1017,7 @@ mod tests {
 
     fn entry(migration_kind: MigrationKind) -> MigrationLedgerEntry {
         MigrationLedgerEntry {
+            posture: registry_platform_config::Posture::Production,
             activation_id: Uuid::from_u128(1),
             package_digest: statement_checksum("target"),
             predecessor_package_digest: Some(statement_checksum("prior")),

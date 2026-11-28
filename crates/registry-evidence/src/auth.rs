@@ -8,7 +8,7 @@ use std::{
 #[cfg(test)]
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_authcommon::{validate_compact_access_token, DeclaredScope, FailedCheck};
-use registry_platform_httputil::FetchUrlPolicy;
+use registry_platform_httputil::{FetchUrlPolicy, PeerPolicy};
 use registry_platform_oidc::{
     actor_kind, grant_claims, ActorKind, Audience, ClaimError, ClaimNames, GrantClaims,
     GrantContextError, IssuerNetworkPolicy, JwksFetcher, JwksFetcherConfig, OidcError,
@@ -66,6 +66,7 @@ pub struct AuthenticationClaimsConfig {
 
 #[derive(Clone)]
 pub struct Authenticator {
+    peer_policy: PeerPolicy,
     verifier: Arc<TokenVerifier>,
     claims: AuthenticationClaimsConfig,
     /// Scopes every token must carry, checked after verification and before
@@ -290,9 +291,6 @@ impl Authenticator {
         issuer_roots: Vec<reqwest::Certificate>,
     ) -> Self {
         let config = &config.oidc;
-        if let Some(diagnostic) = config.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
         let algorithms = config
             .algorithms
             .iter()
@@ -348,6 +346,7 @@ impl Authenticator {
 
     pub fn new(verifier: Arc<TokenVerifier>, claims: AuthenticationClaimsConfig) -> Self {
         Self {
+            peer_policy: PeerPolicy::RefuseDevelopmentPeer,
             verifier,
             claims,
             required_scopes: Vec::new(),
@@ -355,6 +354,11 @@ impl Authenticator {
             scope_claim: DEFAULT_SCOPE_CLAIM.to_owned(),
             key_source: Arc::new(Mutex::new(KeySourceState::default())),
         }
+    }
+
+    pub(crate) fn with_peer_policy(mut self, peer_policy: PeerPolicy) -> Self {
+        self.peer_policy = peer_policy;
+        self
     }
 
     /// State the scopes every token must carry. An empty list keeps the
@@ -632,13 +636,14 @@ impl Authenticator {
                 match exactly_matched_resource(verified.claims.aud.as_ref(), &self.resources) {
                     Some(resource) => {
                         if let Err(error) =
-                            grant.verify_context_without_peer_policy(&verified, resource)
+                            grant.verify_context(&verified, resource, self.peer_policy)
                         {
                             task_grant = Err(match error {
                                 GrantContextError::MissingVerifiedClient
                                 | GrantContextError::InvalidVerifiedClient
                                 | GrantContextError::ClientMismatch => TaskGrantError::Client,
                                 GrantContextError::ResourceMismatch => TaskGrantError::Resource,
+                                GrantContextError::DevelopmentAssertion => TaskGrantError::Claims,
                                 _ => TaskGrantError::Claims,
                             });
                         }
@@ -899,12 +904,6 @@ mod tests {
             "http://issuer.example.test:8081/.well-known/jwks.json",
         );
         opted_in.provider.allow_insecure_http = true;
-        assert_eq!(
-            opted_in.insecure_http_startup_diagnostic(),
-            Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-            )
-        );
         assert!(jwks_fetch_policy(&opted_in).allow_http_non_loopback);
     }
 
@@ -1221,8 +1220,8 @@ mod tests {
     #[test]
     fn an_expired_task_grant_is_kept_apart_from_a_malformed_one() {
         let now = chrono::Utc::now().timestamp();
-        let claims = |grant_exp: i64| {
-            serde_json::from_value(serde_json::json!({
+        let claims = |grant_exp: i64, development: bool| {
+            let mut claims = serde_json::json!({
                 "iss": "https://issuer.invalid",
                 "aud": "evidence-resource",
                 "sub": "institutional-agent",
@@ -1238,11 +1237,15 @@ mod tests {
                 "registry_approver": "h:synthetic-approver",
                 "evidence_tags": ["caseworker"],
                 "evidence_audience": "https://relying-party.invalid"
-            }))
-            .expect("claims parse")
+            });
+            if development {
+                claims["registry_posture"] = serde_json::json!("development");
+            }
+            serde_json::from_value(claims).expect("claims parse")
         };
-        let grant_of = |claims| {
+        let grant_of = |claims, policy| {
             context_extraction_authenticator("sub")
+                .with_peer_policy(policy)
                 .extract_context(VerifiedToken {
                     claims,
                     matched_client: Some("client_id:evidence-agent".to_owned()),
@@ -1252,8 +1255,20 @@ mod tests {
                 .grant()
                 .map(|grant| grant.is_some())
         };
-        assert_eq!(grant_of(claims(now - 1)), Err(TaskGrantError::Expired));
-        assert_eq!(grant_of(claims(now + 300)), Ok(true));
+        let production = PeerPolicy::RefuseDevelopmentPeer;
+        assert_eq!(
+            grant_of(claims(now - 1, false), production),
+            Err(TaskGrantError::Expired)
+        );
+        assert_eq!(grant_of(claims(now + 300, false), production), Ok(true));
+        assert_eq!(
+            grant_of(claims(now + 300, true), production),
+            Err(TaskGrantError::Claims)
+        );
+        assert_eq!(
+            grant_of(claims(now + 300, true), PeerPolicy::AcceptDevelopmentPeer),
+            Ok(true)
+        );
     }
 
     #[test]

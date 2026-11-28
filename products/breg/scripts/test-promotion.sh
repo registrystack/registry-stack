@@ -275,7 +275,6 @@ identity:
   environment: $environment
   instanceId: generic-registry-$environment
   databaseId: generic-registry-$environment-db
-  databaseInitializationEnvironment: $environment
 secretProviders:
   file:
     root: $temporary_root/secrets

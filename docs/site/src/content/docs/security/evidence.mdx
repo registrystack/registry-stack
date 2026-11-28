@@ -16,6 +16,12 @@ permissions across grants, redirect source access, learn from an absence, or rec
 unauthenticated response, and so that its configuration cannot change underneath a request. The
 operator keeps the duties no service-side control can hold.
 
+Your stack shares one deployment posture. A stack signing with Evidence local keys runs in
+development. Production signing uses Transit, and production peers refuse development responses
+and task assertions. Development Evidence responses carry `Registry-Posture: development`.
+Audit entries record the process posture. Successful `/ready` responses include `posture`
+and `developmentSettings`.
+
 ## What the runtime guarantees
 
 A caller cannot turn the service into a fact-query engine. It evaluates only

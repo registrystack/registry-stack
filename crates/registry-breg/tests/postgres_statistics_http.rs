@@ -4103,7 +4103,7 @@ journeys:
         load_package(
             &path,
             &PackageLoadContext {
-                database_initialization_environment: "local",
+                posture: registry_platform_config::Posture::Development,
             },
         )
         .unwrap()
@@ -4125,7 +4125,9 @@ journeys:
         .await
         .expect("initial statistical package applies");
     let pool = database.runtime_config.build_pool().unwrap();
-    let lock_key = RegistryLockKey::derive(PACKAGE_ID).unwrap();
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID)
+        .unwrap()
+        .for_posture(initial.posture());
     let today = Utc::now().date_naive();
     let prior_date = today
         .with_day(1)

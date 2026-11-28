@@ -103,7 +103,7 @@ impl ReviewFixture {
         let predecessor = load_predecessor_package(
             &baseline.package,
             &PackageLoadContext {
-                database_initialization_environment: "production",
+                posture: registry_platform_config::Posture::Production,
             },
         )
         .unwrap();
@@ -297,7 +297,7 @@ fn apply_reports_an_unchanged_successor_as_nothing_to_apply() {
     let predecessor = load_predecessor_package(
         &baseline.package,
         &PackageLoadContext {
-            database_initialization_environment: "production",
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .unwrap();

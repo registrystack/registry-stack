@@ -264,7 +264,6 @@ identity:
   environment: acceptance
   instanceId: household-history-acceptance
   databaseId: household-history-adopter-db
-  databaseInitializationEnvironment: acceptance
 secretProviders:
   file:
     root: $temporary_root/secrets

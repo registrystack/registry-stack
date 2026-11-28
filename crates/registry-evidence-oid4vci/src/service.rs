@@ -58,8 +58,8 @@ use registry_platform_authcommon::{FailedCheck, RefusalNote};
 use registry_platform_config::describe_secret_failure;
 use registry_platform_crypto::PublicJwk;
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit, security_headers_without_posture,
-    CspBuilder, FrameworkRejection,
+    normalize_framework_rejection, request_body_limit, security_headers, CspBuilder,
+    FrameworkRejection,
 };
 use registry_platform_ratelimit::token_bucket::{
     TokenBucketConfig, TokenBucketError, TokenBucketLimiter,
@@ -380,11 +380,10 @@ impl DeliveryService {
             .audit
             .destination()
             .map_err(|error| ServiceError::AuditDestination(error.to_string()))?;
-        let audit = Arc::new(DeliveryAudit::initialize(destination, audit_key).await?);
-        let authorizer = Arc::new(MintResourceServer::from_config(
-            &config.offers,
-            config.validation_mode,
-        ));
+        let audit = Arc::new(
+            DeliveryAudit::initialize(destination, audit_key, config.posture.posture()).await?,
+        );
+        let authorizer = Arc::new(MintResourceServer::from_config(&config.offers));
         Ok(Self::with_halves(config, authorizer, issuer, audit))
     }
 
@@ -577,6 +576,7 @@ fn resolve_audit_key(config: &DeliveryConfig) -> Result<Zeroizing<Vec<u8>>, Serv
 /// bounds the whole request, so a body that arrives a byte at a time is bounded
 /// by the same limit as a handler that waits on a slow source.
 pub fn build_app(service: Arc<DeliveryService>) -> Router {
+    let posture = service.config.posture.posture();
     let body_limit = service.config.listener.maximum_request_bytes as usize;
     let request_timeout =
         Duration::from_millis(service.config.listener.request_timeout_milliseconds);
@@ -617,9 +617,7 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
             refuse_a_stalled_request,
         ))
         .layer(from_fn(normalize_rejections))
-        .layer(security_headers_without_posture(
-            CspBuilder::deny_by_default(),
-        ))
+        .layer(security_headers(CspBuilder::deny_by_default(), posture))
         .layer(from_fn_with_state(metrics, observability::observe))
         .layer(from_fn(add_no_store))
 }
@@ -683,7 +681,10 @@ where
         "delivery service listening"
     );
     let app = build_app(Arc::clone(&service));
-    let metrics_app = observability::metrics_app(Arc::clone(&service.metrics));
+    let metrics_app = observability::metrics_app(
+        Arc::clone(&service.metrics),
+        service.config.posture.posture(),
+    );
     let (stop, stopped) = watch::channel(false);
     let public_stopped = stopped.clone();
     let metrics_stopped = stopped.clone();
@@ -778,7 +779,9 @@ async fn health() -> Response {
 /// releasable operation unavailable and therefore makes this process unready.
 async fn ready(State(service): State<Arc<DeliveryService>>) -> Response {
     if service.audit.ready().await {
-        json_response(StatusCode::OK, br#"{"status":"ready"}"#.to_vec())
+        let mut body = service.config.posture.ready_member();
+        body.insert("status".to_owned(), Value::from("ready"));
+        axum::Json(body).into_response()
     } else {
         json_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1965,7 +1968,7 @@ mod tests {
     fn test_audit_with(sink: Box<dyn Write + Send>) -> Arc<DeliveryAudit> {
         Arc::new(
             DeliveryAudit::with_writer(
-                AuditWriter::from_line_sink_without_posture(sink),
+                AuditWriter::from_line_sink(sink, registry_platform_config::Posture::Development),
                 b"0123456789abcdef0123456789abcdef".to_vec(),
             )
             .expect("the test audit profile is valid"),
@@ -2169,8 +2172,14 @@ mod tests {
     }
 
     fn load_deployment(directory: &Path) -> DeliveryConfig {
-        DeliveryConfig::load(&write_deployment(directory, 8090, 0o600))
-            .expect("the deployment configuration loads")
+        DeliveryConfig::load(
+            &write_deployment(directory, 8090, 0o600),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the deployment configuration loads")
     }
 
     /// A service over the two stubs, so a test drives the protocol rather than
@@ -2540,7 +2549,14 @@ mod tests {
         let occupied = StdTcpListener::bind(("127.0.0.1", 0)).expect("hold a port");
         let port = occupied.local_addr().expect("read the held port").port();
         let path = write_deployment(directory.path(), port, 0o600);
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
 
         DeliveryService::load(config)
             .await
@@ -2552,7 +2568,14 @@ mod tests {
         for mode in [0o640, 0o604, 0o644, 0o660] {
             let directory = canonical_tempdir();
             let path = write_deployment(directory.path(), 8090, mode);
-            let config = DeliveryConfig::load(&path).expect("the configuration loads");
+            let config = DeliveryConfig::load(
+                &path,
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            )
+            .expect("the configuration loads");
 
             let error = DeliveryService::load(config)
                 .await
@@ -2568,7 +2591,14 @@ mod tests {
     async fn loading_refuses_a_client_key_that_is_not_there() {
         let directory = canonical_tempdir();
         let path = write_deployment(directory.path(), 8090, 0o600);
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         fs::remove_file(directory.path().join("delivery-client.jwk.json"))
             .expect("remove the client key file");
 
@@ -2597,7 +2627,14 @@ mod tests {
         fs::write(&audit_key_path, audit_key).expect("write the binary audit key");
         fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
             .expect("keep the audit key owner-only");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
 
         DeliveryService::load(config)
             .await
@@ -2613,7 +2650,14 @@ mod tests {
         fs::write(&audit_key_path, WEAK_KEY.as_bytes()).expect("write the weak audit key");
         fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
             .expect("keep the audit key owner-only");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
 
         let error = DeliveryService::load(config)
             .await
@@ -2633,7 +2677,14 @@ mod tests {
         fs::write(&key_path, b"\xffKEYMATERIAL").expect("write a binary key");
         fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
             .expect("set the client key mode");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
 
         let error = DeliveryService::load(config)
             .await
@@ -3261,7 +3312,7 @@ mod tests {
     #[tokio::test]
     async fn offer_endpoint_refuses_malformed_expired_and_renamed_grants() {
         use crate::authorizer::MintResourceServer;
-        use crate::config::{AccessTokenAlgorithm, ValidationMode};
+        use crate::config::AccessTokenAlgorithm;
         use registry_platform_oidc::ClaimNames;
 
         let directory = canonical_tempdir();
@@ -3304,10 +3355,7 @@ mod tests {
                 names.approver = "task_approver".into();
             }
             config.offers.claims = names.clone();
-            let authorizer = MintResourceServer::from_config(
-                &config.offers,
-                ValidationMode::SupervisedLocalDevelopment,
-            );
+            let authorizer = MintResourceServer::from_config(&config.offers);
             let issuer = Arc::new(RecordingIssuer::new());
             let server = TestServer::new(build_app(Arc::new(DeliveryService::with_halves(
                 config,
@@ -3382,7 +3430,14 @@ mod tests {
             fs::Permissions::from_mode(0o600),
         )
         .expect("set the client key mode");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         assert!(
             matches!(
                 DeliveryService::load(config).await,
@@ -3723,7 +3778,14 @@ mod tests {
                 document.replace("credentialIssuer:", &format!("{member}\ncredentialIssuer:"));
             fs::write(&path, &text).expect("write the configuration document");
             assert!(
-                DeliveryConfig::load(&path).is_err(),
+                DeliveryConfig::load(
+                    &path,
+                    registry_platform_config::DeclaredPosture {
+                        posture: registry_platform_config::Posture::Development,
+                        source: registry_platform_config::PostureSource::Flag
+                    }
+                )
+                .is_err(),
                 "the configuration accepted {member}"
             );
         }
@@ -4363,7 +4425,14 @@ mod tests {
             ),
         )
         .expect("write the configuration document");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         let (service, issuer) = wired_service_over(config);
         let server = TestServer::new(build_app(service));
 
@@ -5324,7 +5393,14 @@ mod tests {
             ),
         )
         .expect("write the configuration document");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         assert_eq!(config.listener.request_timeout_milliseconds, 200);
         let service = Arc::new(
             DeliveryService::load(config)
@@ -5378,7 +5454,14 @@ mod tests {
             probe.local_addr().expect("read the probed port").port()
         };
         let path = write_deployment(directory.path(), port, 0o600);
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         let service = Arc::new(
             DeliveryService::load(config)
                 .await
@@ -5421,7 +5504,14 @@ mod tests {
             probe.local_addr().expect("read the probed port").port()
         };
         let path = write_deployment(directory.path(), port, 0o600);
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         let expired_at = now()
             .saturating_sub(config.store.offer_lifetime_seconds as i64)
             .saturating_sub(1);
@@ -5487,7 +5577,14 @@ mod tests {
             ),
         )
         .expect("configure metrics");
-        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let config = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("the configuration loads");
         let service = Arc::new(
             DeliveryService::load(config)
                 .await

@@ -78,6 +78,10 @@ fn test_seal_refuses_production_without_writing_output() {
         let result = run_with_posture(&bundle(), "notice", &data, &destination, flags);
         let refused = report(&result);
         assert_eq!(result.status.code(), Some(20), "{refused}");
+        assert_eq!(
+            refused["diagnostics"][0]["code"], "render.posture.test-signing",
+            "{refused}"
+        );
         assert!(
             refused
                 .to_string()

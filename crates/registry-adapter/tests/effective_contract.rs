@@ -73,7 +73,6 @@ database:
 oidc:
   issuer: http://127.0.0.1:9
   audience: registry-adapter-test
-  allowInsecureHttp: true
   jwksSource:
     type: static
     documentRef: secret:env/TEST_JWKS

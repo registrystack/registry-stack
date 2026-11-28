@@ -174,11 +174,6 @@ pub(crate) async fn authenticator(
 ) -> Result<Authenticator, ServeError> {
     let oidc = &runtime.oidc;
     let invalid = |what: &str| ServeError::Configuration(format!("oidc: {what}"));
-    if oidc.allow_insecure_http {
-        tracing::warn!(
-            "allowInsecureHttp is set: the token issuer and its keys may be fetched over plain http"
-        );
-    }
     let network = IssuerNetworkPolicy::new(oidc.issuer.as_str(), oidc.allow_insecure_http)
         .map_err(|_| invalid("the issuer was refused"))?;
     let keys = match &oidc.jwks_source {
@@ -274,12 +269,28 @@ fn codec(
     Ok(Some(ContinuationCodec::new(key(current)?, previous, ttl)))
 }
 
+pub(crate) fn check_database(config: &DatabaseConfig) -> Result<(), ServeError> {
+    config
+        .check(cfg!(feature = "postgres-test"))
+        .map_err(database_transport_error)
+}
+
+fn database_transport_error(error: registry_platform_config::DatabaseTransportError) -> ServeError {
+    ServeError::Configuration(format!(
+        "database: {}: {error}; next: {}",
+        error.code(),
+        error.suggested_action()
+    ))
+}
+
 pub(crate) fn pool(
     config: &DatabaseConfig,
     resolver: &SecretResolver,
     migration: bool,
+    development: Option<&registry_platform_config::DevelopmentWitness>,
 ) -> Result<Pool, ServeError> {
     let invalid = |what: &str| ServeError::Configuration(format!("database: {what}"));
+    check_database(config)?;
     let reference = if migration {
         &config.migration_url_ref
     } else {
@@ -298,19 +309,29 @@ pub(crate) fn pool(
     let manager_config = ManagerConfig {
         recycling_method: RecyclingMethod::Verified,
     };
-    #[cfg(feature = "postgres-test")]
-    let manager = if config.test_only_plaintext {
+    use registry_platform_config::{DatabaseHost, DatabaseTransport};
+    let hosts: Vec<_> = postgres
+        .get_hosts()
+        .iter()
+        .map(|host| match host {
+            tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
+            #[cfg(unix)]
+            tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
+        })
+        .chain(
+            postgres
+                .get_hostaddrs()
+                .iter()
+                .map(|ip| DatabaseHost::Tcp(ip.to_string())),
+        )
+        .collect();
+    let transport = config
+        .plaintext_permitted(&hosts, development)
+        .map_err(database_transport_error)?;
+    let manager = if config.test_only_plaintext || transport != DatabaseTransport::VerifiedTls {
         postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
         Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
     } else {
-        postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-        Manager::from_config(postgres, tls_connector(config, resolver)?, manager_config)
-    };
-    #[cfg(not(feature = "postgres-test"))]
-    let manager = {
-        if config.test_only_plaintext {
-            return Err(invalid("plaintext connections are refused in this build"));
-        }
         postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
         Manager::from_config(postgres, tls_connector(config, resolver)?, manager_config)
     };
@@ -612,6 +633,10 @@ pub async fn run(
         runtime_path,
         None,
         &[],
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
     )
     .await
 }
@@ -624,6 +649,7 @@ pub async fn run_configured(
     runtime_path: &std::path::Path,
     payments_path: Option<&std::path::Path>,
     payment_provider_pack: &[std::path::PathBuf],
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<(), ServeError> {
     match (project_directory, payments_path) {
         (Some(project), payments) => {
@@ -634,11 +660,13 @@ pub async fn run_configured(
                 runtime_path,
                 payments,
                 payment_provider_pack,
+                declared,
             )
             .await
         }
         (None, Some(payments)) if profile_path.is_none() && pack_path.is_none() => {
-            crate::payments::http::run_only(runtime_path, payments, payment_provider_pack).await
+            crate::payments::http::run_only(runtime_path, payments, payment_provider_pack, declared)
+                .await
         }
         _ => Err(ServeError::Configuration(
             "a project or payment configuration is required".to_owned(),
@@ -997,6 +1025,101 @@ pub(crate) async fn grant_when_split(
     grant_runtime_privileges(migration, &runtime_role, required).await
 }
 
+type LoadedServeConfig = (
+    registry_platform_config::LoadedRuntimeConfig<AdapterRuntimeConfig>,
+    Option<registry_platform_config::LoadedRuntimeConfig<crate::payments::config::PaymentsConfig>>,
+);
+
+/// Read the two files before deciding whether any collected setting is allowed.
+pub(crate) fn load_serve_configuration(
+    runtime_path: &std::path::Path,
+    payments_path: Option<&std::path::Path>,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<LoadedServeConfig, ServeError> {
+    use registry_platform_config::{RuntimeConfigLoader, RuntimeEnvelope};
+    use registry_platform_yaml::Severity;
+
+    let path = std::fs::canonicalize(runtime_path).unwrap_or_else(|_| runtime_path.to_path_buf());
+    let runtime = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: registry_adapter_core::ADAPTER_RUNTIME_API_VERSION,
+            kind: registry_adapter_core::ADAPTER_RUNTIME_KIND,
+        },
+        declared,
+    )
+    .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS)
+    .check_offline::<AdapterRuntimeConfig>(&path, true, |_| "");
+    let payments =
+        payments_path.map(|path| crate::payments::http::check_config_in_posture(path, declared));
+    let diagnostics = runtime
+        .diagnostics
+        .into_iter()
+        .chain(
+            payments
+                .iter()
+                .flat_map(|file| file.diagnostics.iter().cloned()),
+        )
+        .collect::<Vec<_>>();
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        let details = diagnostics
+            .iter()
+            .map(registry_platform_yaml::Diagnostic::render_human)
+            .collect::<String>();
+        return Err(ServeError::Configuration(format!(
+            "the runtime config was refused: {}",
+            details.trim_end()
+        )));
+    }
+    let mut runtime = runtime
+        .loaded
+        .expect("a successful check reads the runtime file");
+    let payments =
+        payments.map(|file| file.loaded.expect("a successful check reads the companion"));
+    registry_adapter_core::record_endpoint_posture(&runtime.config.endpoints, &mut runtime.posture);
+    if let Some(payments) = &payments {
+        for setting in payments.posture.settings() {
+            runtime.posture.record(setting.clone());
+        }
+        let source = match declared.source {
+            registry_platform_config::PostureSource::Flag => "flag",
+            registry_platform_config::PostureSource::Environment => "environment",
+            registry_platform_config::PostureSource::Default => "default",
+        };
+        tracing::info!(
+            posture = declared.posture.as_str(),
+            posture_source = source,
+            development_settings = runtime.posture.settings().len(),
+            explicit_production_settings = runtime.posture.explicit_settings().len(),
+            "posture declared"
+        );
+        for setting in runtime.posture.explicit_settings() {
+            tracing::info!(
+                setting_code = setting.setting.code,
+                pointer = setting.pointer.as_deref().unwrap_or(""),
+                file = %path.display(),
+                "explicit production setting in use"
+            );
+        }
+        for diagnostic in &diagnostics {
+            tracing::warn!(
+                error_code = diagnostic.code,
+                pointer = diagnostic.path,
+                file = diagnostic
+                    .source
+                    .as_ref()
+                    .map_or("", |source| source.file.as_str()),
+                "development-only setting in use; production refuses it"
+            );
+        }
+    } else {
+        runtime.posture.log_startup();
+    }
+    Ok((runtime, payments))
+}
+
 async fn run_facade(
     project_directory: &std::path::Path,
     profile_path: Option<&std::path::Path>,
@@ -1004,14 +1127,18 @@ async fn run_facade(
     runtime_path: &std::path::Path,
     payments_path: Option<&std::path::Path>,
     payment_provider_pack: &[std::path::PathBuf],
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<(), ServeError> {
-    let loaded = crate::engine::load::load_with_target(
+    let (runtime, payments) = load_serve_configuration(runtime_path, payments_path, declared)?;
+    let loaded = crate::engine::load::load_with_target_from_runtime(
         project_directory,
         profile_path,
         pack_path,
         runtime_path,
+        runtime,
         crate::govstack::target_attachment,
     )?;
+    check_database(&loaded.runtime.database)?;
     for unserved in &loaded.unserved {
         tracing::warn!(binding = %unserved.binding, reason = %unserved.reason,
             reason_code = unserved.reason_code, "binding not served");
@@ -1095,11 +1222,11 @@ async fn run_facade(
     };
     // The payment configuration, packs and credentials settle before any
     // database work, so a refusal grants nothing.
-    let payments = match payments_path {
-        Some(path) => Some(
+    let payments = match payments {
+        Some(config) => Some(
             crate::payments::http::PreparedPayments::prepare(
                 &loaded.runtime,
-                path,
+                config,
                 payment_provider_pack,
             )
             .await?,
@@ -1107,8 +1234,18 @@ async fn run_facade(
         None => None,
     };
     let shutdown = shutdown_signal()?;
-    let migration = pool(&loaded.runtime.database, &loaded.resolver, true)?;
-    let journal = pool(&loaded.runtime.database, &loaded.resolver, false)?;
+    let migration = pool(
+        &loaded.runtime.database,
+        &loaded.resolver,
+        true,
+        loaded.development.as_ref(),
+    )?;
+    let journal = pool(
+        &loaded.runtime.database,
+        &loaded.resolver,
+        false,
+        loaded.development.as_ref(),
+    )?;
     // Whether the grant step found the runtime role holding everything the
     // deployment requires in the schema the migrations ran in.
     let grants_verified;
@@ -1256,7 +1393,8 @@ async fn run_facade(
     let routes = match payments_router {
         Some(payments) => router(state).merge(payments),
         None => router(state),
-    };
+    }
+    .layer(registry_platform_httpsec::posture_mark(declared.posture));
     let serving = axum::serve(listener, routes).with_graceful_shutdown(async move {
         let _closed = server_shutdown.changed().await;
     });
@@ -1271,6 +1409,7 @@ async fn run_facade(
                         let _closed = metrics_shutdown.changed().await;
                     },
                     crate::metrics::METRICS_SHUTDOWN_TIMEOUT,
+                    declared.posture,
                 )
                 .await
             }
@@ -1376,6 +1515,51 @@ mod tests {
         let resolver = SecretResolver::new([registry_platform_config::SecretProvider::File], root)
             .expect("resolver");
         authenticator(&static_key_runtime(), &resolver).await
+    }
+
+    #[cfg(not(feature = "postgres-test"))]
+    #[test]
+    fn outside_test_builds_plaintext_requires_an_explicit_transport() {
+        let mut runtime = static_key_runtime();
+        runtime.database.test_only_plaintext = true;
+        let resolver =
+            SecretResolver::new([registry_platform_config::SecretProvider::Environment], "")
+                .unwrap();
+        let error = pool(&runtime.database, &resolver, false, None)
+            .expect_err("test-only transport must refuse");
+        assert!(
+            error
+                .to_string()
+                .contains("platform.database.test-only-plaintext"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn loopback_database_transport_refuses_a_private_network_host() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let file = root.join("database-runtime");
+        std::fs::write(&file, "postgresql://test@10.0.0.5/registry").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let resolver =
+            SecretResolver::new([registry_platform_config::SecretProvider::File], root).unwrap();
+        let mut runtime = static_key_runtime();
+        runtime.database.transport = Some(
+            registry_platform_config::Gated::everywhere(
+                registry_platform_config::DatabaseTransport::LoopbackPlaintext,
+            )
+            .unwrap(),
+        );
+        let error = pool(&runtime.database, &resolver, false, None)
+            .expect_err("loopback plaintext must refuse the private host");
+        assert!(
+            error
+                .to_string()
+                .contains("platform.database.transport-host-mismatch"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

@@ -206,7 +206,6 @@ identity:
   environment: production
   instanceId: registry-primary
   databaseId: registry-db
-  databaseInitializationEnvironment: production
 secretProviders:
   environment: {{}}
   file:
@@ -407,7 +406,14 @@ impl S3Fixture {
             "{}\nattachmentStorage:\n  type: s3\n  url: {endpoint}\n  bucket: synthetic-proposal\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 2000\nattachmentVerification:\n  type: http\n  url: {endpoint}/verify\n  policyId: synthetic-policy\n  authorizationRef: secret:file/verifier\n  attemptTimeoutMilliseconds: {verifier_timeout_milliseconds}\n",
             valid_runtime(secrets.path(), secrets.path())
         );
-        let config = parse_runtime_config(&raw).unwrap();
+        let config = parse_runtime_config(
+            &raw,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Default,
+            },
+        )
+        .unwrap();
         let storage = config
             .activate_attachment_storage("proposal-test")
             .await

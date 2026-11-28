@@ -80,6 +80,11 @@ pub fn apply(config_path: &Path, records_path: &Path, declared: DeclaredPosture)
             },
         ));
     }
+    if let Some(error) =
+        registry_scheduling::store::posture_mismatch(active.posture, declared.posture)
+    {
+        return Err(crate::activation::refusal_or_failure(error));
+    }
     let (_, audit) = runtime
         .block_on(open_audit(&config, &resolver, Some("schedulingctl")))
         .context("opening the schedulingctl audit destination")?;
@@ -107,8 +112,7 @@ pub fn apply(config_path: &Path, records_path: &Path, declared: DeclaredPosture)
         Ok(()) => {}
         Err(store_error) => {
             let answer = unanswered_swap(&store_error);
-            let error =
-                anyhow::Error::new(store_error).context("replacing the environment records");
+            let error = swap_failure(store_error);
             return Err(record_unanswered(
                 &runtime,
                 &audit,
@@ -168,6 +172,11 @@ fn unanswered_swap(error: &StoreError) -> (&'static str, &'static str) {
         StoreError::Unacknowledged => ("unfinished", "records.replace-unacknowledged"),
         _ => ("refused", "records.replace-failed"),
     }
+}
+
+/// The error `records apply` returns for a swap the store refused or lost.
+fn swap_failure(error: StoreError) -> anyhow::Error {
+    crate::activation::refusal_or_failure(error).context("replacing the environment records")
 }
 
 /// Write the `response` entry of a swap the store did not confirm. The
@@ -247,6 +256,48 @@ mod tests {
             unanswered_swap(&StoreError::DeploymentIdentity),
             ("refused", "records.replace-failed")
         );
+    }
+
+    #[test]
+    fn a_swap_refusal_is_a_domain_refusal_and_an_outage_stays_operational() {
+        use crate::{classify_failure, DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT};
+
+        for (error, code) in [
+            (
+                StoreError::PackageNotActive {
+                    active: "sha256:a".to_owned(),
+                    candidate: "sha256:b".to_owned(),
+                },
+                "schedulingctl.activation.package-not-active",
+            ),
+            (
+                StoreError::DeploymentIdentity,
+                "schedulingctl.activation.deployment-identity",
+            ),
+            (
+                StoreError::NotActivated,
+                "schedulingctl.activation.not-activated",
+            ),
+            (
+                StoreError::DatabaseIdMismatch,
+                "schedulingctl.activation.database-id-mismatch",
+            ),
+            (
+                StoreError::CombinedInvariant("a pool names a missing resource".to_owned()),
+                "schedulingctl.activation.combined-invariant",
+            ),
+        ] {
+            let (exit, diagnostic) = classify_failure(&swap_failure(error));
+            assert_eq!(exit, DOMAIN_REFUSAL_EXIT, "{code}");
+            assert_eq!(diagnostic["code"], code);
+            assert!(diagnostic["message"]
+                .as_str()
+                .unwrap()
+                .contains("replacing the environment records"));
+        }
+        let (exit, diagnostic) = classify_failure(&swap_failure(StoreError::Unacknowledged));
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "schedulingctl.store-unavailable");
     }
 
     #[test]

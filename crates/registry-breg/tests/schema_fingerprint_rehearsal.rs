@@ -576,8 +576,9 @@ fn runtime_config_with_roles(
     migration_role: &str,
     runtime_role: &str,
 ) -> RuntimeConfig {
-    parse_runtime_config(&format!(
-        r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
+    parse_runtime_config(
+        &format!(
+            r#"apiVersion: id.registrystack.org/formats/breg/runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
   bind: 127.0.0.1:8080
@@ -585,7 +586,6 @@ identity:
   environment: {environment}
   instanceId: {instance_id}
   databaseId: {DATABASE}
-  databaseInitializationEnvironment: {environment}
 secretProviders:
   environment: {{}}
 database:
@@ -637,7 +637,12 @@ operationalTimeouts:
   migrationLockMilliseconds: 30000
   migrationStatementMilliseconds: 60000
 "#
-    ))
+        ),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
     .expect("test runtime config parses")
 }
 

@@ -27,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{middleware, Extension, Json, Router};
 use registry_platform_canonical_json::parse_json_strict;
-use registry_platform_httpsec::{security_headers_without_posture, CspBuilder};
+use registry_platform_httpsec::{security_headers, CspBuilder};
 use serde_json::{json, Map, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -111,11 +111,12 @@ pub fn set_request_deadline_for_test(
 }
 
 pub fn router(service: Arc<HttpService>) -> Router {
+    let posture = service.posture.posture();
     route_set(Arc::clone(&service))
         .merge(probe_routes(service))
         .layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
-        .layer(security_headers_without_posture(CspBuilder::restrictive()))
+        .layer(security_headers(CspBuilder::restrictive(), posture))
 }
 
 fn route_set(service: Arc<HttpService>) -> Router {
@@ -284,6 +285,15 @@ pub fn authenticated_router(
     service: Arc<HttpService>,
     authenticator: Arc<RegistryAuthenticator>,
 ) -> Router {
+    authenticated_router_with_listener(service, authenticator, false)
+}
+
+pub(crate) fn authenticated_router_with_listener(
+    service: Arc<HttpService>,
+    authenticator: Arc<RegistryAuthenticator>,
+    loopback: bool,
+) -> Router {
+    let posture = service.posture.posture();
     let completion_receiver = service.review_completions.is_some();
     let authenticated = route_set(Arc::clone(&service))
         .layer(middleware::from_fn_with_state(
@@ -300,9 +310,15 @@ pub fn authenticated_router(
     } else {
         authenticated
     };
+    let headers = security_headers(CspBuilder::restrictive(), posture);
+    let headers = if loopback && posture == registry_platform_config::Posture::Development {
+        headers.without_hsts()
+    } else {
+        headers
+    };
     app.layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
-        .layer(security_headers_without_posture(CspBuilder::restrictive()))
+        .layer(headers)
 }
 
 async fn review_completion(
@@ -411,7 +427,9 @@ async fn health() -> Response {
 
 async fn ready(State(service): State<Arc<HttpService>>) -> Response {
     if service.readiness.is_ready().await {
-        Json(json!({"status": "ready"})).into_response()
+        let mut members = service.posture.ready_member();
+        members.insert("status".to_owned(), json!("ready"));
+        Json(members).into_response()
     } else {
         fixed_problem(ProblemCode::RuntimeNotReady)
     }
@@ -5795,6 +5813,7 @@ fn mutation_problem_response(error: MutationError) -> Response {
         | MutationError::RetryableConflict
         | MutationError::CommitUnresolved
         | MutationError::MigrationLockHeld
+        | MutationError::PostureMismatch { .. }
         | MutationError::PackagePinMismatch(_) => fixed_problem(ProblemCode::ServiceUnavailable),
         MutationError::ActionRefusal(refusal) => {
             crate::correlation::action_refusal_response(refusal)

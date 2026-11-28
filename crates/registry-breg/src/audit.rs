@@ -89,7 +89,7 @@ impl RegistryAudit {
             .destination()
             .for_process(COMPANION_PROCESS_ROLE)
             .map_err(|_| RegistryAuditError::Unavailable)?;
-        let writer = AuditWriter::open_without_posture(destination)
+        let writer = AuditWriter::open(destination, config.posture())
             .await
             .map_err(|_| RegistryAuditError::Unavailable)?;
         Ok(Self::new(profile, writer))
@@ -1316,9 +1316,10 @@ pub mod test_support {
         /// process appending to the same destination would.
         #[must_use]
         pub fn audit(&self, profile: AuditProfile) -> RegistryAudit {
-            let writer = AuditWriter::from_line_sink_without_posture(Box::new(CaptureSink(
-                Arc::clone(&self.0),
-            )));
+            let writer = AuditWriter::from_line_sink(
+                Box::new(CaptureSink(Arc::clone(&self.0))),
+                registry_platform_config::Posture::Production,
+            );
             self.0
                 .lock()
                 .expect("audit capture lock")

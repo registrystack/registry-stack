@@ -95,6 +95,9 @@ fn new(args: NewArgs) -> Result<ExitCode> {
         copy_explicit_target(source, &args.directory)?;
     }
     println!("Created Evidence target {}", args.directory.display());
+    if args.local {
+        println!("Start it with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.");
+    }
     if !carried.is_empty() {
         println!(
             "Source connections declared from {LOCAL_TARGET_FILE}: {}",

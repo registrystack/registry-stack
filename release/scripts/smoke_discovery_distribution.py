@@ -677,10 +677,9 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
                     base_url,
                     EXPECTED_RECORD_ID,
                 ],
-                env={
-                    **node_environment(environment, scratch),
-                    "REGISTRY_STACK_POSTURE": environment["REGISTRY_STACK_POSTURE"],
-                },
+                # The SDK's peer policy, not an environment variable, decides whether
+                # it accepts the development Discovery.
+                env=node_environment(environment, scratch),
                 capture_output=True,
                 text=True,
                 timeout=30,

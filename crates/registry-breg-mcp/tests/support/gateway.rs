@@ -3,10 +3,11 @@
 //! A complete gateway on a loopback port, started from an operator document.
 //!
 //! The harness writes the same runtime configuration an operator would, with
-//! owner-only secret files, and starts the public `runtime::build` router over
-//! the test authorization server and the stand-in registry. The gateway's
-//! token endpoint is a counting pass-through to the authorization server, so
-//! a test can prove that a refused request never reached the exchange.
+//! owner-only secret files, and starts the public
+//! `runtime::build_with_posture` router over the test authorization server
+//! and the stand-in registry. The gateway's token endpoint is a counting
+//! pass-through to the authorization server, so a test can prove that a
+//! refused request never reached the exchange.
 
 #![allow(dead_code)]
 

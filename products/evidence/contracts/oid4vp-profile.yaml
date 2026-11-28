@@ -101,7 +101,7 @@ endpoints:
       Liveness, and readiness that tracks the local audit destination and the
       client identifier certificates: readiness answers 503 once a certificate
       is past its notAfter by the service clock, with one warning logged per
-      identifier.
+      identifier. A successful readiness response includes posture and developmentSettings.
 client_identifiers:
   rule: >-
     The runtime file declares a list of clientIdentifiers, each with a local

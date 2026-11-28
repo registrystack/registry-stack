@@ -124,6 +124,14 @@ pub(crate) const FIXTURE_FORMAT: FormatSpec<'static> = FormatSpec {
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    pub posture: Option<String>,
+
+    /// Declare the production posture.
+    #[arg(long)]
+    pub production: bool,
+
     /// Authored adapter project: its directory (holding `project.yaml`) or
     /// the `project.yaml` file itself. The profile, pack, and fixtures are
     /// read beside the project either way.
@@ -204,7 +212,10 @@ pub(crate) struct CheckRun {
 /// Check one project. Reads every file even after a refusal so one pass
 /// names everything to fix; a document that does not read stops the run
 /// only when the file itself is unavailable.
-pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
+pub(crate) fn run(
+    args: &CheckArgs,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<CheckRun, CheckFailure> {
     let mut report = Report::new(Vec::new());
     let mut files = 0usize;
 
@@ -287,7 +298,9 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     }
 
     let runtime = match &args.runtime {
-        Some(path) => read_runtime(path, args.environment, &mut report, &mut files)?,
+        Some(path) => {
+            read_runtime_in_posture(path, args.environment, &mut report, &mut files, declared)?
+        }
         None => None,
     };
 
@@ -348,6 +361,27 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     }
     check_fixture_bodies(&profile, &project, &fixtures, &mut report);
     check_consultation_fixture_bodies(&project, &directory, &fixtures, &mut report);
+    if !report.has_errors() {
+        if let (Some(runtime), Some(path)) = (runtime, &args.runtime) {
+            let mut posture = registry_platform_config::PostureReport::new(declared);
+            registry_adapter_core::record_endpoint_posture(&runtime.endpoints, &mut posture);
+            for finding in posture.explicit_settings() {
+                let mut diagnostic = Diagnostic::warning(
+                    finding.setting.code,
+                    finding.pointer.as_deref().unwrap_or(""),
+                    finding.setting.summary,
+                    "Keep anonymousHttps only for a fixed source intended to work without credentials.",
+                );
+                diagnostic.artifact = Some(ADAPTER_RUNTIME_KIND.to_owned());
+                diagnostic.source = Some(registry_platform_yaml::Source {
+                    file: path.display().to_string(),
+                    line: None,
+                    column: None,
+                });
+                report.push(diagnostic);
+            }
+        }
+    }
 
     Ok(CheckRun {
         diagnostics: report.into_diagnostics(),
@@ -835,11 +869,12 @@ pub(crate) fn read<T: serde::de::DeserializeOwned>(
 /// position only, and a value it would fill is replaced whole by a stand-in
 /// so the members around it still decode. A file the loader cannot read is
 /// an environment failure; one it refuses is reported.
-pub(crate) fn read_runtime(
+pub(crate) fn read_runtime_in_posture(
     path: &Path,
     substitute: bool,
     report: &mut Report,
     files: &mut usize,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<Option<registry_adapter_core::AdapterRuntimeConfig>, CheckFailure> {
     let shown = path.display().to_string();
     // The loader reads absolute paths whose components are no symbolic
@@ -850,10 +885,13 @@ pub(crate) fn read_runtime(
         path: shown.clone(),
         source,
     })?;
-    let loader = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
-        api_version: ADAPTER_RUNTIME_API_VERSION,
-        kind: ADAPTER_RUNTIME_KIND,
-    })
+    let loader = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: ADAPTER_RUNTIME_API_VERSION,
+            kind: ADAPTER_RUNTIME_KIND,
+        },
+        declared,
+    )
     .removed_keys(registry_adapter_core::ADAPTER_REMOVED_KEYS);
     let check = loader.check_offline::<registry_adapter_core::AdapterRuntimeConfig>(
         &absolute,
@@ -892,6 +930,26 @@ pub(crate) fn read_runtime(
             path: shown,
             source: io::Error::other(reason),
         });
+    }
+    if let Some(loaded) = &check.loaded {
+        if let Err(error) = loaded.config.database.check(false) {
+            let path = if matches!(
+                error,
+                registry_platform_config::DatabaseTransportError::Conflict
+            ) {
+                "/database/transport"
+            } else {
+                "/database/testOnlyPlaintext"
+            };
+            let diagnostic = check.error_at(
+                ADAPTER_RUNTIME_KIND,
+                error.code(),
+                path,
+                error.to_string(),
+                error.suggested_action(),
+            );
+            report.push(rewrite(&diagnostic));
+        }
     }
     for diagnostic in &check.diagnostics {
         report.push(rewrite(diagnostic));

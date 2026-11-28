@@ -195,9 +195,25 @@ async fn every_payment_refusal_keeps_its_answer_and_is_counted_under_its_check()
         migrate(&mut client).await.expect("the payment tables");
     }
     let deployment = format!("payment-refusals-{}", Uuid::new_v4());
+    let development = registry_platform_config::RuntimeConfigLoader::new(
+        registry_platform_config::RuntimeEnvelope {
+            api_version: API_VERSION,
+            kind: KIND,
+        },
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .parse_str::<PaymentsConfig>(
+        &format!("apiVersion: {API_VERSION}\nkind: {KIND}\nconnections: []\n"),
+        |_| None,
+    )
+    .expect("the test runtime decodes")
+    .development;
     let service = PaymentService::new(
         payments(),
-        PaymentStore::new(pool.clone(), deployment.clone()),
+        PaymentStore::new(pool.clone(), deployment.clone()).with_development(development),
         Arc::new(BregBridge::new(resolver.clone())),
         Arc::new(SyntheticProvider::new(resolver.clone(), None)),
     )
@@ -218,9 +234,14 @@ async fn every_payment_refusal_keeps_its_answer_and_is_counted_under_its_check()
         .expect("bind a probe port");
     let port = listener.local_addr().expect("the probe port").port();
     tokio::spawn(async move {
-        axum::serve(listener, payment_router(state))
-            .await
-            .expect("the payment router serves");
+        axum::serve(
+            listener,
+            payment_router(state).layer(registry_platform_httpsec::posture_mark(
+                registry_platform_config::Posture::Development,
+            )),
+        )
+        .await
+        .expect("the payment router serves");
     });
 
     let now = SystemTime::now()
@@ -366,6 +387,7 @@ async fn every_payment_refusal_keeps_its_answer_and_is_counted_under_its_check()
         let before = counter(check);
         let headers: Vec<&str> = authorization.iter().map(String::as_str).collect();
         let (status, head, answer) = send(port, method, path, &headers, *body).await;
+        assert_eq!(header(&head, "Registry-Posture"), Some("development"));
         answers.insert((*name).to_owned(), frozen(status, &head, &answer));
         *deltas.entry(check).or_default() += counter(check) - before;
     }

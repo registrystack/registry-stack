@@ -14,10 +14,11 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_PATH};
 use served_harness::upstream::UpstreamDouble;
 use served_harness::{copy_example_project, replace_profile_text, Served};
 
+const READY_BODY: &str = r#"{"developmentSettings":[],"posture":"production","status":"ready"}"#;
 const NOT_READY_BODY: &str = r#"{"status":"not-ready"}"#;
 
 /// One raw response: status, header lines (the `date` header, which the HTTP
@@ -122,6 +123,7 @@ async fn probes_answer_identically_under_three_projects_with_and_without_authori
                 READY_BODY
             };
             assert_probe(answer, 200, expected);
+            assert_eq!(header(answer, "registry-posture"), None);
         }
         // The same path answers byte-for-byte alike, whatever the header.
         assert_eq!(answers[0], answers[1]);
@@ -233,4 +235,27 @@ async fn a_project_declaring_health_or_ready_refuses_to_start() {
             "a refused deployment performs no source I/O"
         );
     }
+}
+
+#[tokio::test]
+async fn development_readiness_and_startup_name_the_selected_setting() {
+    let upstream = UpstreamDouble::start();
+    let served = Served::start_development(&upstream.url("")).await;
+    let ready = raw(&served, "GET", READY_PATH, None);
+    assert_eq!(ready.status, 200);
+    assert_eq!(header(&ready, "registry-posture"), Some("development"));
+    let body: serde_json::Value = serde_json::from_slice(&ready.body).unwrap();
+    assert_eq!(body["posture"], "development");
+    assert_eq!(
+        body["developmentSettings"],
+        serde_json::json!([{
+            "code": "platform.posture.insecure-issuer-http", "pointer": "/oidc/allowInsecureHttp"
+        }])
+    );
+    let log = served.stop_and_read_stderr();
+    assert!(log.contains("posture declared"), "{log}");
+    assert!(
+        log.contains("platform.posture.insecure-issuer-http"),
+        "{log}"
+    );
 }

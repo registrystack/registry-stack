@@ -14,6 +14,7 @@ mod selected_binary;
 mod templates;
 use anyhow::Result;
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_platform_config::{declared, DeclaredPosture};
 use serde_json::{json, Value};
 use std::{
     ffi::OsString,
@@ -104,6 +105,9 @@ enum Command {
         /// Runtime configuration file
         #[arg(long, value_name = "FILE")]
         runtime_config: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// Operator change or approval reference recorded with activation.
         #[arg(long)]
         operator_reference: Option<String>,
@@ -129,6 +133,9 @@ struct ServeArgs {
     /// Runtime configuration file passed unchanged to the Casework runtime.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    posture: Option<String>,
 
     /// Casework runtime executable for an unmanaged installation.
     #[arg(long, hide = true, env = "CASEWORK_BIN", value_name = "BINARY")]
@@ -144,6 +151,9 @@ enum GenerateCommand {
         /// Runtime configuration file; no secret in it is resolved.
         #[arg(long, value_name = "FILE")]
         runtime_config: PathBuf,
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// New file for the facts; an existing file is never overwritten.
         #[arg(long, value_name = "FILE")]
         output: PathBuf,
@@ -216,6 +226,9 @@ struct OperatorArgs {
     /// Runtime configuration file
     #[arg(long, value_name = "FILE")]
     runtime_config: PathBuf,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    posture: Option<String>,
 }
 #[derive(Debug, Args)]
 struct CheckArgs {
@@ -240,6 +253,9 @@ struct CheckArgs {
     /// Runtime configuration file
     #[arg(long, value_name = "FILE")]
     runtime_config: Option<PathBuf>,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    posture: Option<String>,
     /// Resolve configured environment substitutions while checking the runtime file.
     #[arg(long, requires = "runtime_config")]
     environment: bool,
@@ -315,10 +331,43 @@ pub fn main_entry_from(
         }
     };
     let Cli { format, command } = cli;
+    let command_posture = match command.posture_flag() {
+        Some(Err(diagnostic)) => return posture_usage(diagnostic, format, stdout, stderr),
+        Some(Ok(flag)) => match declared(flag) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                return posture_usage(
+                    registry_platform_yaml::Diagnostic::error(
+                        error.code(),
+                        "posture",
+                        error.message(),
+                        error.suggested_action(),
+                    ),
+                    format,
+                    stdout,
+                    stderr,
+                )
+            }
+        },
+        None => None,
+    };
     let command = match command {
-        Command::Serve(args) => return serve(args, format, format_supplied, stdout, stderr),
+        Command::Serve(args) => {
+            return serve(
+                args,
+                format,
+                format_supplied,
+                stdout,
+                stderr,
+                command_posture.expect("serve declares posture"),
+            )
+        }
         Command::Provision(args) => {
-            return provision::run(args, matches!(format, OutputFormat::Json));
+            return provision::run(
+                args,
+                matches!(format, OutputFormat::Json),
+                command_posture.expect("provision declares posture"),
+            );
         }
         Command::Api(args) => return api(*args, format_supplied, stderr),
         Command::Connection { command } => {
@@ -330,7 +379,7 @@ pub fn main_entry_from(
     let kind = command_kind(&command);
     let report_command = command.report_command();
     if report_command == "internal" {
-        return match run(command) {
+        return match run(command, command_posture) {
             Ok(_) => ExitCode::SUCCESS,
             Err(error) => {
                 let (exit, diagnostic) = classify_failure(kind, &error);
@@ -351,8 +400,8 @@ pub fn main_entry_from(
             }
         };
     }
-    let result =
-        run(command).and_then(|value| report::CliReport::from_value(report_command, value));
+    let result = run(command, command_posture)
+        .and_then(|value| report::CliReport::from_value(report_command, value));
     let (value, exit) = match result {
         Ok(value) => {
             let value =
@@ -367,8 +416,16 @@ pub fn main_entry_from(
             } else {
                 (
                     exit,
-                    configuration_report(&error)
-                        .map(|report| report.diagnostics().to_vec())
+                    error
+                        .chain()
+                        .find_map(|cause| {
+                            cause.downcast_ref::<registry_casework::RuntimeConfigError>()
+                        })
+                        .and_then(registry_casework::RuntimeConfigError::load_diagnostics)
+                        .map(<[_]>::to_vec)
+                        .or_else(|| {
+                            configuration_report(&error).map(|report| report.diagnostics().to_vec())
+                        })
                         .unwrap_or_else(|| {
                             vec![registry_platform_yaml::Diagnostic::error(
                                 diagnostic["code"].as_str().unwrap_or("caseworkctl.refused"),
@@ -400,11 +457,32 @@ pub fn main_entry_from(
         stdout as &mut dyn Write
     };
     let written = match format {
-        OutputFormat::Json => report::write(&value, output),
+        OutputFormat::Json => report::write_with_posture(&value, output, command_posture),
         OutputFormat::Human => render_human(&value, output),
     };
     ExitCode::from(if written.is_ok() {
         exit
+    } else {
+        OPERATIONAL_FAILURE_EXIT
+    })
+}
+
+fn posture_usage(
+    diagnostic: registry_platform_yaml::Diagnostic,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let value =
+        report::CliReport::failure("usage", report::ReportStatus::UsageError, vec![diagnostic])
+            .and_then(|value| serde_json::to_value(value).map_err(Into::into))
+            .expect("a usage report serializes");
+    let result = match format {
+        OutputFormat::Json => report::write(&value, stdout),
+        OutputFormat::Human => render_human(&value, stderr),
+    };
+    ExitCode::from(if result.is_ok() {
+        report::USAGE_EXIT
     } else {
         OPERATIONAL_FAILURE_EXIT
     })
@@ -485,6 +563,21 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
             json!({"severity":"error","code":code,"artifact":"provider-pair","path":path,"message":message,"suggestedAction":action}),
         );
     }
+    if let Some(registry_casework::StoreError::DatabaseTransport(transport)) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<registry_casework::StoreError>())
+    {
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({
+                "severity": "error",
+                "code": transport.code(),
+                "path": "runtime.yaml:/database/transport",
+                "message": transport.to_string(),
+                "suggestedAction": transport.suggested_action(),
+            }),
+        );
+    }
     if let Some(runtime) = error
         .chain()
         .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeConfigError>())
@@ -558,6 +651,32 @@ fn activation_failure(
 mod operator_tests;
 
 impl Command {
+    fn posture_flag(&self) -> Option<Result<Option<&str>, registry_platform_yaml::Diagnostic>> {
+        let flag = match self {
+            Self::Serve(args) => args.posture.as_deref(),
+            Self::Provision(args) => args.posture.as_deref(),
+            Self::Apply { posture, .. }
+            | Self::Generate {
+                command: GenerateCommand::IdentityFacts { posture, .. },
+            } => posture.as_deref(),
+            Self::Doctor(args) | Self::Plan(args) | Self::Status(args) => args.posture.as_deref(),
+            Self::Check(args) if args.production => {
+                if args.posture.as_deref() == Some("development") {
+                    return Some(Err(registry_platform_yaml::Diagnostic::error(
+                        "platform.posture.conflict",
+                        "posture",
+                        "--production and --posture development contradict each other",
+                        "Use one of them.",
+                    )));
+                }
+                args.posture.as_deref().or(Some("production"))
+            }
+            Self::Check(args) => args.posture.as_deref(),
+            _ => return None,
+        };
+        Some(Ok(flag))
+    }
+
     fn report_command(&self) -> &'static str {
         match self {
             Self::Init { .. } => "init",
@@ -587,7 +706,8 @@ impl Command {
     }
 }
 
-fn run(command: Command) -> Result<Value> {
+fn run(command: Command, posture: Option<DeclaredPosture>) -> Result<Value> {
+    let posture = || posture.expect("runtime commands declare posture");
     match command {
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Init { project, template } => project::init(&project, &template),
@@ -604,6 +724,7 @@ fn run(command: Command) -> Result<Value> {
                     args.environment,
                     args.deny_warnings,
                     result,
+                    posture(),
                 );
             }
             let mut report = result?;
@@ -627,8 +748,9 @@ fn run(command: Command) -> Result<Value> {
                     project,
                     runtime_config,
                     output,
+                    ..
                 },
-        } => identity::generate(&project, &runtime_config, &output),
+        } => identity::generate(&project, &runtime_config, &output, posture()),
         Command::Provider {
             command:
                 ProviderCommand::Add {
@@ -692,14 +814,20 @@ fn run(command: Command) -> Result<Value> {
                 )
             }
         }
-        Command::Doctor(args) => project::doctor(&args.runtime_config),
-        Command::Plan(args) => project::plan(&args.runtime_config),
-        Command::Status(args) => project::status(&args.runtime_config),
+        Command::Doctor(args) => project::doctor(&args.runtime_config, posture()),
+        Command::Plan(args) => project::plan(&args.runtime_config, posture()),
+        Command::Status(args) => project::status(&args.runtime_config, posture()),
         Command::Apply {
             runtime_config,
             operator_reference,
             backup_reference,
-        } => project::apply(&runtime_config, operator_reference, backup_reference),
+            ..
+        } => project::apply(
+            &runtime_config,
+            operator_reference,
+            backup_reference,
+            posture(),
+        ),
         Command::Provision(_) => unreachable!("provision writes its own report"),
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("raw API commands bypass report dispatch")
@@ -770,6 +898,7 @@ fn serve(
     format_supplied: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    declared: DeclaredPosture,
 ) -> ExitCode {
     if format_supplied {
         let diagnostic = registry_platform_yaml::Diagnostic::error(
@@ -815,6 +944,7 @@ fn serve(
     command
         .arg("--runtime-config")
         .arg(args.runtime_config)
+        .args(["--posture", declared.posture.as_str()])
         .arg("serve");
     replace_with_service(command, "casework", stderr)
 }

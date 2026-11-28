@@ -164,6 +164,8 @@ error[render.runtime.public-bind] /etc/registry-render/runtime.yaml:4:9 /listene
 1 error, 0 warnings in 1 file
 ```
 
+Check reads the runtime file alone. To preview the refusal of a sealed package that the runtime has no `signing` block for, add `--bundle` with the package directory. A runtime that admits every OIDC client is accepted in production, and check lists it as an explicit production setting under `explicitProductionSettings` in the JSON report and in a note after the human report.
+
 A `${VAR}` value is left for the deployment unless you add `--environment`, which substitutes it
 from the current environment first. In a container preflight, add `--require-audit-under
 <directory>` to prove the audit file lands on persistent storage:

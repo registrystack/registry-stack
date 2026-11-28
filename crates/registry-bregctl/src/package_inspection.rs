@@ -17,8 +17,8 @@ use registry_platform_config::package::VerifiedPackage as SharedVerifiedPackage;
 /// A baseline package named by `--baseline-package` is read on the author's
 /// machine, where no runtime identity names a database initialization
 /// environment, so its closure is held to the local permission rules.
-const BASELINE_PACKAGE_CONTEXT: PackageLoadContext<'static> = PackageLoadContext {
-    database_initialization_environment: "local",
+const BASELINE_PACKAGE_CONTEXT: PackageLoadContext = PackageLoadContext {
+    posture: registry_platform_config::Posture::Development,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,9 +32,10 @@ pub(crate) enum RuntimePackageInspectionError {
 /// Inspect exactly the package selected by one strict runtime configuration.
 /// This opens no database, OIDC source, or listener.
 pub(crate) fn inspect_runtime_package(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
 ) -> Result<IntegrityInspectedPackage, RuntimePackageInspectionError> {
-    let config = load_inspected_runtime_config(runtime_config)?;
+    let config = load_inspected_runtime_config(posture, runtime_config)?;
     let shared = verify_envelope(&config)?;
     inspect_package_integrity_with_verified_envelope(config.package().root(), &shared)
         .map_err(RuntimePackageInspectionError::Package)
@@ -67,9 +68,10 @@ pub(crate) fn inspect_baseline_rehearsal(
 /// predecessor for successor planning, then compile its packaged sources with
 /// the current compiler.
 pub(crate) fn inspect_runtime_predecessor_rehearsal_baseline(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
 ) -> Result<(VerifiedPredecessorPackage, CompiledRegistry), RuntimePackageInspectionError> {
-    let config = load_inspected_runtime_config(runtime_config)?;
+    let config = load_inspected_runtime_config(posture, runtime_config)?;
     let shared = verify_envelope(&config)?;
     load_predecessor_rehearsal_baseline_with_verified_envelope(
         config.package().root(),
@@ -88,10 +90,12 @@ fn verify_envelope(
 }
 
 fn load_inspected_runtime_config(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
 ) -> Result<RuntimeConfig, RuntimePackageInspectionError> {
     if !runtime_config.is_absolute() {
         return Err(RuntimePackageInspectionError::RuntimeConfigPath);
     }
-    load_runtime_config(runtime_config).map_err(RuntimePackageInspectionError::RuntimeConfig)
+    load_runtime_config(runtime_config, posture)
+        .map_err(RuntimePackageInspectionError::RuntimeConfig)
 }

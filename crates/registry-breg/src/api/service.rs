@@ -860,6 +860,7 @@ pub trait SnapshotReadService: Send + Sync {
 
 #[derive(Clone)]
 pub struct HttpService {
+    pub(crate) posture: registry_platform_config::PostureReport,
     pub(crate) registry: Arc<CompiledRegistry>,
     pub(crate) identity: ReadRuntimeIdentity,
     pub(crate) records: Arc<dyn RecordReadService>,
@@ -903,6 +904,12 @@ impl HttpService {
         cursors: Arc<CursorCodec>,
     ) -> Self {
         Self {
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Production,
+                    source: registry_platform_config::PostureSource::Default,
+                },
+            ),
             registry,
             identity,
             records,
@@ -917,6 +924,11 @@ impl HttpService {
             public_origin: None,
             field_encryption: None,
         }
+    }
+
+    pub(crate) fn with_posture(mut self, posture: registry_platform_config::PostureReport) -> Self {
+        self.posture = posture;
+        self
     }
 
     pub(crate) fn with_external_views(

@@ -7,7 +7,8 @@ cargo run --locked -p registry-mcp -- --runtime-config "$PWD/products/platform/e
 ```
 
 The example publishes HTTPS resource, issuer, and review URLs and selects the existing BReg citizen tools explicitly.
-Its endpoints are placeholders. The offline check validates the configuration without contacting those services.
+Its endpoints are placeholders. A TLS proxy on the same host publishes the resource name and forwards to the loopback listener.
+The offline check validates the configuration without contacting those services.
 Use the institution's independently operated issuer and task authority for protected BReg operations.
 
 The staff example selects the separate delegated-read contract explicitly:

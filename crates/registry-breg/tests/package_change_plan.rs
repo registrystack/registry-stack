@@ -1472,7 +1472,7 @@ fn published_predecessor() -> (
     let predecessor = load_predecessor_package(
         &package,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .expect("the initial package is a readable predecessor");
@@ -1503,7 +1503,7 @@ fn verified_unchanged_successor(
     registry_breg::package::load_package(
         &package,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .expect("the unchanged successor verifies")
@@ -1610,7 +1610,7 @@ fn display_only_successor_is_not_an_empty_rebuild() {
     let successor = registry_breg::package::load_package(
         &package,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .expect("display-only successor verifies");

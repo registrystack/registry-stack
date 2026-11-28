@@ -1433,8 +1433,15 @@ fn openapi_document(
         "ReadyStatus".to_string(),
         json!({
             "type": "object", "additionalProperties": false,
-            "required": ["status"],
-            "properties": {"status": {"type": "string", "enum": ["ready"]}}
+            "required": ["status", "posture", "developmentSettings"],
+            "properties": {
+                "status": {"type": "string", "enum": ["ready"]},
+                "posture": {"type": "string", "enum": ["development", "production"]},
+                "developmentSettings": {"type": "array", "items": {
+                    "type": "object", "additionalProperties": false, "required": ["code", "pointer"],
+                    "properties": {"code": {"type": "string"}, "pointer": {"type": "string"}}
+                }}
+            }
         }),
     );
 

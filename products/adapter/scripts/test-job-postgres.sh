@@ -101,10 +101,10 @@ if [[ -z "${ADAPTER_TEST_DATABASE_URL:-}" ]]; then
 	fi
 	port=$(docker port "$container_id" 5432/tcp | head -n 1)
 	port=${port##*:}
-	export ADAPTER_TEST_DATABASE_URL="postgresql://${db_user}:${db_password}@localhost:${port}/${db_name}"
-	printf '%s\n' "The owned PostgreSQL fixture ${container_id:0:12} is serving ${db_name} on localhost:${port}." >&2
+	export ADAPTER_TEST_DATABASE_URL="postgresql://${db_user}:${db_password}@127.0.0.1:${port}/${db_name}"
+	printf '%s\n' "The owned PostgreSQL fixture ${container_id:0:12} is serving ${db_name} on 127.0.0.1:${port}." >&2
 else
-	printf '%s\n' 'Using ADAPTER_TEST_DATABASE_URL from the environment. The fixture server must provide PostGIS.' >&2
+	printf '%s\n' 'Using ADAPTER_TEST_DATABASE_URL from the environment. The fixture server must provide PostGIS and the URL must name a numeric loopback host.' >&2
 fi
 
 # This proof owns a separate TLS-only database even when the caller supplied
@@ -128,11 +128,8 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --feat
 
 # The read-only PostgreSQL source host: the statement transaction refuses a
 # SELECT with a write effect, the byte bounds hold before delivery, and the
-# compiled source authority survives a replaced runtime file. The suite admits
-# only 127.0.0.0/8 as a source address, so it takes the numeric loopback host
-# rather than the fixture's localhost name.
-ADAPTER_TEST_DATABASE_URL="${ADAPTER_TEST_DATABASE_URL/@localhost:/@127.0.0.1:}" \
-	PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-postgres,postgres-test,signed-coordinator-event --test postgres_source_host -- --test-threads=1
+# compiled source authority survives a replaced runtime file.
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features job-postgres,postgres-test,signed-coordinator-event --test postgres_source_host -- --test-threads=1
 
 # Hook ingress only wakes the real CLI pass. This target proves authenticated
 # socket admission and source re-read against the durable store; request bodies

@@ -10,9 +10,9 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use axum::Router;
 use registry_mcp_edge::{
-    router, token_verifier, AuditOptions, GatewayCore, GatewayInfo, ProviderBinding,
-    RateLimitOptions, ResourceServer, ResourceServerError, ServerOptions, TokenBucketOptions,
-    ToolAuditLog,
+    config::describe_development_settings, router, token_verifier, AuditOptions, GatewayCore,
+    GatewayInfo, ProviderBinding, RateLimitOptions, ResourceServer, ResourceServerError,
+    ServerOptions, TokenBucketOptions, ToolAuditLog,
 };
 use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
 use registry_platform_config::{
@@ -51,6 +51,8 @@ pub enum StartupError {
     Edge(String),
     #[error("the audit log could not be opened: {0}")]
     Audit(String),
+    #[error("{0}")]
+    Posture(String),
     #[error("the listener could not be bound: {0}")]
     Bind(#[source] std::io::Error),
     #[error("the listener failed: {0}")]
@@ -131,7 +133,10 @@ async fn assemble(
     ))
     .map_err(|_| StartupError::Key("audit.hashKeyRef"))?;
     let server = &config.resource_server;
-    let network = IssuerNetworkPolicy::new(server.issuer.as_str(), server.allow_insecure_http)
+    let issuer = server
+        .issuer_url(development)
+        .map_err(|error| StartupError::ResourceServer(error.to_string()))?;
+    let network = IssuerNetworkPolicy::new(issuer.as_str(), server.allow_insecure_http)
         .map_err(|error| StartupError::ResourceServer(error.to_string()))?;
     let jwks_source = server
         .jwks_source
@@ -146,7 +151,7 @@ async fn assemble(
         JwksSource::Discovery {} => {
             let (discovery, policy) = fetch_discovery_for_issuer(
                 &OidcDiscoveryConfig {
-                    issuer: server.issuer.to_string(),
+                    issuer: issuer.to_string(),
                     jwks_uri_override: None,
                     discovery_timeout: Duration::from_secs(5),
                     max_doc_bytes: 1024 * 1024,
@@ -206,6 +211,7 @@ async fn assemble(
         &config.registry,
         &config.exchange,
         &config.service,
+        development,
         &resource_options.resource,
         key,
         profile.key_hasher(),
@@ -213,7 +219,9 @@ async fn assemble(
     )
     .map_err(|error| match error {
         BRegBindingError::Authorization => StartupError::Outbound(error.to_string()),
-        BRegBindingError::Client | BRegBindingError::Tools => StartupError::Edge(error.to_string()),
+        BRegBindingError::Client | BRegBindingError::Tools | BRegBindingError::ReviewOrigin => {
+            StartupError::Edge(error.to_string())
+        }
     })?;
     Ok(Parts {
         resource_server,
@@ -221,36 +229,38 @@ async fn assemble(
     })
 }
 
-/// Build the gateway's HTTP application.
-pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
-    let declared = crate::config::default_posture();
-    build_with_posture(config, &PostureReport::new(declared), None).await
-}
+/// How an operator gets past a posture refusal at startup.
+const POSTURE_REMEDY: &str = "Run breg-mcp check for each member. For a laptop or test run, \
+     start with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or \
+     --posture development.";
 
+/// Build the gateway's HTTP application from the configuration, the posture
+/// report and the witness the runtime loader returned together.
 pub async fn build_with_posture(
     config: &RuntimeConfig,
     posture: &PostureReport,
     development: Option<&DevelopmentWitness>,
 ) -> Result<Router, StartupError> {
-    let development =
-        development.filter(|_| posture.posture() == registry_platform_config::Posture::Development);
+    if development.is_some()
+        != (posture.posture() == registry_platform_config::Posture::Development)
+    {
+        return Err(StartupError::Posture(format!(
+            "the development witness does not match the declared posture. Use the \
+             configuration, posture and witness the runtime loader returned. {POSTURE_REMEDY}"
+        )));
+    }
+    let settings = config.development_settings();
+    if posture.posture() == registry_platform_config::Posture::Production && !settings.is_empty() {
+        return Err(StartupError::Posture(format!(
+            "production refuses development settings: {}. {POSTURE_REMEDY}",
+            describe_development_settings(&settings)
+        )));
+    }
     let resource = config
         .resource_server
         .resource_url(development)
         .map_err(|error| StartupError::ResourceServer(error.to_string()))?
         .to_url();
-    let mut checked = posture.clone();
-    config
-        .service
-        .record_review_origin(&mut checked, "/service/reviewBaseUrl".to_owned());
-    config.resource_server.record_posture(&mut checked);
-    if checked.posture() == registry_platform_config::Posture::Production
-        && (!checked.settings().is_empty() || config.resource_server.allow_insecure_http)
-    {
-        return Err(StartupError::ResourceServer(
-            "production refuses development settings; run breg-mcp check".to_owned(),
-        ));
-    }
     let parts = assemble(config, posture, development).await?;
     // The loader already refused a destination the audit writer cannot use.
     let destination = config

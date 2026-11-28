@@ -232,7 +232,7 @@
     "EventDestinationNetworkProfile": {
       "enum": [
         "production-https",
-        "loopback-development-http"
+        "loopback-http"
       ],
       "type": "string"
     },
@@ -1263,13 +1263,8 @@
           "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
           "type": "string"
         },
-        "databaseInitializationEnvironment": {
-          "maxLength": 256,
-          "minLength": 1,
-          "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
-          "type": "string"
-        },
         "environment": {
+          "description": "A deployment label recorded in activation audit entries.",
           "maxLength": 256,
           "minLength": 1,
           "pattern": "^[^\\s\\x00-\\x1F\\x7F](?:[^\\x00-\\x1F\\x7F]*[^\\s\\x00-\\x1F\\x7F])?$",
@@ -1285,8 +1280,7 @@
       "required": [
         "environment",
         "instanceId",
-        "databaseId",
-        "databaseInitializationEnvironment"
+        "databaseId"
       ],
       "type": "object"
     },
@@ -1429,7 +1423,10 @@
       "description": "Raw `fieldEncryption` deployment block, absent by default.",
       "properties": {
         "provider": {
-          "$ref": "#/$defs/RawFieldEncryptionProvider"
+          "$ref": "#/$defs/RawFieldEncryptionProvider",
+          "x-registry-development-only": [
+            "breg.posture.local-key-custody"
+          ]
         }
       },
       "type": "object"
@@ -1477,6 +1474,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "Development-only custody of the data key in a local file. Use Transit in production.",
           "properties": {
             "dekRef": {
               "$ref": "#/$defs/SecretReference",
@@ -1840,7 +1838,10 @@
         },
         "publicOrigin": {
           "$ref": "#/$defs/Url",
-          "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. It is `https`; `http` is accepted\nonly for a loopback host, for local development. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links."
+          "description": "Canonical public origin for QGIS discovery and pagination links, with\nan optional deployment path prefix such as\n`https://registry.example.org/breg`. Production requires `https`.\nDevelopment also accepts `http` for a loopback host. Required when the\nregistry exposes GIS collections; omitted, the registry builds no\nabsolute discovery or paging links.",
+          "x-registry-development-only": [
+            "breg.posture.http-public-origin"
+          ]
         }
       },
       "required": [

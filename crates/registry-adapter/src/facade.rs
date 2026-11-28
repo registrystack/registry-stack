@@ -57,7 +57,7 @@ use crate::engine::route::{
     run_async_status_poll, run_served_route_until, AsyncStatusPollKind, RouteContext, RouteFailure,
     EXCHANGE_DEADLINE,
 };
-use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_PATH};
 
 use crate::govstack::consultation::{CAPABILITIES_PATH, MOUNT_PATH};
 use crate::govstack::correlation::RequestCorrelation;
@@ -1006,15 +1006,17 @@ async fn probe_refusal() -> Response {
 
 /// Unauthenticated readiness: whether the journal migration set is exactly
 /// the set this binary supports and the runtime role holds its privileges.
-/// It touches no source, appends no journal event, and answers a constant
-/// body whatever the project or the cause of a failure.
+/// It touches no source and appends no journal event. The success body
+/// contains the process posture.
 async fn readiness(state: Arc<FacadeState>) -> Response {
     let journal_ready = match state.journal.get().await {
         Ok(client) => journal::ready(&client).await.unwrap_or(false),
         Err(_) => false,
     };
     if journal_ready {
-        probe_response(StatusCode::OK, READY_BODY)
+        let mut body = state.loaded.posture.ready_member();
+        body.insert("status".to_owned(), serde_json::json!("ready"));
+        no_store(axum::Json(body).into_response())
     } else {
         tracing::error!("the readiness probe found the journal unusable");
         probe_response(StatusCode::SERVICE_UNAVAILABLE, NOT_READY_BODY)
@@ -2571,17 +2573,22 @@ async fn append_all(
             .await
             .map_err(|error| journal_failure(&state.metrics, journal_fault(&error)))?;
         for (event, occurred_at) in events {
-            journal::append(&transaction, event, occurred_at)
-                .await
-                .map_err(|error| {
-                    journal_failure(
-                        &state.metrics,
-                        match error {
-                            journal::JournalError::Query(error) => journal_fault(&error),
-                            _ => "the journal write failed".to_owned(),
-                        },
-                    )
-                })?;
+            journal::append_in_posture(
+                &transaction,
+                event,
+                occurred_at,
+                state.loaded.posture.posture(),
+            )
+            .await
+            .map_err(|error| {
+                journal_failure(
+                    &state.metrics,
+                    match error {
+                        journal::JournalError::Query(error) => journal_fault(&error),
+                        _ => "the journal write failed".to_owned(),
+                    },
+                )
+            })?;
         }
         transaction
             .commit()
@@ -2619,17 +2626,22 @@ async fn append_all_with_write(
             .await
             .map_err(|error| error.to_string())?;
         for (event, occurred_at) in events {
-            journal::append(&transaction, event, occurred_at)
-                .await
-                .map_err(|error| {
-                    journal_failure(
-                        &state.metrics,
-                        match error {
-                            journal::JournalError::Query(error) => journal_fault(&error),
-                            _ => "the journal write failed".to_owned(),
-                        },
-                    )
-                })?;
+            journal::append_in_posture(
+                &transaction,
+                event,
+                occurred_at,
+                state.loaded.posture.posture(),
+            )
+            .await
+            .map_err(|error| {
+                journal_failure(
+                    &state.metrics,
+                    match error {
+                        journal::JournalError::Query(error) => journal_fault(&error),
+                        _ => "the journal write failed".to_owned(),
+                    },
+                )
+            })?;
         }
         transaction
             .commit()
@@ -2710,17 +2722,22 @@ async fn append_all_with_acceptance(
             .to_string(),
         );
         for (event, occurred_at) in events.into_iter().chain([(acceptance_event, accepted_at)]) {
-            journal::append(&transaction, event, occurred_at)
-                .await
-                .map_err(|error| {
-                    journal_failure(
-                        &state.metrics,
-                        match error {
-                            journal::JournalError::Query(error) => journal_fault(&error),
-                            _ => "the journal write failed".to_owned(),
-                        },
-                    )
-                })?;
+            journal::append_in_posture(
+                &transaction,
+                event,
+                occurred_at,
+                state.loaded.posture.posture(),
+            )
+            .await
+            .map_err(|error| {
+                journal_failure(
+                    &state.metrics,
+                    match error {
+                        journal::JournalError::Query(error) => journal_fault(&error),
+                        _ => "the journal write failed".to_owned(),
+                    },
+                )
+            })?;
         }
         transaction
             .commit()
@@ -3424,17 +3441,22 @@ async fn append_all_with_recovery(
             .await
             .map_err(|error| error.to_string())?;
         for (event, occurred_at) in events {
-            journal::append(&transaction, event, occurred_at)
-                .await
-                .map_err(|error| {
-                    journal_failure(
-                        &state.metrics,
-                        match error {
-                            journal::JournalError::Query(error) => journal_fault(&error),
-                            _ => "the journal write failed".to_owned(),
-                        },
-                    )
-                })?;
+            journal::append_in_posture(
+                &transaction,
+                event,
+                occurred_at,
+                state.loaded.posture.posture(),
+            )
+            .await
+            .map_err(|error| {
+                journal_failure(
+                    &state.metrics,
+                    match error {
+                        journal::JournalError::Query(error) => journal_fault(&error),
+                        _ => "the journal write failed".to_owned(),
+                    },
+                )
+            })?;
         }
         transaction
             .commit()

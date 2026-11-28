@@ -104,11 +104,14 @@ store:
 `listener.bind` is the private address the proxy forwards to: keep a loopback or private address
 on a non-zero port such as `8090`, not the public origin's `443`. The listener speaks plain HTTP.
 
-`offers.allowedClients` and `offers.requiredScopes` are explicit lists: name each client that may
-create offers and the scopes its token must carry. The keyword `unrestricted` is not a setup for
-any deployment. It exists for supervised local development only, and the file loads with it only
-when `validationMode` is `supervised-local-development`; in strict mode `check` refuses it with
-`evidence.oid4vci.offer-gate-unrestricted`.
+Use explicit lists for `offers.allowedClients` and `offers.requiredScopes` in production.
+Development also accepts `unrestricted` for either gate, independently of `validationMode`.
+
+Called origins may use HTTPS or loopback HTTP in either posture. For an offer issuer or key set
+beyond loopback, HTTP requires the development posture and `offers.allowInsecureHttp: true`.
+Use `validationMode: supervised-local-development` only in development. If you publish an HTTP
+credential issuer in this mode, write `http://127.0.0.1:<port>` and bind the listener to that address
+and port. Strict mode requires an HTTPS credential issuer.
 
 The subject of an offer comes from the request body, not from the access token: the service
 trusts the selector values the caller sends. Any client listed in `allowedClients` can therefore
@@ -116,8 +119,8 @@ request an offer for any subject, and the credential is then issued for that sub
 listed client as a trusted issuing back office, and do not list a self-service or citizen-facing
 client; a flow where people request their own credential must not be given offer authority.
 
-{/* Evidence: crates/registry-evidence-oid4vci/src/config.rs, offer_gate_findings,
-    evidence.oid4vci.offer-gate-unrestricted;
+{/* Evidence: crates/registry-evidence-oid4vci/src/config.rs,
+    evidence.posture.unrestricted-offer-gate;
     crates/registry-evidence-oid4vci/src/offer.rs, SelectorValueOrigin::Request. */}
 
 `privateKeyRef` and `audit.hashKeyRef` follow the [secret reference grammar](../../reference/environment-variables/#secret-references).
@@ -202,7 +205,7 @@ Your front end creates a credential offer at `/offers` with an access token the 
 admits; the wallet calls the two `/.well-known` metadata routes, `/token`, `/nonce`, and
 `/credential`. The [wallet delivery API reference](../../reference/apis/evidence-oid4vci/) renders
 the same document. `/health` answers `{"status":"ok"}` while the process runs, and `/ready`
-answers `{"status":"ready"}` while the required local audit destination can accept entries. It
+answers with `status: ready`, `posture`, and `developmentSettings` while the required local audit destination can accept entries. It
 answers `503` after that destination stops or stalls. Readiness does not depend on the state of the
 gateway or token issuer.
 
@@ -324,7 +327,7 @@ credential it stores is the Registry Evidence's SD-JWT VC response, bound to the
 | Code | Meaning | Recovery |
 | --- | --- | --- |
 | `platform.runtime-config.unavailable` | The runtime file could not be read. | Check that the file exists and that the runtime user can read it. |
-| `evidence.oid4vci.https-required` | An origin is not `https` in strict mode. | Write an `https` URL, or set `validationMode: supervised-local-development` for a loopback process group. |
+| `evidence.oid4vci.https-required` | A called origin requires HTTPS or loopback HTTP, or a published issuer requires HTTPS. | Use HTTPS, or use loopback HTTP for a called origin. |
 | `evidence.oid4vci.listener-port` | The listener port is zero. | Bind the listener to a non-zero private port your TLS proxy forwards to. |
 | `evidence.oid4vci.nonce-lifetime` | The nonce outlives the access token. | Lower `store.nonceLifetimeSeconds` to at most `store.accessTokenLifetimeSeconds`. |
 | `evidence.oid4vci.secret-file-root` | The file provider root is relative. | Write `secretProviders.file.root` as an absolute directory path. |
@@ -332,7 +335,9 @@ credential it stores is the Registry Evidence's SD-JWT VC response, bound to the
 | `evidence.oid4vci.audit-secret-provider-disabled` | The audit hash key reference names a provider the file does not enable. | Declare that provider under `secretProviders`, or reference the audit key through an enabled one. |
 | `evidence.oid4vci.invalid-audit` | The audit destination settings do not describe a usable file or stdout destination. | Use an absolute file path with valid rotation and retention settings, or select stdout with no file-only settings. |
 | `evidence.oid4vci.metrics-shared-binding` | The metrics listener shares the delivery binding. | Bind the metrics listener to a port the delivery listener does not use. |
-| `evidence.oid4vci.offer-gate-unrestricted` | `offers.allowedClients` or `offers.requiredScopes` is `unrestricted` outside supervised local development. | Write an explicit list of clients or scopes, or set `validationMode: supervised-local-development` for a supervised local run. |
+| `evidence.posture.unrestricted-offer-gate` | An unrestricted offer gate requires development. | List the clients and scopes for production. |
+| `evidence.posture.insecure-offer-issuer-http` | The offer issuer HTTP opt-in requires development. | Use HTTPS beyond loopback. |
+| `evidence.posture.supervised-validation` | Supervised validation requires development. | Use strict validation and publish an HTTPS issuer in production. |
 | `evidence.oid4vci.wildcard-spelled-item` | An `offers` list item spells `*` or `unrestricted`, which matches only itself (a warning). | Remove the item and list the real client or scope names. |
 | `invalid_proof` (wallet response) | The proof failed a named check. | Read the check in `error_description`, then correct that header parameter or claim in the wallet's proof. |
 

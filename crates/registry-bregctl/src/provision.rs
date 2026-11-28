@@ -61,7 +61,11 @@ fn spatial(config: &RuntimeConfig, package: &Path) -> Result<Option<Spatial>, Bo
 
 /// Reads the runtime file exactly as `apply` does and resolves the two
 /// database URLs and the CA behind `database.caBundleRef`.
-pub(crate) fn load(path: &Path, package: Option<&Path>) -> Result<ProvisionInput, Box<Diagnostic>> {
+pub(crate) fn load(
+    posture: registry_platform_config::DeclaredPosture,
+    path: &Path,
+    package: Option<&Path>,
+) -> Result<ProvisionInput, Box<Diagnostic>> {
     let absolute = std::path::absolute(path).map_err(|_| {
         refused(
             "config.unresolvable",
@@ -71,8 +75,8 @@ pub(crate) fn load(path: &Path, package: Option<&Path>) -> Result<ProvisionInput
             "Pass --runtime-config as a path that exists.",
         )
     })?;
-    let config =
-        load_runtime_config(&absolute).map_err(|error| runtime_file_refused(&absolute, &error))?;
+    let config = load_runtime_config(&absolute, posture)
+        .map_err(|error| runtime_file_refused(&absolute, &error))?;
     // The same checks `apply` makes: each URL parses and logs in as the role
     // the file names for it.
     config

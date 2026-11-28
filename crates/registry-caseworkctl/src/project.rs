@@ -6,7 +6,10 @@ use registry_casework::{
 use registry_casework_core::{
     CaseworkActsAs, CaseworkProject, ClockPolicy, ConfigLoadError, ReviewContextPolicy,
 };
-use registry_platform_config::{plan_package, write_package, SecretResolver};
+use registry_platform_config::{
+    plan_package, write_package, DeclaredPosture, DevelopmentWitness, LoadedRuntimeConfig, Posture,
+    SecretResolver,
+};
 use registry_platform_yaml::{Decoded, Diagnostic, Report, Severity, Source};
 use serde_json::{json, Value};
 use std::{
@@ -223,7 +226,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     let absolute = std::path::absolute(project)?;
     let runtime = json!({"apiVersion":"id.registrystack.org/formats/casework/runtime/v1alpha1","kind":"CaseworkRuntimeConfig",
         "identity":{"databaseId":"casework-example"},"package":{"root":absolute.join(LOCAL_PACKAGE_DIRECTORY)},
-        "listener":{"bind":"127.0.0.1:8100","tlsTermination":"development-loopback","networkExposure":"private-address"},
+        "listener":{"bind":"127.0.0.1:8100","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
         "secretProviders":{"file":{"root":absolute.join("secrets")}},
         "database":{"runtimeUrlRef":"secret:file/runtime-database-url","migrationUrlRef":"secret:file/migration-database-url"},
         "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
@@ -271,7 +274,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     load_and_check_policy(stage.path())?;
     fs::rename(stage.path(), project)?;
     Ok(
-        json!({"ok":true,"command":"init","created":project,"template":template,"next":if canonical_review { "Run caseworkctl check, then pair the BReg provider and configure source transport. Write a dev.yaml plan beside casework.yaml and run rstack dev start." } else { "Run caseworkctl check, test and types. Write a dev.yaml plan beside casework.yaml and run rstack dev start." }}),
+        json!({"ok":true,"command":"init","created":project,"template":template,"next":if canonical_review { "Run caseworkctl check, then pair the BReg provider and configure source transport. Write a dev.yaml plan beside casework.yaml and run rstack dev start. To use this runtime file directly, set REGISTRY_STACK_POSTURE=development or pass --posture development." } else { "Run caseworkctl check, test and types. Write a dev.yaml plan beside casework.yaml and run rstack dev start. To use this runtime file directly, set REGISTRY_STACK_POSTURE=development or pass --posture development." }}),
     )
 }
 
@@ -805,6 +808,8 @@ pub(super) fn package_dry_run(project: &Path, revision: Option<&str>) -> Result<
     )
 }
 struct ActivationInputs {
+    posture: Posture,
+    development: Option<DevelopmentWitness>,
     config: RuntimeConfig,
     runtime_config: PathBuf,
     package: registry_casework::LoadedCaseworkPackage,
@@ -813,8 +818,9 @@ struct ActivationInputs {
 }
 
 impl ActivationInputs {
-    fn load(runtime_config: &Path) -> Result<Self> {
-        let config = load_runtime_config(runtime_config)?;
+    fn load(runtime_config: &Path, declared: DeclaredPosture) -> Result<Self> {
+        let loaded = load_runtime_config(runtime_config, declared)?;
+        let config = loaded.config;
         let runtime_config =
             fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
         let package = config
@@ -824,6 +830,8 @@ impl ActivationInputs {
         let providers = registry_casework::build_context_providers(&config, &package, &resolver)
             .context("building the Casework context providers")?;
         Ok(Self {
+            posture: declared.posture,
+            development: loaded.development,
             config,
             runtime_config,
             package,
@@ -844,6 +852,7 @@ impl ActivationInputs {
         providers: &'a [&'a dyn registry_casework_core::ReviewContextProvider],
     ) -> registry_casework::ActivationCandidate<'a> {
         registry_casework::ActivationCandidate {
+            posture: self.posture,
             database_id: self.config.database_id(),
             package_digest: self.package.digest(),
             project: self.package.project(),
@@ -875,12 +884,16 @@ fn single_role_statement(role_mode: Option<registry_casework::RoleMode>) -> Valu
     }
 }
 
-pub(super) fn plan(runtime_config: &Path) -> Result<Value> {
-    let inputs = ActivationInputs::load(runtime_config)?;
+pub(super) fn plan(runtime_config: &Path, declared: DeclaredPosture) -> Result<Value> {
+    let inputs = ActivationInputs::load(runtime_config, declared)?;
     let providers = inputs.provider_refs();
     let candidate = inputs.candidate(&providers);
-    let store = PostgresStore::connect_runtime(&inputs.config.database, &inputs.resolver)
-        .context("the Casework runtime database configuration is invalid")?;
+    let store = PostgresStore::connect_runtime(
+        &inputs.config.database,
+        &inputs.resolver,
+        inputs.development.as_ref(),
+    )
+    .context("the Casework runtime database configuration is invalid")?;
     let plan = async_runtime()?
         .block_on(store.plan_activation(&candidate))
         .context("planning the Casework package activation")?;
@@ -903,23 +916,38 @@ pub(super) fn apply(
     runtime_config: &Path,
     operator_reference: Option<String>,
     backup_references: Vec<String>,
+    declared: DeclaredPosture,
 ) -> Result<Value> {
-    let inputs = ActivationInputs::load(runtime_config)?;
+    let inputs = ActivationInputs::load(runtime_config, declared)?;
     let providers = inputs.provider_refs();
     let candidate = inputs.candidate(&providers);
     let runtime = async_runtime()?;
     // The role the runtime credential connects as decides the role mode;
     // only apply resolves the migration credential.
     let runtime_user = {
-        let store = PostgresStore::connect_runtime(&inputs.config.database, &inputs.resolver)
-            .context("the Casework runtime database configuration is invalid")?;
+        let store = PostgresStore::connect_runtime(
+            &inputs.config.database,
+            &inputs.resolver,
+            inputs.development.as_ref(),
+        )
+        .context("the Casework runtime database configuration is invalid")?;
         runtime
             .block_on(store.current_user())
             .context("reading the Casework runtime database role")?
     };
-    let store = PostgresStore::connect_migration(&inputs.config.database, &inputs.resolver)
-        .context("the Casework migration database configuration is invalid")?;
-    let store = with_operator_audit(store, &inputs.config, &inputs.resolver, &runtime)?;
+    let store = PostgresStore::connect_migration(
+        &inputs.config.database,
+        &inputs.resolver,
+        inputs.development.as_ref(),
+    )
+    .context("the Casework migration database configuration is invalid")?;
+    let store = with_operator_audit(
+        store,
+        &inputs.config,
+        &inputs.resolver,
+        &runtime,
+        declared.posture,
+    )?;
     let applied = runtime
         .block_on(store.apply_activation(
             &runtime_user,
@@ -945,21 +973,38 @@ pub(super) fn apply(
     Ok(report)
 }
 
-pub(super) fn status(runtime_config: &Path) -> Result<Value> {
-    let config = load_runtime_config(runtime_config)?;
+pub(super) fn status(runtime_config: &Path, declared: DeclaredPosture) -> Result<Value> {
+    let loaded = load_runtime_config(runtime_config, declared)?;
+    let config = loaded.config;
     let runtime_config =
         fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
     let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
-    let store = PostgresStore::connect_runtime(&config.database, &resolver)
-        .context("the Casework runtime database configuration is invalid")?;
+    let store =
+        PostgresStore::connect_runtime(&config.database, &resolver, loaded.development.as_ref())
+            .context("the Casework runtime database configuration is invalid")?;
     let status = async_runtime()?
         .block_on(store.activation_status())
         .context("reading the Casework activation ledger")?;
     let statement = single_role_statement(status.role_mode);
+    let diagnostics: Vec<_> = status
+        .active
+        .iter()
+        .filter(|active| active.posture != declared.posture)
+        .map(|active| {
+            let (message, action) = registry_casework::posture_mismatch(active.posture);
+            Diagnostic::warning(
+                "platform.activation.posture-mismatch",
+                "database",
+                message,
+                action,
+            )
+        })
+        .collect();
     activation_report(
         json!({
             "ok": true,
             "command": "status",
+            "diagnostics": diagnostics,
             "runtimeConfig": runtime_config,
             "singleRoleStatement": statement,
         }),
@@ -972,9 +1017,10 @@ fn with_operator_audit(
     config: &RuntimeConfig,
     resolver: &SecretResolver,
     runtime: &tokio::runtime::Runtime,
+    posture: Posture,
 ) -> Result<PostgresStore> {
     let audit = runtime
-        .block_on(open_audit(config, resolver, Some("caseworkctl")))
+        .block_on(open_audit(config, resolver, Some("caseworkctl"), posture))
         .context("opening the Casework operator audit destination")?;
     Ok(store.with_audit(audit))
 }
@@ -986,8 +1032,11 @@ fn async_runtime() -> Result<tokio::runtime::Runtime> {
         .context("starting the Casework operator runtime")
 }
 
-fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
-    Ok(RuntimeConfig::load(path)?)
+fn load_runtime_config(
+    path: &Path,
+    declared: DeclaredPosture,
+) -> Result<LoadedRuntimeConfig<RuntimeConfig>> {
+    Ok(RuntimeConfig::load(path, declared)?)
 }
 pub(super) fn check_runtime_config(
     project: &Path,
@@ -995,10 +1044,12 @@ pub(super) fn check_runtime_config(
     environment: bool,
     deny_warnings: bool,
     checked: Result<Value>,
+    declared: DeclaredPosture,
 ) -> Result<Value> {
     let policy = load_and_check_policy(project).ok();
     let absolute = std::path::absolute(path)?;
-    let runtime = registry_casework::check_runtime(&absolute, policy.as_ref(), environment);
+    let runtime =
+        registry_casework::check_runtime(&absolute, policy.as_ref(), environment, declared);
     let runtime = Report::new(runtime.diagnostics);
     let (mut combined, mut checked) = match checked {
         Ok(checked) => {
@@ -1031,12 +1082,16 @@ pub(super) fn check_runtime_config(
     }
     Ok(checked)
 }
-pub(super) fn doctor(path: &Path) -> Result<Value> {
-    let inputs = ActivationInputs::load(path)?;
+pub(super) fn doctor(path: &Path, declared: DeclaredPosture) -> Result<Value> {
+    let inputs = ActivationInputs::load(path, declared)?;
     inputs.config.check_runtime_secrets(&inputs.resolver)?;
     let refs = inputs.provider_refs();
     let candidate = inputs.candidate(&refs);
-    let store = PostgresStore::connect_runtime(&inputs.config.database, &inputs.resolver)?;
+    let store = PostgresStore::connect_runtime(
+        &inputs.config.database,
+        &inputs.resolver,
+        inputs.development.as_ref(),
+    )?;
     let runtime = async_runtime()?;
     runtime.block_on(store.current_user())?;
     let mut plan = runtime.block_on(store.plan_activation(&candidate))?;
@@ -1553,10 +1608,10 @@ mod doctor_tests {
         let mut config = json!({
             "apiVersion":registry_casework::RUNTIME_CONFIG_API_VERSION,"kind":registry_casework::RUNTIME_CONFIG_KIND,
             "identity":{"databaseId":"doctor-preflight"},"package":{"root":package_root},
-            "listener":{"bind":"127.0.0.1:8100","tlsTermination":"development-loopback","networkExposure":"private-address"},
+            "listener":{"bind":"127.0.0.1:8100","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
             "secretProviders":{"file":{"root":secrets}},
             "database":{"runtimeUrlRef":"secret:file/runtime-url","migrationUrlRef":"secret:file/absent-migration-url"},
-            "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+            "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework","allowedClients":["casework-test"],"scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
             "audit":{"path":root.path().join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"},
             "reviewCompletionDestinations":{"receiver":{"url":"https://completion.example.test/reviews","hmacSha256KeyRef":"secret:file/completion-key"}}
         });
@@ -1585,7 +1640,14 @@ mod doctor_tests {
         ] {
             let (root, runtime) = setup(None);
             fs::remove_file(root.path().join("secrets").join(name)).unwrap();
-            let error = doctor(&runtime).unwrap_err();
+            let error = doctor(
+                &runtime,
+                DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            )
+            .unwrap_err();
             let shown = format!("{error:#}");
             assert!(shown.contains(field), "{shown}");
             assert!(!shown.contains("database connection"), "{shown}");
@@ -1658,7 +1720,14 @@ mod doctor_tests {
         } else {
             "/reviewCompletionDestinations/receiver/hmacSha256KeyRef"
         };
-        let error = doctor(&runtime).unwrap_err();
+        let error = doctor(
+            &runtime,
+            DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .unwrap_err();
         let report = error.downcast_ref::<Report>().expect("doctor diagnostic");
         let [diagnostic] = report.diagnostics() else {
             panic!("expected one completion key diagnostic");
@@ -1672,7 +1741,15 @@ mod doctor_tests {
     #[test]
     fn serving_preflight_accepts_present_secrets_without_a_migration_credential() {
         let (root, runtime) = setup(None);
-        let config = load_runtime_config(&runtime).unwrap();
+        let config = load_runtime_config(
+            &runtime,
+            DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .unwrap()
+        .config;
         let resolver = secret_resolver(&config).unwrap();
         config.check_runtime_secrets(&resolver).unwrap();
         assert!(!root.path().join("secrets/absent-migration-url").exists());
@@ -1702,7 +1779,15 @@ mod doctor_tests {
                 _ => unreachable!(),
             }
             fs::remove_file(root.path().join("secrets/completion-key")).unwrap();
-            let config = load_runtime_config(&runtime).unwrap();
+            let config = load_runtime_config(
+                &runtime,
+                DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            )
+            .unwrap()
+            .config;
             let resolver = secret_resolver(&config).unwrap();
             let report = config.check_runtime_secrets(&resolver).unwrap_err();
             let paths = report

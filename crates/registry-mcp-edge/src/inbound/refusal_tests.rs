@@ -142,7 +142,7 @@ pub(super) fn application(
         burst,
     };
     let resource_server = Arc::new(
-        ResourceServer::new(
+        ResourceServer::new_with_posture(
             &options,
             token_verifier(&options, fetcher),
             profile.key_hasher(),
@@ -150,6 +150,7 @@ pub(super) fn application(
                 per_principal: bucket,
                 per_client: bucket,
             },
+            registry_platform_config::Posture::Development,
         )
         .expect("resource server"),
     );
@@ -616,5 +617,24 @@ fn production_constructor_refuses_development_resource_server_options() {
                 assert!(result.is_ok());
             }
         }
+        // The constructors that name no posture are the production ones.
+        assert_eq!(options.validate(), Err(expected));
+        let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            "https://issuer.example.test/jwks".to_owned(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::https_or_loopback(),
+        ));
+        let profile =
+            AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![8; 32])).unwrap();
+        let result = ResourceServer::new(
+            &options,
+            token_verifier(&options, fetcher),
+            profile.key_hasher(),
+            RateLimitOptions {
+                per_principal: bucket,
+                per_client: bucket,
+            },
+        );
+        assert_eq!(result.err(), Some(expected));
     }
 }

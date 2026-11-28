@@ -2150,9 +2150,10 @@ async fn real_postgres_row_local_constraint_problems_name_only_readable_declarat
 /// with others asserts a rise of at least one.
 async fn refusal_counts() -> std::collections::BTreeMap<String, u64> {
     use tower::ServiceExt as _;
-    let response = registry_breg::metrics::metrics_app(Arc::new(
-        registry_breg::metrics::Metrics::without_pool_for_test(),
-    ))
+    let response = registry_breg::metrics::metrics_app(
+        Arc::new(registry_breg::metrics::Metrics::without_pool_for_test()),
+        registry_platform_config::Posture::Production,
+    )
     .oneshot(
         Request::builder()
             .uri("/metrics")

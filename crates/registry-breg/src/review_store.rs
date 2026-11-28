@@ -3096,9 +3096,11 @@ mod tests {
     }
 
     fn authority(id: &str, completion: Option<(u8, &str)>) -> Arc<ReviewAuthorityClient> {
-        let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new_without_peer_policy(
-            "https://casework.example.test/".parse().expect("URL"),
-        ))
+        let client = ReviewClient::new(
+            registry_review_client::ReviewClientConfig::new_without_peer_policy(
+                "https://casework.example.test/".parse().expect("URL"),
+            ),
+        )
         .expect("client");
         Arc::new(
             ReviewAuthorityClient::new(

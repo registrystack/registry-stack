@@ -31,10 +31,10 @@ fn write_runtime_with(
 kind: {RUNTIME_CONFIG_KIND}
 identity: {{databaseId: \"{database_id}\"}}
 package: {{root: {package}}}
-listener: {{bind: \"{bind}\", tlsTermination: development-loopback}}
+listener: {{bind: \"{bind}\", tlsTermination: loopback-plaintext}}
 secretProviders: {{file: {{root: {root}/secrets}}, environment: {{}}}}
 database: {{runtimeUrlRef: secret:env/RUNTIME, migrationUrlRef: secret:env/MIGRATION}}
-authentication: {{oidc: {{issuer: http://127.0.0.1:8091, audience: urn:example:casework, allowedClients: unrestricted}}}}
+authentication: {{oidc: {{issuer: http://127.0.0.1:8091, audience: urn:example:casework, allowedClients: [casework-test]}}}}
 audit: {{path: {root}/audit.ndjson, hashKeyRef: secret:file/audit}}
 contextProviders: {{}}
 {tail}",
@@ -304,7 +304,7 @@ taskTemplates:
     let text = std::fs::read_to_string(&runtime)
         .expect("read runtime.yaml")
         .replace(
-            "allowedClients: unrestricted",
+            "allowedClients: [casework-test]",
             "allowedClients: [summary-client]",
         )
         .replace(
@@ -330,7 +330,15 @@ taskAuthority:
         );
     std::fs::write(&runtime, text).expect("write runtime.yaml");
 
-    let config = registry_casework::RuntimeConfig::load(&runtime).expect("runtime file");
+    let loaded = registry_casework::RuntimeConfig::load(
+        &runtime,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("runtime file");
+    let config = loaded.config;
     let package = config.load_package().expect("package");
     let secrets = registry_casework::secret_resolver(&config).expect("secrets");
     let error = registry_casework::build_context_providers(&config, &package, &secrets)
@@ -346,4 +354,93 @@ taskAuthority:
         error.to_string(),
         "the Casework review-context provider facility-proposal-context is not configured for its declared capability and export"
     );
+}
+
+#[test]
+fn production_collects_development_settings_before_opening_the_package() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let runtime = write_runtime(&root, &root.join("absent-package"));
+    let contents = std::fs::read_to_string(&runtime).expect("runtime file");
+    std::fs::write(
+        &runtime,
+        contents
+            .replace(
+                "issuer: http://127.0.0.1:8091",
+                "issuer: http://10.0.0.5:8091, allowInsecureHttp: true",
+            )
+            .replace(
+                "allowedClients: [casework-test]",
+                "allowedClients: unrestricted",
+            ),
+    )
+    .expect("write runtime file");
+
+    for posture in [None, Some("production")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_casework"));
+        command.env_remove("REGISTRY_STACK_POSTURE");
+        command.arg("--runtime-config").arg(&runtime);
+        if let Some(value) = posture {
+            command.args(["--posture", value]);
+        }
+        let output = command.arg("serve").output().expect("run casework");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+        for needle in [
+            "platform.posture.insecure-issuer-http",
+            "casework.posture.unrestricted-clients",
+            "/authentication/oidc/allowedClients",
+            "rstack dev",
+            "REGISTRY_STACK_POSTURE=development",
+            "--posture development",
+        ] {
+            assert!(stderr.contains(needle), "missing {needle}: {stderr}");
+        }
+        assert_eq!(output.status.code(), Some(1));
+    }
+}
+
+#[test]
+fn development_startup_logs_the_settings_before_opening_dependencies() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let package = root.join("package");
+    std::fs::create_dir(&package).unwrap();
+    std::fs::write(package.join(POLICY_FILE), PROJECT).unwrap();
+    registry_platform_config::write_sum_file(&package, None, &package_limits(), PACKAGE_COMMAND)
+        .unwrap();
+    let runtime = write_runtime(&root, &package);
+    let contents = std::fs::read_to_string(&runtime).unwrap().replace(
+        "issuer: http://127.0.0.1:8091, audience: urn:example:casework, allowedClients: [casework-test]",
+        "issuer: http://10.0.0.5:8091, allowInsecureHttp: true, audience: urn:example:casework, allowedClients: unrestricted",
+    );
+    std::fs::write(&runtime, contents).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_casework"))
+        .arg("--runtime-config")
+        .arg(&runtime)
+        .args(["--posture", "development", "serve"])
+        .env_remove("REGISTRY_STACK_POSTURE")
+        .env_remove("CASEWORK_LOG")
+        .output()
+        .unwrap();
+    let lines = String::from_utf8(output.stdout).unwrap();
+    let logs: Vec<serde_json::Value> = lines
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        logs.iter()
+            .any(|log| log["fields"]["message"] == "posture declared"
+                && log["fields"]["posture"] == "development"
+                && log["fields"]["development_settings"] == 2),
+        "{lines}"
+    );
+    for code in [
+        "platform.posture.insecure-issuer-http",
+        "casework.posture.unrestricted-clients",
+    ] {
+        assert!(
+            logs.iter().any(|log| log["fields"]["error_code"] == code),
+            "{lines}"
+        );
+    }
 }

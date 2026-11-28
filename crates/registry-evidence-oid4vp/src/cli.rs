@@ -34,6 +34,12 @@ pub enum Command {
             env = "EVIDENCE_OID4VP_RUNTIME_CONFIG"
         )]
         config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
         /// Emit the selected command's report in this format.
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
@@ -61,6 +67,12 @@ pub enum Command {
             env = "EVIDENCE_OID4VP_RUNTIME_CONFIG"
         )]
         config: PathBuf,
+        #[arg(
+            long = "posture",
+            value_name = "POSTURE",
+            help = "Declared posture: development or production. Unset means production."
+        )]
+        posture: Option<String>,
     },
 }
 

@@ -223,8 +223,9 @@ pub(crate) fn run(
             )
         }
     };
-    let written = if format == OutputFormat::Json {
+    let written = if format.is_json() {
         write_ctl_report(
+            format,
             &mut *stdout,
             &FileCheckReport {
                 ok: exit == 0,

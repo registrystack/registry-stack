@@ -21,8 +21,9 @@ use registry_adapter_core::{
     ADAPTER_PROJECT_KIND, ADAPTER_REMOVED_KEYS, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::{
-    sha256_uri, AuthoredExpressions, RuntimeConfigLoader, RuntimeEnvelope, SecretError,
-    SecretProvider, SecretProvidersConfig, SecretResolver,
+    sha256_uri, AuthoredExpressions, DeclaredPosture, DevelopmentWitness, Posture, PostureReport,
+    PostureSource, RuntimeConfigLoader, RuntimeEnvelope, SecretError, SecretProvider,
+    SecretProvidersConfig, SecretResolver,
 };
 use registry_platform_yaml::{
     ApiVersion, Digest, EnvelopeRule, Expect, FormatSpec, Reader, Severity,
@@ -259,6 +260,8 @@ pub struct Loaded {
     pub problem_envelope: CompiledEnvelope,
     pub project: AdapterProject,
     pub runtime: AdapterRuntimeConfig,
+    pub posture: PostureReport,
+    pub development: Option<DevelopmentWitness>,
     pub scripts: ScriptSet,
     /// The deployment's declared code maps, shared by the conversion
     /// steps and the Rhai `code_map` helper.
@@ -595,13 +598,9 @@ pub fn load(
     pack_path: Option<&Path>,
     runtime_path: &Path,
 ) -> Result<Loaded, LoadError> {
-    load_inner(
-        project_directory,
-        profile_path,
-        pack_path,
-        runtime_path,
-        None,
-    )
+    load_inner(project_directory, profile_path, pack_path, None, || {
+        read_runtime(runtime_path, default_posture())
+    })
 }
 
 /// A runtime host callback that derives immutable fixed-target metadata from
@@ -619,21 +618,96 @@ pub fn load_with_target(
     runtime_path: &Path,
     target_builder: TargetBuilder,
 ) -> Result<Loaded, LoadError> {
-    load_inner(
+    load_with_target_in_posture(
         project_directory,
         profile_path,
         pack_path,
         runtime_path,
-        Some(target_builder),
+        target_builder,
+        default_posture(),
     )
+}
+
+fn default_posture() -> DeclaredPosture {
+    DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Default,
+    }
+}
+
+pub fn load_with_target_in_posture(
+    project_directory: &Path,
+    profile_path: Option<&Path>,
+    pack_path: Option<&Path>,
+    runtime_path: &Path,
+    target_builder: TargetBuilder,
+    declared: DeclaredPosture,
+) -> Result<Loaded, LoadError> {
+    load_inner(
+        project_directory,
+        profile_path,
+        pack_path,
+        Some(target_builder),
+        || read_runtime(runtime_path, declared),
+    )
+}
+
+/// Compile against the process's already checked runtime document.
+pub fn load_with_target_from_runtime(
+    project_directory: &Path,
+    profile_path: Option<&Path>,
+    pack_path: Option<&Path>,
+    runtime_path: &Path,
+    loaded: registry_platform_config::LoadedRuntimeConfig<AdapterRuntimeConfig>,
+    target_builder: TargetBuilder,
+) -> Result<Loaded, LoadError> {
+    loaded
+        .posture
+        .decide(runtime_path)
+        .map_err(|error| LoadError::Runtime(error.to_string()))?;
+    load_inner(
+        project_directory,
+        profile_path,
+        pack_path,
+        Some(target_builder),
+        || Ok(loaded),
+    )
+}
+
+fn read_runtime(
+    runtime_path: &Path,
+    declared: DeclaredPosture,
+) -> Result<registry_platform_config::LoadedRuntimeConfig<AdapterRuntimeConfig>, LoadError> {
+    let absolute = std::fs::canonicalize(runtime_path).map_err(|_| LoadError::Unreadable {
+        path: runtime_path.display().to_string(),
+    })?;
+    let mut loaded = RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: ADAPTER_RUNTIME_API_VERSION,
+            kind: ADAPTER_RUNTIME_KIND,
+        },
+        declared,
+    )
+    .removed_keys(ADAPTER_REMOVED_KEYS)
+    .load::<AdapterRuntimeConfig>(&absolute)
+    .map_err(|error| LoadError::Runtime(format!("the runtime config was refused: {error}")))?;
+    registry_adapter_core::record_endpoint_posture(&loaded.config.endpoints, &mut loaded.posture);
+    loaded
+        .posture
+        .decide(&absolute)
+        .map_err(|error| LoadError::Runtime(error.to_string()))?;
+    Ok(loaded)
 }
 
 fn load_inner(
     project_directory: &Path,
     profile_path: Option<&Path>,
     pack_path: Option<&Path>,
-    runtime_path: &Path,
     target_builder: Option<TargetBuilder>,
+    load_runtime: impl FnOnce() -> Result<
+        registry_platform_config::LoadedRuntimeConfig<AdapterRuntimeConfig>,
+        LoadError,
+    >,
 ) -> Result<Loaded, LoadError> {
     let (project, project_bytes): (AdapterProject, _) = read(
         &project_directory.join("project.yaml"),
@@ -677,17 +751,8 @@ fn load_inner(
             ));
         }
     };
-    let absolute = std::fs::canonicalize(runtime_path).map_err(|_| LoadError::Unreadable {
-        path: runtime_path.display().to_string(),
-    })?;
-    let runtime = RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
-        api_version: ADAPTER_RUNTIME_API_VERSION,
-        kind: ADAPTER_RUNTIME_KIND,
-    })
-    .removed_keys(ADAPTER_REMOVED_KEYS)
-    .load::<AdapterRuntimeConfig>(&absolute)
-    .map_err(|error| LoadError::Runtime(format!("the runtime config was refused: {error}")))?
-    .config;
+    let loaded = load_runtime()?;
+    let runtime = loaded.config;
 
     let mut findings: Vec<String> = Vec::new();
     for diagnostic in check_project_pins(
@@ -788,6 +853,8 @@ fn load_inner(
         problem_envelope: authored.problem_envelope,
         project,
         runtime,
+        posture: loaded.posture,
+        development: loaded.development,
         scripts: authored.scripts,
         code_maps: authored.code_maps,
         endpoints: authored.endpoints,

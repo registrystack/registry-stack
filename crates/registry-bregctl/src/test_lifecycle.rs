@@ -230,9 +230,10 @@ pub(crate) fn preflight_output(path: &Path) -> Result<OutputTarget, TestLifecycl
 }
 
 pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     request: TestLifecycleRequest<'_>,
 ) -> Result<TestLifecycleOutcome, TestLifecycleError> {
-    let config = load_test_runtime_config(request.runtime_config)?;
+    let config = load_test_runtime_config(posture, request.runtime_config)?;
     request
         .candidate
         .prevalidate()
@@ -328,10 +329,11 @@ pub(crate) fn run(
 /// is, without validating journeys, resolving credentials, or writing a
 /// receipt.
 pub(crate) fn measure(
+    posture: registry_platform_config::DeclaredPosture,
     candidate: CapturedPackageCandidate,
     runtime_config: &Path,
 ) -> Result<SchemaMeasurement, TestLifecycleError> {
-    let config = load_test_runtime_config(runtime_config)?;
+    let config = load_test_runtime_config(posture, runtime_config)?;
     candidate
         .prevalidate()
         .map_err(|error| TestLifecycleError::Candidate {
@@ -361,11 +363,14 @@ pub(crate) fn measure(
     })
 }
 
-fn load_test_runtime_config(path: &Path) -> Result<RuntimeConfig, TestLifecycleError> {
+fn load_test_runtime_config(
+    posture: registry_platform_config::DeclaredPosture,
+    path: &Path,
+) -> Result<RuntimeConfig, TestLifecycleError> {
     if !path.is_absolute() || super::has_parent_component(path) {
         return Err(TestLifecycleError::RuntimeConfigPath);
     }
-    load_runtime_config(path).map_err(TestLifecycleError::RuntimeConfig)
+    load_runtime_config(path, posture).map_err(TestLifecycleError::RuntimeConfig)
 }
 
 fn load_credentials(
@@ -801,6 +806,7 @@ mod tests {
         )
         .unwrap();
         let candidate = CapturedPackageCandidate {
+            posture_diagnostics: Vec::new(),
             compiled,
             compiler_source_revision: "candidate-regression".to_owned(),
             from_package_digest: None,
@@ -830,17 +836,20 @@ mod tests {
         let errors = [
             (
                 "prevalidate",
-                run(TestLifecycleRequest {
-                    candidate: candidate.clone(),
-                    runtime_config: &runtime,
-                    credentials: &root.join("credentials-canary.yaml"),
-                    output,
-                })
+                run(
+                    crate::DEFAULT_POSTURE,
+                    TestLifecycleRequest {
+                        candidate: candidate.clone(),
+                        runtime_config: &runtime,
+                        credentials: &root.join("credentials-canary.yaml"),
+                        output,
+                    },
+                )
                 .unwrap_err(),
             ),
             (
                 "measure.prevalidate",
-                measure(candidate, &runtime).unwrap_err(),
+                measure(crate::DEFAULT_POSTURE, candidate, &runtime).unwrap_err(),
             ),
         ];
         for (stage, error) in errors {

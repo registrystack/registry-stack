@@ -247,7 +247,7 @@ identity:
   databaseId: casework-backup-restore
 listener:
   bind: 127.0.0.1:$casework_port
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
 audit:
   hashKeyRef: secret:file/casework-audit-key
   path: $audit_file
@@ -255,7 +255,7 @@ authentication:
   oidc:
     issuer: $issuer
     audience: urn:example:casework-restore
-    allowedClients: unrestricted
+    allowedClients: [requester, staff, administrator]
     scopeClaim: scope
     humanIdentity: {claim: registry_actor_kind, value: human}
     jwksSource: {type: static, documentRef: secret:file/jwks}

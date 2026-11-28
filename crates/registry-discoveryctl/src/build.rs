@@ -15,7 +15,7 @@ use registry_platform_config::{
     VerifiedPackage,
 };
 use registry_platform_httputil::{
-    read_bounded, validate_response_headers, FetchUrlPolicy, PeerPolicy,
+    read_bounded, validate_response_headers, FetchUrlPolicy, PeerPolicy, ResponseHeaderError,
 };
 use reqwest::header::{ACCEPT, CONTENT_ENCODING, CONTENT_TYPE};
 use sha2::{Digest as _, Sha256};
@@ -43,6 +43,12 @@ pub enum BuildError {
     Project(#[from] ProjectError),
     #[error("an approved Discovery origin could not be fetched safely")]
     Fetch,
+    #[error(
+        "an approved Discovery origin answers as a development service, and this run declares \
+         production. Run the provider in production, or declare development with \
+         REGISTRY_STACK_POSTURE=development or --posture development"
+    )]
+    DevelopmentPeer,
     #[error("an approved Discovery origin returned an invalid public description")]
     Description,
     #[error(
@@ -205,8 +211,12 @@ async fn fetch_origins(
             .send()
             .await
             .map_err(|_| BuildError::Fetch)?;
-        validate_response_headers(response.headers(), peer_policy)
-            .map_err(|_| BuildError::Fetch)?;
+        validate_response_headers(response.headers(), peer_policy).map_err(
+            |error| match error {
+                ResponseHeaderError::DevelopmentPeer => BuildError::DevelopmentPeer,
+                _ => BuildError::Fetch,
+            },
+        )?;
         if response.status() != reqwest::StatusCode::OK
             || !exact_profile_media_type(response.headers())
             || response
@@ -434,10 +444,13 @@ mod tests {
         )
         .unwrap();
         let body = render_description(&DiscoveryDescription::new(vec![service]).unwrap()).unwrap();
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = requests.clone();
         let app = Router::new().route(
             "/catalog.jsonld",
             get(move || {
                 let body = body.clone();
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 async move {
                     Response::builder()
                         .header(CONTENT_TYPE, MEDIA_TYPE)
@@ -475,7 +488,13 @@ mod tests {
             FETCH_TIMEOUT,
         )
         .await;
-        assert!(matches!(result, Err(BuildError::Fetch)), "{result:?}");
+        assert!(
+            matches!(result, Err(BuildError::DevelopmentPeer)),
+            "{result:?}"
+        );
+        // The provider answered, so the refusal came from its development
+        // marking and not from a failure to connect.
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
         let package = package_project(
             project.path(),
             &project.path().join("package"),

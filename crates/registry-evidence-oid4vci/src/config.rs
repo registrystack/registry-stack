@@ -19,12 +19,14 @@ use std::{
 use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use registry_platform_config::{
     check_metrics_bind_address, check_metrics_bind_apart, AuditKeyConfig, ConfigBlockErrorKind,
-    ListenerNetworkExposure, MetricsBindError, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
-    RuntimeFileCheck, SecretProvidersConfig, SecretReference, DEFAULT_STAND_IN,
+    DeclaredPosture, DevelopmentClass, DevelopmentOnlyRefused, DevelopmentSetting,
+    DevelopmentWitness, Gated, ListenerNetworkExposure, MetricsBindError, PostureReport,
+    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvidersConfig,
+    SecretReference, DEFAULT_STAND_IN,
 };
 use registry_platform_httputil::client::{
-    valid_resource_uri, valid_scope_token, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
-    MAXIMUM_SCOPE_PARAMETER_BYTES,
+    is_loopback_host, valid_resource_uri, valid_scope_token, MAXIMUM_REQUESTED_SCOPES,
+    MAXIMUM_REQUESTED_SCOPE_BYTES, MAXIMUM_SCOPE_PARAMETER_BYTES,
 };
 use registry_platform_yaml::{
     shape_union, BoundedU32, BoundedU64, Diagnostic, ExternalId, Invalid, Report, Severity,
@@ -80,11 +82,14 @@ const REMOVED_KEYS: &[RemovedKey] = &[
 
 /// The shared runtime reader for a delivery runtime file.
 #[must_use]
-pub const fn loader() -> RuntimeConfigLoader {
-    RuntimeConfigLoader::new_without_posture(RuntimeEnvelope {
-        api_version: OID4VCI_RUNTIME_API_VERSION,
-        kind: OID4VCI_RUNTIME_KIND,
-    })
+pub const fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+    RuntimeConfigLoader::new(
+        RuntimeEnvelope {
+            api_version: OID4VCI_RUNTIME_API_VERSION,
+            kind: OID4VCI_RUNTIME_KIND,
+        },
+        declared,
+    )
     .removed_keys(REMOVED_KEYS)
     .require_trusted_ownership()
 }
@@ -161,14 +166,22 @@ pub struct RuntimeCheck {
 /// checked by syntax and position only, and a rule that reads its value is
 /// left out.
 #[must_use]
-pub fn check_file(path: &Path, substitute: bool) -> RuntimeCheck {
-    let check = loader().check_offline::<DeliveryDocument>(path, substitute, stand_in_for);
-    let mut diagnostics = check.diagnostics.clone();
+pub fn check_file(path: &Path, substitute: bool, declared: DeclaredPosture) -> RuntimeCheck {
+    let check = loader(declared).check_offline::<DeliveryDocument>(path, substitute, stand_in_for);
+    let mut diagnostics = check
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            !(diagnostic.code.split('.').nth(1) == Some("posture")
+                && check.defers_within(&diagnostic.path))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     if let Some(loaded) = &check.loaded {
         diagnostics.extend(
             loaded
                 .config
-                .findings()
+                .findings(loaded.development.as_ref())
                 .iter()
                 .filter(|finding| !reads_deferred_value(&check, finding))
                 .map(|finding| positioned(&check, finding)),
@@ -190,13 +203,35 @@ pub fn check_file(path: &Path, substitute: bool) -> RuntimeCheck {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ValidationMode {
-    /// Every published and called origin uses https.
+    /// The published credential issuer uses HTTPS.
     #[default]
     Strict,
     /// One supervised process group on loopback: the credential issuer is a
     /// canonical `http://127.0.0.1:<port>` origin the listener binds exactly,
-    /// and every called origin is https or a 127.0.0.1 HTTP origin.
+    /// when the issuer uses HTTP. Requires the development posture.
     SupervisedLocalDevelopment,
+}
+
+static SUPERVISED_VALIDATION: DevelopmentSetting = DevelopmentSetting {
+    code: "evidence.posture.supervised-validation",
+    key: "validationMode",
+    summary: "supervised validation permits a published loopback HTTP credential issuer",
+    production: "Use validationMode: strict and publish an HTTPS credential issuer.",
+};
+
+impl DevelopmentClass for ValidationMode {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&SUPERVISED_VALIDATION];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::Strict => None,
+            Self::SupervisedLocalDevelopment => Some(&SUPERVISED_VALIDATION),
+        }
+    }
+}
+
+fn strict_validation() -> Gated<ValidationMode> {
+    Gated::everywhere(ValidationMode::Strict).expect("strict validation is valid in every posture")
 }
 
 /// The signature algorithms an offer token may be signed with.
@@ -356,22 +391,14 @@ pub struct OfferAuthorizationConfig {
     pub audiences: Vec<String>,
     pub algorithms: Vec<AccessTokenAlgorithm>,
     /// Client identifiers permitted to create offers. Unrestricted accepts any
-    /// client the issuer vouched for and loads only in supervised local
-    /// development.
+    /// client the issuer vouched for and loads only in development.
     pub allowed_clients: Restriction,
     /// Scopes every offer token must carry, checked against the verified
     /// token's scope set. Unrestricted applies no scope gate and loads only in
-    /// supervised local development; generated configurations state
+    /// development. Generated configurations state
     /// `oid4vci:offer`.
     pub required_scopes: Restriction,
     pub maximum_token_lifetime_seconds: u64,
-}
-
-impl OfferAuthorizationConfig {
-    pub(crate) fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.allow_insecure_http
-            .then_some("offers.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
-    }
 }
 
 /// The bounds of the in-memory store.
@@ -455,8 +482,9 @@ impl Default for RateLimitsConfig {
 /// issue. The reader refuses an unknown key, so an attempt to write one by
 /// hand is a load failure rather than a silently ignored key, and no type in
 /// this crate deserializes one.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct DeliveryConfig {
+    pub posture: PostureReport,
     pub validation_mode: ValidationMode,
     /// The `credential_issuer` identifier this service publishes, and the value
     /// a wallet proof must carry as its `aud`. Held without a trailing slash,
@@ -478,26 +506,32 @@ pub struct DeliveryConfig {
 
 impl DeliveryConfig {
     /// Load and validate the runtime file at the absolute `path`.
-    pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        Self::load_reporting(path).map(|(config, _)| config)
+    pub fn load(path: &Path, declared: DeclaredPosture) -> Result<Self, ConfigError> {
+        Self::load_reporting(path, declared).map(|(config, _)| config)
     }
 
     /// Load and validate the runtime file at the absolute `path`, returning
     /// the warnings it carries beside the configuration.
-    pub fn load_reporting(path: &Path) -> Result<(Self, Vec<Diagnostic>), ConfigError> {
-        let mut check = loader().check_offline::<DeliveryDocument>(path, true, stand_in_for);
+    pub fn load_reporting(
+        path: &Path,
+        declared: DeclaredPosture,
+    ) -> Result<(Self, Vec<Diagnostic>), ConfigError> {
+        let mut check =
+            loader(declared).check_offline::<DeliveryDocument>(path, true, stand_in_for);
         let Some(loaded) = check.loaded.take() else {
             return Err(ConfigError {
                 diagnostics: std::mem::take(&mut check.diagnostics),
                 unavailable: check.unavailable,
             });
         };
-        let mut diagnostics: Vec<Diagnostic> = loaded
-            .config
-            .findings()
-            .iter()
-            .map(|finding| positioned(&check, finding))
-            .collect();
+        let mut diagnostics = std::mem::take(&mut check.diagnostics);
+        diagnostics.extend(
+            loaded
+                .config
+                .findings(loaded.development.as_ref())
+                .iter()
+                .map(|finding| positioned(&check, finding)),
+        );
         in_file_order(&mut diagnostics);
         if diagnostics
             .iter()
@@ -508,7 +542,19 @@ impl DeliveryConfig {
                 unavailable: false,
             });
         }
-        Ok((loaded.config.into_config(), diagnostics))
+        let config = loaded
+            .config
+            .into_config(loaded.posture, loaded.development.as_ref())
+            .map_err(|error| ConfigError {
+                diagnostics: vec![Diagnostic::error(
+                    error.setting.code,
+                    "",
+                    error.to_string(),
+                    error.setting.production,
+                )],
+                unavailable: false,
+            })?;
+        Ok((config, diagnostics))
     }
 
     /// The first rule the listener bindings break, as a sentence.
@@ -602,8 +648,8 @@ pub struct DeliveryDocument {
     /// The document kind.
     pub kind: String,
     /// The transport validation boundary. Absent means strict.
-    #[serde(default)]
-    pub validation_mode: ValidationMode,
+    #[serde(default = "strict_validation")]
+    pub validation_mode: Gated<ValidationMode>,
     /// The `credential_issuer` identifier this service publishes, and the
     /// value a wallet proof must carry as its `aud`: a bare origin with no
     /// path, query, or fragment. https in strict mode. A trailing slash is
@@ -715,7 +761,7 @@ pub struct ListenerDocument {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceDocument {
-    /// The Evidence base URL, with no query or fragment. https in strict mode.
+    /// The Evidence base URL, using HTTPS or loopback HTTP, with no query or fragment.
     pub base_url: Url,
 }
 
@@ -724,7 +770,7 @@ pub struct EvidenceDocument {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TokenClientDocument {
-    /// The token endpoint, with no query or fragment. https in strict mode.
+    /// The token endpoint, using HTTPS or loopback HTTP, with no query or fragment.
     pub token_endpoint: Url,
     /// The client identifier registered with the token issuer, at most 128
     /// bytes.
@@ -810,7 +856,7 @@ impl<'de> Deserialize<'de> for UnrestrictedKeyword {
         } else {
             Err(Invalid::expected(
                 "unrestricted, or a list of at least one value",
-                "List the admitted values; unrestricted is accepted only with validationMode: supervised-local-development.",
+                "List the admitted values; unrestricted is accepted only in the development posture.",
             )
             .into_error())
         }
@@ -846,7 +892,7 @@ impl<'de> Deserialize<'de> for ListedIdentifiers {
         if items.is_empty() {
             return Err(Invalid::expected(
                 "unrestricted, or a list of at least one value",
-                "List the admitted values; unrestricted is accepted only with validationMode: supervised-local-development.",
+                "List the admitted values; unrestricted is accepted only in the development posture.",
             )
             .into_error());
         }
@@ -888,6 +934,52 @@ pub enum IdentifierRestriction {
 
 shape_union!(IdentifierRestriction { scalar => Unrestricted, list => Listed });
 
+static UNRESTRICTED_OFFER_GATE: DevelopmentSetting = DevelopmentSetting {
+    code: "evidence.posture.unrestricted-offer-gate",
+    key: "allowedClients",
+    summary: "an unrestricted offer gate admits all values vouched for by the issuer",
+    production: "List the required clients and scopes explicitly.",
+};
+
+impl DevelopmentClass for IdentifierRestriction {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&UNRESTRICTED_OFFER_GATE];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self {
+            Self::Unrestricted(_) => Some(&UNRESTRICTED_OFFER_GATE),
+            Self::Listed(_) => None,
+        }
+    }
+}
+
+static INSECURE_OFFER_ISSUER_HTTP: DevelopmentSetting = DevelopmentSetting {
+    code: "evidence.posture.insecure-offer-issuer-http",
+    key: "allowInsecureHttp",
+    summary: "plain HTTP beyond loopback can expose the offer issuer connection",
+    production: "Use HTTPS for the offer issuer and key set beyond loopback.",
+};
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct InsecureHttp(bool);
+
+impl DevelopmentClass for InsecureHttp {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&INSECURE_OFFER_ISSUER_HTTP];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        match self.0 {
+            true => Some(&INSECURE_OFFER_ISSUER_HTTP),
+            false => None,
+        }
+    }
+}
+
+fn deserialize_insecure_http<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    // A selected development setting represents exactly the authored true value.
+    let gated = Gated::<InsecureHttp>::deserialize(deserializer)?;
+    Ok(gated.development_setting().is_some())
+}
+
 impl IdentifierRestriction {
     fn items(&self) -> &[ExternalId] {
         match self {
@@ -921,13 +1013,14 @@ pub struct OffersDocument {
     #[serde(default)]
     pub claims: ClaimNamesDocument,
     /// The authorization server that issues offer tokens, compared exactly
-    /// against a token's `iss`. https in strict mode.
+    /// against a token's `iss`. Use HTTPS or loopback HTTP in production.
     pub issuer: Url,
-    /// The offer-token issuer's key set. https in strict mode.
+    /// The offer-token issuer's key set. Use HTTPS or loopback HTTP in production.
     pub jwks_uri: Url,
     /// Permit plain HTTP beyond loopback to the offer-token issuer and to
-    /// `jwksUri`.
-    #[serde(default)]
+    /// `jwksUri` in the development posture.
+    #[serde(default, deserialize_with = "deserialize_insecure_http")]
+    #[cfg_attr(feature = "schema", schemars(extend("x-registry-development-only" = ["evidence.posture.insecure-offer-issuer-http"])))]
     pub allow_insecure_http: bool,
     /// The audiences this service answers to, each at most 256 bytes. A token
     /// issued for anything else is refused.
@@ -945,13 +1038,13 @@ pub struct OffersDocument {
     pub algorithms: UniqueList<AccessTokenAlgorithm>,
     /// Client identifiers permitted to create offers, each at most 128 bytes,
     /// or `unrestricted` for any client the issuer vouched for, which loads
-    /// only with `validationMode: supervised-local-development`.
-    pub allowed_clients: IdentifierRestriction,
+    /// only in the development posture.
+    pub allowed_clients: Gated<IdentifierRestriction>,
     /// Scopes every offer token must carry, each an RFC 6749 scope token of at
     /// most 256 bytes, or `unrestricted` for no scope gate, which loads only
-    /// with `validationMode: supervised-local-development`. Generated
+    /// in the development posture. Generated
     /// configurations state `oid4vci:offer`.
-    pub required_scopes: IdentifierRestriction,
+    pub required_scopes: Gated<IdentifierRestriction>,
     /// The longest lifetime an offer token may carry, in seconds.
     #[serde(default = "default_maximum_token_lifetime_seconds")]
     pub maximum_token_lifetime_seconds: BoundedU64<60, 3_600>,
@@ -1105,7 +1198,7 @@ const URL_QUERY_OR_FRAGMENT: &str = "evidence.oid4vci.url-query-or-fragment";
 
 impl DeliveryDocument {
     /// Every rule a decoded document breaks beyond its shape.
-    fn findings(&self) -> Vec<Finding> {
+    fn findings(&self, witness: Option<&DevelopmentWitness>) -> Vec<Finding> {
         let mut findings = Vec::new();
         self.transport_findings(&mut findings);
         findings.extend(binding_findings(
@@ -1116,8 +1209,7 @@ impl DeliveryDocument {
         self.secret_findings(&mut findings);
         self.audit_findings(&mut findings);
         self.token_client.findings(&mut findings);
-        self.offers.findings(&mut findings);
-        self.offer_gate_findings(&mut findings);
+        self.offers.findings(&mut findings, witness);
         if self.store.nonce_lifetime_seconds.get() > self.store.access_token_lifetime_seconds.get()
         {
             // A nonce that remains valid after the access token window can
@@ -1155,33 +1247,23 @@ impl DeliveryDocument {
 
     fn transport_findings(&self, findings: &mut Vec<Finding>) {
         let issuer = normalized_credential_issuer(self.credential_issuer.as_str());
-        match self.validation_mode {
-            ValidationMode::Strict => {
-                credential_issuer_findings(issuer, findings);
-                for (pointer, origin) in self.called_origins() {
-                    url_query_or_fragment_findings(pointer, origin, findings);
-                    if self.offers.allow_insecure_http
-                        && matches!(pointer, "/offers/issuer" | "/offers/jwksUri")
-                    {
-                        continue;
-                    }
-                    https_origin_findings(pointer, origin, findings);
-                }
+        if self.validation_mode.development_setting().is_some() {
+            self.supervised_local_development_findings(issuer, findings);
+        } else {
+            credential_issuer_findings(issuer, findings);
+        }
+        for (pointer, origin) in self.called_origins() {
+            url_query_or_fragment_findings(pointer, origin, findings);
+            if self.offers.allow_insecure_http
+                && matches!(pointer, "/offers/issuer" | "/offers/jwksUri")
+            {
+                continue;
             }
-            ValidationMode::SupervisedLocalDevelopment => {
-                self.supervised_local_development_findings(issuer, findings);
-            }
+            https_origin_findings(pointer, origin, findings);
         }
     }
 
-    /// Admit one supervised process group on loopback, or nothing.
-    ///
-    /// The credential issuer is published to wallets and compared byte for byte
-    /// by a wallet proof's `aud`, so a supervised deployment has to serve
-    /// exactly the origin it publishes. Every other origin this mode reaches is
-    /// loopback too: a supervised group that called a real Evidence or token issuer
-    /// deployment over plain HTTP would be a production deployment wearing a
-    /// development label.
+    /// A supervised HTTP credential issuer must match the bound address.
     fn supervised_local_development_findings(&self, issuer: &str, findings: &mut Vec<Finding>) {
         if self.credential_issuer.is_https() {
             credential_issuer_findings(issuer, findings);
@@ -1211,59 +1293,6 @@ impl DeliveryDocument {
                         );
                     }
                 }
-            }
-        }
-        for (pointer, origin) in self.called_origins() {
-            url_query_or_fragment_findings(pointer, origin, findings);
-            if self.offers.allow_insecure_http
-                && matches!(pointer, "/offers/issuer" | "/offers/jwksUri")
-            {
-                continue;
-            }
-            if origin.is_https() {
-                https_origin_findings(pointer, origin, findings);
-            } else if !is_supervised_local_endpoint(origin) {
-                findings.push(
-                    Finding::error(
-                        "evidence.oid4vci.supervised-endpoint",
-                        pointer,
-                        "a supervised local development endpoint must be https or a 127.0.0.1 HTTP origin with an explicit port and no query or fragment",
-                        "Write the endpoint as http://127.0.0.1:<port> followed by an optional path, or as an https URL.",
-                    )
-                    .reading(TRANSPORT_READS),
-                );
-            }
-        }
-    }
-
-    /// An unrestricted gate admits every client or scope the offer-token
-    /// issuer vouches for, and the subject of an offer comes from the request,
-    /// so only the supervised local development profile may state one.
-    fn offer_gate_findings(&self, findings: &mut Vec<Finding>) {
-        if self.validation_mode == ValidationMode::SupervisedLocalDevelopment {
-            return;
-        }
-        for (pointer, message, action, restriction) in [
-            (
-                "/offers/allowedClients",
-                "offers.allowedClients is unrestricted, which only validationMode: supervised-local-development accepts",
-                "List the clients that may create offers, for example allowedClients: [back-office-issuer], or set validationMode: supervised-local-development for a supervised local run.",
-                &self.offers.allowed_clients,
-            ),
-            (
-                "/offers/requiredScopes",
-                "offers.requiredScopes is unrestricted, which only validationMode: supervised-local-development accepts",
-                "List the scopes an offer token must carry, for example requiredScopes: [oid4vci:offer], or set validationMode: supervised-local-development for a supervised local run.",
-                &self.offers.required_scopes,
-            ),
-        ] {
-            if matches!(restriction, IdentifierRestriction::Unrestricted(_)) {
-                findings.push(Finding::error(
-                    "evidence.oid4vci.offer-gate-unrestricted",
-                    pointer,
-                    message,
-                    action,
-                ));
             }
         }
     }
@@ -1349,11 +1378,16 @@ impl DeliveryDocument {
         }
     }
 
-    fn into_config(self) -> DeliveryConfig {
+    fn into_config(
+        self,
+        posture: PostureReport,
+        witness: Option<&DevelopmentWitness>,
+    ) -> Result<DeliveryConfig, DevelopmentOnlyRefused> {
         let credential_issuer =
             normalized_credential_issuer(self.credential_issuer.as_str()).to_owned();
-        DeliveryConfig {
-            validation_mode: self.validation_mode,
+        Ok(DeliveryConfig {
+            posture,
+            validation_mode: *self.validation_mode.get(witness)?,
             credential_issuer,
             listener: ListenerConfig {
                 bind: self.listener.address.bind.socket_addr(),
@@ -1405,14 +1439,24 @@ impl DeliveryDocument {
                     .map(ExternalId::into_string)
                     .collect(),
                 algorithms: self.offers.algorithms.into_vec(),
-                allowed_clients: self.offers.allowed_clients.into_restriction(),
-                required_scopes: self.offers.required_scopes.into_restriction(),
+                allowed_clients: self
+                    .offers
+                    .allowed_clients
+                    .get(witness)?
+                    .clone()
+                    .into_restriction(),
+                required_scopes: self
+                    .offers
+                    .required_scopes
+                    .get(witness)?
+                    .clone()
+                    .into_restriction(),
                 maximum_token_lifetime_seconds: self.offers.maximum_token_lifetime_seconds.get(),
             },
             store: self.store.into_config(),
             rate_limits: self.rate_limits.into_config(),
             draft13_profile: self.draft13_profile.is_some(),
-        }
+        })
     }
 }
 
@@ -1469,7 +1513,15 @@ impl TokenClientDocument {
 }
 
 impl OffersDocument {
-    fn findings(&self, findings: &mut Vec<Finding>) {
+    fn findings(&self, findings: &mut Vec<Finding>, witness: Option<&DevelopmentWitness>) {
+        let clients = self
+            .allowed_clients
+            .get(witness)
+            .map_or(&[][..], IdentifierRestriction::items);
+        let scopes = self
+            .required_scopes
+            .get(witness)
+            .map_or(&[][..], IdentifierRestriction::items);
         if self.claims.to_claim_names().validate().is_err() {
             findings.push(Finding::error(
                 "evidence.oid4vci.claim-names",
@@ -1507,7 +1559,7 @@ impl OffersDocument {
                 "List the one algorithm the offer-token issuer signs with.",
             ));
         }
-        for (index, client) in self.allowed_clients.items().iter().enumerate() {
+        for (index, client) in clients.iter().enumerate() {
             if client.trim().is_empty() || client.len() > 128 {
                 findings.push(Finding::error(
                     "evidence.oid4vci.authorized-client",
@@ -1517,7 +1569,7 @@ impl OffersDocument {
                 ));
             }
         }
-        for (index, scope) in self.required_scopes.items().iter().enumerate() {
+        for (index, scope) in scopes.iter().enumerate() {
             if scope.trim().is_empty() || scope.len() > 256 || !valid_scope_token(scope) {
                 findings.push(Finding::error(
                     "evidence.oid4vci.required-scope",
@@ -1529,8 +1581,8 @@ impl OffersDocument {
         }
         for (list, items) in [
             ("/offers/audiences", &self.audiences[..]),
-            ("/offers/allowedClients", self.allowed_clients.items()),
-            ("/offers/requiredScopes", self.required_scopes.items()),
+            ("/offers/allowedClients", clients),
+            ("/offers/requiredScopes", scopes),
         ] {
             for (index, item) in items.iter().enumerate() {
                 if matches!(item.as_str(), "*" | "unrestricted") {
@@ -1565,21 +1617,24 @@ fn normalized_credential_issuer(written: &str) -> &str {
 /// query or a fragment in any of them would weaken a comparison. The reader
 /// already refuses a URL without a host or with embedded credentials.
 fn https_origin_findings(pointer: &'static str, origin: &Url, findings: &mut Vec<Finding>) {
-    if !origin.is_https() {
+    if !origin.is_https()
+        && !origin
+            .to_url()
+            .host()
+            .as_ref()
+            .is_some_and(is_loopback_host)
+    {
         let action = if matches!(pointer, "/offers/issuer" | "/offers/jwksUri") {
-            "Write an https URL, or set offers.allowInsecureHttp: true for the declared issuer."
+            "Write an HTTPS or loopback HTTP URL, or use offers.allowInsecureHttp: true with development for HTTP beyond loopback."
         } else {
-            "Write an https URL, or set validationMode: supervised-local-development for a loopback process group."
+            "Write an HTTPS or loopback HTTP URL."
         };
-        findings.push(
-            Finding::error(
-                HTTPS_REQUIRED,
-                pointer,
-                "this origin must use https in strict validation mode",
-                action,
-            )
-            .reading(TRANSPORT_READS),
-        );
+        findings.push(Finding::error(
+            HTTPS_REQUIRED,
+            pointer,
+            "a called origin must use HTTPS or loopback HTTP",
+            action,
+        ));
     }
 }
 
@@ -1616,7 +1671,7 @@ fn credential_issuer_findings(issuer: &str, findings: &mut Vec<Finding>) {
                 HTTPS_REQUIRED,
                 POINTER,
                 "this origin must use https in strict validation mode",
-                "Write an https URL, or set validationMode: supervised-local-development for a loopback process group.",
+                "Write an HTTPS URL, or start with `rstack dev` or declare development with REGISTRY_STACK_POSTURE=development or --posture development and use validationMode: supervised-local-development for a loopback process group.",
             )
             .reading(TRANSPORT_READS),
         );
@@ -1641,18 +1696,6 @@ fn credential_issuer_findings(issuer: &str, findings: &mut Vec<Finding>) {
             "Write the credential issuer as scheme, host, and port only, such as https://wallet.example.org.",
         ));
     }
-}
-
-/// Accept a plain HTTP endpoint on exactly `127.0.0.1`, the address a
-/// supervised development service binds, with an optional path and nothing
-/// else that could vary between what is configured and what is reached.
-fn is_supervised_local_endpoint(origin: &Url) -> bool {
-    let url = origin.to_url();
-    url.scheme() == "http"
-        && url.host_str() == Some("127.0.0.1")
-        && url.port().is_some()
-        && url.query().is_none()
-        && url.fragment().is_none()
 }
 
 /// Parse the only HTTP origin admitted as a supervised credential issuer.
@@ -1869,8 +1912,21 @@ store:
     }
 
     fn load_from(text: &str) -> Result<DeliveryConfig, ConfigError> {
+        load_in(text, registry_platform_config::Posture::Production)
+    }
+
+    fn load_in(
+        text: &str,
+        posture: registry_platform_config::Posture,
+    ) -> Result<DeliveryConfig, ConfigError> {
         let (_root, path) = write(text);
-        DeliveryConfig::load(&path)
+        DeliveryConfig::load(
+            &path,
+            DeclaredPosture {
+                posture,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
     }
 
     fn codes(error: &ConfigError) -> Vec<&str> {
@@ -1904,8 +1960,14 @@ store:
         let (_root, path) = write(VALID);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 
-        DeliveryConfig::load(&path)
-            .expect("an owner-writable runtime in a private directory loads");
+        DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("an owner-writable runtime in a private directory loads");
     }
 
     #[cfg(unix)]
@@ -1915,7 +1977,13 @@ store:
 
         let (_root, path) = write(VALID);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
-        let result = DeliveryConfig::load(&path);
+        let result = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        );
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
 
         assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
@@ -1932,7 +2000,13 @@ store:
         fs::set_permissions(&writable, fs::Permissions::from_mode(0o770)).unwrap();
         let path = writable.join("oid4vci.yaml");
         fs::write(&path, VALID).unwrap();
-        let result = DeliveryConfig::load(&path);
+        let result = DeliveryConfig::load(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        );
         fs::set_permissions(&writable, fs::Permissions::from_mode(0o700)).unwrap();
 
         assert_unsafe_runtime(
@@ -1946,18 +2020,28 @@ store:
             "  issuer: https://mint.example.org",
             "  issuer: http://mint.example.org\n  allowInsecureHttp: true",
         );
-        let config = load_from(&text).expect("explicit HTTP issuer opt-in");
+        let load = |text: &str| {
+            let (_root, path) = write(text);
+            DeliveryConfig::load(
+                &path,
+                DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            )
+        };
+        let config = load(&text).expect("explicit HTTP issuer opt-in");
         assert!(config.offers.allow_insecure_http);
         assert_eq!(
-            config.offers.insecure_http_startup_diagnostic(),
-            Some("offers.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration")
+            config.posture.settings()[0].setting.code,
+            "evidence.posture.insecure-offer-issuer-http"
         );
 
         let with_query = text.replace(
             "  issuer: http://mint.example.org",
             "  issuer: http://mint.example.org?unexpected",
         );
-        let error = load_from(&with_query)
+        let error = load(&with_query)
             .expect_err("the HTTP opt-in does not permit an issuer query")
             .diagnostics()
             .iter()
@@ -2002,7 +2086,59 @@ store:
 
     fn check(text: &str, substitute: bool) -> RuntimeCheck {
         let (_root, path) = write(text);
-        check_file(&path, substitute)
+        check_file(
+            &path,
+            substitute,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+    }
+
+    #[test]
+    fn posture_refuses_all_development_settings_in_production() {
+        let text = VALID
+            .replace(
+                "kind: EvidenceOid4vciRuntimeConfig",
+                "kind: EvidenceOid4vciRuntimeConfig\nvalidationMode: supervised-local-development",
+            )
+            .replace(
+                "  issuer: https://mint.example.org",
+                "  issuer: http://mint.example.org\n  allowInsecureHttp: true",
+            )
+            .replace(
+                "  allowedClients: [adopter-front-end]",
+                "  allowedClients: unrestricted",
+            );
+        let report = check(&text, false);
+        for (code, path) in [
+            ("evidence.posture.supervised-validation", "/validationMode"),
+            (
+                "evidence.posture.insecure-offer-issuer-http",
+                "/offers/allowInsecureHttp",
+            ),
+            (
+                "evidence.posture.unrestricted-offer-gate",
+                "/offers/allowedClients",
+            ),
+        ] {
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == code && d.path == path && d.severity == Severity::Error),
+                "{report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn posture_strict_called_origins_allow_loopback_http_only() {
+        let loopback = VALID.replace("https://evidence.example.org", "http://127.0.0.1:8080");
+        assert!(load_from(&loopback).is_ok());
+        let private = VALID.replace("https://evidence.example.org", "http://10.0.0.5");
+        assert_refused_with(&private, HTTPS_REQUIRED);
     }
 
     #[test]
@@ -2424,16 +2560,17 @@ store:
             )
         };
         let text = unrestricted(&supervised());
-        let config = load_from(&text).expect("unrestricted gates load in supervised development");
+        let config = load_in(&text, registry_platform_config::Posture::Development)
+            .expect("development admits unrestricted gates");
         assert_eq!(config.offers.allowed_clients, Restriction::Unrestricted);
         assert_eq!(config.offers.required_scopes, Restriction::Unrestricted);
         assert!(config.offers.allowed_clients.items().is_empty());
     }
 
     /// An unrestricted gate admits every client or scope the issuer vouches
-    /// for, so only the supervised local development profile may state one.
+    /// for, so an unrestricted gate requires the development posture.
     #[test]
-    fn unrestricted_offer_gates_are_refused_outside_supervised_development() {
+    fn unrestricted_offer_gates_are_refused_in_production() {
         for (from, to, pointer) in [
             (
                 "  allowedClients: [adopter-front-end]",
@@ -2447,16 +2584,23 @@ store:
             ),
         ] {
             let text = VALID.replace(from, to);
+            let development = load_in(&text, registry_platform_config::Posture::Development)
+                .expect("development admits the gate with strict issuer validation");
+            assert_eq!(development.validation_mode, ValidationMode::Strict);
+            assert_eq!(
+                development.posture.settings()[0].pointer.as_deref(),
+                Some(pointer)
+            );
             let error = load_from(&text).expect_err("a strict configuration refuses unrestricted");
             let diagnostic = error
                 .diagnostics()
                 .iter()
-                .find(|diagnostic| diagnostic.code == "evidence.oid4vci.offer-gate-unrestricted")
+                .find(|diagnostic| diagnostic.code == "evidence.posture.unrestricted-offer-gate")
                 .unwrap_or_else(|| panic!("no unrestricted finding for {pointer}"));
             assert_eq!(diagnostic.path, pointer);
             assert!(diagnostic
                 .suggested_action
-                .contains("supervised-local-development"));
+                .contains("REGISTRY_STACK_POSTURE=development"));
         }
     }
 
@@ -2467,7 +2611,14 @@ store:
             "  allowedClients: [\"*\"]",
         );
         let (_root, path) = write(&text);
-        let (_, warnings) = DeliveryConfig::load_reporting(&path).expect("a warning loads");
+        let (_, warnings) = DeliveryConfig::load_reporting(
+            &path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect("a warning loads");
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].code, "evidence.oid4vci.wildcard-spelled-item");
         assert_eq!(warnings[0].severity, Severity::Warning);
@@ -2475,7 +2626,7 @@ store:
     }
 
     #[test]
-    fn strict_mode_requires_https_for_the_offer_issuer_and_key_set() {
+    fn strict_mode_requires_https_beyond_loopback_for_the_offer_issuer_and_key_set() {
         for (from, to) in [
             (
                 "  issuer: https://mint.example.org",
@@ -2484,12 +2635,6 @@ store:
             (
                 "  jwksUri: https://mint.example.org/.well-known/jwks.json",
                 "  jwksUri: http://mint.example.org/.well-known/jwks.json",
-            ),
-            // The key fetch policy opens plain http on loopback, so strict
-            // validation is what keeps a loopback key set on https.
-            (
-                "  jwksUri: https://mint.example.org/.well-known/jwks.json",
-                "  jwksUri: http://127.0.0.1:8082/.well-known/jwks.json",
             ),
         ] {
             let text = VALID.replace(from, to);
@@ -2608,15 +2753,26 @@ store:
     #[test]
     fn supervised_local_development_pins_the_listener_to_the_issuer_origin() {
         let local = supervised();
-        let config = load_from(&local).expect("the supervised configuration loads");
+        let config = load_in(&local, registry_platform_config::Posture::Development)
+            .expect("the supervised configuration loads");
         assert_eq!(
             config.validation_mode,
             ValidationMode::SupervisedLocalDevelopment
         );
 
+        let refused_in = |text: &str| {
+            let error = load_in(text, registry_platform_config::Posture::Development)
+                .expect_err("invalid supervised configuration");
+            error
+                .diagnostics()
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == Severity::Error)
+                .map(|diagnostic| diagnostic.code.clone())
+                .collect::<Vec<_>>()
+        };
         let mismatched = local.replace("bind: 127.0.0.1:8090", "bind: 127.0.0.1:8099");
         assert_eq!(
-            refused(&mismatched),
+            refused_in(&mismatched),
             ["evidence.oid4vci.supervised-listener"]
         );
         for issuer in [
@@ -2629,7 +2785,7 @@ store:
                 &format!("credentialIssuer: {issuer}"),
             );
             assert_eq!(
-                refused(&text),
+                refused_in(&text),
                 ["evidence.oid4vci.supervised-issuer"],
                 "the supervised issuer accepted {issuer}"
             );
@@ -2638,7 +2794,7 @@ store:
             "baseUrl: http://127.0.0.1:8080",
             "baseUrl: http://evidence.example.org",
         );
-        assert_eq!(refused(&remote), ["evidence.oid4vci.supervised-endpoint"]);
+        assert_eq!(refused_in(&remote), ["evidence.oid4vci.https-required"]);
     }
 
     #[test]
@@ -3003,11 +3159,27 @@ store:
     #[test]
     fn a_missing_document_reports_that_it_is_unavailable() {
         let root = canonical_tempdir();
-        let error = DeliveryConfig::load(&root.path().join("absent.yaml"))
-            .expect_err("a missing file is refused");
+        let error = DeliveryConfig::load(
+            &root.path().join("absent.yaml"),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .expect_err("a missing file is refused");
         assert!(error.is_unavailable());
         assert_eq!(error.to_string(), "the configuration file is unavailable");
-        assert!(check_file(&root.path().join("absent.yaml"), false).unavailable);
+        assert!(
+            check_file(
+                &root.path().join("absent.yaml"),
+                false,
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Production,
+                    source: registry_platform_config::PostureSource::Flag
+                }
+            )
+            .unavailable
+        );
     }
 
     #[test]

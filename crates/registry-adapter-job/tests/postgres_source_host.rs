@@ -771,7 +771,7 @@ fn runtime_yaml(binding: &DatabaseBinding, query_kind: SourceQuery) -> String {
             "user": binding.user,
             "passwordRef": "secret:env/JOB_SOURCE_PASSWORD",
             "namespace": "ledger",
-            "tls": {"type": "plaintext"}
+            "tls": {"type": "loopback-plaintext"}
         }),
     )]);
     if query_kind.has_unused_source() {
@@ -784,7 +784,7 @@ fn runtime_yaml(binding: &DatabaseBinding, query_kind: SourceQuery) -> String {
                 "user": binding.user,
                 "passwordRef": "secret:env/JOB_SOURCE_PASSWORD_UNUSED",
                 "namespace": "unused-ledger",
-                "tls": {"type": "plaintext"}
+                "tls": {"type": "loopback-plaintext"}
             }),
         );
     }
@@ -798,7 +798,7 @@ fn runtime_yaml(binding: &DatabaseBinding, query_kind: SourceQuery) -> String {
                 "user": binding.user,
                 "passwordRef": "secret:env/JOB_SOURCE_PASSWORD_UNUSED",
                 "namespace": "undeclared-ledger",
-                "tls": {"type": "plaintext"}
+                "tls": {"type": "loopback-plaintext"}
             }),
         );
     }
@@ -811,7 +811,7 @@ fn runtime_yaml(binding: &DatabaseBinding, query_kind: SourceQuery) -> String {
         "allowedPrivateCidrs": ["127.0.0.0/8"],
         "store": {
             "runtimeUrlRef": "secret:env/JOB_TEST_DB",
-            "testOnlyPlaintext": true
+            "transport": "loopback-plaintext"
         },
         "destinations": {
             "coordinator-test": {

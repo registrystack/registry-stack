@@ -81,7 +81,7 @@ The default is `production`.
 For a laptop deployment that uses development settings, run with `rstack dev` or declare `development` explicitly.
 Use the same posture for the entire deployment. Production peers refuse development responses.
 
-`plan`, `apply`, and startup refuse a database activated under a different posture.
+`plan`, `apply`, `records apply`, and startup refuse a database activated under a different posture.
 `status` reports the mismatch alongside the ledger and schema information.
 To change posture, apply to a fresh database.
 

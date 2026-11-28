@@ -42,10 +42,10 @@ use registry_breg::package::{
     PackageModuleSource, PackageSourceFile, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    index_revisions_for_test, initialize_compiled_registry_state_for_test, install_compiled_schema,
-    managed_schema_fingerprint, ExpectedManagedCatalog, ExpectedRegistryIdentity,
-    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    RegistryLockKey, RegistryStateTestIdentity,
+    index_revisions_for_test, initialize_compiled_registry_state_with_posture_for_test,
+    install_compiled_schema, managed_schema_fingerprint, ExpectedManagedCatalog,
+    ExpectedRegistryIdentity, PostgresRecordMutationService, PostgresRecordReadService,
+    PostgresRevisionReadService, RegistryLockKey, RegistryStateTestIdentity,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
@@ -538,7 +538,9 @@ async fn erase_first_revision(
         HistoryErasureRequest {
             expected: identity,
             migration_role: &database.migration_role,
-            lock_key: RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded"),
+            lock_key: RegistryLockKey::derive(PACKAGE_ID)
+                .expect("lock identity is bounded")
+                .for_posture(registry_platform_config::Posture::Development),
             timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
                 .expect("erasure timeouts are bounded"),
             audit: &audit,
@@ -621,7 +623,7 @@ async fn install_current_active_database(
     install_compiled_schema(&migration, registry, &database.runtime_role)
         .await
         .expect("current active database installs compiled schema");
-    let identity = initialize_compiled_registry_state_for_test(
+    let identity = initialize_compiled_registry_state_with_posture_for_test(
         &migration,
         &database.runtime_role,
         registry,
@@ -630,6 +632,7 @@ async fn install_current_active_database(
             database_id: DATABASE_ID,
             label: BASE_PACKAGE_REVISION,
         },
+        registry_platform_config::Posture::Development,
     )
     .await
     .expect("current database records active identity and empty history baseline");
@@ -1035,7 +1038,7 @@ fn publish_and_load(prepared: registry_breg::package::PreparedPackage) -> Verifi
     load_package(
         &package,
         &PackageLoadContext {
-            database_initialization_environment: "local",
+            posture: registry_platform_config::Posture::Development,
         },
     )
     .expect("published package loads")
@@ -1107,7 +1110,9 @@ fn mutation_revision_router(
         CursorCodec::new(Zeroizing::new(vec![0x4d; 32]), Duration::from_secs(300))
             .expect("test cursor key is valid"),
     );
-    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID)
+        .expect("lock identity is bounded")
+        .for_posture(registry_platform_config::Posture::Development);
     let audit_profile = registry_breg::audit::test_support::capturing(
         AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
             .expect("test audit profile is keyed"),

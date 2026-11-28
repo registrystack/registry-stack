@@ -29,7 +29,7 @@ use registry_platform_authcommon::{DeclaredScope, FailedCheck};
 use registry_platform_config::SecretResolver;
 use registry_platform_httputil::client::BearerToken;
 use registry_platform_httputil::{
-    read_bounded, validate_response_headers_without_peer_policy, ServiceBaseUrl,
+    read_bounded, validate_response_headers, PeerPolicy, ServiceBaseUrl,
 };
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
@@ -41,8 +41,9 @@ pub trait ProviderPort: Send + Sync {
         &self,
         binding: &PaymentBinding,
         bill: &BillSnapshot,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
     ) -> Result<CollectionProviderCommand, ConnectorError> {
-        bill.provider_command(binding)
+        bill.provider_command(binding, development)
             .map_err(|_| ConnectorError::Configuration)
     }
 
@@ -101,6 +102,8 @@ pub struct ProviderSubmission {
 }
 
 pub struct SyntheticProvider {
+    peer_policy: PeerPolicy,
+    development: Option<registry_platform_config::DevelopmentWitness>,
     resolver: Arc<SecretResolver>,
     mappings: Option<Arc<PaymentMappingRegistry>>,
 }
@@ -109,7 +112,23 @@ impl SyntheticProvider {
         resolver: Arc<SecretResolver>,
         mappings: Option<Arc<PaymentMappingRegistry>>,
     ) -> Self {
-        Self { resolver, mappings }
+        Self {
+            resolver,
+            mappings,
+            peer_policy: PeerPolicy::RefuseDevelopmentPeer,
+            development: None,
+        }
+    }
+    pub fn with_peer_policy(mut self, peer_policy: PeerPolicy) -> Self {
+        self.peer_policy = peer_policy;
+        self
+    }
+    pub fn with_development(
+        mut self,
+        development: Option<registry_platform_config::DevelopmentWitness>,
+    ) -> Self {
+        self.development = development;
+        self
     }
     fn token(&self, binding: &PaymentBinding) -> Result<BearerToken, ConnectorError> {
         let secret = self
@@ -142,10 +161,14 @@ impl ProviderPort for SyntheticProvider {
         &self,
         binding: &PaymentBinding,
         bill: &BillSnapshot,
+        development: Option<&registry_platform_config::DevelopmentWitness>,
     ) -> Result<CollectionProviderCommand, ConnectorError> {
-        let CollectionProvider::Http { settings, .. } = &binding.provider else {
+        let CollectionProvider::Http { settings, .. } = binding
+            .provider(development)
+            .map_err(|_| ConnectorError::Configuration)?
+        else {
             return bill
-                .provider_command(binding)
+                .provider_command(binding, development)
                 .map_err(|_| ConnectorError::Configuration);
         };
         let mapping = self.mapping(binding)?;
@@ -178,7 +201,12 @@ impl ProviderPort for SyntheticProvider {
                 ..
             },
             CollectionProviderCommand::Http(command),
-        ) = (&binding.provider, command)
+        ) = (
+            binding
+                .provider(self.development.as_ref())
+                .map_err(|_| ConnectorError::Configuration)?,
+            command,
+        )
         else {
             return Ok(ProviderPreflight::Direct);
         };
@@ -233,13 +261,14 @@ impl ProviderPort for SyntheticProvider {
         let mapping = self.mapping(binding)?;
         let intent = command.intent.clone();
         let settings = settings.clone();
+        let peer_policy = self.peer_policy;
         Ok(ProviderPreflight::Prepared(PreparedProviderSend::new(
             async move {
                 let response = client
                     .execute(request)
                     .await
                     .map_err(|_| ConnectorError::Unknown)?;
-                validate_response_headers_without_peer_policy(response.headers())
+                validate_response_headers(response.headers(), peer_policy)
                     .map_err(|_| ConnectorError::Unknown)?;
                 let status = response.status().as_u16();
                 let body = read_bounded(response, 131_072)
@@ -283,7 +312,12 @@ impl ProviderPort for SyntheticProvider {
         binding: &PaymentBinding,
         command: &CollectionProviderCommand,
     ) -> Result<ProviderSubmission, ConnectorError> {
-        match (&binding.provider, command) {
+        match (
+            binding
+                .provider(self.development.as_ref())
+                .map_err(|_| ConnectorError::Configuration)?,
+            command,
+        ) {
             (
                 CollectionProvider::Simulator {
                     connection: provider,
@@ -328,7 +362,12 @@ impl ProviderPort for SyntheticProvider {
         transfer: &str,
         acceptance: Option<&ProviderAcceptance>,
     ) -> Result<Observation, ConnectorError> {
-        match (&binding.provider, command) {
+        match (
+            binding
+                .provider(self.development.as_ref())
+                .map_err(|_| ConnectorError::Configuration)?,
+            command,
+        ) {
             (
                 CollectionProvider::Simulator {
                     connection: provider,
@@ -491,7 +530,7 @@ impl SyntheticProvider {
                 ConnectorError::Unavailable
             }
         })?;
-        validate_response_headers_without_peer_policy(response.headers()).map_err(|_| {
+        validate_response_headers(response.headers(), self.peer_policy).map_err(|_| {
             if prepared.method == PaymentHttpMethod::Post {
                 ConnectorError::Unknown
             } else {
@@ -511,7 +550,10 @@ impl SyntheticProvider {
 }
 
 fn http_settings(binding: &PaymentBinding) -> Result<&serde_json::Value, ConnectorError> {
-    match &binding.provider {
+    match binding
+        .provider(None)
+        .map_err(|_| ConnectorError::Configuration)?
+    {
         CollectionProvider::Http { settings, .. } => Ok(settings),
         _ => Err(ConnectorError::Configuration),
     }
@@ -565,7 +607,7 @@ fn validate_http_observation(
         || payer_values.len() != 2
         || !payer_values.contains(payer_id)
         || !payer_values.contains(payer_address)
-        || !matches!(&binding.provider, CollectionProvider::Http { .. })
+        || !matches!(binding.provider(None), Ok(CollectionProvider::Http { .. }))
     {
         return Err(ConnectorError::Protocol);
     }
@@ -603,7 +645,9 @@ impl PaymentService {
         registry: Arc<dyn RegistryPort>,
         provider: Arc<dyn ProviderPort>,
     ) -> Result<Self, Error> {
-        config.validate().map_err(|_| Error::Unavailable)?;
+        config
+            .validate(store.development.as_ref())
+            .map_err(|_| Error::Unavailable)?;
         Ok(Self {
             config,
             store,
@@ -721,7 +765,11 @@ impl PaymentService {
             }
             let provider_command = self
                 .provider
-                .prepare(&connection.binding, &view.snapshot)
+                .prepare(
+                    &connection.binding,
+                    &view.snapshot,
+                    self.store.development.as_ref(),
+                )
                 .map_err(|_| Error::Unavailable)?;
             let provider_command_digest =
                 matches!(&provider_command, CollectionProviderCommand::Http(_))
@@ -735,7 +783,7 @@ impl PaymentService {
                 binding: connection.binding.clone(),
                 binding_revision: connection
                     .binding
-                    .revision()
+                    .revision(self.store.development.as_ref())
                     .map_err(|_| Error::Unavailable)?,
                 provider_command,
                 provider_command_digest,
@@ -785,7 +833,7 @@ impl PaymentService {
             .await
             .map_err(|_| Error::Unavailable)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        attempt.may_dispatch(now)?;
+        attempt.may_dispatch(now, self.store.development.as_ref())?;
         if attempt.first_send_at.is_none() {
             attempt.first_send_at = Some(now);
         }
@@ -1022,7 +1070,11 @@ impl PaymentService {
             return Err(Error::Conflict.into());
         }
         let reference = status.provider_reference.ok_or(Error::Conflict)?;
-        match &attempt.binding.provider {
+        match attempt
+            .binding
+            .provider(self.store.development.as_ref())
+            .map_err(|_| Error::Unavailable)?
+        {
             CollectionProvider::Simulator { .. }
                 if status.simulation && reference.starts_with("SIM-") => {}
             CollectionProvider::Mifos { .. } if !status.simulation => {

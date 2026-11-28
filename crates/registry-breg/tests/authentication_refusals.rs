@@ -478,15 +478,18 @@ impl CapturedLogs {
 
 /// The counter, read the way an operator reads it: from the metrics listener.
 async fn refusal_counts() -> BTreeMap<String, u64> {
-    let response = metrics_app(Arc::new(Metrics::without_pool_for_test()))
-        .oneshot(
-            Request::builder()
-                .uri("/metrics")
-                .body(Body::empty())
-                .expect("scrape request"),
-        )
-        .await
-        .expect("metrics respond");
+    let response = metrics_app(
+        Arc::new(Metrics::without_pool_for_test()),
+        registry_platform_config::Posture::Production,
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("scrape request"),
+    )
+    .await
+    .expect("metrics respond");
     let bytes = to_bytes(response.into_body(), 4 * 1024 * 1024)
         .await
         .expect("metrics body");

@@ -18,10 +18,10 @@ use registry_platform_authcommon::{
     RefusalRecorder,
 };
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit_default, security_headers_without_posture,
-    CspBuilder, FrameworkRejection, ProblemBody, TraceContext,
+    normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
+    FrameworkRejection, ProblemBody, TraceContext,
 };
-use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_BODY, READY_PATH};
+use registry_platform_httputil::probe::{HEALTH_BODY, HEALTH_PATH, READY_PATH};
 use serde_json::error::Category;
 use uuid::Uuid;
 
@@ -77,6 +77,7 @@ const DELEGATED_READER_HEADER: &str = "registry-casework-delegated-reader";
 
 #[derive(Clone)]
 pub struct HttpState {
+    pub posture: registry_platform_config::PostureReport,
     pub service: CaseworkService,
     pub authenticator: Arc<CaseworkAuthenticator>,
     pub project: Arc<CaseworkProject>,
@@ -259,6 +260,11 @@ fn contract_edge<S>(
 where
     S: Clone + Send + Sync + 'static,
 {
+    let posture = source_state
+        .as_ref()
+        .map_or(registry_platform_config::Posture::Production, |state| {
+            state.posture.posture()
+        });
     let router = router.method_not_allowed_fallback(method_not_allowed);
     // Admission can refuse before a handler runs. Keep those refusals inside
     // the same contract, trace, cache and security boundary as handler errors.
@@ -278,7 +284,7 @@ where
         .layer(middleware::from_fn(move |request, next| {
             http_boundary(contract, request, next)
         }))
-        .layer(security_headers_without_posture(CspBuilder::restrictive()).without_hsts())
+        .layer(security_headers(CspBuilder::restrictive(), posture).without_hsts())
 }
 
 /// Counts and logs the refusal a response carries in its extensions. The
@@ -532,7 +538,9 @@ async fn health() -> Response {
 
 async fn ready(RequestState(state): RequestState) -> Result<Response, HttpError> {
     if state.service.ready().await.is_ok() {
-        Ok(probe_response(READY_BODY))
+        let mut body = state.posture.ready_member();
+        body.insert("status".into(), serde_json::json!("ready"));
+        Ok(Json(body).into_response())
     } else {
         Err(HttpError::ServiceUnavailable)
     }

@@ -218,7 +218,7 @@ pub(super) async fn start_from_runtime(
     let package = load_package(
         &package_root,
         &PackageLoadContext {
-            database_initialization_environment: "test",
+            posture: registry_platform_config::Posture::Production,
         },
     )
     .unwrap();
@@ -281,7 +281,7 @@ identity:
   environment: test
   instanceId: native-task-grant
   databaseId: task-database
-  databaseInitializationEnvironment: test
+
 secretProviders:
   file: {{root: {secrets}}}
 database:
@@ -346,10 +346,16 @@ operationalTimeouts:
     )
     .unwrap();
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o600)).unwrap();
-    let prepared =
-        prepare_with_connection_config_for_test(&runtime_path, db.runtime_config.clone())
-            .await
-            .unwrap();
+    let prepared = prepare_with_connection_config_for_test(
+        &runtime_path,
+        db.runtime_config.clone(),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
+    .await
+    .unwrap();
     let app = prepared.app();
     Deployment {
         app,

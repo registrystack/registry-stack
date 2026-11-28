@@ -30,6 +30,26 @@
         }
       ]
     },
+    "DatabaseTransport": {
+      "description": "How a PostgreSQL connection is protected.",
+      "oneOf": [
+        {
+          "const": "verified-tls",
+          "description": "TLS with verification. `caBundleRef` is optional.",
+          "type": "string"
+        },
+        {
+          "const": "loopback-plaintext",
+          "description": "No TLS. Every host must be a Unix socket, a numeric loopback address\nor `localhost`.",
+          "type": "string"
+        },
+        {
+          "const": "private-network-plaintext",
+          "description": "No TLS, in development only. Every host must also be loopback, a\nsocket, a private IPv4 address (RFC 1918), an IPv6 unique local\naddress (`fc00::/7`), or a name that resolves only to such addresses.",
+          "type": "string"
+        }
+      ]
+    },
     "EndpointBinding": {
       "additionalProperties": false,
       "description": "The environment binding of one pack endpoint: its base URL, its\ncredentials matching the endpoint's declared kind, and the optional TLS\nadditions.",
@@ -213,7 +233,7 @@
               "then": {
                 "properties": {
                   "tlsTermination": {
-                    "const": "development-loopback"
+                    "const": "loopback-plaintext"
                   }
                 }
               }
@@ -335,6 +355,13 @@
         "testOnlyPlaintext": {
           "description": "Plaintext connections for the loopback test database only;\nrefused when true in any build without the job host's test\nfeature.",
           "type": "boolean"
+        },
+        "transport": {
+          "$ref": "#/$defs/DatabaseTransport",
+          "description": "PostgreSQL transport. Absent means verified TLS.",
+          "x-registry-development-only": [
+            "platform.posture.database-private-plaintext"
+          ]
         }
       },
       "required": [
@@ -443,8 +470,8 @@
           "type": "integer"
         },
         "tls": {
-          "$ref": "#/$defs/SourceTls",
-          "description": "The TLS posture of the connection; absent, the system roots with\nTLS required."
+          "$ref": "#/$defs/PostgresSourceTls",
+          "description": "The TLS posture of the connection. Absent, verified TLS with the\nsystem roots. Plaintext requires a loopback host."
         },
         "user": {
           "description": "The source user.",
@@ -459,6 +486,57 @@
         "namespace"
       ],
       "type": "object"
+    },
+    "PostgresSourceTls": {
+      "description": "How the PostgreSQL source connection is protected.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Require verified TLS with the platform roots.",
+          "properties": {
+            "type": {
+              "const": "system-roots",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Require TLS with an additional trusted CA bundle.",
+          "properties": {
+            "caBundleFile": {
+              "type": "string"
+            },
+            "type": {
+              "const": "ca-bundle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "caBundleFile"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Plaintext to a Unix socket, numeric loopback address or localhost.",
+          "properties": {
+            "type": {
+              "const": "loopback-plaintext",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "PrivateListenerConfig": {
       "additionalProperties": false,
@@ -954,7 +1032,7 @@
       "type": "object"
     },
     "SourceTls": {
-      "description": "The TLS posture of one postgres or RabbitMQ source connection.\nPlaintext is a test-build posture only and is not part of the format.",
+      "description": "The TLS policy of one RabbitMQ source connection.\nPlaintext is a test-build posture only and is not part of the format.",
       "oneOf": [
         {
           "additionalProperties": false,

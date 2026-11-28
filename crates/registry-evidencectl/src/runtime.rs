@@ -39,9 +39,15 @@ impl std::error::Error for DoctorOperationalDiagnostic {}
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("selection").multiple(false).args(["runtime_config", "project"])))]
 pub(crate) struct DoctorArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    pub(crate) posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
-    runtime_config: Option<PathBuf>,
+    pub(crate) runtime_config: Option<PathBuf>,
     /// Also prove that the audit destination resolves below this persistent root.
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY", requires = "runtime_config")]
     require_audit_under: Option<PathBuf>,
@@ -92,7 +98,11 @@ impl DoctorArgs {
     }
 }
 
-pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
+pub(crate) fn run(
+    args: DoctorArgs,
+    format: OutputFormat,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ExitCode> {
     if args.runtime_config.is_none() {
         let project = args.project.unwrap_or_else(|| PathBuf::from("."));
         return crate::doctor::run(crate::doctor::DoctorArgs {
@@ -128,7 +138,7 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
             error
         }
     })?;
-    let base = invoke_check(&evidence, &runtime_config, false, None, false)?;
+    let base = invoke_check(&evidence, &runtime_config, false, None, false, declared)?;
     if !base.status.success() {
         // `evidence check` exits 3 when an input it depends on could not be
         // read, such as an unreadable runtime file or package.
@@ -149,6 +159,7 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
             },
             &base.stderr,
             if dependency_failure { 3 } else { 1 },
+            declared,
         );
     }
     let dependency = invoke_check(
@@ -157,6 +168,7 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
         true,
         args.require_audit_under.as_deref(),
         args.without_audit_lock,
+        declared,
     )?;
 
     if dependency.status.success() {
@@ -166,11 +178,10 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
             diagnostics: Vec::new(),
         };
         match format {
-            OutputFormat::Json => crate::print_report(&crate::report::success(
-                "doctor",
-                "ready",
-                serde_json::to_value(&report)?,
-            )),
+            OutputFormat::Json => crate::report::print_with_posture(
+                &crate::report::success("doctor", "ready", serde_json::to_value(&report)?),
+                Some(declared),
+            )?,
             OutputFormat::Human => {
                 print!("{}", String::from_utf8_lossy(&dependency.stdout));
                 println!(
@@ -194,6 +205,7 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
         "operational-failure",
         &dependency.stderr,
         3,
+        declared,
     )
 }
 
@@ -254,6 +266,7 @@ fn invoke_check(
     dependencies: bool,
     audit_root: Option<&std::path::Path>,
     without_audit_lock: bool,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<CheckOutcome> {
     let mut stdout = tempfile::tempfile().context("creating private Evidence doctor output")?;
     let mut stderr =
@@ -261,6 +274,7 @@ fn invoke_check(
     let mut command = Command::new(evidence);
     command
         .arg("check")
+        .args(["--posture", declared.posture.as_str()])
         .arg("--runtime-config")
         .arg(runtime_config)
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
@@ -347,6 +361,7 @@ fn render_refusal(
     status: &'static str,
     runtime_diagnostic: &[u8],
     exit: u8,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<ExitCode> {
     let detail = String::from_utf8_lossy(runtime_diagnostic)
         .trim()
@@ -368,11 +383,10 @@ fn render_refusal(
         }],
     };
     match format {
-        OutputFormat::Json => crate::print_report(&crate::report::refused(
-            "doctor",
-            status,
-            serde_json::to_value(&report)?,
-        )),
+        OutputFormat::Json => crate::report::print_with_posture(
+            &crate::report::refused("doctor", status, serde_json::to_value(&report)?),
+            Some(declared),
+        )?,
         OutputFormat::Human => {
             eprintln!(
                 "Evidence runtime dependency preflight refused {}",
@@ -424,14 +438,21 @@ mod tests {
         drop(script);
         crate::evidence_binary::wait_until_executable(&binary);
 
-        let outcome =
-            invoke_check(&binary, &runtime, true, Some(root.path()), false).expect("preflight");
+        let outcome = invoke_check(
+            &binary,
+            &runtime,
+            true,
+            Some(root.path()),
+            false,
+            crate::DEFAULT_POSTURE,
+        )
+        .expect("preflight");
         assert!(outcome.status.success());
         let invoked = fs::read_to_string(arguments).expect("arguments");
         assert_eq!(
             invoked,
             format!(
-                "check\n--runtime-config\n{}\n--require-runtime-dependencies\n--require-audit-under\n{}\n",
+                "check\n--posture\nproduction\n--runtime-config\n{}\n--require-runtime-dependencies\n--require-audit-under\n{}\n",
                 runtime.display(),
                 root.path().display()
             )
@@ -440,12 +461,13 @@ mod tests {
         assert!(!invoked.contains("evaluate"));
         assert!(!root.path().join("audit.jsonl").exists());
 
-        let outcome = invoke_check(&binary, &runtime, true, None, true).expect("preflight");
+        let outcome = invoke_check(&binary, &runtime, true, None, true, crate::DEFAULT_POSTURE)
+            .expect("preflight");
         assert!(outcome.status.success());
         assert_eq!(
             fs::read_to_string(root.path().join("arguments")).expect("arguments"),
             format!(
-                "check\n--runtime-config\n{}\n--require-runtime-dependencies\n--without-audit-lock\n",
+                "check\n--posture\nproduction\n--runtime-config\n{}\n--require-runtime-dependencies\n--without-audit-lock\n",
                 runtime.display()
             )
         );

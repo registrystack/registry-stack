@@ -45,6 +45,9 @@ struct TimerRuntimeArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: super::PostureArgs,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -79,6 +82,9 @@ struct TimerListArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: super::PostureArgs,
     /// Retained occurrence state.
     #[arg(long, value_name = "STATE")]
     state: Option<TimerStateArg>,
@@ -101,6 +107,9 @@ struct TimerShowArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: super::PostureArgs,
     /// Exact retained occurrence identifier.
     #[arg(long, value_name = "UUID")]
     occurrence_id: Uuid,
@@ -111,6 +120,9 @@ struct TimerRetryArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: super::PostureArgs,
     /// Exact retained occurrence identifier.
     #[arg(long, value_name = "UUID")]
     occurrence_id: Uuid,
@@ -130,6 +142,9 @@ struct TimerControlArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
+
+    #[command(flatten)]
+    posture: super::PostureArgs,
     /// Durable control epoch observed by the operator.
     #[arg(long, value_name = "EPOCH")]
     expected_control_epoch: i64,
@@ -150,6 +165,7 @@ enum TimerOutcome {
 }
 
 pub(super) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     args: TimerArgs,
     format: OutputFormat,
     stdout: &mut dyn Write,
@@ -161,10 +177,23 @@ pub(super) fn run(
         .build();
     let outcome = runtime
         .map_err(|_| TimerOperatorError::DatabaseUnavailable)
-        .and_then(|runtime| runtime.block_on(args.command.execute()));
+        .and_then(|runtime| runtime.block_on(args.command.execute(posture)));
     match outcome {
         Ok(outcome) => write_success(command, &outcome, format, stdout, stderr),
         Err(error) => write_failure(&timer_failure(command, error), format, stdout, stderr),
+    }
+}
+
+impl TimerArgs {
+    pub(super) fn posture_flag(&self) -> Option<&str> {
+        let posture = match &self.command {
+            TimerCommand::Status(args) => &args.posture,
+            TimerCommand::List(args) => &args.posture,
+            TimerCommand::Show(args) => &args.posture,
+            TimerCommand::Retry(args) => &args.posture,
+            TimerCommand::Pause(args) | TimerCommand::Resume(args) => &args.posture,
+        };
+        posture.flag.as_deref()
     }
 }
 
@@ -180,11 +209,15 @@ impl TimerCommand {
         }
     }
 
-    async fn execute(self) -> Result<TimerOutcome, TimerOperatorError> {
+    async fn execute(
+        self,
+        posture: registry_platform_config::DeclaredPosture,
+    ) -> Result<TimerOutcome, TimerOperatorError> {
         match self {
             Self::Status(args) => {
                 let service =
-                    TimerOperatorService::from_runtime_config(&args.runtime_config).await?;
+                    TimerOperatorService::from_runtime_config(&args.runtime_config, posture)
+                        .await?;
                 service.status().await.map(TimerOutcome::Status)
             }
             Self::List(args) => {
@@ -197,12 +230,14 @@ impl TimerCommand {
                 };
                 request.validate(MAXIMUM_TIMER_LIST_LIMIT)?;
                 let service =
-                    TimerOperatorService::from_runtime_config(&args.runtime_config).await?;
+                    TimerOperatorService::from_runtime_config(&args.runtime_config, posture)
+                        .await?;
                 service.list(request).await.map(TimerOutcome::List)
             }
             Self::Show(args) => {
                 let service =
-                    TimerOperatorService::from_runtime_config(&args.runtime_config).await?;
+                    TimerOperatorService::from_runtime_config(&args.runtime_config, posture)
+                        .await?;
                 service
                     .show(args.occurrence_id)
                     .await
@@ -218,16 +253,18 @@ impl TimerCommand {
                 };
                 request.validate()?;
                 let service =
-                    TimerOperatorService::from_runtime_config(&args.runtime_config).await?;
+                    TimerOperatorService::from_runtime_config(&args.runtime_config, posture)
+                        .await?;
                 service.retry(request).await.map(TimerOutcome::Retry)
             }
-            Self::Pause(args) => execute_control(args, true).await,
-            Self::Resume(args) => execute_control(args, false).await,
+            Self::Pause(args) => execute_control(posture, args, true).await,
+            Self::Resume(args) => execute_control(posture, args, false).await,
         }
     }
 }
 
 async fn execute_control(
+    posture: registry_platform_config::DeclaredPosture,
     args: TimerControlArgs,
     pause: bool,
 ) -> Result<TimerOutcome, TimerOperatorError> {
@@ -237,7 +274,7 @@ async fn execute_control(
         reason: &args.reason,
     };
     request.validate()?;
-    let service = TimerOperatorService::from_runtime_config(&args.runtime_config).await?;
+    let service = TimerOperatorService::from_runtime_config(&args.runtime_config, posture).await?;
     let transition = if pause {
         service.pause(request).await?
     } else {
@@ -267,7 +304,7 @@ fn timer_failure(command: &'static str, error: TimerOperatorError) -> FailureRep
             DiagnosticArtifact::TimerOperator,
             SuggestedAction::VerifyPackageBinding,
         ),
-        TimerOperatorError::DatabaseUnavailable => (
+        TimerOperatorError::DatabaseUnavailable | TimerOperatorError::PostureMismatch { .. } => (
             "database",
             "the timer store is unavailable; verify the runtime database, active package binding, and timer protocol",
             DiagnosticArtifact::TimerOperator,
@@ -346,7 +383,7 @@ fn write_success(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> ExitCode {
-    let result = if format == OutputFormat::Json {
+    let result = if format.is_json() {
         let body = match outcome {
             TimerOutcome::Status(status) => json!({"ok":true,"command":command,"timer":status}),
             TimerOutcome::List(page) => json!({"ok":true,"command":command,"page":page}),
@@ -358,7 +395,7 @@ fn write_success(
                 json!({"ok":true,"command":command,"control":control})
             }
         };
-        write_ctl_report(&mut *stdout, &body)
+        write_ctl_report(format, &mut *stdout, &body)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout))
     } else {
@@ -683,6 +720,7 @@ mod tests {
         let unavailable = PathBuf::from("/definitely/unavailable/breg-runtime.yaml");
         let cases = [
             TimerListArgs {
+                posture: super::super::PostureArgs::default(),
                 runtime_config: unavailable.clone(),
                 state: None,
                 record_type: None,
@@ -691,6 +729,7 @@ mod tests {
                 limit: Some(0),
             },
             TimerListArgs {
+                posture: super::super::PostureArgs::default(),
                 runtime_config: unavailable.clone(),
                 state: None,
                 record_type: None,
@@ -699,6 +738,7 @@ mod tests {
                 limit: Some(MAXIMUM_TIMER_LIST_LIMIT + 1),
             },
             TimerListArgs {
+                posture: super::super::PostureArgs::default(),
                 runtime_config: unavailable.clone(),
                 state: None,
                 record_type: Some("Not-A-Local-Id".to_owned()),
@@ -707,6 +747,7 @@ mod tests {
                 limit: None,
             },
             TimerListArgs {
+                posture: super::super::PostureArgs::default(),
                 runtime_config: unavailable,
                 state: None,
                 record_type: None,
@@ -716,7 +757,10 @@ mod tests {
             },
         ];
         for args in cases {
-            let error = match TimerCommand::List(args).execute().await {
+            let error = match TimerCommand::List(args)
+                .execute(crate::DEFAULT_POSTURE)
+                .await
+            {
                 Err(error) => error,
                 Ok(_) => panic!("invalid list input was not refused"),
             };

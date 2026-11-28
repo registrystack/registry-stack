@@ -231,7 +231,40 @@ fn payments_command(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
-    let run = payments::run(&args.command);
+    let posture = match &args.command {
+        payments::PaymentsCommand::Check {
+            posture,
+            production,
+            ..
+        } => Some((posture.as_deref(), *production)),
+        payments::PaymentsCommand::Contract { posture, .. }
+        | payments::PaymentsCommand::Fixtures {
+            command: payments::PaymentsFixturesCommand::Replay { posture, .. },
+        } => Some((posture.as_deref(), false)),
+        payments::PaymentsCommand::CheckPack { .. } => None,
+    };
+    let declared = match posture
+        .map(|(flag, production)| check_posture(flag, production))
+        .transpose()
+    {
+        Ok(Some(declared)) => declared,
+        Ok(None) => registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+        Err((code, message, action)) => {
+            return write_posture_usage(
+                command_name,
+                format,
+                stdout,
+                stderr,
+                code,
+                message,
+                action,
+            );
+        }
+    };
+    let run = payments::run(&args.command, declared);
     let exit = if run.unavailable {
         OPERATIONAL_FAILURE_EXIT
     } else if refused(run.checked.diagnostics(), run.deny_warnings) {
@@ -240,6 +273,9 @@ fn payments_command(
         0
     };
     let mut value = run.value;
+    if posture.is_some() {
+        value["posture"] = posture_member(declared);
+    }
     value["ok"] = json!(exit == 0);
     value["status"] = json!(if exit == 0 {
         "complete"
@@ -277,11 +313,25 @@ fn check_command(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
-    let run = match check::run(&args) {
+    let declared = match check_posture(args.posture.as_deref(), args.production) {
+        Ok(declared) => declared,
+        Err((code, message, action)) => {
+            return write_posture_usage(
+                command_name,
+                format,
+                stdout,
+                stderr,
+                code,
+                message,
+                action,
+            );
+        }
+    };
+    let run = match check::run(&args, declared) {
         Ok(run) => run,
         Err(check::CheckFailure::Io { path, source }) => {
             let exit = OPERATIONAL_FAILURE_EXIT;
-            let report = failure(
+            let mut report = failure(
                 command_name,
                 exit,
                 vec![json!({
@@ -293,6 +343,7 @@ fn check_command(
                     "suggestedAction": "Correct the path or permissions, then retry.",
                 })],
             );
+            report["posture"] = posture_member(declared);
             return write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit));
         }
     };
@@ -307,6 +358,7 @@ fn check_command(
             "status": failure_status(exit),
             "diagnostics": checked.to_json_value(),
             "filesChecked": run.files_checked,
+            "posture": posture_member(declared),
         });
         return write_configuration_report(
             &checked,
@@ -325,6 +377,7 @@ fn check_command(
         "command": command_name,
         "status": "complete",
         "project": run.project,
+        "posture": posture_member(declared),
         "filesChecked": run.files_checked,
         "diagnostics": checked.to_json_value(),
     });
@@ -337,6 +390,50 @@ fn check_command(
     write_success(&envelope, &checked, format, stdout)
 }
 
+fn check_posture(
+    flag: Option<&str>,
+    production: bool,
+) -> Result<registry_platform_config::DeclaredPosture, (&'static str, &'static str, &'static str)> {
+    if production && flag == Some("development") {
+        return Err((
+            "platform.posture.conflict",
+            "--production and --posture development contradict each other",
+            "Use one of them.",
+        ));
+    }
+    registry_platform_config::declared(flag.or(production.then_some("production")))
+        .map_err(|error| (error.code(), error.message(), error.suggested_action()))
+}
+
+fn posture_member(declared: registry_platform_config::DeclaredPosture) -> Value {
+    let source = match declared.source {
+        registry_platform_config::PostureSource::Flag => "flag",
+        registry_platform_config::PostureSource::Environment => "environment",
+        registry_platform_config::PostureSource::Default => "default",
+    };
+    json!({"value": declared.posture.as_str(), "source": source})
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_posture_usage(
+    command: &str,
+    format: OutputFormat,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+    code: &str,
+    message: &str,
+    action: &str,
+) -> Result<ExitCode, ()> {
+    let report = failure(
+        command,
+        report::USAGE_EXIT,
+        vec![json!({
+            "severity": "error", "code": code, "message": message, "suggestedAction": action,
+        })],
+    );
+    write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(report::USAGE_EXIT))
+}
+
 /// Run `job check` and write its verdict: the compiled artifacts, a
 /// refusal carrying the compile's own diagnostics, or a failure naming
 /// the broken environment.
@@ -347,7 +444,21 @@ fn job_command(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
-    match job::run(&args) {
+    let declared = match check_posture(args.posture.as_deref(), false) {
+        Ok(declared) => declared,
+        Err((code, message, action)) => {
+            return write_posture_usage(
+                command_name,
+                format,
+                stdout,
+                stderr,
+                code,
+                message,
+                action,
+            );
+        }
+    };
+    match job::run(&args, declared) {
         Ok(run) if refused(&run.warnings, args.deny_warnings) => {
             let mut checked = Report::new(run.warnings);
             checked.set_files_checked(run.files_checked);
@@ -763,7 +874,21 @@ fn verify_command(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> Result<ExitCode, ()> {
-    match verify::run(&args) {
+    let declared = match check_posture(args.posture.as_deref(), false) {
+        Ok(declared) => declared,
+        Err((code, message, action)) => {
+            return write_posture_usage(
+                command_name,
+                format,
+                stdout,
+                stderr,
+                code,
+                message,
+                action,
+            );
+        }
+    };
+    match verify::run(&args, declared) {
         Ok(run) => {
             let mut checked = Report::new(run.warnings);
             checked.set_files_checked(run.files_checked);

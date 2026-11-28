@@ -23,6 +23,7 @@ fn ctl(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
         .args(arguments)
         .env_remove("RSTACK_GENERATION_DIR")
+        .env_remove("REGISTRY_STACK_POSTURE")
         .output()
         .expect("caseworkctl starts")
 }
@@ -104,12 +105,12 @@ fn deployment(urls: &DatabaseUrls<'_>) -> Deployment {
     let config = json!({
         "apiVersion":registry_casework::RUNTIME_CONFIG_API_VERSION,"kind":registry_casework::RUNTIME_CONFIG_KIND,
         "identity":{"databaseId":"provision-test"},"package":{"root":package},
-        "listener":{"bind":urls.bind,"tlsTermination":"development-loopback","networkExposure":"private-address"},
+        "listener":{"bind":urls.bind,"tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
         "secretProviders":{"file":{"root":secrets}},
         "database":database,
         "authentication":{"oidc":{"issuer":"https://identity.example.test","audience":"urn:example:casework",
             "jwksSource":{"type":"static","documentRef":"secret:file/jwks"},
-            "allowedClients":"unrestricted","scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
+            "allowedClients":["provision-test"],"scopeClaim":"scope","humanIdentity":{"claim":"registry_actor_kind","value":"human"}}},
         "audit":{"path":root.join("audit.ndjson"),"hashKeyRef":"secret:file/audit-key"}
     });
     let runtime = root.join("runtime.yaml");
@@ -548,7 +549,16 @@ mod served {
 
         let server_task = tokio::spawn({
             let runtime = deployment.runtime.clone();
-            async move { registry_casework::serve_from_path(runtime).await }
+            async move {
+                registry_casework::serve_from_path(
+                    runtime,
+                    registry_platform_config::DeclaredPosture {
+                        posture: registry_platform_config::Posture::Production,
+                        source: registry_platform_config::PostureSource::Flag,
+                    },
+                )
+                .await
+            }
         });
         let mut answer = String::new();
         for _ in 0..100 {
@@ -573,4 +583,48 @@ mod served {
             "the runtime role serves /ready after provision and apply: {answer:?}"
         );
     }
+}
+
+#[test]
+fn print_sql_requires_development_for_unrestricted_clients() {
+    let (migration, runtime) = offline_urls();
+    let deployment = deployment(&DatabaseUrls {
+        migration: &migration,
+        runtime: &runtime,
+        ca_pem: None,
+        plaintext: false,
+        bind: "127.0.0.1:8100",
+    });
+    let contents = fs::read_to_string(&deployment.runtime).unwrap();
+    let contents: Value = registry_platform_yaml::Reader::new("runtime.yaml")
+        .scan(contents.as_bytes())
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let mut contents = contents;
+    contents["authentication"]["oidc"]["allowedClients"] = json!("unrestricted");
+    fs::write(
+        &deployment.runtime,
+        serde_norway::to_string(&contents).unwrap(),
+    )
+    .unwrap();
+    let (exit, report, _) = refused_print(&deployment.runtime);
+    assert_eq!(exit, Some(1));
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "casework.posture.unrestricted-clients"
+    );
+    let output = ctl(&[
+        "provision",
+        "--runtime-config",
+        deployment.runtime.to_str().unwrap(),
+        "--print-sql",
+        "--posture",
+        "development",
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

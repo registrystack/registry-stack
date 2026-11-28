@@ -220,7 +220,6 @@ identity:
   environment: acceptance
   instanceId: asset-site-placement-acceptance
   databaseId: asset-site-placement-adopter-db
-  databaseInitializationEnvironment: acceptance
 secretProviders:
   file:
     root: $temporary_root/secrets

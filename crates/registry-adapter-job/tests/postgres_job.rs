@@ -2,7 +2,8 @@
 
 //! The job host's PostgreSQL suite: the item table's no-payload
 //! invariant, the lease, and every pass edge the seven steps carry. Every test runs in its
-//! own schema inside the database named by `ADAPTER_TEST_DATABASE_URL`;
+//! own schema inside the database named by `ADAPTER_TEST_DATABASE_URL`,
+//! which must use a numeric loopback host;
 //! a test binary that passes because its database URL is absent is not
 //! database verification, so the variable is required: without it every
 //! test in this file fails on the spot.
@@ -74,8 +75,7 @@ async fn isolated() -> Isolated {
 
 /// An isolated schema no migration has touched.
 async fn unmigrated() -> Isolated {
-    let base = std::env::var("ADAPTER_TEST_DATABASE_URL")
-        .expect("ADAPTER_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let base = job_fixture::test_database_url();
     let serial = NEXT_SCHEMA.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -298,10 +298,19 @@ fn assert_value_free_output(label: &str, output: &Output) {
             "{label} exposed a source-only canary"
         );
     }
-    assert!(
-        output.stderr.is_empty(),
-        "{label} wrote stderr after the output passed source-canary checks: {}",
-        String::from_utf8_lossy(&output.stderr)
+    assert_only_posture_log(output, label);
+}
+
+fn assert_only_posture_log(output: &Output, label: &str) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines = stderr.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "{label}: {stderr}");
+    let event: Value =
+        serde_json::from_str(lines[0]).unwrap_or_else(|_| panic!("{label}: {stderr}"));
+    assert_eq!(event["level"], "INFO", "{label}: {stderr}");
+    assert_eq!(
+        event["fields"]["message"], "posture declared",
+        "{label}: {stderr}"
     );
 }
 
@@ -741,7 +750,10 @@ async fn the_lease_refuses_a_second_pass_until_the_first_releases() {
         None,
         false,
         store::RescanProgress::None,
-        SystemTime::now(),
+        store::PassFinished {
+            at: SystemTime::now(),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     .expect("the pass completes");
@@ -1134,6 +1146,7 @@ async fn a_held_item_settles_and_stays_held_until_the_source_changes() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1235,6 +1248,7 @@ async fn a_source_revert_advances_the_sequence_and_stays_held() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1278,6 +1292,7 @@ async fn a_source_revert_advances_the_sequence_and_stays_held() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1334,6 +1349,7 @@ async fn a_source_revert_advances_the_sequence_and_stays_held() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1440,6 +1456,7 @@ async fn a_rescan_retries_the_refused_item_and_skips_the_unchanged_ones() {
     // The rescan runs from the first page, re-delivers the refused item
     // under the same identity, and skips the acknowledged one.
     let rescan_options = PassOptions {
+        posture: registry_platform_config::Posture::Production,
         refusal_limit: 20,
         rescan: true,
         dry_run: false,
@@ -1585,6 +1602,7 @@ async fn a_rescan_holds_a_refused_retry_after_a_lost_breg_answer() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1686,6 +1704,7 @@ async fn an_active_rescan_continues_from_its_saved_cursor() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1702,6 +1721,7 @@ async fn an_active_rescan_continues_from_its_saved_cursor() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1767,6 +1787,7 @@ async fn a_rescan_of_an_ongoing_source_ends_when_it_reaches_the_tail() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1816,6 +1837,7 @@ async fn a_rescan_of_a_finite_source_continues_past_an_empty_page_with_a_cursor(
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1853,6 +1875,7 @@ async fn an_explicit_rescan_dry_run_restarts_without_moving_the_active_state() {
         &program,
         &destination,
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1869,6 +1892,7 @@ async fn an_explicit_rescan_dry_run_restarts_without_moving_the_active_state() {
         &program,
         &NullDestination::new(),
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: true,
@@ -1913,6 +1937,7 @@ async fn an_explicit_rescan_dry_run_restarts_without_moving_the_active_state() {
         &program,
         &NullDestination::new(),
         PassOptions {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: 20,
             rescan: true,
             dry_run: false,
@@ -1936,6 +1961,7 @@ async fn the_dry_run_writes_nothing_and_reports_the_hand_offs() {
     let program = compile(&fixture).await;
     let destination = NullDestination::new();
     let options = PassOptions {
+        posture: registry_platform_config::Posture::Production,
         refusal_limit: 20,
         rescan: false,
         dry_run: true,
@@ -3375,7 +3401,7 @@ async fn a_failed_migration_records_no_version_and_retries_whole() {
         .expect("the retried migration applies whole");
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103, 104]
+        vec![100, 101, 102, 103, 104, 105]
     );
 }
 
@@ -3473,17 +3499,14 @@ async fn init_store_bootstraps_only_the_store_from_the_runtime_reference() {
         "init-store failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        output.stderr.is_empty(),
-        "store initialization logs no errors"
-    );
+    assert_only_posture_log(&output, "store initialization");
     assert!(
         fixture.double.requests().is_empty(),
         "store initialization never reads the source endpoint"
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("init-store prints JSON");
     assert_eq!(report["ok"], true);
-    assert_eq!(report["schemaVersion"], 104);
+    assert_eq!(report["schemaVersion"], 105);
     assert_eq!(
         report
             .as_object()
@@ -3496,7 +3519,7 @@ async fn init_store_bootstraps_only_the_store_from_the_runtime_reference() {
     let client = isolated.pool.get().await.expect("a pooled client");
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103, 104]
+        vec![100, 101, 102, 103, 104, 105]
     );
     drop(client);
     for table in [
@@ -3570,7 +3593,7 @@ async fn init_store_repeats_unchanged_and_advances_a_supported_schema() {
     let client = older.pool.get().await.expect("a pooled client");
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103, 104]
+        vec![100, 101, 102, 103, 104, 105]
     );
     store::schema_current(&client)
         .await
@@ -3678,7 +3701,7 @@ async fn initialized_fresh_store_supports_status_inspect_and_dry_run_without_wri
     let client = isolated.pool.get().await.expect("a pooled client");
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103, 104]
+        vec![100, 101, 102, 103, 104, 105]
     );
 }
 
@@ -4053,7 +4076,7 @@ async fn a_dry_run_reads_only_a_store_at_this_release_schema() {
     );
     let client = isolated.pool.get().await.expect("a pooled client");
     client
-        .batch_execute("DELETE FROM adapter_job_schema_migrations WHERE version = 104")
+        .batch_execute("DELETE FROM adapter_job_schema_migrations WHERE version = 105")
         .await
         .expect("the version row deletes");
     let output = run_job(&isolated.url, job_args("pass", &fixture, &["--dry-run"])).await;
@@ -4068,7 +4091,7 @@ async fn a_dry_run_reads_only_a_store_at_this_release_schema() {
     );
     assert_eq!(
         applied_versions(&client).await,
-        vec![100, 101, 102, 103],
+        vec![100, 101, 102, 103, 104],
         "the dry run applied nothing"
     );
 }
@@ -4271,7 +4294,10 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
             None,
             false,
             store::RescanProgress::None,
-            SystemTime::now(),
+            store::PassFinished {
+                at: SystemTime::now(),
+                posture: registry_platform_config::Posture::Production,
+            },
         )
         .await,
         "complete_pass",
@@ -4282,7 +4308,10 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
             "case-daily",
             stale,
             "lease-held",
-            SystemTime::now(),
+            store::PassFinished {
+                at: SystemTime::now(),
+                posture: registry_platform_config::Posture::Production,
+            },
         )
         .await,
         "stop_pass",
@@ -4309,7 +4338,10 @@ async fn a_stale_lease_epoch_refuses_every_fenced_write() {
         None,
         false,
         store::RescanProgress::None,
-        SystemTime::now(),
+        store::PassFinished {
+            at: SystemTime::now(),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     .expect("the current holder completes");
@@ -4350,7 +4382,10 @@ async fn a_position_within_the_engine_bound_saves_whatever_its_jsonb_text_length
         Some(&position),
         false,
         store::RescanProgress::None,
-        SystemTime::now(),
+        store::PassFinished {
+            at: SystemTime::now(),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     .expect("a cursor within the engine bound saves");
@@ -4374,7 +4409,10 @@ async fn a_position_over_the_engine_bound_refuses() {
         Some(&position),
         false,
         store::RescanProgress::None,
-        SystemTime::now(),
+        store::PassFinished {
+            at: SystemTime::now(),
+            posture: registry_platform_config::Posture::Production,
+        },
     )
     .await
     {
@@ -4805,4 +4843,67 @@ async fn actual_cli_interval_loop_finishes_the_running_pass_on_sigterm() {
             .is_none_or(|expires| expires <= SystemTime::now()),
         "the finished pass released the lease"
     );
+}
+
+#[tokio::test]
+async fn status_reports_a_pass_recorded_in_a_different_posture() {
+    let fixture = JobFixture::start(
+        job_fixture::PAGE_SCRIPT,
+        vec![(200, reply_page_end())],
+        job_fixture::Edits::Ordered,
+    )
+    .await;
+    let receiver = FixtureReceiver::start(vec![Scripted::Acknowledge { run_id: None }]).await;
+    let isolated = isolated().await;
+    let mut pass_args = fixture_pass_args(&fixture, &receiver);
+    pass_args.extend(["--posture".into(), "development".into()]);
+    let pass = run_job_without_env(&isolated.url, pass_args, &["REGISTRY_STACK_POSTURE"]).await;
+    assert!(
+        pass.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pass.stderr)
+    );
+    let status = run_job_without_env(
+        &isolated.url,
+        job_args("status", &fixture, &["--posture", "production"]),
+        &["REGISTRY_STACK_POSTURE"],
+    )
+    .await;
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let report: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(report["items"]["acknowledged"], 1, "{report}");
+    assert_eq!(
+        report["findings"],
+        json!([{
+            "code": "adapter.job.posture-mismatch",
+            "recordedPosture": "development",
+            "declaredPosture": "production"
+        }]),
+        "{report}"
+    );
+}
+
+#[test]
+fn job_database_fixture_rejects_non_numeric_loopback_hosts_before_connecting() {
+    for url in [
+        "postgresql://test@10.0.0.5/job",
+        "postgresql://test@localhost/job",
+        "postgresql://test@127.0.0.1,10.0.0.5/job",
+    ] {
+        let failure = std::panic::catch_unwind(|| job_fixture::validate_test_database_url(url))
+            .expect_err("the harness must refuse this URL before connecting");
+        let message = failure
+            .downcast_ref::<&str>()
+            .expect("a fixed panic message");
+        assert_eq!(
+            *message,
+            "ADAPTER_TEST_DATABASE_URL must name a numeric loopback host"
+        );
+    }
+    job_fixture::validate_test_database_url("postgresql://test@127.0.0.2/job");
+    job_fixture::validate_test_database_url("postgresql://test@[::1]/job");
 }

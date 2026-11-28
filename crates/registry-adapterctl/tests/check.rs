@@ -2042,3 +2042,149 @@ fn the_expectation_target_is_a_bounded_plain_string_in_the_target_syntax() {
         "{target}"
     );
 }
+
+#[test]
+fn check_reports_default_explicit_and_invalid_postures() {
+    let project = minimal_project();
+    let (_, report, _) = run_json(&["check", &project]);
+    assert_eq!(
+        report["posture"],
+        json!({"value": "production", "source": "default"})
+    );
+    let (_, report, _) = run_json(&["check", &project, "--posture", "development"]);
+    assert_eq!(
+        report["posture"],
+        json!({"value": "development", "source": "flag"})
+    );
+    let (exit, report, _) = run_json(&["check", &project, "--posture", "invalid"]);
+    assert_eq!(exit, ExitCode::from(2));
+    assert_eq!(report["status"], "usage-error");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "platform.posture.invalid-value"
+    );
+}
+
+#[test]
+fn check_reports_insecure_issuer_http_in_both_postures() {
+    let (root, project) = mutated_project(|root| {
+        let runtime = runtime_with_expressions("90").replace(
+            "  issuer: https://issuer.example.invalid\n",
+            "  issuer: http://issuer.example.invalid\n  allowInsecureHttp: true\n",
+        );
+        std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    for (flags, expected_exit, severity) in [
+        (&[][..], ExitCode::from(1), "error"),
+        (
+            &["--posture", "development"][..],
+            ExitCode::SUCCESS,
+            "warning",
+        ),
+    ] {
+        let mut args = vec!["check", &project, "--runtime", runtime.to_str().unwrap()];
+        args.extend_from_slice(flags);
+        let (exit, report, _) = run_json(&args);
+        assert_eq!(exit, expected_exit, "{report}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| {
+                    finding["code"] == "platform.posture.insecure-issuer-http"
+                        && finding["path"] == "/oidc/allowInsecureHttp"
+                        && finding["severity"] == severity
+                }),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn check_points_database_transport_conflict_at_transport() {
+    let (root, project) = mutated_project(|root| {
+        let runtime = runtime_with_expressions("90").replace(
+            "database:\n",
+            "database:\n  transport: loopback-plaintext\n  testOnlyPlaintext: true\n",
+        );
+        std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_refused(exit, &report, "platform.database.transport-conflict");
+    assert_eq!(
+        diagnostic_path(&report, "platform.database.transport-conflict"),
+        "/database/transport"
+    );
+}
+
+#[test]
+fn check_reports_explicit_anonymous_https() {
+    let (root, project) = mutated_project(|root| {
+        let pack = root.join("pack.yaml");
+        let text = std::fs::read_to_string(&pack).unwrap();
+        let old_digest = registry_platform_config::sha256_uri(text.as_bytes());
+        let text = text.replace("type: oauth2-client-credentials", "type: none");
+        let new_digest = registry_platform_config::sha256_uri(text.as_bytes());
+        std::fs::write(pack, text).unwrap();
+        let project = root.join("project.yaml");
+        let text = std::fs::read_to_string(&project).unwrap();
+        std::fs::write(project, text.replace(&old_digest, &new_digest)).unwrap();
+        let mut runtime = runtime_with_expressions("90");
+        let start = runtime.find("    credential:\n").unwrap();
+        let end = runtime.find("listener:\n").unwrap();
+        runtime.replace_range(
+            start..end,
+            "    anonymousHttps: operator-approved\n    credential: {type: none}\n",
+        );
+        std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
+    });
+    let runtime = root.path().join("minimal/runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.posture.anonymous-https"),
+        "/endpoints/0/anonymousHttps",
+        "{report}"
+    );
+}
+
+#[test]
+fn job_check_lists_private_transport_in_development_and_refuses_it_in_production() {
+    let runtime = format!(
+        "{}store:\n  runtimeUrlRef: secret:env/JOB_DB\n  transport: private-network-plaintext\n",
+        base_job_text("job-runtime.yaml")
+    );
+    for (flags, expected_exit, severity) in [
+        (&[][..], ExitCode::from(1), "error"),
+        (&["--posture", "production"][..], ExitCode::from(1), "error"),
+        (
+            &["--posture", "development"][..],
+            ExitCode::SUCCESS,
+            "warning",
+        ),
+    ] {
+        let (exit, report, _) = job_check_with("job-runtime.yaml", &runtime, flags);
+        assert_eq!(exit, expected_exit, "{report}");
+        let finding = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["code"] == "platform.posture.database-private-plaintext")
+            .unwrap_or_else(|| panic!("{report}"));
+        assert_eq!(finding["severity"], severity, "{report}");
+        assert_eq!(finding["path"], "/store/transport", "{report}");
+        if severity == "error" {
+            assert_eq!(finding["message"], "store.transport selects an unencrypted connection to a private network; it is accepted only when the process declares development", "{report}");
+            let action = finding["suggestedAction"].as_str().unwrap();
+            assert!(action.contains("store.transport"), "{action}");
+            assert!(action.contains("--posture development"), "{action}");
+            assert!(
+                action.contains("REGISTRY_STACK_POSTURE=development"),
+                "{action}"
+            );
+        }
+    }
+}

@@ -229,13 +229,14 @@ pub(crate) fn sample(
 }
 
 pub(crate) fn list(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     limit: u16,
 ) -> Result<HookListOutcome, HookLifecycleError> {
     let runtime = operator_runtime()?;
     list_with(runtime_config, limit, |runtime_config, limit| {
         runtime.block_on(async {
-            let service = HookOperatorService::from_runtime_config(runtime_config).await?;
+            let service = HookOperatorService::from_runtime_config(runtime_config, posture).await?;
             service.list(limit).await
         })
     })
@@ -256,6 +257,7 @@ fn list_with(
 }
 
 pub(crate) fn drain(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     max_attempts: u16,
     timeout_seconds: u16,
@@ -271,11 +273,13 @@ pub(crate) fn drain(
             runtime_config,
             max_attempts,
             std::time::Duration::from_secs(u64::from(timeout_seconds)),
+            posture,
         ))
         .map_err(operator_failure)
 }
 
 pub(crate) fn replay(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     event_id: &str,
     delivery_id: &str,
@@ -289,7 +293,8 @@ pub(crate) fn replay(
         expected_generation,
         |runtime_config, event_id, delivery_id, expected_generation| {
             runtime.block_on(async {
-                let service = HookOperatorService::from_runtime_config(runtime_config).await?;
+                let service =
+                    HookOperatorService::from_runtime_config(runtime_config, posture).await?;
                 service
                     .replay(event_id, delivery_id, expected_generation)
                     .await
@@ -323,6 +328,7 @@ fn replay_with(
 }
 
 pub(crate) fn discard(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
     event_id: &str,
     delivery_id: &str,
@@ -336,7 +342,8 @@ pub(crate) fn discard(
         expected_generation,
         |runtime_config, event_id, delivery_id, expected_generation| {
             runtime.block_on(async {
-                let service = HookOperatorService::from_runtime_config(runtime_config).await?;
+                let service =
+                    HookOperatorService::from_runtime_config(runtime_config, posture).await?;
                 service
                     .discard(event_id, delivery_id, expected_generation)
                     .await
@@ -379,7 +386,9 @@ fn operator_failure(error: HookOperatorError) -> HookLifecycleError {
         HookOperatorError::EventDestinations(error) => {
             HookLifecycleError::EventDestinations(error.to_string())
         }
-        HookOperatorError::Unavailable => HookLifecycleError::Operator,
+        HookOperatorError::Unavailable | HookOperatorError::PostureMismatch { .. } => {
+            HookLifecycleError::Operator
+        }
     }
 }
 

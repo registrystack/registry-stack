@@ -1302,12 +1302,13 @@ pub(crate) fn route_template(request: &Request<Body>) -> &str {
 /// are operator material, and the public Registry contract does not describe
 /// them. Every other path on this listener is unserved rather than delegated
 /// back to the Registry routes.
-pub fn metrics_app(metrics: Arc<Metrics>) -> Router {
+pub fn metrics_app(metrics: Arc<Metrics>, posture: registry_platform_config::Posture) -> Router {
     Router::new()
         .route("/metrics", get(render_metrics))
         .fallback(metrics_route_absent)
         .method_not_allowed_fallback(metrics_route_absent)
         .with_state(metrics)
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 async fn render_metrics(State(metrics): State<Arc<Metrics>>) -> Response {
@@ -1731,10 +1732,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metrics_marks_every_development_response() {
+        use registry_platform_config::Posture;
+
+        for posture in [Posture::Production, Posture::Development] {
+            for path in ["/metrics", "/unknown"] {
+                let response = metrics_app(Arc::new(Metrics::default()), posture)
+                    .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response
+                        .headers()
+                        .get("registry-posture")
+                        .map(|value| value.to_str().unwrap()),
+                    (posture == Posture::Development).then_some("development"),
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn metrics_app_serves_prometheus_text_and_refuses_other_paths() {
         let metrics = Arc::new(Metrics::default());
         metrics.record_http("/health", "GET", "success", Duration::from_millis(5));
-        let app = metrics_app(Arc::clone(&metrics));
+        let app = metrics_app(
+            Arc::clone(&metrics),
+            registry_platform_config::Posture::Production,
+        );
 
         let response = app
             .clone()

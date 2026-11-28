@@ -1012,6 +1012,29 @@ async fn task_grant_must_name_the_request_principal_and_purpose() {
 }
 
 #[tokio::test]
+async fn production_refuses_a_signed_development_task_assertion() {
+    let harness = contextual_harness().await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let path = format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent");
+    let mut claims = delegated_task_claims(now);
+    let plain = harness.signed_token(claims.clone(), "JWT");
+    assert_eq!(
+        delegated_read_status(&harness, &plain).await,
+        StatusCode::OK
+    );
+
+    claims[registry_platform_oidc::POSTURE_CLAIM] = json!("development");
+    let development = harness.signed_token(claims, "JWT");
+    let response = harness.send(&path, &[bearer(&development)], None).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(body_json(response).await["code"], "authentication.refused");
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn task_grant_tokens_are_issued_for_at_most_fifteen_minutes() {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

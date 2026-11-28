@@ -878,6 +878,7 @@ async fn split_activation_and_real_router_enforce_owned_progress_and_operator_re
         .err()
         .expect("TLS is required");
     assert_eq!(error.code, "database-tls-required");
+    assert_eq!(error.field.as_deref(), Some("database.runtimeUrlRef"));
     assert_eq!(error.suggested_action.as_deref(), Some("Add sslmode=require for a TLS database, or set database.transport: loopback-plaintext for PostgreSQL on this host."));
 
     let mut remote_url = runtime_url.clone();

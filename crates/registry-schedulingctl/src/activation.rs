@@ -308,6 +308,7 @@ pub fn plan(config_path: &Path, declared: DeclaredPosture) -> Result<Value> {
             let mut diagnostic =
                 json!({"code": refusal_code(refusal), "message": refusal.to_string()});
             if let StoreError::PostureMismatch { action, .. } = refusal {
+                diagnostic["path"] = json!("/database");
                 diagnostic["suggestedAction"] = json!(action);
             }
             diagnostic

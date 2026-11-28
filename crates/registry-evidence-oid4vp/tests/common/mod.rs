@@ -314,7 +314,6 @@ audit:
 applicantTokens:
   issuer: {issuer}
   audience: {AUDIENCE}
-  allowInsecureHttp: true
   jwksSource:
     {applicant_jwks_source}
   algorithms: [EdDSA]
@@ -322,7 +321,6 @@ applicantTokens:
 evidenceCredentials:
   issuer: {issuer}
   audience: {AUDIENCE}
-  allowInsecureHttp: true
   jwksSource:
     type: uri
     uri: {jwks}
@@ -403,7 +401,14 @@ rateLimits:
     }
 
     pub fn config(&self) -> Oid4vpConfig {
-        Oid4vpConfig::load(&self.config_path).unwrap_or_else(|error| {
+        Oid4vpConfig::load(
+            &self.config_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Default,
+            },
+        )
+        .unwrap_or_else(|error| {
             panic!(
                 "the test deployment loads: {error} {:?}",
                 error.diagnostics()

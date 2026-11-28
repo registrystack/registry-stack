@@ -428,6 +428,31 @@ async fn activation_posture_is_fixed_and_status_reports_the_mismatch() {
                 .any(|finding| { finding["code"] == "platform.activation.posture-mismatch" }),
             "{plan}"
         );
+        let cli_report = |command: &str| {
+            let output = std::process::Command::new(env!("CARGO_BIN_EXE_schedulingctl"))
+                .args([
+                    "--format",
+                    "json",
+                    command,
+                    "--posture",
+                    other.posture.as_str(),
+                ])
+                .arg("--runtime-config")
+                .arg(&config)
+                .env_remove("REGISTRY_STACK_POSTURE")
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            serde_json::from_slice::<Value>(&output.stdout).unwrap()
+        };
+        let plan = cli_report("plan");
+        assert_eq!(plan["refusals"][0]["path"], "/database", "{plan}");
+        let apply = cli_report("apply");
+        assert_eq!(
+            apply["diagnostics"][0]["code"], "platform.activation.posture-mismatch",
+            "{apply}"
+        );
+        assert_eq!(apply["diagnostics"][0]["path"], "/database", "{apply}");
         let path = config.clone();
         let refused = refusal(ctl(move || activation::apply(&path, None, &[], other)));
         assert!(

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-03"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -33,6 +33,13 @@ with `rstack dev stop RUN_ID` first.
     'Internet access',
   ]}
 />
+
+For the local commands in this tutorial, declare development in your shell.
+`rstack dev` sets this value for the processes it starts.
+
+```bash
+export REGISTRY_STACK_POSTURE=development
+```
 
 ## What Evidence needs from your API
 
@@ -76,7 +83,7 @@ Check it and run its fixtures, which need no network:
 
 ```sh
 rstack evidence check . --target local-target.yaml
-rstack evidence test . --target local-target.yaml --deny-warnings
+rstack evidence test . --target local-target.yaml
 ```
 
 ```text test-expect

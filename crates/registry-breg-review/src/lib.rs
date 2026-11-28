@@ -644,19 +644,32 @@ fn posture_refusal(posture: &PostureReport, source: &str) -> RuntimeError {
     ))
 }
 
-/// Build the page from a validated runtime configuration. Startup reads the
-/// secrets, fetches the provider's discovery document, opens the audit
-/// journal, and compiles the templates, and fails on the first fault.
-pub async fn router(config: RuntimeConfig) -> Result<Router, RuntimeError> {
-    build(
-        config,
-        None,
-        &PostureReport::new(config::default_posture()),
-        None,
+/// Every setting in `settings` refused as production refuses it, each with
+/// its pointer, code and remedy.
+fn production_refusal(settings: Vec<FoundSetting>, source: &str) -> RuntimeError {
+    let mut refused = PostureReport::new(config::default_posture());
+    for found in settings {
+        refused.record(found);
+    }
+    RuntimeError::Posture(
+        refused
+            .diagnostics(std::path::Path::new(source))
+            .iter()
+            .map(|finding| {
+                format!(
+                    "{} [{}] {}. {}",
+                    finding.path, finding.code, finding.message, finding.suggested_action
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
     )
-    .await
 }
 
+/// Build the page from what the runtime loader returned: the configuration,
+/// the posture report and the witness. Startup reads the secrets, fetches the
+/// provider's discovery document, opens the audit journal, and compiles the
+/// templates, and fails on the first fault.
 pub async fn router_with_posture(
     loaded: registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
 ) -> Result<Router, RuntimeError> {
@@ -693,13 +706,23 @@ async fn build(
     posture: &PostureReport,
     development: Option<&registry_platform_config::DevelopmentWitness>,
 ) -> Result<Router, RuntimeError> {
+    if development.is_some() != (posture.posture() == Posture::Development) {
+        return Err(RuntimeError::Posture(
+            "the development witness does not match the declared posture. Use the \
+             configuration, posture and witness the runtime loader returned. For a laptop or \
+             test run, start it with `rstack dev`, or declare development with \
+             REGISTRY_STACK_POSTURE=development or --posture development."
+                .to_owned(),
+        ));
+    }
+    let settings = config.development_settings();
+    if posture.posture() == Posture::Production && !settings.is_empty() {
+        return Err(production_refusal(settings, "runtime configuration"));
+    }
     let mut posture = posture.clone();
     let origin = config
-        .public_origin(development.filter(|_| posture.posture() == Posture::Development))
-        .map_err(|_| {
-            config.record_public_origin(&mut posture);
-            posture_refusal(&posture, "publicOrigin")
-        })?
+        .public_origin(development)
+        .map_err(|error| RuntimeError::Posture(error.to_string()))?
         .to_url();
     let plaintext_origin = origin.scheme() == "http";
     let redirect_uri = origin
@@ -733,18 +756,20 @@ async fn build(
     .map_err(|error| RuntimeError::Discovery(error.to_string()))?;
     let authorization_endpoint = discovered_endpoint(&discovery, "authorization_endpoint")?;
     if authorization_endpoint.scheme() != "https" {
+        // The value is not in the file: the issuer's discovery document
+        // publishes it, so the setting points at the issuer the file names.
         static HTTP_AUTHORIZATION_ENDPOINT: DevelopmentSetting = DevelopmentSetting {
             code: "breg.posture.review-http-authorization-endpoint",
-            key: "authorization_endpoint",
-            summary: "The discovered authorization endpoint is plain http",
+            key: "issuer",
+            summary: "The authorization endpoint discovered from signIn.issuer is plain http",
             production:
                 "Publish an https authorization_endpoint in the issuer's discovery document.",
         };
         posture.record(FoundSetting {
             setting: &HTTP_AUTHORIZATION_ENDPOINT,
-            pointer: Some("/signIn/discovery/authorization_endpoint".to_owned()),
+            pointer: Some("/signIn/issuer".to_owned()),
             position: None,
-            origin: SettingOrigin::RuntimeFile,
+            origin: SettingOrigin::Combination,
         });
         if posture.posture() == Posture::Production {
             return Err(posture_refusal(&posture, "OIDC discovery"));

@@ -18,19 +18,58 @@ use registry_adapter_job::cli::{Cli, Command, WorkspaceArgs};
 use registry_adapter_job::destination::{
     FixtureDestination, JobDestination as DestinationSeam, NullDestination,
 };
-use registry_adapter_job::metrics::{metrics_router, JobMetrics};
+use registry_adapter_job::metrics::{metrics_router_in_posture, JobMetrics};
 use registry_adapter_job::pass::{run_pass, PassOptions, PassReport, StopReason};
 use registry_adapter_job::runtime_destination::{activate_destination, check_destination_runtime};
 use registry_adapter_job::store;
 use registry_adapter_job::trigger::{self, Edits, HookPassGate, JobState, LastPass, Step};
-use registry_platform_config::SecretResolver;
+use registry_platform_config::{DeclaredPosture, SecretResolver};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing_subscriber::prelude::*;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    tracing_subscriber::registry()
+        .with(
+            Targets::new()
+                .with_target("registry_adapter", LevelFilter::INFO)
+                .with_target("registry_platform_config::posture", LevelFilter::INFO),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_target(false)
+                .with_current_span(false)
+                .with_span_list(false)
+                .with_writer(std::io::stderr),
+        )
+        .init();
+
+    let flag = match &cli.command {
+        Command::InitStore { posture, .. }
+        | Command::Check { posture, .. }
+        | Command::Status { posture, .. }
+        | Command::Inspect { posture, .. }
+        | Command::Pass { posture, .. }
+        | Command::RebindIdentity { posture, .. }
+        | Command::Rescan { posture, .. } => posture,
+    };
+    let declared = match registry_platform_config::declared(flag.as_deref()) {
+        Ok(declared) => declared,
+        Err(error) => {
+            eprintln!(
+                "adapter-job: {}: {}\nnext: {}",
+                error.code(),
+                error.message(),
+                error.suggested_action()
+            );
+            return ExitCode::from(2);
+        }
+    };
     #[cfg(feature = "job-rabbitmq")]
     if let Err(error) = registry_adapter_job::tls_provider::initialize() {
         eprintln!("adapter-job: {error}");
@@ -49,26 +88,31 @@ fn main() -> ExitCode {
     let outcome = match &cli.command {
         Command::InitStore {
             runtime: runtime_path,
-        } => runtime.block_on(init_store(runtime_path)),
+            posture: _,
+        } => runtime.block_on(init_store(runtime_path, declared)),
         Command::Check {
             job_yaml,
             pack,
             runtime: runtime_path,
+            posture: _,
             workspace,
-        } => check(job_yaml, pack, runtime_path, workspace),
+        } => check(job_yaml, pack, runtime_path, workspace, declared),
         Command::Status {
             job_yaml,
             runtime: runtime_path,
-        } => runtime.block_on(status(job_yaml, runtime_path)),
+            posture: _,
+        } => runtime.block_on(status(job_yaml, runtime_path, declared)),
         Command::Inspect {
             job_yaml,
             runtime: runtime_path,
+            posture: _,
             key,
-        } => runtime.block_on(inspect(job_yaml, runtime_path, key)),
+        } => runtime.block_on(inspect(job_yaml, runtime_path, key, declared)),
         Command::Pass {
             job_yaml,
             pack,
             runtime: runtime_path,
+            posture: _,
             workspace,
             fixture,
             fixture_url,
@@ -86,17 +130,26 @@ fn main() -> ExitCode {
             !*r#loop,
             *refusal_limit,
             cli.show_values,
+            declared,
         )),
         Command::RebindIdentity {
             job_yaml,
             pack,
             runtime: runtime_path,
+            posture: _,
             workspace,
-        } => runtime.block_on(rebind_identity(job_yaml, pack, runtime_path, workspace)),
+        } => runtime.block_on(rebind_identity(
+            job_yaml,
+            pack,
+            runtime_path,
+            workspace,
+            declared,
+        )),
         Command::Rescan {
             job_yaml,
             pack,
             runtime: runtime_path,
+            posture: _,
             workspace,
             fixture,
             fixture_url,
@@ -112,6 +165,7 @@ fn main() -> ExitCode {
             *dry_run,
             *refusal_limit,
             cli.show_values,
+            declared,
         )),
     };
     match outcome {
@@ -126,8 +180,8 @@ fn main() -> ExitCode {
 /// Initialize or advance only the job-store schema. The typed runtime reader
 /// checks the whole document, but this command extracts and resolves only its
 /// store block: no job is compiled and no source or destination is activated.
-async fn init_store(runtime_path: &Path) -> Result<ExitCode, String> {
-    let runtime = load_runtime(runtime_path)?;
+async fn init_store(runtime_path: &Path, declared: DeclaredPosture) -> Result<ExitCode, String> {
+    let runtime = load_runtime(runtime_path, declared)?;
     let resolver = runtime_secret_resolver(&runtime)?;
     let _pool = open_pool(&runtime, &resolver).await?;
     let report = serde_json::json!({
@@ -148,8 +202,9 @@ fn check(
     pack: &Path,
     runtime: &Path,
     workspace: &WorkspaceArgs,
+    declared: DeclaredPosture,
 ) -> Result<ExitCode, String> {
-    let runtime_config = load_runtime(runtime)?;
+    let runtime_config = load_runtime(runtime, declared)?;
     let resolver = runtime_secret_resolver(&runtime_config)?;
     let program = compile(
         pack,
@@ -183,7 +238,7 @@ fn check(
             })
         }
     };
-    let report = serde_json::json!({
+    let mut report = serde_json::json!({
         "ok": true,
         "job": {
             "id": program.job.job.id.as_str(),
@@ -199,6 +254,18 @@ fn check(
         "projectionDigest": program.job.projection_digest(),
         "destination": destination,
     });
+    report
+        .as_object_mut()
+        .expect("a plain object")
+        .extend(runtime_config.posture.ready_member());
+    report["explicitProductionSettings"] = runtime_config
+        .posture
+        .explicit_settings()
+        .iter()
+        .map(
+            |finding| serde_json::json!({"code": finding.setting.code, "pointer": finding.pointer}),
+        )
+        .collect();
     println!(
         "{}",
         serde_json::to_string_pretty(&report).expect("a plain object renders")
@@ -219,8 +286,9 @@ async fn pass(
     once: bool,
     refusal_limit: u32,
     show_values: bool,
+    declared: DeclaredPosture,
 ) -> Result<ExitCode, String> {
-    let runtime = load_runtime(runtime_path)?;
+    let runtime = load_runtime(runtime_path, declared)?;
     let resolver = runtime_secret_resolver(&runtime)?;
     let mut program = compile(pack, job_yaml, &runtime, Arc::clone(&resolver), workspace)?;
     check_hook_runtime(&program.job, &runtime)?;
@@ -232,6 +300,7 @@ async fn pass(
             activate_pass_destination(&program, &runtime, &resolver, fixture, fixture_url, dry_run)
                 .await?;
         let options = PassOptions {
+            posture: declared.posture,
             refusal_limit,
             dry_run,
             ..PassOptions::default()
@@ -291,10 +360,11 @@ async fn pass(
     };
     let (stop_sender, stop_receiver) = tokio::sync::watch::channel(false);
     let metrics_future = {
-        let router = metrics_router(
+        let router = metrics_router_in_posture(
             Arc::clone(&metrics),
             pool.clone(),
             program.job.job.id.as_str(),
+            declared.posture,
         );
         let mut stop = stop_receiver.clone();
         async move {
@@ -352,6 +422,7 @@ async fn pass(
         gate,
         &metrics,
         shutdown,
+        declared.posture,
         refusal_limit,
         show_values,
     );
@@ -423,6 +494,7 @@ async fn run_pass_loop(
     gate: Arc<HookPassGate>,
     metrics: &JobMetrics,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    posture: registry_platform_config::Posture,
     refusal_limit: u32,
     show_values: bool,
 ) -> Result<ExitCode, String> {
@@ -471,6 +543,7 @@ async fn run_pass_loop(
             return Err("adapter.job.hook-pass-already-running".to_string());
         }
         let options = PassOptions {
+            posture,
             refusal_limit,
             rescan,
             dry_run: false,
@@ -506,8 +579,9 @@ async fn rescan(
     dry_run: bool,
     refusal_limit: u32,
     show_values: bool,
+    declared: DeclaredPosture,
 ) -> Result<ExitCode, String> {
-    let runtime = load_runtime(runtime_path)?;
+    let runtime = load_runtime(runtime_path, declared)?;
     let resolver = runtime_secret_resolver(&runtime)?;
     let mut program = compile(pack, job_yaml, &runtime, Arc::clone(&resolver), workspace)?;
     check_hook_runtime(&program.job, &runtime)?;
@@ -536,6 +610,7 @@ async fn rescan(
             .map_err(|error| format!("the job store refused: {error}"))?;
     }
     let options = PassOptions {
+        posture: declared.posture,
         refusal_limit,
         rescan: true,
         dry_run,
@@ -553,8 +628,9 @@ async fn rebind_identity(
     pack: &Path,
     runtime_path: &Path,
     workspace: &WorkspaceArgs,
+    declared: DeclaredPosture,
 ) -> Result<ExitCode, String> {
-    let runtime = load_runtime(runtime_path)?;
+    let runtime = load_runtime(runtime_path, declared)?;
     let resolver = runtime_secret_resolver(&runtime)?;
     let program = compile(pack, job_yaml, &runtime, Arc::clone(&resolver), workspace)?;
     let pool = open_pool(&runtime, &resolver).await?;
@@ -783,9 +859,13 @@ fn pass_exit_code(report: &PassReport) -> ExitCode {
 }
 
 /// Count what the item table holds, value-free.
-async fn status(job_yaml: &Path, runtime_path: &Path) -> Result<ExitCode, String> {
+async fn status(
+    job_yaml: &Path,
+    runtime_path: &Path,
+    declared: DeclaredPosture,
+) -> Result<ExitCode, String> {
     let job = read_job(job_yaml)?;
-    let runtime = load_runtime(runtime_path)?;
+    let runtime = load_runtime(runtime_path, declared)?;
     let resolver = runtime_secret_resolver(&runtime)?;
     let pool = read_pool(&runtime, &resolver)?;
     let client = pool
@@ -842,8 +922,21 @@ async fn status(job_yaml: &Path, runtime_path: &Path) -> Result<ExitCode, String
             Some(guidance)
         })
         .collect::<Vec<_>>();
+    let findings: Vec<_> = row
+        .last_pass_posture
+        .filter(|recorded| *recorded != declared.posture)
+        .map(|recorded| {
+            serde_json::json!({
+                "code": "adapter.job.posture-mismatch",
+                "recordedPosture": recorded.as_str(),
+                "declaredPosture": declared.posture.as_str(),
+            })
+        })
+        .into_iter()
+        .collect();
     let report = serde_json::json!({
         "job": {"id": job.job.id.as_str(), "version": job.job.version},
+        "findings": findings,
         "items": {
             "pending": counts.pending,
             "acknowledged": counts.acknowledged,
@@ -879,9 +972,14 @@ async fn status(job_yaml: &Path, runtime_path: &Path) -> Result<ExitCode, String
 }
 
 /// Read one item's row, value-free.
-async fn inspect(job_yaml: &Path, runtime_path: &Path, key: &str) -> Result<ExitCode, String> {
+async fn inspect(
+    job_yaml: &Path,
+    runtime_path: &Path,
+    key: &str,
+    declared: DeclaredPosture,
+) -> Result<ExitCode, String> {
     let job = read_job(job_yaml)?;
-    let runtime = load_runtime(runtime_path)?;
+    let runtime = load_runtime(runtime_path, declared)?;
     let resolver = runtime_secret_resolver(&runtime)?;
     let pool = read_pool(&runtime, &resolver)?;
     let client = pool
@@ -1151,7 +1249,8 @@ fn trigger_state(row: &store::JobStateRow) -> JobState {
 /// reference, migrated before it serves.
 async fn open_pool(runtime: &JobRuntimeConfig, resolver: &SecretResolver) -> Result<Pool, String> {
     let store_config = runtime_store(runtime)?;
-    let pool = store::build_pool(store_config, resolver).map_err(|error| error.to_string())?;
+    let pool = store::build_pool_in_posture(store_config, resolver, runtime.development.as_ref())
+        .map_err(|error| error.to_string())?;
     let client = pool
         .get()
         .await
@@ -1210,7 +1309,8 @@ async fn require_current_schema(
 /// runtime config's store block.
 fn read_pool(runtime: &JobRuntimeConfig, resolver: &SecretResolver) -> Result<Pool, String> {
     let store_config = runtime_store(runtime)?;
-    store::build_pool(store_config, resolver).map_err(|error| error.to_string())
+    store::build_pool_in_posture(store_config, resolver, runtime.development.as_ref())
+        .map_err(|error| error.to_string())
 }
 
 fn runtime_secret_resolver(runtime: &JobRuntimeConfig) -> Result<Arc<SecretResolver>, String> {
@@ -1236,15 +1336,24 @@ fn read_job(path: &Path) -> Result<AdapterJob, String> {
 /// Read the job store block of the operator runtime config through the
 /// one reader the compile path shares (`engine::job_sources`), which
 /// refuses an undeclared member of the block like any other.
-fn load_runtime(path: &Path) -> Result<JobRuntimeConfig, String> {
-    JobRuntimeConfig::load(path).map_err(|error| {
-        let mut message = format!("the runtime config was refused: {error}");
-        if let Some(hint) = JobRuntimeConfig::facade_kind_hint(path, &error) {
-            message.push_str("\nhint: ");
-            message.push_str(&hint);
-        }
-        message
-    })
+fn load_runtime(path: &Path, declared: DeclaredPosture) -> Result<JobRuntimeConfig, String> {
+    JobRuntimeConfig::load_in_posture(path, declared)
+        .inspect(|runtime| runtime.posture.log_startup())
+        .map_err(|error| {
+            let details: String = error
+                .diagnostics()
+                .iter()
+                .cloned()
+                .map(registry_adapter_engine::job_sources::job_runtime_diagnostic)
+                .map(|diagnostic| diagnostic.render_human())
+                .collect();
+            let mut message = format!("the runtime config was refused: {}", details.trim_end());
+            if let Some(hint) = JobRuntimeConfig::facade_kind_hint(path, &error) {
+                message.push_str("\nhint: ");
+                message.push_str(&hint);
+            }
+            message
+        })
 }
 
 fn runtime_store(runtime: &JobRuntimeConfig) -> Result<&store::JobStoreConfig, String> {

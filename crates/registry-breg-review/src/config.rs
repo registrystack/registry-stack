@@ -566,18 +566,28 @@ impl RuntimeConfig {
         self.public_origin.get(development).map(|value| &value.0)
     }
 
-    pub(crate) fn record_public_origin(
-        &self,
-        report: &mut registry_platform_config::PostureReport,
-    ) {
-        if let Some(setting) = self.public_origin.development_setting() {
-            report.record(FoundSetting {
+    /// Every development-only setting in the file, each with its pointer.
+    /// The reader records them, and a production page refuses to build while
+    /// the list is not empty.
+    #[must_use]
+    pub fn development_settings(&self) -> Vec<FoundSetting> {
+        [
+            ("/publicOrigin", self.public_origin.development_setting()),
+            (
+                "/audit/hashKeyCustody",
+                self.audit.key.hash_key_custody.development_setting(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(pointer, setting)| {
+            setting.map(|setting| FoundSetting {
                 setting,
-                pointer: Some("/publicOrigin".to_owned()),
+                pointer: Some(pointer.to_owned()),
                 position: None,
                 origin: SettingOrigin::RuntimeFile,
-            });
-        }
+            })
+        })
+        .collect()
     }
 }
 
@@ -636,11 +646,23 @@ fn read_runtime(
     substitute: bool,
     declared: DeclaredPosture,
 ) -> (Option<LoadedRuntimeConfig<RuntimeConfig>>, RuntimeCheck) {
-    let check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+    let mut check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
         path,
         substitute,
         stand_in_for,
     );
+    if let Some(loaded) = check.loaded.as_mut() {
+        // The loader records these while it decodes, with their positions.
+        // The list makes sure none is missing.
+        for found in loaded.config.development_settings() {
+            let recorded = loaded.posture.settings().iter().any(|recorded| {
+                recorded.setting.code == found.setting.code && recorded.pointer == found.pointer
+            });
+            if !recorded {
+                loaded.posture.record(found);
+            }
+        }
+    }
     let mut diagnostics = check.loaded.as_ref().map_or_else(
         || check.diagnostics.clone(),
         |loaded| loaded.posture.diagnostics(path),
@@ -1409,8 +1431,52 @@ audit:
             },
         )
         .expect("development configuration");
-        let error = crate::router(loaded.config).await.unwrap_err();
+        let error = crate::router_with_posture(LoadedRuntimeConfig {
+            posture: registry_platform_config::PostureReport::new(DeclaredPosture {
+                posture: Posture::Production,
+                source: PostureSource::Flag,
+            }),
+            development: None,
+            ..loaded
+        })
+        .await
+        .unwrap_err();
         assert_eq!(error.to_string(), "/publicOrigin [breg.posture.review-http-public-origin] The review page's public origin is plain http; it is accepted only when the process declares development. Use an https public origin. For a laptop or test run, start it with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.");
+    }
+
+    /// Every gated member is recorded while the file decodes, at the pointer
+    /// `development_settings` names, so the runtime's own list and the
+    /// loader's report cannot drift apart.
+    #[test]
+    fn development_settings_list_what_the_decoder_records() {
+        let source = development()
+            .replace("https://review.example", "http://review.example")
+            .replace(
+                "audit:\n",
+                "audit:\n  hashKeyCustody: development-generated\n",
+            );
+        let (_directory, path) = written(&source);
+        let declared = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+            &path,
+            true,
+            stand_in_for,
+        );
+        let loaded = check.loaded.expect("development decodes the document");
+        let pairs = |settings: &[FoundSetting]| {
+            let mut pairs: Vec<(&str, Option<String>)> = settings
+                .iter()
+                .map(|found| (found.setting.code, found.pointer.clone()))
+                .collect();
+            pairs.sort();
+            pairs
+        };
+        let listed = loaded.config.development_settings();
+        assert_eq!(listed.len(), 2, "{:?}", pairs(&listed));
+        assert_eq!(pairs(&listed), pairs(loaded.posture.settings()));
     }
 
     #[test]

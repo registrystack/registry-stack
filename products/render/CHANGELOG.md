@@ -12,6 +12,9 @@
 
 - A secret file Render refuses names the failed check and its fix.
 
+- `test-seal` refuses an undeclared or production posture with the diagnostic `render.posture.test-signing`.
+- `serve` logs the posture block and refuses a sealed bundle served without `signing` before authentication starts. `healthcheck` refuses a listener bound to a scoped IPv6 address, which a URL cannot name.
+
 - A scope refusal writes the scope claim name and the scope the route
   requires on its `request refused` log line. The values are fixed by Render
   and never come from the caller's token. Responses are unchanged.

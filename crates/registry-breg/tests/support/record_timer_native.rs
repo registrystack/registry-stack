@@ -682,6 +682,8 @@ impl NativeTimerHarness {
             let arguments = vec![
                 "--runtime-config".to_owned(),
                 config_path.display().to_string(),
+                "--posture".to_owned(),
+                "production".to_owned(),
             ];
             let checkpoint_label =
                 self.checkpoint
@@ -710,8 +712,7 @@ impl NativeTimerHarness {
                     });
             let mut command = Command::new(&executable);
             command
-                .arg("--runtime-config")
-                .arg(&config_path)
+                .args(&arguments)
                 .env("BREG_LOG", "info")
                 .env("TOKIO_WORKER_THREADS", "2")
                 .stdin(Stdio::null())
@@ -4013,7 +4014,6 @@ listener:
   environment: {ENVIRONMENT}
   instanceId: {instance_id}
   databaseId: {DATABASE_ID}
-  databaseInitializationEnvironment: {ENVIRONMENT}
 secretProviders:
   file:
     root: {secret_root}
@@ -4849,9 +4849,9 @@ fn lowercase_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-fn package_context() -> PackageLoadContext<'static> {
+fn package_context() -> PackageLoadContext {
     PackageLoadContext {
-        database_initialization_environment: ENVIRONMENT,
+        posture: registry_platform_config::Posture::Production,
     }
 }
 

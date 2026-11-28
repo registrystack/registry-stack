@@ -147,7 +147,7 @@ def runtime_config(work, roles, pack, listener, prefix="", identities=IDENTITIES
         "listener": {"bind": listener},
         "identity": {
             "environment": "acceptance", "instanceId": "external-views-fixture",
-            "databaseId": prefix + "external-views-fixture", "databaseInitializationEnvironment": "acceptance",
+            "databaseId": prefix + "external-views-fixture",
         },
         "secretProviders": {"file": {"root": str(work / "secrets")}},
         "database": {

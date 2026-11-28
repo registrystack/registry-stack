@@ -41,6 +41,7 @@ pub(crate) struct ReviewRecoveryOutcome {
 }
 
 pub(crate) fn recover(
+    posture: registry_platform_config::DeclaredPosture,
     operation: ReviewRecoveryOperation,
     runtime_config: &Path,
     action_id: &str,
@@ -61,7 +62,7 @@ pub(crate) fn recover(
         .build()
         .map_err(|_| ReviewRecoveryCliError::Operator)?;
     let recovery = runtime.block_on(async {
-        let service = ReviewRecoveryOperatorService::from_runtime_config(runtime_config)
+        let service = ReviewRecoveryOperatorService::from_runtime_config(runtime_config, posture)
             .await
             .map_err(map_error)?;
         match operation {
@@ -76,7 +77,9 @@ pub(crate) fn recover(
 
 fn map_error(error: ReviewRecoveryError) -> ReviewRecoveryCliError {
     match error {
-        ReviewRecoveryError::Unavailable => ReviewRecoveryCliError::Operator,
+        ReviewRecoveryError::Unavailable | ReviewRecoveryError::PostureMismatch { .. } => {
+            ReviewRecoveryCliError::Operator
+        }
         ReviewRecoveryError::NotFound => ReviewRecoveryCliError::NotFound,
         ReviewRecoveryError::Ineligible {
             reason,
@@ -145,6 +148,7 @@ mod tests {
         ] {
             assert_eq!(
                 recover(
+                    crate::DEFAULT_POSTURE,
                     ReviewRecoveryOperation::Close,
                     Path::new(config),
                     entity,

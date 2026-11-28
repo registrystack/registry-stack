@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -314,3 +314,11 @@ Temporary source or status failure refuses the current attempt and can be retrie
 - [task grants and standing agents](../breg-task-grants/)
 - [registry scheduling task grants](../scheduling-task-grants/)
 - [author a casework policy](../../configure/casework/)
+
+A development Casework includes `registry_posture: "development"` in each
+signed task assertion. Production omits the claim. A production verifier
+refuses an assertion carrying the development claim with
+`platform.task-grant.development-assertion`.
+
+{/* Evidence: crates/registry-casework/src/task_grants.rs POSTURE_CLAIM;
+    crates/registry-platform-oidc/src/authorization_claims.rs development-assertion */}

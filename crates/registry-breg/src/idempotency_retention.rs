@@ -46,11 +46,14 @@ pub struct IdempotencyRetentionOperatorService {
 }
 
 impl IdempotencyRetentionOperatorService {
-    pub async fn from_runtime_config(path: &Path) -> Result<Self, MutationError> {
+    pub async fn from_runtime_config(
+        path: &Path,
+        posture: registry_platform_config::DeclaredPosture,
+    ) -> Result<Self, MutationError> {
         if !path.is_absolute() {
             return Err(MutationError::InvalidRequest);
         }
-        let config = load_runtime_config(path).map_err(|_| MutationError::Unavailable)?;
+        let config = load_runtime_config(path, posture).map_err(|_| MutationError::Unavailable)?;
         let package = config.load_active_package().map_err(|error| match error {
             PackageError::ExpectedDigestMismatch(mismatch) => {
                 MutationError::PackagePinMismatch(mismatch)
@@ -71,7 +74,12 @@ impl IdempotencyRetentionOperatorService {
             config.database().roles().runtime(),
         )
         .await
-        .map_err(|_| MutationError::Unavailable)?;
+        .map_err(|error| match error {
+            crate::startup::StartupError::PostureMismatch { recorded, declared } => {
+                MutationError::PostureMismatch { recorded, declared }
+            }
+            _ => MutationError::Unavailable,
+        })?;
         Ok(Self {
             expected: startup.expected_identity().clone(),
             expected_catalog: startup.expected_catalog().clone(),
@@ -289,7 +297,11 @@ enum Erasure {
 
 /// Drop only held responses whose receipt horizon has passed. Diagnostics
 /// contain no connection, caller, key, or response values.
-pub async fn erase_expired(path: &Path, before: &str) -> Result<u64, MutationError> {
+pub async fn erase_expired(
+    path: &Path,
+    before: &str,
+    posture: registry_platform_config::DeclaredPosture,
+) -> Result<u64, MutationError> {
     if !path.is_absolute() {
         return Err(MutationError::InvalidRequest);
     }
@@ -299,7 +311,7 @@ pub async fn erase_expired(path: &Path, before: &str) -> Result<u64, MutationErr
     if before > chrono::Utc::now() {
         return Err(MutationError::InvalidRequest);
     }
-    IdempotencyRetentionOperatorService::from_runtime_config(path)
+    IdempotencyRetentionOperatorService::from_runtime_config(path, posture)
         .await?
         .erase_expired(before)
         .await
@@ -317,7 +329,15 @@ mod tests {
             ("/nonexistent/config.yaml", "9999-01-01T00:00:00Z"),
         ] {
             assert!(matches!(
-                erase_expired(Path::new(path), boundary).await,
+                erase_expired(
+                    Path::new(path),
+                    boundary,
+                    registry_platform_config::DeclaredPosture {
+                        posture: registry_platform_config::Posture::Production,
+                        source: registry_platform_config::PostureSource::Default,
+                    },
+                )
+                .await,
                 Err(MutationError::InvalidRequest)
             ));
         }

@@ -20,9 +20,41 @@
   the service after a change. Startup refuses a previous key equal to the
   current key.
 
-- A migration adds a posture to the activation ledger. Every activation
-  records production until the runtime declares its posture, and the
-  activation objects in `caseworkctl` reports carry it as `posture`.
+- Activations record the declared posture, and `caseworkctl` activation
+  reports include it.
+- BREAKING: An undeclared posture is production. Runtime files that select
+  development settings are refused. Migration: Set REGISTRY_STACK_POSTURE=development
+  for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `caseworkctl check` reports development settings as errors under
+  the default posture. Migration: Pass --posture development, or set
+  REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: `allowedClients: unrestricted` requires development on every
+  listener. Migration: List the OAuth clients your production deployment admits.
+- BREAKING: The loopback listener setting restricts placement to loopback.
+  Migration: Write tlsTermination: loopback-plaintext; settings it used to
+  relax now follow the posture.
+- BREAKING: `allowInsecureHttp: true` requires development. Migration: Delete
+  allowInsecureHttp where the issuer is on loopback: no setting is needed in
+  any posture.
+- BREAKING: Plaintext PostgreSQL on a private network requires development.
+  The `platform.database.test-only-plaintext` diagnostic replaces
+  `casework.runtime.plaintext-database`. Migration: Use database.transport:
+  private-network-plaintext for a database container beside the product.
+  Update scripts that match the old codes.
+- BREAKING: A database activated in the other posture refuses startup,
+  `plan` and `apply`. Existing activations read as production. Migration:
+  Recreate development databases: a fresh apply is the way.
+- BREAKING: `/ready` adds `posture` and `developmentSettings`. Migration:
+  No change for probes that read the status code.
+- BREAKING: Audit lines add `posture`. Migration: Audit readers with a closed
+  line parser accept the posture member.
+- BREAKING: Development HTTP responses carry `Registry-Posture: development`.
+  Migration: Point production runtimes at production peers.
+- BREAKING: Development task assertions carry `registry_posture`. Migration:
+  No change for development consumers.
+- `--posture` is available on `casework` and on `caseworkctl` commands that
+  read runtime files. Casework command reports carry the resolved posture and
+  its source.
 
 - Casework counts every refused request by the check that refused it, in
   `casework_request_refusals_total{check}` on the metrics listener, published

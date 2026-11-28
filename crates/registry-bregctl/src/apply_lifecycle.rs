@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 
 use registry_breg::audit::RegistryAudit;
-use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
     apply_verified_package, bind_active_package, operator_reference_is_well_formed,
     plan_verified_package, read_activation_status, read_recorded_registry_state,
@@ -36,7 +35,6 @@ pub(crate) enum ApplyLifecycleError {
     Uninitialized,
     EventDestinations(String),
     FieldEncryptionConfiguration,
-    FieldEncryptionCustody,
     DatabaseConfiguration,
     TimeoutConfiguration,
     BackupArgument,
@@ -97,9 +95,10 @@ pub(crate) struct PlanLifecycleRequest<'a> {
 }
 
 pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     request: ApplyLifecycleRequest<'_>,
 ) -> Result<ApplyLifecycleOutcome, ApplyLifecycleError> {
-    match execute(request, LifecycleMode::Apply)? {
+    match execute(posture, request, LifecycleMode::Apply)? {
         Executed::Applied(outcome) => Ok(outcome),
         Executed::Planned(_) => Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed)),
     }
@@ -110,9 +109,11 @@ pub(crate) fn run(
 /// back, and writes nothing: no ledger entry, no maintenance state, and no
 /// audit entry. It holds the apply lock while it checks, as an apply would.
 pub(crate) fn plan(
+    posture: registry_platform_config::DeclaredPosture,
     request: PlanLifecycleRequest<'_>,
 ) -> Result<PlanLifecycleOutcome, ApplyLifecycleError> {
     match execute(
+        posture,
         ApplyLifecycleRequest {
             runtime_config: request.runtime_config,
             package: request.package,
@@ -131,12 +132,14 @@ pub(crate) fn plan(
 /// Reads what the database records about its activations, as the migration
 /// role, without the apply lock. `None` means it was never activated.
 pub(crate) fn status(
+    posture: registry_platform_config::DeclaredPosture,
     runtime_config: &Path,
 ) -> Result<Option<ActivationStatus>, ApplyLifecycleError> {
     if !runtime_config.is_absolute() {
         return Err(ApplyLifecycleError::RuntimeConfigPath);
     }
-    let config = load_runtime_config(runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
+    let config =
+        load_runtime_config(runtime_config, posture).map_err(ApplyLifecycleError::RuntimeConfig)?;
     let access = DatabaseAccess::resolve(&config)?;
     access
         .runtime
@@ -195,6 +198,7 @@ fn plans_initial_activation(
 }
 
 fn execute(
+    posture: registry_platform_config::DeclaredPosture,
     request: ApplyLifecycleRequest<'_>,
     mode: LifecycleMode,
 ) -> Result<Executed, ApplyLifecycleError> {
@@ -213,8 +217,8 @@ fn execute(
             MigrationError::OperatorReference,
         ));
     }
-    let config =
-        load_runtime_config(request.runtime_config).map_err(ApplyLifecycleError::RuntimeConfig)?;
+    let config = load_runtime_config(request.runtime_config, posture)
+        .map_err(ApplyLifecycleError::RuntimeConfig)?;
 
     let target = load_package(request.package, &config.package_load_context())
         .map_err(ApplyLifecycleError::TargetPackage)?;
@@ -287,10 +291,6 @@ fn execute(
             .field_encryption()
             .provider()
             .ok_or(ApplyLifecycleError::FieldEncryptionConfiguration)?;
-        validate_field_encryption_custody(
-            provider,
-            config.identity().database_initialization_environment(),
-        )?;
         Some(provider)
     } else {
         None
@@ -349,6 +349,31 @@ fn execute(
             Some(recorded.identity)
         }
     };
+
+    // Check before opening the apply audit destination or contacting review
+    // authorities. The activation transaction checks again under its lock.
+    if mode == LifecycleMode::Apply {
+        let status = runtime
+            .block_on(read_activation_status(
+                &connection,
+                config.database().roles().migration(),
+                timeouts,
+            ))
+            .map_err(ApplyLifecycleError::Apply)?;
+        if let Some(recorded) = status
+            .as_ref()
+            .and_then(ActivationStatus::active_entry)
+            .map(|entry| entry.posture)
+            .filter(|recorded| *recorded != posture.posture)
+        {
+            return Err(ApplyLifecycleError::Apply(
+                MigrationError::PostureMismatch {
+                    recorded,
+                    declared: posture.posture,
+                },
+            ));
+        }
+    }
 
     // A plan appends no audit entry, so it never opens the audit destination.
     let audit = match mode {
@@ -505,26 +530,6 @@ async fn prepare_proposal_compatibility(
     }
 }
 
-fn validate_field_encryption_custody(
-    provider: &FieldEncryptionProvider,
-    database_initialization_environment: &str,
-) -> Result<(), ApplyLifecycleError> {
-    validate_field_encryption_custody_kind(
-        matches!(provider, FieldEncryptionProvider::LocalFile { .. }),
-        database_initialization_environment,
-    )
-}
-
-fn validate_field_encryption_custody_kind(
-    local_file: bool,
-    database_initialization_environment: &str,
-) -> Result<(), ApplyLifecycleError> {
-    if local_file && database_initialization_environment != "local" {
-        return Err(ApplyLifecycleError::FieldEncryptionCustody);
-    }
-    Ok(())
-}
-
 struct BackupArgument {
     binding_path: String,
     local_path: PathBuf,
@@ -603,15 +608,5 @@ mod tests {
             plans_initial_activation(Err(MigrationError::ApplyFailed)),
             Err(ApplyLifecycleError::Apply(MigrationError::ApplyFailed))
         ));
-    }
-
-    #[test]
-    fn plaintext_field_key_custody_is_local_only_during_apply() {
-        assert!(validate_field_encryption_custody_kind(true, "local").is_ok());
-        assert!(matches!(
-            validate_field_encryption_custody_kind(true, "production"),
-            Err(ApplyLifecycleError::FieldEncryptionCustody)
-        ));
-        assert!(validate_field_encryption_custody_kind(false, "production").is_ok());
     }
 }

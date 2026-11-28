@@ -257,6 +257,7 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
     assert_eq!(evidence_args[1], "--runtime-config");
     assert_eq!(evidence_args[3], "--input");
     assert!(evidence_args[4].ends_with("/procedure-input.json"));
+    assert_eq!(&evidence_args[5..], ["--posture", "production"]);
     assert!(!evidence_args.join(" ").contains(TOKEN));
     assert_eq!(
         fs::read_to_string(fixture.evidence.with_extension("prepare.stdin")).unwrap(),

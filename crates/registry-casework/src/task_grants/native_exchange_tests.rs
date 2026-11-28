@@ -218,9 +218,15 @@ async fn start_evidence(root: &Path, issuer: &Issuer) -> EvidenceDeployment {
     drop(listener);
     let prepared = prepare_evidence(root, &source.uri(), &issuer.url(), port);
     let runtime = Arc::new(
-        EvidenceRuntime::initialize(&prepared.runtime_path)
-            .await
-            .unwrap(),
+        EvidenceRuntime::initialize(
+            &prepared.runtime_path,
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        )
+        .await
+        .unwrap(),
     );
     let served = Arc::clone(&runtime);
     let server =
@@ -357,7 +363,14 @@ fn the_rewritten_evidence_deployment_loads_through_the_evidence_loader() {
         "http://127.0.0.1:10",
         8080,
     );
-    registry_evidence::bundle::DeploymentInputs::load(&prepared.runtime_path).unwrap();
+    registry_evidence::bundle::DeploymentInputs::load(
+        &prepared.runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .unwrap();
 }
 
 /// The runtime configuration loaders refuse a path through a symbolic link,
@@ -862,7 +875,7 @@ fn configured_private_thunderid_is_discovered_on_an_owned_docker_network() {
             "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1",
             "kind":"BRegRuntimeConfig",
             "listener":{"bind":"127.0.0.1:0"},
-            "identity":{"environment":"test","instanceId":"private-issuer-proof","databaseId":"private-issuer-proof","databaseInitializationEnvironment":"test"},
+            "identity":{"environment":"test","instanceId":"private-issuer-proof","databaseId":"private-issuer-proof"},
             "secretProviders":{"file":{"root":"/probe/secrets"}},
             "database":{"runtimeUrlRef":"secret:file/runtime-database-url","migrationUrlRef":"secret:file/migration-database-url","pool":{"maximumConnections":1,"waitTimeoutMilliseconds":1000,"createTimeoutMilliseconds":1000,"recycleTimeoutMilliseconds":1000},"roles":{"migration":"registry_migration","runtime":"registry_runtime"}},
             "package":{"root":"/probe/package"},
@@ -1116,7 +1129,7 @@ async fn fixture(
         test_only_plaintext: true,
         transport: None,
     };
-    let store = PostgresStore::connect_migration(&db_config, &secrets)
+    let store = PostgresStore::connect_migration(&db_config, &secrets, None)
         .unwrap()
         .with_audit(crate::CaseworkAudit::capture().0);
     store.migrate().await.unwrap();
@@ -1244,7 +1257,7 @@ async fn fixture(
             "kind": crate::RUNTIME_CONFIG_KIND,
             "identity": {"databaseId": "native-task-grant"},
             "package": {"root": package_root},
-            "listener": {"bind": "127.0.0.1:0", "tlsTermination": "development-loopback", "networkExposure": "private-address"},
+            "listener": {"bind": "127.0.0.1:0", "tlsTermination": "loopback-plaintext", "networkExposure": "private-address"},
             "secretProviders": {"file": {"root": secret_root}},
             "database": {"runtimeUrlRef": "secret:file/runtime-url", "migrationUrlRef": "secret:file/migration-url"},
             "authentication": {"oidc": {
@@ -1266,13 +1279,22 @@ async fn fixture(
     )
     .unwrap();
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o600)).unwrap();
-    let runtime = crate::RuntimeConfig::load(&runtime_path).unwrap();
+    let loaded = crate::RuntimeConfig::load(
+        &runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .unwrap();
+    let runtime = loaded.config;
     let project = runtime.load_package().unwrap().project().clone();
     let secrets = crate::runtime::secret_resolver(&runtime).unwrap();
     let authority = TaskAuthority::load(
         runtime.task_authority.as_ref().unwrap(),
         &secrets,
         registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
+        registry_platform_config::Posture::Production,
     )
     .unwrap();
     let service = crate::CaseworkService::new(
@@ -1282,7 +1304,10 @@ async fn fixture(
     )
     .unwrap()
     .with_task_authority(Some(authority));
-    let (verifier, keys) = runtime.oidc_verifier(&secrets).await.unwrap();
+    let (verifier, keys) = runtime
+        .oidc_verifier(&secrets, loaded.development.as_ref())
+        .await
+        .unwrap();
     let auth = crate::CaseworkAuthenticator::new(
         &project,
         verifier,
@@ -1291,6 +1316,12 @@ async fn fixture(
     );
     Fixture {
         app: crate::router(crate::HttpState {
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Production,
+                    source: registry_platform_config::PostureSource::Flag,
+                },
+            ),
             service,
             authenticator: Arc::new(auth),
             project: Arc::new(project),

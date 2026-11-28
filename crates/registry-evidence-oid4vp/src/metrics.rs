@@ -173,10 +173,15 @@ struct MetricsState {
 }
 
 /// The router the private metrics listener serves.
-pub fn metrics_app(metrics: Arc<Metrics>, store: Arc<SessionStore>) -> Router {
+pub fn metrics_app(
+    metrics: Arc<Metrics>,
+    store: Arc<SessionStore>,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         .route(METRICS_PATH, get(scrape))
         .with_state(MetricsState { metrics, store })
+        .layer(registry_platform_httpsec::posture_mark(posture))
 }
 
 async fn scrape(State(state): State<MetricsState>) -> Response {

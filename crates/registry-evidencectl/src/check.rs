@@ -13,6 +13,7 @@ pub(crate) fn check(
     target: Option<&Path>,
     production: bool,
     deny_warnings: bool,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> Result<Checked> {
     let target_path = target.map(crate::target::target_path);
     let target = target_path.as_deref();
@@ -102,10 +103,13 @@ pub(crate) fn check(
                         Some(path),
                         project,
                         &compiled.fixture_paths,
+                        declared,
                     )
                 })();
                 crate::build::make_tree_removable(stage.path())?;
                 let result = result?;
+                checked.diagnostics.extend(Report::new(result.diagnostics));
+                checked.report["diagnostics"] = checked.diagnostics.to_json_value();
                 checked.report["proof"] = json!("compiled-target");
                 checked.report["packageDigest"] = json!(result.package_digest);
                 checked.report["definitionRevisions"] = json!(result.requirements.iter().map(|definition| json!({"requirement":definition.id,"configurationRevision":definition.configuration_revision})).collect::<Vec<_>>());
@@ -118,6 +122,12 @@ pub(crate) fn check(
                 }
                 .into());
             } else {
+                checked.diagnostics.extend(uncompiled_target_posture(
+                    path,
+                    target_model.assurance_profile,
+                    declared,
+                ));
+                checked.report["diagnostics"] = checked.diagnostics.to_json_value();
                 checked.report["deploymentInputs"] =
                     json!({"complete":false,"missing":["signer.publicJwkFile"]});
             }
@@ -127,10 +137,57 @@ pub(crate) fn check(
     if let Err(error) = target_check {
         return Err(merge_target_refusal(checked.diagnostics, error));
     }
-    if refuses_warnings(&checked.diagnostics, deny_warnings) {
+    if checked.diagnostics.has_errors() || refuses_warnings(&checked.diagnostics, deny_warnings) {
         return Err(checked.diagnostics.into());
     }
     Ok(checked)
+}
+
+fn uncompiled_target_posture(
+    path: &Path,
+    profile: Option<registry_evidence_authoring::target::TargetAssuranceProfile>,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Report {
+    use registry_evidence_authoring::target::TargetAssuranceProfile;
+    use registry_platform_config::{
+        DevelopmentSetting, FoundSetting, Posture, PostureReport, SettingOrigin,
+    };
+
+    match profile {
+        Some(TargetAssuranceProfile::Local) => {
+            static LOCAL_ASSURANCE: DevelopmentSetting = DevelopmentSetting {
+                code: "evidence.posture.local-assurance",
+                key: "assuranceProfile",
+                summary: "local assurance permits locally held signing keys",
+                production: "Build a production or evidence-grade package with a Transit signer.",
+            };
+            let mut posture = PostureReport::new(declared);
+            posture.record(FoundSetting {
+                setting: &LOCAL_ASSURANCE,
+                pointer: Some("/assuranceProfile".to_owned()),
+                position: None,
+                origin: SettingOrigin::Package,
+            });
+            Report::new(posture.diagnostics(path))
+        }
+        Some(TargetAssuranceProfile::Production | TargetAssuranceProfile::EvidenceGrade)
+            if declared.posture == Posture::Development =>
+        {
+            let mut diagnostic = Diagnostic::error(
+                "evidence.posture.assurance-profile-conflict",
+                "/assuranceProfile",
+                "a development process requires a package built with assuranceProfile: local",
+                "Build the package with assuranceProfile: local for development, or run the current package in production.",
+            );
+            diagnostic.source = Some(registry_platform_yaml::Source {
+                file: path.display().to_string(),
+                line: None,
+                column: None,
+            });
+            Report::new(vec![diagnostic])
+        }
+        _ => Report::new(Vec::new()),
+    }
 }
 
 fn merge_target_refusal(mut diagnostics: Report, error: anyhow::Error) -> anyhow::Error {
@@ -416,7 +473,14 @@ mod tests {
     }
     #[test]
     fn production_requires_an_explicit_target() {
-        assert!(check(Path::new("unused"), None, true, false).is_err());
+        assert!(check(
+            Path::new("unused"),
+            None,
+            true,
+            false,
+            crate::DEFAULT_POSTURE
+        )
+        .is_err());
     }
     #[test]
     fn deny_warnings_refuses_a_reported_warning_but_not_a_clean_report() {
@@ -450,7 +514,7 @@ mod tests {
         );
         fs::write(&project_file, authored).unwrap();
 
-        let checked = check(temporary.path(), None, false, false)
+        let checked = check(temporary.path(), None, false, false, crate::DEFAULT_POSTURE)
             .expect("warnings do not normally refuse check");
         assert_eq!(checked.diagnostics.error_count(), 0);
         assert_eq!(checked.diagnostics.warning_count(), 1);
@@ -467,7 +531,7 @@ mod tests {
             project_file.to_str().unwrap()
         );
 
-        let error = check(temporary.path(), None, false, true)
+        let error = check(temporary.path(), None, false, true, crate::DEFAULT_POSTURE)
             .expect_err("--deny-warnings refuses the warning");
         let report = error
             .downcast_ref::<Report>()
@@ -492,7 +556,7 @@ acceptances:
 "#,
         )
         .unwrap();
-        let accepted = check(temporary.path(), None, false, true)
+        let accepted = check(temporary.path(), None, false, true, crate::DEFAULT_POSTURE)
             .expect("an accepted warning does not fail --deny-warnings");
         assert_eq!(accepted.diagnostics.error_count(), 0);
         assert_eq!(accepted.diagnostics.warning_count(), 0);
@@ -529,7 +593,7 @@ acceptances:
         )
         .unwrap();
 
-        let error = check(temporary.path(), None, false, false)
+        let error = check(temporary.path(), None, false, false, crate::DEFAULT_POSTURE)
             .expect_err("a malformed acceptance file refuses the project");
         let report = error
             .downcast_ref::<Report>()
@@ -568,7 +632,7 @@ acceptances:
         )
         .unwrap();
 
-        let error = check(temporary.path(), None, false, false)
+        let error = check(temporary.path(), None, false, false, crate::DEFAULT_POSTURE)
             .expect_err("the Function error refuses a project that also warns");
         let report = error
             .downcast_ref::<Report>()
@@ -613,7 +677,7 @@ acceptances:
 "#,
         )
         .unwrap();
-        let error = check(temporary.path(), None, false, true)
+        let error = check(temporary.path(), None, false, true, crate::DEFAULT_POSTURE)
             .expect_err("the Function error still refuses a project with an accepted warning");
         let report = error
             .downcast_ref::<Report>()
@@ -685,6 +749,7 @@ acceptances:
                 Some(&temporary.path().join("local-target.yaml")),
                 true,
                 true,
+                crate::DEFAULT_POSTURE,
             )
             .expect_err("the target refusal still refuses a project with an accepted warning");
             let report = error
@@ -767,7 +832,7 @@ acceptances:
         let function_file = temporary.path().join("functions/derive-adult-status.rhai");
         fs::write(&function_file, "fn extract(").unwrap();
 
-        let error = check(temporary.path(), None, false, false)
+        let error = check(temporary.path(), None, false, false, crate::DEFAULT_POSTURE)
             .expect_err("the Function error refuses a project with excess warnings");
         let report = error
             .downcast_ref::<Report>()
@@ -829,7 +894,7 @@ acceptances:
         fs::write(&project_file, authored).unwrap();
         fs::remove_file(temporary.path().join("functions/derive-adult-status.rhai")).unwrap();
 
-        let error = check(temporary.path(), None, false, false)
+        let error = check(temporary.path(), None, false, false, crate::DEFAULT_POSTURE)
             .expect_err("the absent Function asset prevents inspection");
         let report = error
             .downcast_ref::<Report>()
@@ -892,7 +957,7 @@ acceptances:
         );
         fs::write(&project_file, authored).unwrap();
 
-        let error = check(temporary.path(), None, false, false)
+        let error = check(temporary.path(), None, false, false, crate::DEFAULT_POSTURE)
             .expect_err("the malformed project is refused");
         let report = error
             .downcast_ref::<Report>()

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -25,6 +25,13 @@ This page covers the older `bregctl dev` loop, which `rstack dev` replaces.
 `bregctl dev` starts an existing, explicitly authored local registry using the installed `breg`
 binary, a source-pinned ThunderID image, and Docker PostgreSQL.
 It needs no checkout, Python launcher, shell script, or OpenSSL installation.
+`bregctl dev` declares development for the processes it starts. It writes
+`audit.hashKeyCustody: development-generated` because it generates the audit
+hash key for the session. An explicit production declaration refuses the
+command before it writes anything.
+
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs development_command;
+    crates/registry-bregctl/src/dev/config.rs development-generated. */}
 ThunderID is a local issuer chosen by this development tool; an operated Base Registry Engine
 (BReg) runtime remains an independent OAuth resource server.
 

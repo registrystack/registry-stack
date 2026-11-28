@@ -13,6 +13,12 @@ mod record_timer_native;
 
 use std::{collections::BTreeSet, os::unix::fs::PermissionsExt as _, path::Path, time::Duration};
 
+const PRODUCTION_POSTURE: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Flag,
+    };
+
 use record_timer_native::{
     NativeOperatorConfig, NativeOutcomeSettlementKind, NativeRunIdentity, NativeTimerCheckpoint,
     NativeTimerHarness,
@@ -178,7 +184,7 @@ async fn adoption_hold_fences_old_lease(harness: &mut NativeTimerHarness) -> Res
 
     let config = harness.operator_runtime_config_path(0)?;
     let audit_baseline = harness.operator_audit_entries(0)?.len();
-    let claims = InstanceClaimService::from_runtime_config(&config)
+    let claims = InstanceClaimService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("instance-claim service construction failed: {error}"))?;
     let adoption = claims
@@ -198,7 +204,7 @@ async fn adoption_hold_fences_old_lease(harness: &mut NativeTimerHarness) -> Res
     // service before opening the timer operator on that same destination.
     drop(claims);
 
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("post-adoption timer operator construction failed: {error}"))?;
     let held_status = service
@@ -346,7 +352,7 @@ async fn unsupported_protocol_adoption_rolls_back(
     harness.start_replicas(1).await?;
     let config = harness.operator_runtime_config_path(0)?;
     harness.crash_all_replicas()?;
-    let claims = InstanceClaimService::from_runtime_config(&config)
+    let claims = InstanceClaimService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("instance-claim service construction failed: {error}"))?;
     let before = claims
@@ -449,9 +455,10 @@ async fn operator_admission(harness: &mut NativeTimerHarness) -> Result<(), Stri
         ));
     }
 
-    let relative = TimerOperatorService::from_runtime_config(Path::new("runtime.yaml"))
-        .await
-        .err();
+    let relative =
+        TimerOperatorService::from_runtime_config(Path::new("runtime.yaml"), PRODUCTION_POSTURE)
+            .await
+            .err();
     if relative != Some(TimerOperatorError::RuntimeConfigPath) {
         return Err(format!(
             "relative operator runtime configuration was not refused: {relative:?}"
@@ -459,7 +466,7 @@ async fn operator_admission(harness: &mut NativeTimerHarness) -> Result<(), Stri
     }
 
     let refused = harness.write_package_refused_operator_config(0)?;
-    let refusal = TimerOperatorService::from_runtime_config(&refused)
+    let refusal = TimerOperatorService::from_runtime_config(&refused, PRODUCTION_POSTURE)
         .await
         .err();
     if refusal != Some(TimerOperatorError::PackageRefused) {
@@ -468,7 +475,7 @@ async fn operator_admission(harness: &mut NativeTimerHarness) -> Result<(), Stri
         ));
     }
 
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("active timer package operator admission failed: {error}"))?;
     let status = service
@@ -516,7 +523,7 @@ async fn operator_reads(harness: &mut NativeTimerHarness) -> Result<(), String> 
         .await?;
 
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("timer operator service construction failed: {error}"))?;
     let status = service
@@ -671,7 +678,7 @@ async fn bounded_status_preserves_later_blocks(
         .await?;
 
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("bounded-history timer operator construction failed: {error}"))?;
     let status = service
@@ -704,7 +711,7 @@ async fn operator_pause_resume(harness: &mut NativeTimerHarness) -> Result<(), S
     let record_id = created.value.data.record_identifier.clone();
     let occurrence_id = harness.timer_evidence(&record_id).await?.occurrence_id;
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("timer operator service construction failed: {error}"))?;
     let initial = service
@@ -852,9 +859,10 @@ async fn operator_pause_interlock(harness: &mut NativeTimerHarness) -> Result<()
     harness.enable_checkpoint(NativeTimerCheckpoint::BeforeCommit, None)?;
     harness.start_replicas(1).await?;
     let operator_config = harness.write_operator_runtime_config("pause-interlock")?;
-    let service = TimerOperatorService::from_runtime_config(&operator_config.path)
-        .await
-        .map_err(|error| format!("interlock timer operator construction failed: {error}"))?;
+    let service =
+        TimerOperatorService::from_runtime_config(&operator_config.path, PRODUCTION_POSTURE)
+            .await
+            .map_err(|error| format!("interlock timer operator construction failed: {error}"))?;
     let initial = service
         .status()
         .await
@@ -1039,7 +1047,7 @@ async fn operator_retry(harness: &mut NativeTimerHarness) -> Result<(), String> 
         .await?;
 
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("timer operator service construction failed: {error}"))?;
     let audit_baseline = harness.operator_audit_entries(0)?.len();
@@ -1204,9 +1212,10 @@ async fn operator_retry_after_actual_exhaustion(
     harness.crash_all_replicas()?;
 
     let operator_config = harness.write_operator_runtime_config("actual-retry")?;
-    let service = TimerOperatorService::from_runtime_config(&operator_config.path)
-        .await
-        .map_err(|error| format!("actual retry operator construction failed: {error}"))?;
+    let service =
+        TimerOperatorService::from_runtime_config(&operator_config.path, PRODUCTION_POSTURE)
+            .await
+            .map_err(|error| format!("actual retry operator construction failed: {error}"))?;
     let audit_baseline = harness
         .separate_operator_audit_entries(&operator_config)?
         .len();
@@ -1628,7 +1637,7 @@ async fn known_retained_technical_code(harness: &mut NativeTimerHarness) -> Resu
         .fixture_only_set_retained_technical_attempt(&record_id, "handler-failure")
         .await?;
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("timer operator service construction failed: {error}"))?;
     let detail = service
@@ -1666,7 +1675,7 @@ async fn unknown_retained_technical_code(harness: &mut NativeTimerHarness) -> Re
         .fixture_only_set_retained_technical_attempt(&record_id, "unknown-technical-code-canary")
         .await?;
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("timer operator service construction failed: {error}"))?;
     let error = service.show(occurrence_id).await.err();
@@ -1691,7 +1700,7 @@ async fn removed_binding_projection(harness: &mut NativeTimerHarness) -> Result<
     let record_id = created.value.data.record_identifier.clone();
     let occurrence_id = harness.timer_evidence(&record_id).await?.occurrence_id;
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("timer operator service construction failed: {error}"))?;
 
@@ -1748,7 +1757,7 @@ async fn completed_revision_drift_projection(
         .wait_for_completion(&record_id, Duration::from_secs(12))
         .await?;
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("timer operator service construction failed: {error}"))?;
 
@@ -1801,7 +1810,7 @@ async fn activation_only_drift_projection(harness: &mut NativeTimerHarness) -> R
         .await?;
 
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| format!("timer operator service construction failed: {error}"))?;
     let status = service
@@ -1873,7 +1882,7 @@ async fn non_exhausted_technical_block_projection(
         .await?;
 
     let config = harness.operator_runtime_config_path(0)?;
-    let service = TimerOperatorService::from_runtime_config(&config)
+    let service = TimerOperatorService::from_runtime_config(&config, PRODUCTION_POSTURE)
         .await
         .map_err(|error| {
             format!("non-exhausted technical-block operator construction failed: {error}")

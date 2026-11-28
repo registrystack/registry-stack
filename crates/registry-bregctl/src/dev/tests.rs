@@ -821,16 +821,13 @@ fn dev_packages_the_placeholder_iri_in_process_and_retains_a_refusal() {
 
     // A deployment package refuses the placeholder before it reads the
     // receipt, and the in-process refusal is retained and named.
-    let Err(deployment) = crate::package(&args, true) else {
+    let Err(deployment) = crate::package(&args, crate::DEFAULT_POSTURE) else {
         panic!("a deployment package refuses the placeholder");
     };
-    assert_eq!(
-        codes(&deployment),
-        ["breg.registry.canonical-base-iri-reserved"]
-    );
+    assert_eq!(codes(&deployment), ["breg.posture.placeholder-identity"]);
     let rendered = format!("{:#}", in_process_refusal(&root, "package", &deployment));
     assert!(
-        rendered.contains("native package refused: breg.registry.canonical-base-iri-reserved"),
+        rendered.contains("native package refused: breg.posture.placeholder-identity"),
         "{rendered}"
     );
     let retained = fs::read_dir(root.join("logs"))
@@ -842,7 +839,7 @@ fn dev_packages_the_placeholder_iri_in_process_and_retains_a_refusal() {
 
     // The local-development package accepts the placeholder and goes on to
     // the receipt, which this synthetic session never produced.
-    let Err(local) = crate::package(&args, false) else {
+    let Err(local) = crate::package(&args, crate::DEV_POSTURE) else {
         panic!("a missing receipt is refused");
     };
     let local = codes(&local);
@@ -850,7 +847,7 @@ fn dev_packages_the_placeholder_iri_in_process_and_retains_a_refusal() {
     assert!(
         !local
             .iter()
-            .any(|code| code == "breg.registry.canonical-base-iri-reserved"),
+            .any(|code| code == "breg.posture.placeholder-identity"),
         "{local:?}"
     );
     assert!(!root.join("build").exists());
@@ -2863,6 +2860,7 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
         "{:#}",
         retry_busy_stub(|| {
             start(StartArgs {
+                posture: crate::PostureArgs::default(),
                 project: project.clone(),
                 clients_file: None,
                 breg_port: Some(ports[0]),
@@ -3102,6 +3100,15 @@ fn doctor_refusal(code: &str, message: &str) -> Vec<u8> {
         {"severity":"error","code":code,"artifact":"startupDependencies","path":"database",
          "message":message,"suggestedAction":"verifyStartupDependencies"}]}))
     .unwrap()
+}
+
+#[test]
+fn activation_preflight_refuses_a_successful_doctor_posture_finding() {
+    let report = br#"{"ok":true,"diagnostics":[{"code":"breg.activation.posture-mismatch","path":"database","message":"the database was activated in production"}]}"#;
+    let refusal = activation(true, report).unwrap_err();
+    assert!(refusal
+        .to_string()
+        .contains("breg.activation.posture-mismatch"));
 }
 
 #[test]
@@ -3559,6 +3566,7 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
 
 fn start_without_binaries(project: &Path) -> Result<Value> {
     start(StartArgs {
+        posture: crate::PostureArgs::default(),
         project: project.to_path_buf(),
         clients_file: None,
         breg_port: None,
@@ -4362,8 +4370,14 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
     let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
         .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
     for filename in ["runtime-test.yaml", "runtime.yaml"] {
-        let runtime =
-            registry_breg::runtime_config::load_runtime_config(&root.join(filename)).unwrap();
+        let runtime = registry_breg::runtime_config::load_runtime_config(
+            &root.join(filename),
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Development,
+                source: registry_platform_config::PostureSource::Default,
+            },
+        )
+        .unwrap();
         let activated = runtime
             .activate_event_destinations(&compiled)
             .expect("all declared destinations activate");
@@ -4379,7 +4393,7 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
                 format!("secret:file/inbox-key-{id}")
             );
             assert_eq!(binding["origin"], "http://127.0.0.1:18996");
-            assert_eq!(binding["networkProfile"], "loopback-development-http");
+            assert_eq!(binding["networkProfile"], "loopback-http");
             assert_eq!(binding["classificationCeiling"], "internal");
             assert_eq!(binding["deliveryCeilings"]["maximumAttempts"], 5);
             assert_eq!(
@@ -4901,7 +4915,14 @@ fn local_review_authority_uses_refreshing_logical_client_without_exposing_creden
     let rendered = String::from_utf8(runtime_bytes).unwrap();
     assert!(!rendered.contains("synthetic-completion-key-32-bytes"));
     assert!(!rendered.contains(completion.as_str()));
-    registry_breg::runtime_config::load_runtime_config(&root.join("runtime-test.yaml")).unwrap();
+    registry_breg::runtime_config::load_runtime_config(
+        &root.join("runtime-test.yaml"),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -5385,7 +5406,14 @@ fn local_task_grant_status_uses_only_the_registered_status_client_and_resource()
                 .unwrap()
                 .contains(&json!("source")));
             assert!(!runtime.to_string().contains("\"d\""));
-            registry_breg::runtime_config::load_runtime_config(&file).unwrap();
+            registry_breg::runtime_config::load_runtime_config(
+                &file,
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Development,
+                    source: registry_platform_config::PostureSource::Default,
+                },
+            )
+            .unwrap();
         }
     }
 }
@@ -5971,4 +5999,27 @@ fn external_review_executor_credentials_are_not_a_dev_client_contract() {
     let mut value = serde_json::to_value(&clients).unwrap();
     value["reviewExecutors"] = json!({"legacy":{"accessProfile":"operator","client":"operator"}});
     assert!(config::clients("dev-clients.yaml", &serde_json::to_vec(&value).unwrap()).is_err());
+}
+
+#[test]
+fn development_child_commands_set_the_development_posture() {
+    let scratch = tempfile::tempdir().unwrap();
+    let project = scratch.path().join("project");
+    crate::init(&project).unwrap_or_else(|_| panic!("initialize the project"));
+    let state = retained_session(&project, None);
+    let assert_development = |command: Command| {
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| key == registry_platform_config::POSTURE_ENV
+                && value == Some(std::ffi::OsStr::new(registry_platform_config::DEVELOPMENT))));
+    };
+    // The supervisor, service and prerequisite tools use this constructor.
+    for program in [
+        std::env::current_exe().unwrap(),
+        PathBuf::from("breg"),
+        PathBuf::from("docker"),
+    ] {
+        assert_development(development_command(program));
+    }
+    assert_development(ctl(&state));
 }

@@ -21,6 +21,17 @@ This page covers the artifacts you write, the contract between a route and a fac
 [Adapter route language](../adapter-routes/) covers the routes themselves.
 [Adapter ingestion jobs](../adapter-jobs/) covers jobs and the webhook trigger.
 
+## Deployment posture
+
+Adapter defaults to production. To run a laptop configuration that uses development
+settings, start with `rstack dev` or declare development with
+`REGISTRY_STACK_POSTURE=development` or `--posture development`.
+Production payment callers refuse responses marked by development peers.
+Use one posture across a deployment.
+
+{/* Evidence: crates/registry-adapter/src/main.rs resolve_posture;
+    crates/registry-adapter/src/payments/http.rs PreparedPayments. */}
+
 ## Artifacts
 
 {/* Evidence: products/adapter/schemas/profile.v1alpha1.schema.json AdapterProfile */}
@@ -674,7 +685,7 @@ Response custody and terminal audit remain one PostgreSQL transaction.
 Every facade operation call is authenticated with an OIDC bearer token through the platform block, as in every Registry Stack product.
 It is authorised by the Adapter's own access profiles: named bindings of scopes to concrete facade operations and record types, declared in the project.
 The facade accepts no API keys, no Basic authentication and no anonymous operation calls.
-The one exception is the two listener probes, `GET /health` and `GET /ready`, which answer anyone with a fixed body and read nothing the caller names. [Probe health and readiness](../../operate/adapter/#probe-health-and-readiness) describes them.
+The one exception is the two listener probes, `GET /health` and `GET /ready`, which return service status and readiness information to any caller. [Probe health and readiness](../../operate/adapter/#probe-health-and-readiness) describes them.
 The Adapter inherits no authorisation from any product and grants none to any source.
 
 The caller's token is never forwarded upstream.
@@ -744,6 +755,9 @@ The private CA is `outboundTls.trustProfiles.<id>.caBundleFile` in the runtime c
 A CA bundle is not a secret.
 
 A pack `authentication.type: none` with an explicit runtime `credential.type: none` may reach a fixed non-loopback HTTPS source only when the same binding says `anonymousHttps: operator-approved`.
+Adapter logs the explicit acknowledgement at startup in either posture.
+
+{/* Evidence: crates/registry-adapter-core/src/runtime.rs record_endpoint_posture. */}
 The acknowledgement is a named operator decision, not a boolean, and omission stays closed.
 It is refused on HTTP or with any other authentication pairing.
 It is harmlessly redundant on an admitted `none` plus mTLS HTTPS binding.
@@ -1116,7 +1130,7 @@ The Adapter core and the shared engine keep their source-neutral dependency boun
 
 ### Collection
 
-Collections run only against the synthetic payment simulator.
+Collections run in development against the synthetic payment simulator.
 A collection connection must use the `simulator` provider with `simulation: true`; any other collection provider is refused at load with `adapter.payment.collection-simulation-only`, by both `adapter serve` and `adapterctl payments check`.
 
 Before any provider send, PostgreSQL reserves one attempt per institution, service, bill and bill version across workflow command keys.

@@ -70,6 +70,7 @@ pub(crate) struct ReconcileLifecycleOutcome {
 }
 
 pub(crate) fn run(
+    posture: registry_platform_config::DeclaredPosture,
     request: ReconcileLifecycleRequest<'_>,
 ) -> Result<ReconcileLifecycleOutcome, ReconcileLifecycleError> {
     if !request.runtime_config.is_absolute() {
@@ -79,7 +80,7 @@ pub(crate) fn run(
         return Err(ReconcileLifecycleError::TargetPackagePath);
     }
     validate_operator_reference(request.operator_reference)?;
-    let config = load_runtime_config(request.runtime_config)
+    let config = load_runtime_config(request.runtime_config, posture)
         .map_err(ReconcileLifecycleError::RuntimeConfig)?;
 
     // The active package may have been compiled before a generated contract

@@ -214,6 +214,11 @@ mod operator {
     /// Value-free refusal of an instance claim operation.
     #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
     pub enum InstanceClaimError {
+        #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
+        PostureMismatch {
+            recorded: registry_platform_config::Posture,
+            declared: registry_platform_config::Posture,
+        },
         #[error("the instance claim is unavailable")]
         Unavailable,
         #[error("another session held the exclusive migration lock past the lock timeout")]
@@ -275,11 +280,14 @@ mod operator {
     }
 
     impl InstanceClaimService {
-        pub async fn from_runtime_config(path: &Path) -> Result<Self, InstanceClaimError> {
+        pub async fn from_runtime_config(
+            path: &Path,
+            posture: registry_platform_config::DeclaredPosture,
+        ) -> Result<Self, InstanceClaimError> {
             if !path.is_absolute() {
                 return Err(InstanceClaimError::Unavailable);
             }
-            let config = crate::runtime_config::load_runtime_config(path)
+            let config = crate::runtime_config::load_runtime_config(path, posture)
                 .map_err(|_| InstanceClaimError::Unavailable)?;
             // The runtime file's package pin and the package closure close
             // before any database call, as they do for the serving runtime.
@@ -317,7 +325,12 @@ mod operator {
                 config.database().roles().runtime(),
             )
             .await
-            .map_err(|_| InstanceClaimError::Unavailable)?;
+            .map_err(|error| match error {
+                crate::startup::StartupError::PostureMismatch { recorded, declared } => {
+                    InstanceClaimError::PostureMismatch { recorded, declared }
+                }
+                _ => InstanceClaimError::Unavailable,
+            })?;
             Ok(Self {
                 expected: startup.expected_identity().clone(),
                 expected_catalog: startup.expected_catalog().clone(),

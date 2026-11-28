@@ -120,6 +120,28 @@ pub(crate) async fn load_service(
     let (mut loaded, positions) = runtime::load_with_positions(runtime_path, declared)?;
     let runtime = loaded.config;
     let config_id = loaded.effective_digest;
+    let bundle = runtime::load_package(&runtime)?;
+    crate::check::check_labels(&bundle)?;
+    let diagnostics = runtime::record_seal_binding_posture(
+        &runtime,
+        &bundle.manifest,
+        runtime_path,
+        &mut loaded.posture,
+    );
+    // The one posture block, before authentication reaches any network or
+    // secret. A development warning is carried by this block, so only the
+    // refusal returns here.
+    loaded.posture.log_startup();
+    if let Some(refusal) = diagnostics
+        .into_iter()
+        .find(|diagnostic| diagnostic.severity == registry_platform_yaml::Severity::Error)
+    {
+        return Err(RenderProblem::new(
+            ProblemKind::RuntimeInvalid,
+            "the bundle and runtime combination was refused",
+        )
+        .with_diagnostics(vec![refusal]));
+    }
     let oidc = crate::auth::verifier(&runtime).await?;
     let api_key = if oidc.is_none() {
         normalize_api_key(runtime::resolve_secret(
@@ -165,25 +187,6 @@ pub(crate) async fn load_service(
             ),
         ));
     }
-    let bundle = runtime::load_package(&runtime)?;
-    crate::check::check_labels(&bundle)?;
-    let diagnostics = runtime::record_seal_binding_posture(
-        &runtime,
-        &bundle.manifest,
-        runtime_path,
-        &mut loaded.posture,
-    );
-    for diagnostic in diagnostics {
-        if diagnostic.severity == registry_platform_yaml::Severity::Error {
-            return Err(RenderProblem::new(
-                ProblemKind::RuntimeInvalid,
-                "the bundle and runtime combination was refused",
-            )
-            .with_diagnostics(vec![diagnostic]));
-        }
-        tracing::warn!(code = %diagnostic.code, pointer = %diagnostic.path, "{}", diagnostic.message);
-    }
-    loaded.posture.log_startup();
     for warning in runtime::validate_seal_bindings(&runtime, &bundle.manifest)? {
         tracing::warn!(
             code = %warning.code,
@@ -1865,6 +1868,7 @@ fn peer_policy(declared: DeclaredPosture) -> PeerPolicy {
 pub fn healthcheck(runtime_path: &Path, declared: DeclaredPosture) -> Result<i32, RenderProblem> {
     let (loaded, _) = runtime::load_with_positions(runtime_path, declared)?;
     let address = loaded.config.listener.bind.socket_addr();
+    let url = healthcheck_url(address)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1880,16 +1884,12 @@ pub fn healthcheck(runtime_path: &Path, declared: DeclaredPosture) -> Result<i32
             },
         )
         .map_err(|reason| RenderProblem::new(ProblemKind::Internal, reason))?;
-        let response = client
-            .get(healthcheck_url(address))
-            .send()
-            .await
-            .map_err(|_| {
-                RenderProblem::new(
-                    ProblemKind::RuntimeInvalid,
-                    format!("cannot reach the health endpoint at {address}"),
-                )
-            })?;
+        let response = client.get(url).send().await.map_err(|_| {
+            RenderProblem::new(
+                ProblemKind::RuntimeInvalid,
+                format!("cannot reach the health endpoint at {address}"),
+            )
+        })?;
         validate_response_headers(response.headers(), peer_policy(declared))
             .map_err(|error| RenderProblem::new(ProblemKind::RuntimeInvalid, error.to_string()))?;
         if response.status() != StatusCode::OK {
@@ -1903,9 +1903,20 @@ pub fn healthcheck(runtime_path: &Path, declared: DeclaredPosture) -> Result<i32
     })
 }
 
-fn healthcheck_url(address: std::net::SocketAddr) -> String {
-    let address = std::net::SocketAddr::new(address.ip(), address.port());
-    format!("http://{address}/health")
+/// The URL the probe requests. A URL cannot carry an IPv6 scope, so the
+/// probe cannot reach a listener bound to a scoped link-local address, and
+/// says so instead of probing the unscoped address and reporting a failure.
+fn healthcheck_url(address: std::net::SocketAddr) -> Result<String, RenderProblem> {
+    if matches!(address, std::net::SocketAddr::V6(v6) if v6.scope_id() != 0) {
+        return Err(RenderProblem::new(
+            ProblemKind::RuntimeInvalid,
+            format!(
+                "healthcheck cannot probe {address}: an HTTP URL cannot carry its IPv6 scope. \
+                 Probe /health from a client that names the scope, or bind an address without one"
+            ),
+        ));
+    }
+    Ok(format!("http://{address}/health"))
 }
 
 #[cfg(test)]
@@ -1913,11 +1924,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn healthcheck_url_omits_the_numeric_ipv6_scope() {
+    fn healthcheck_refuses_a_scoped_listener_it_cannot_reach() {
         let bind: registry_platform_config::ListenerBind = "[fe80::1%2]:8080".parse().unwrap();
+        let problem = healthcheck_url(bind.socket_addr()).expect_err("a scoped address");
+        assert_eq!(problem.kind, ProblemKind::RuntimeInvalid);
+        assert!(problem.detail.contains("scope"), "{}", problem.detail);
+        let plain: registry_platform_config::ListenerBind = "[::1]:8080".parse().unwrap();
         assert_eq!(
-            healthcheck_url(bind.socket_addr()),
-            "http://[fe80::1]:8080/health"
+            healthcheck_url(plain.socket_addr()).unwrap(),
+            "http://[::1]:8080/health"
         );
     }
 

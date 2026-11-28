@@ -131,7 +131,6 @@ identity:
   environment: production
   instanceId: registry-primary
   databaseId: registry-db
-  databaseInitializationEnvironment: production
 secretProviders:
   environment: {{}}
   file:
@@ -234,8 +233,14 @@ fn literal_text(fixture: &TokenFixture, claim: &str) -> Option<String> {
 
 async fn observe(case: FixtureCase) -> Outcome {
     let shape = Shape::of(&case);
-    let config = parse_runtime_config(&shape.runtime_yaml(&case))
-        .expect("the runtime file for this row parses");
+    let config = parse_runtime_config(
+        &shape.runtime_yaml(&case),
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            source: registry_platform_config::PostureSource::Default,
+        },
+    )
+    .expect("the runtime file for this row parses");
     let registry = Arc::new(
         compile_project(
             &parse_project_yaml(shape.project_yaml(case.against).as_bytes())
@@ -324,15 +329,18 @@ async fn refused_stage(
 
 /// The refusal counter as the metrics listener serves it.
 async fn refusal_counts() -> std::collections::BTreeMap<String, u64> {
-    let response = metrics_app(Arc::new(Metrics::without_pool_for_test()))
-        .oneshot(
-            Request::builder()
-                .uri("/metrics")
-                .body(Body::empty())
-                .expect("scrape request"),
-        )
-        .await
-        .expect("the metrics listener responds");
+    let response = metrics_app(
+        Arc::new(Metrics::without_pool_for_test()),
+        registry_platform_config::Posture::Production,
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("scrape request"),
+    )
+    .await
+    .expect("the metrics listener responds");
     let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
         .await
         .expect("metrics body");

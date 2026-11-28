@@ -165,6 +165,10 @@ Check the authored project against the runtime file before anything touches a da
 caseworkctl check ./decisions --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
+Pass `--posture development` to check a development runtime file, or set
+`REGISTRY_STACK_POSTURE=development`. `--production` declares production and
+enables the package closure checks.
+
 The check opens no package, database, issuer, provider, or secret. Add `--environment` to fill
 `${VAR}` expressions from the current environment. A clean check does not prove live readiness.
 
@@ -289,6 +293,12 @@ caseworkctl apply --runtime-config /etc/registry-casework/runtime.yaml \
 caseworkctl status --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
+Pass `--posture development` to `plan`, `apply`, `status`, `doctor`, or
+`serve` for a development deployment. Both `casework` and `caseworkctl serve`
+accept the flag. Startup, `plan`, and `apply` refuse a database activated in
+the other posture. `status` and `doctor` report the mismatch and continue
+their checks. To change posture, apply to a fresh database.
+
 `plan` writes nothing; read its package digest, pending schema versions, role mode, and refusals.
 Applying the package that is already active is refused with
 `casework.activation.already-active`. `--operator-reference` is stored as a keyed hash;
@@ -308,7 +318,9 @@ curl --fail http://10.42.0.7:8100/ready
 ```
 
 Startup refuses a database whose active package is not the configured one. `/ready` checks the
-database and audit writer only; check source context and queue staffing with real identities.
+database and audit writer only. Its JSON body contains `status`, `posture`,
+and `developmentSettings`, an array of codes and configuration pointers.
+Check source context and queue staffing with real identities.
 
 {/* Evidence: crates/registry-casework/src/activation.rs, plan_activation() and apply_activation();
     crates/registry-caseworkctl/src/project.rs, plan() and apply();

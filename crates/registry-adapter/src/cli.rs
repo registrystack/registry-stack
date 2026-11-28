@@ -22,6 +22,9 @@ pub struct Cli {
 pub enum Command {
     /// Serve the governed record facade, typed payment connections, or both.
     Serve {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// Runtime configuration file.
         #[arg(long, value_name = "ABSOLUTE_FILE")]
         runtime_config: PathBuf,
@@ -48,6 +51,9 @@ pub enum Command {
     },
     /// Export the record-facade contract without binding a listener.
     EffectiveContract {
+        /// Declared posture: development or production. Unset means production.
+        #[arg(long = "posture", value_name = "POSTURE")]
+        posture: Option<String>,
         /// Runtime configuration file.
         #[arg(long, value_name = "ABSOLUTE_FILE")]
         runtime_config: PathBuf,
@@ -73,6 +79,21 @@ pub fn command() -> clap::Command {
 #[cfg(test)]
 mod tests {
     use clap::Parser;
+
+    #[test]
+    fn serve_accepts_a_declared_posture() {
+        super::Cli::try_parse_from([
+            "adapter",
+            "serve",
+            "--runtime-config",
+            "/runtime.yaml",
+            "--payments-config",
+            "/payments.yaml",
+            "--posture",
+            "development",
+        ])
+        .unwrap();
+    }
 
     #[test]
     fn a_payment_only_host_needs_no_record_project() {

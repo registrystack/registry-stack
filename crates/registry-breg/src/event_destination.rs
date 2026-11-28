@@ -576,21 +576,45 @@ impl EventDestinationDeliveryCeilings {
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "schema", serde(rename_all = "kebab-case"))]
 enum EventDestinationNetworkProfile {
     ProductionHttps,
-    LoopbackDevelopmentHttp,
+    LoopbackHttp,
     #[cfg(feature = "postgres-test")]
     #[cfg_attr(feature = "schema", schemars(skip))]
     PinnedLoopbackHttpsTest,
+}
+
+impl<'de> Deserialize<'de> for EventDestinationNetworkProfile {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let profile = String::deserialize(deserializer)?;
+        match profile.as_str() {
+            "production-https" => Ok(Self::ProductionHttps),
+            "loopback-http" => Ok(Self::LoopbackHttp),
+            #[cfg(feature = "postgres-test")]
+            "pinned-loopback-https-test" => Ok(Self::PinnedLoopbackHttpsTest),
+            "loopback-development-http" => Err(registry_platform_yaml::Invalid::expected(
+                "the current loopback network profile",
+                "Write loopback-http in networkProfile.",
+            )
+            .into_error()),
+            other => Err(D::Error::unknown_variant(
+                other,
+                &["production-https", "loopback-http"],
+            )),
+        }
+    }
 }
 
 impl EventDestinationNetworkProfile {
     fn platform(self) -> DestinationProfile {
         match self {
             Self::ProductionHttps => DestinationProfile::ProductionHttps,
-            Self::LoopbackDevelopmentHttp => DestinationProfile::LoopbackHttp,
+            Self::LoopbackHttp => DestinationProfile::LoopbackHttp,
             #[cfg(feature = "postgres-test")]
             Self::PinnedLoopbackHttpsTest => DestinationProfile::PinnedLoopbackHttpsTest,
         }
@@ -602,7 +626,8 @@ impl EventDestinationNetworkProfile {
     fn as_str(self) -> &'static str {
         match self {
             Self::ProductionHttps => "productionHttps",
-            Self::LoopbackDevelopmentHttp => "loopbackDevelopmentHttp",
+            // Keep this digest input so retained loopback deliveries stay bound.
+            Self::LoopbackHttp => "loopbackDevelopmentHttp",
             #[cfg(feature = "postgres-test")]
             Self::PinnedLoopbackHttpsTest => "pinnedLoopbackHttpsTest",
         }

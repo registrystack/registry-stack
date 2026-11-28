@@ -2515,6 +2515,41 @@ fn validate_project_header(
     }
 }
 
+pub(crate) static BREG_PLACEHOLDER_IDENTITY: registry_platform_config::DevelopmentSetting =
+    registry_platform_config::DevelopmentSetting {
+        code: "breg.posture.placeholder-identity",
+        key: "canonicalBaseIri",
+        summary: "The package uses a reserved placeholder registry identity",
+        production: "Replace canonicalBaseIri and rebuild the package.",
+    };
+
+const PLACEHOLDER_IDENTITY_POINTER: &str = "/project/canonicalBaseIri";
+
+#[cfg(feature = "runtime")]
+pub(crate) fn record_placeholder_identity(report: &mut registry_platform_config::PostureReport) {
+    report.record(registry_platform_config::FoundSetting {
+        setting: &BREG_PLACEHOLDER_IDENTITY,
+        pointer: Some(PLACEHOLDER_IDENTITY_POINTER.to_owned()),
+        position: None,
+        origin: registry_platform_config::SettingOrigin::Package,
+    });
+}
+
+/// Record a project identity that requires development posture.
+#[cfg(feature = "runtime")]
+pub fn record_project_posture(
+    report: &mut registry_platform_config::PostureReport,
+    project: &RegistryProject,
+) {
+    if has_placeholder_identity(project) {
+        record_placeholder_identity(report);
+    }
+}
+
+pub(crate) fn has_placeholder_identity(project: &RegistryProject) -> bool {
+    reserved_production_iri(&project.project.canonical_base_iri)
+}
+
 /// Refusals for project identity that a deployable package must not carry.
 ///
 /// They are not part of [`compile_project`]: a freshly initialized project
@@ -2523,11 +2558,14 @@ fn validate_project_header(
 /// deployment or asserts production readiness.
 pub fn deployment_diagnostics(project: &RegistryProject) -> Vec<Diagnostic> {
     let mut errors = Vec::new();
-    if reserved_production_iri(&project.project.canonical_base_iri) {
+    if has_placeholder_identity(project) {
         errors.push(Diagnostic::error(
-            "breg.registry.canonical-base-iri-reserved",
-            "project.project.canonicalBaseIri",
-            "production canonicalBaseIri must not use the reserved .invalid namespace",
+            BREG_PLACEHOLDER_IDENTITY.code,
+            PLACEHOLDER_IDENTITY_POINTER,
+            &format!(
+                "{}. {}",
+                BREG_PLACEHOLDER_IDENTITY.summary, BREG_PLACEHOLDER_IDENTITY.production
+            ),
         ));
     }
     errors

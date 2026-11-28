@@ -370,8 +370,14 @@ async fn a_protected_registry_read_backs_a_full_signed_minimum_disclosure_assert
     fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444))
         .expect("local protected-read runtime is immutable");
 
-    let deployment = DeploymentInputs::load(&runtime_path)
-        .expect("current protected-read deployment inputs load");
+    let deployment = DeploymentInputs::load(
+        &runtime_path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .expect("current protected-read deployment inputs load");
     let (bundle, runtime) = deployment.into_parts();
     let bundle = Arc::new(bundle);
     let kernel = OfflineKernel::compile(Arc::clone(&bundle))

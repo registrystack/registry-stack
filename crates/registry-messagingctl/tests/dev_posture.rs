@@ -2,6 +2,8 @@
 
 use std::process::Command;
 
+const ACTION: &str = "Drop --posture production or unset REGISTRY_STACK_POSTURE, or run the runtime in production with messagingctl serve.";
+
 #[test]
 fn dev_help_states_the_default_and_refuses_production() {
     let output = Command::new(env!("CARGO_BIN_EXE_messagingctl"))
@@ -41,6 +43,6 @@ fn dev_refuses_explicit_production_before_writing() {
             "messagingctl dev runs under the development posture, but production was declared",
             "{report}"
         );
-        assert_eq!(finding["suggestedAction"], "Drop the production declaration, or run the runtime in production with messagingctl serve.", "{report}");
+        assert_eq!(finding["suggestedAction"], ACTION, "{report}");
     }
 }

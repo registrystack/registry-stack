@@ -116,9 +116,21 @@ fn refused_argument(error: &clap::Error) -> Option<String> {
 
 /// Write one report, envelope members first, and its trailing newline.
 pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    write_with_posture(report, stdout, None)
+}
+
+pub(crate) fn write_with_posture(
+    report: &Value,
+    stdout: &mut dyn io::Write,
+    declared: Option<registry_platform_config::DeclaredPosture>,
+) -> io::Result<()> {
     let report =
         registry_cli_report::Report::new(report, registry_platform_buildinfo::DISPLAY_VERSION)
             .map_err(io::Error::other)?;
+    let report = match declared {
+        Some(declared) => report.with_posture(declared),
+        None => report,
+    };
     serde_json::to_writer_pretty(&mut *stdout, &report).map_err(io::Error::other)?;
     writeln!(stdout)
 }

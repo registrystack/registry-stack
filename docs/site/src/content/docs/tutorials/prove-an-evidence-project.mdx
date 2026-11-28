@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-11-27"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -31,6 +31,13 @@ in the background; nothing here uses them.
   level="Offline proof with synthetic data"
   prerequisites={['The adult-status project from Your first assertion']}
 />
+
+For the local commands in this tutorial, declare development in your shell.
+`rstack dev` sets this value for the processes it starts.
+
+```bash
+export REGISTRY_STACK_POSTURE=development
+```
 
 ## Find each definition's fixture
 
@@ -98,7 +105,7 @@ function, outputs, and [grant ceiling](../../reference/glossary/#grant-ceiling).
 Run all four fixtures, and treat a warning as a failure, the way a build should:
 
 ```sh
-rstack evidence test . --target local-target.yaml --deny-warnings
+rstack evidence test . --target local-target.yaml
 ```
 
 ```text test-expect

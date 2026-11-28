@@ -487,13 +487,13 @@ async fn fixture_for_issuer(
         test_only_plaintext: true,
         transport: None,
     };
-    PostgresStore::connect_migration(&database_config, &secrets)
+    PostgresStore::connect_migration(&database_config, &secrets, None)
         .expect("payment migration store")
         .with_audit(registry_casework::CaseworkAudit::capture().0)
         .migrate()
         .await
         .expect("payment fixture migrations");
-    let store = PostgresStore::connect_runtime(&database_config, &secrets)
+    let store = PostgresStore::connect_runtime(&database_config, &secrets, None)
         .expect("payment runtime store")
         .with_audit(registry_casework::CaseworkAudit::capture().0);
     let (database, connection) = tokio_postgres::connect(&scoped_url, NoTls)
@@ -637,6 +637,12 @@ async fn payment_http_push_and_feed_recovery_preserve_receiver_and_release_bound
         HumanIdentityConfig::default(),
     );
     let casework = LoopbackServer::start(router(HttpState {
+        posture: registry_platform_config::PostureReport::new(
+            registry_platform_config::DeclaredPosture {
+                posture: registry_platform_config::Posture::Production,
+                source: registry_platform_config::PostureSource::Flag,
+            },
+        ),
         service,
         authenticator: Arc::new(authenticator),
         project: Arc::new(project),

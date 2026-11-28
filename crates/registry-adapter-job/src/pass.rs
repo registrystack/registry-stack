@@ -128,6 +128,8 @@ pub const ITEM_IDENTITY_MIGRATION_REQUIRED: &str = "adapter.job.identity-migrati
 /// The options one pass runs under.
 #[derive(Clone, Debug)]
 pub struct PassOptions {
+    /// The deployment posture recorded when this pass settles.
+    pub posture: registry_platform_config::Posture,
     /// The consecutive item-scoped refusals with one code that stop the
     /// pass with the position unchanged.
     pub refusal_limit: u32,
@@ -148,6 +150,7 @@ pub struct PassOptions {
 impl Default for PassOptions {
     fn default() -> Self {
         Self {
+            posture: registry_platform_config::Posture::Production,
             refusal_limit: DEFAULT_REFUSAL_LIMIT,
             rescan: false,
             dry_run: false,
@@ -830,7 +833,10 @@ pub async fn run_pass(
             next,
             report.items_read == 0,
             rescan,
-            SystemTime::now(),
+            store::PassFinished {
+                at: SystemTime::now(),
+                posture: options.posture,
+            },
         )
         .await
         {
@@ -903,7 +909,10 @@ async fn finish_stopped(
                 job_id,
                 token,
                 &reason.stop_text(),
-                SystemTime::now(),
+                store::PassFinished {
+                    at: SystemTime::now(),
+                    posture: options.posture,
+                },
             )
             .await
             .map_err(|error| error.to_string()),

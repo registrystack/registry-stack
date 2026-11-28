@@ -1618,7 +1618,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         ["listener", "bind"] => "127.0.0.1:8100",
         ["metricsListener", "bind"] => "127.0.0.1:9100",
         ["metricsListener", "networkExposure"] => "private-address",
-        ["listener", "tlsTermination"] => "development-loopback",
+        ["listener", "tlsTermination"] => "loopback-plaintext",
         ["listener", "networkExposure"] => "private-address",
         ["audit", "destination"] => "file",
         ["package", "root"] | ["audit", "path"] | ["secretProviders", "file", "root"] => {
@@ -1907,7 +1907,7 @@ impl RuntimeConfigError {
                 "Set package.expectedDigest to the digest `schedulingctl package` reported for the package at package.root, or remove it."
             }
             Self::InvalidListener => {
-                "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
+                "Bind to a loopback address under loopback-plaintext; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
             }
             Self::InvalidMetricsListener(cause) | Self::MetricsListenerSharesSocket(cause) => {
                 return cause.remedy("metricsListener.networkExposure");
@@ -2743,6 +2743,17 @@ holdPolicy:
                     .to_owned()
             )
         );
+    }
+
+    #[test]
+    fn listener_diagnostics_use_the_current_plaintext_value() {
+        assert_eq!(
+            stand_in_for("/listener/tlsTermination"),
+            "loopback-plaintext"
+        );
+        assert!(RuntimeConfigError::InvalidListener
+            .suggested_action()
+            .contains("loopback-plaintext"));
     }
 
     #[test]

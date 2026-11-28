@@ -179,7 +179,7 @@ impl Breg {
             json!({
                 "apiVersion":"id.registrystack.org/formats/breg/runtime/v1alpha1", "kind":"BRegRuntimeConfig",
             "listener":{"bind":address.to_string()},
-                "identity":{"environment":"test", "instanceId":"native-citizen-proof", "databaseId":"native-citizen-proof", "databaseInitializationEnvironment":"test"},
+                "identity":{"environment":"test", "instanceId":"native-citizen-proof", "databaseId":"native-citizen-proof"},
                 "secretProviders":{"file":{"root":service.root}},
                 "database":{"runtimeUrlRef":format!("secret:file/database-{database}-1"), "migrationUrlRef":format!("secret:file/database-{database}-0"), "testOnlyPlaintext":true,
                     "pool":{"maximumConnections":4}, "roles":{"migration":service.roles[0], "runtime":service.roles[1]}},

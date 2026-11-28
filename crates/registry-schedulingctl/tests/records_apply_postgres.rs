@@ -201,6 +201,135 @@ fn audit_entries(path: &Path) -> Vec<Value> {
         .collect()
 }
 
+const POSTURE_RUNTIME: &str = "apiVersion: id.registrystack.org/formats/scheduling/runtime/v1alpha1
+kind: SchedulingRuntimeConfig
+identity: {{databaseId: scheduling-posture-test}}
+package: {{root: {package}}}
+listener: {{bind: '127.0.0.1:8105', tlsTermination: loopback-plaintext}}
+secretProviders: {{environment: {{}}}}
+authentication:
+  oidc:
+    issuer: https://identity.example.test
+    audience: urn:example:scheduling
+    allowedClients: [scheduling-test-client]
+database:
+  runtimeUrlRef: secret:env/SCHEDULING_POSTURE_DATABASE
+  migrationUrlRef: secret:env/SCHEDULING_POSTURE_DATABASE
+  transport: loopback-plaintext
+taskGrantStatus: unchecked-final-fifteen-minutes
+audit: {{path: {audit}, hashKeyRef: 'secret:env/SCHEDULING_POSTURE_AUDIT'}}
+retention: {{receiptRetentionDays: 2}}
+";
+
+const ACTION_FROM_DEVELOPMENT: &str =
+    "Create a fresh database and apply the package as production: a fresh apply is the way.";
+const ACTION_FROM_PRODUCTION: &str =
+    "Start it as production. To develop, use a fresh database: a fresh apply is the way.";
+const SWAP_CONTEXT: &str = "replacing the environment records";
+
+#[test]
+fn records_apply_refuses_a_different_activation_posture() {
+    let base = std::env::var("SCHEDULING_TEST_DATABASE_URL").unwrap();
+    for (applied, other, action) in [
+        (Some("development"), None, ACTION_FROM_DEVELOPMENT),
+        (None, Some("development"), ACTION_FROM_PRODUCTION),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        std::fs::write(package.join("scheduling.yaml"), POLICY).unwrap();
+        registry_platform_config::package::write_sum_file(
+            &package,
+            None,
+            &registry_scheduling::config::package_limits(),
+            registry_scheduling::config::PACKAGE_COMMAND,
+        )
+        .unwrap();
+        let config = root.path().join("runtime.yaml");
+        let records = root.path().join("records.yaml");
+        std::fs::write(&records, FIRST_RECORDS).unwrap();
+        std::fs::write(
+            &config,
+            POSTURE_RUNTIME
+                .replace("{package}", &package.display().to_string())
+                .replace(
+                    "{audit}",
+                    &root.path().join("audit.ndjson").display().to_string(),
+                )
+                .replace("{{", "{")
+                .replace("}}", "}"),
+        )
+        .unwrap();
+        let schema = format!("records_posture_{}", Uuid::new_v4().simple());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (client, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+                .await
+                .unwrap();
+            tokio::spawn(connection);
+            client
+                .batch_execute(&format!("CREATE SCHEMA {schema}"))
+                .await
+                .unwrap();
+        });
+        let ctl = |arguments: &[&str], posture| {
+            let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_schedulingctl"));
+            command
+                .args(["--format", "json"])
+                .args(arguments)
+                .args(["--runtime-config", config.to_str().unwrap()])
+                .env_remove("REGISTRY_STACK_POSTURE")
+                .env("SCHEDULING_POSTURE_DATABASE", scoped_url(&base, &schema))
+                .env(
+                    "SCHEDULING_POSTURE_AUDIT",
+                    "0123456789abcdef0123456789abcdef",
+                );
+            if let Some(posture) = posture {
+                command.args(["--posture", posture]);
+            }
+            let output = command.output().unwrap();
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            (output.status.code(), report)
+        };
+        let (code, report) = ctl(&["apply"], applied);
+        assert_eq!(code, Some(0), "{report}");
+        let (code, report) = ctl(&["records", "apply", records.to_str().unwrap()], other);
+        assert_eq!(code, Some(1), "{report}");
+        let finding = &report["diagnostics"][0];
+        assert_eq!(
+            finding["code"], "platform.activation.posture-mismatch",
+            "{report}"
+        );
+        assert_eq!(finding["path"], "/database", "{report}");
+        assert_eq!(finding["suggestedAction"], action, "{report}");
+        // The pre-check refuses before the audit opens, so no records.apply
+        // entry exists and the message is not the swap's.
+        let audit = std::fs::read_to_string(root.path().join("audit.schedulingctl.ndjson"))
+            .unwrap_or_default();
+        assert!(!audit.contains("records.apply"), "{audit}");
+        assert!(
+            !finding["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(SWAP_CONTEXT),
+            "{report}"
+        );
+        runtime.block_on(async {
+            let (client, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+                .await
+                .unwrap();
+            tokio::spawn(connection);
+            client
+                .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+                .await
+                .unwrap();
+        });
+    }
+}
+
 #[tokio::test]
 async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")

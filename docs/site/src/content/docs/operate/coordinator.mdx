@@ -687,6 +687,7 @@ In the doctor report:
 
 - `activationReady` and `state.auditReady` are `true` on a serving deployment, and a held run leaves `activationReady` `true`.
 - `state.restoreHold` and `state.admissionsHold` are `false` until an operator or a restore places a hold.
+- `findings` holds at most one `platform.activation.posture-mismatch` entry, when the activation ledger records the other posture. `activationReady` is then `false`.
 - `state.states` counts runs by state.
 - `state.uncertain` counts steps whose effect waits for an operator.
 - `state.restoreReviewRequired` counts runs that need restore review.
@@ -698,15 +699,16 @@ In the doctor report:
 Doctor carries no personal labels or payload values.
 
 {/* Evidence: crates/registry-coordinator/src/http.rs /health, /ready, activationReady, auditReady,
-    proposalWaitsByTurn, heldRunCount;
+    proposalWaitsByTurn, heldRunCount, findings;
     crates/registry-coordinator/src/store/readiness.rs;
-    crates/registry-coordinator/tests/deployment_postgres.rs heldRuns. */}
+    crates/registry-coordinator/tests/deployment_postgres.rs heldRuns,
+    deployment_operators_act_on_every_flow_without_a_flow_list. */}
 
 ### Codes you see
 
 Each surface names a refusal in its own vocabulary.
 The service's standard error carries the raw code: `store-unavailable` while the database is unreachable, `deployment.refused` or `state-key-custody` when the service stops, and `live-binding-conflict` when startup finds a live run's binding changed.
-`coordinatorctl` prefixes its codes with `coordinator.`, as in `coordinator.deployment.refused`, `coordinator.deployment.workflow-unlisted`, `coordinator.deployment.workflow-live-runs`, `coordinator.command.state-key-custody`, and `coordinator.command.live-binding-conflict`.
+`coordinatorctl` prefixes its codes with `coordinator.`, as in `coordinator.deployment.refused`, `coordinator.deployment.workflow-unlisted`, `coordinator.deployment.workflow-live-runs`, `coordinator.command.state-key-custody`, `coordinator.command.live-binding-conflict`, and `coordinator.command.development-peer`, which a typed command raises when it runs as production and the service answers as development.
 HTTP answers carry RFC 9457 problem documents; the ones an operator acts on are:
 
 | Code | Status | What to do |
