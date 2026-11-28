@@ -136,6 +136,10 @@ The client is typed to the register's operations and to the products the service
 
 Both entry points accept `profile` as a default for routes with an `accessProfile` query parameter.
 An explicit `accessProfile` on a call takes precedence.
+The default reaches every route that takes the parameter.
+`list` and `read` refuse before sending when a record type does not publish the default, and say so.
+Name a profile on that call.
+`call()` sends the default, and the register decides.
 A route whose `accessProfile` parameter is required refuses with a `TypeError` before anything is sent when neither the call nor the client names a profile.
 This holds for `call()`, `invoke`, `targetConditions`, `list` and `read`.
 Routes without that parameter receive no default.
@@ -143,10 +147,11 @@ Routes without that parameter receive no default.
 {/* Evidence: clients/typescript/core.ts ClientOptions, Transport; clients/typescript/tests/service.test.ts. */}
 
 There is no audience parameter yet.
-Task helpers for proposals and documents attach at one marked place in the generated file, the `withTaskHelpers` function.
-The comment there names `proposalCommands` and `documentCommands` and shows the two lines that attach them.
-The service description takes an optional `authorProfile` for the proposals helper.
-Until they exist, `registry.documents` is the Document Store's typed operation client and `registry.proposals` is absent.
+The generated file attaches the task helpers.
+`registry.proposals` is `proposalCommands` over the register client, under the `authorProfile` of the service description.
+`registry.documents` is `documentCommands` over the Document Store client when that product is installed, and it keeps the client's typed `call` and page methods.
+A service without the Document Store has no `documents` member, in the type and at run time.
+The generator refuses a register that has Proposals when the description gives no `authorProfile`, and the message names the missing member.
 
 The `token` function runs on every call.
 A token that changes between calls needs no new client.
@@ -155,7 +160,7 @@ Other options:
 
 | Option | Behaviour |
 | --- | --- |
-| `allowInsecureHttp` | Allows `http:` for a host that cannot be on the public internet: a private or link-local IP address, or a host name without a dot. Loopback hosts accept `http:` without it. |
+| `allowInsecureHttp` | Allows `http:` for a client with no `token` to a host that cannot be on the public internet: a private IP address, or a host name without a dot. Loopback hosts accept `http:` without it, with or without a token. |
 | `timeoutMs` | Deadline for the whole call. Default 10 seconds. A [byte transfer](#byte-transfers) uses it as an idle deadline. |
 | `maxResponseBytes` | Largest response body read. Default 8 MiB. A byte transfer ignores it. A call can set its own. |
 | `fetch` | The Fetch function to use. Default `globalThis.fetch`. |
@@ -163,10 +168,23 @@ Other options:
 The base URL must use HTTPS, with two exceptions for plain HTTP:
 
 - A loopback host: `localhost`, `127.0.0.0/8` or `[::1]`.
-- With `allowInsecureHttp: true`, a host that cannot be on the public internet.
-  That is an IP address in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `fc00::/7` or `fe80::/10`, or a host name without a dot, such as a container name on a compose network.
+- With `allowInsecureHttp: true` and no `token`, a host that cannot be on the public internet.
+  That is an IP address in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `fc00::/7`, or a host name without a dot, such as a container name on a compose network.
+  The client does not resolve names or check what they resolve to.
 
-Plain HTTP to any other host is refused when the client is built, before the `token` function runs, with or without the option.
+A client with a `token` never sends it over plain HTTP beyond loopback.
+That configuration is refused when the client is built, before the `token` function runs.
+Link-local addresses (`169.254.0.0/16`, `fe80::/10`) are refused over HTTP in every mode.
+A base that names a cloud metadata literal (`169.254.169.254`, `100.100.100.200`, `fd00:ec2::254`), the `0.0.0.0/8` block, `::` or a multicast address is refused under HTTPS too, in its IPv4-mapped, NAT64 and IPv4-compatible IPv6 spellings as well.
+Loopback means `127.0.0.0/8`, `::1` and `localhost` as written, so an IPv4-mapped loopback literal such as `[::ffff:7f00:1]` is not loopback.
+Plain HTTP to any other host is refused when the client is built, with or without the option.
+
+The way out for a client with a token is HTTPS or loopback.
+On a container network (Compose), put a TLS hop in front of the module and give the runtime its CA, or call through a gateway's HTTPS listener.
+In Supabase's edge runtime, set `DENO_TLS_CA_STORE=mozilla,system` and `SSL_CERT_FILE=/ca/ca.crt` on the functions service, with the deployment's CA mounted read-only at `/ca/ca.crt`.
+No function code changes.
+`DENO_CERT` does not work, and `SSL_CERT_FILE` alone does not work without the store setting.
+As a code fallback, use `Deno.createHttpClient({ caCerts: [pem] })` with the PEM taken from an environment variable, because a user worker cannot read a mounted file.
 
 The base URL must not carry credentials, a query, a fragment, or a `.` or `..` segment, plain or percent-encoded.
 A path prefix is kept.
@@ -180,7 +198,7 @@ No call follows a redirect.
 A successful call returns `data`, `status` and `headers`, plus `idempotencyKey` when the operation sends one.
 
 {/* Evidence: clients/typescript/core.ts ClientOptions, Transport, baseAddress, Answer;
-    clients/typescript/generate-service.ts generateService, withTaskHelpers;
+    clients/typescript/generate-service.ts generateService;
     clients/typescript/generated/services/breg-facility-all-products.ts;
     clients/typescript/tests/service.test.ts; clients/typescript/tests/core.test.ts;
     clients/typescript/tests/screens.test.ts; clients/typescript/tests/page.test.ts. */}
@@ -250,7 +268,9 @@ No registry answers a cross-origin page call, and the browser refuses one.
 A page client whose base is an absolute URL on another origin refuses the call with a `TypeError` before anything is sent.
 The page's own origin must not redirect a registry route to another place.
 A redirect would carry the request, its body and its `Idempotency-Key` along with it.
-The client refuses a redirected answer, and a request's idempotency key makes a replay to the same URL harmless.
+The client refuses a redirected answer.
+For a keyed operation, the idempotency key makes a 307 or 308 replay to the same URL harmless.
+A 303 replays as a GET with no body.
 
 In a page:
 
@@ -287,7 +307,7 @@ Operations authenticated by a signature never send cookies.
 
 {/* Evidence: clients/typescript/core.ts registryClientHeader, ClientOptions, isSessionProblem, Transport, describeError;
     clients/typescript/tests/page.test.ts; clients/typescript/tests/service.test.ts;
-    products/platform/scripts/check-no-cross-origin.sh; products/platform/scripts/check-client-contract.py. */}
+    products/platform/scripts/check-no-cross-origin.sh; products/platform/scripts/check-client-assumptions.py. */}
 
 ## Errors
 
@@ -311,6 +331,11 @@ Every other failure throws one class, `RegistryError`.
 It chooses the sentence by `reason` and `status`.
 An error the client raised itself with a `client.` code shows that code's sentence from `clientSentences`, the one table a programme replaces through `describeError(error, { clientSentences })`.
 A code the table lacks gets a generic sentence, and the error's `detail` stays on the error for developers.
+The task helpers for Proposals and documents raise their refusals this way, with one sentence for each of their `client.` codes.
+The `can.*` reason sentences of the Proposals helper sit in the same table, with `available`, `unavailable` and `client.fallback`.
+A page that replaces the table passes the same `clientSentences` to `proposalCommands` and to `describeError`, because each `can.*` message is chosen when the Proposal is read.
+A step refused because it is no longer offered (`client.command-unavailable`) shows the sentence for the served reason, such as `package-changed`.
+The sentence never names a policy, a slot, a link operation or any other served value. Those stay in `detail`.
 A `client.` code that arrived in an answer is a product failure and gets the usual sentence.
 Read `traceId` from the error when you need it for support.
 
@@ -413,7 +438,8 @@ const offerUri = data.credentialOfferUri
 ```
 
 The page entry omits `oid4vci` in its type and at run time.
-The server module also types `createDraft13CredentialOffer`, `health` and `readiness`.
+The server module also types `createDraft13CredentialOffer`.
+It has no `health` or `readiness`, because every module of a service shares one base URL and those calls would reach whichever module the gateway maps `/health` to.
 Wallet exchanges and discovery metadata use the OID4VCI protocol directly.
 
 {/* Evidence: clients/typescript/generate-all.ts; clients/typescript/generate-service.ts;
@@ -469,7 +495,7 @@ Not-equals and `or` need a typed `call` with `$filter`.
 
 A profile can publish `requiredFilters`, a list of alternatives, each a list of property names.
 That profile lists only when `where` holds an equality filter on every property of one alternative.
-The types require one, and an `in` list does not count.
+When the call names its profile, the types require one. An `in` list does not count.
 
 The client checks the rules of the resolved profile before it sends anything.
 A refusal is a `TypeError` that names the property and profile, for example ``Profile `licence-holder` lists only with an equality filter on `holderId`, or on `licenceNumber` and `status` ``.
@@ -479,7 +505,7 @@ It never repeats a filter value, and it names a property only when the contract 
 Pass `nextCursor` as `after` for the next page. If the first page used the default, omit `accessProfile` again. If it named a profile, repeat that profile.
 A null cursor ends the list.
 The cursor carries the query, so the continuation sends only the access profile and the cursor.
-The client refuses `where`, `orderBy`, `select` and `count` alongside `after` before sending a request.
+The client refuses `where`, `orderBy`, `select`, `count` and `top` alongside `after` before sending a request, because the cursor carries them.
 `list` takes the same `signal` and `maxResponseBytes` as any call, and works with `pages` and `allPages`.
 
 Sub-collection lists use `call` by operation ID or their generated page method.

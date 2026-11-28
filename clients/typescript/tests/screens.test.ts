@@ -34,13 +34,15 @@ test('a path base resolves against the page origin and keeps the transport rule'
     new Transport({ baseUrl: '/registry', token: () => '' })
   })
   await withLocation('http://app.example.org', async () => {
-    assert.throws(() => new Transport({ baseUrl: '/registry', token: () => '' }), /Invalid registry base URL/u)
+    assert.throws(() => new Transport({ baseUrl: '/registry', token: () => '' }), /needs an https base URL/u)
     assert.throws(() => new Transport({ baseUrl: '/registry', token: () => '', allowInsecureHttp: true }),
-      /Invalid registry base URL/u)
+      /needs an https base URL/u)
+    assert.throws(() => new Transport({ baseUrl: '/registry', allowInsecureHttp: true }), /Invalid registry base URL/u)
   })
   await withLocation('http://portal:5173', async () => {
-    assert.throws(() => new Transport({ baseUrl: '/registry', token: () => '' }), /Invalid registry base URL/u)
-    new Transport({ baseUrl: '/registry', token: () => '', allowInsecureHttp: true })
+    assert.throws(() => new Transport({ baseUrl: '/registry', token: () => '' }), /needs an https base URL/u)
+    assert.throws(() => new Transport({ baseUrl: '/registry', token: () => '', allowInsecureHttp: true }), /needs an https base URL/u)
+    new Transport({ baseUrl: '/registry', allowInsecureHttp: true })
   })
   await withLocation('https://app.example.org', async () => {
     for (const bad of ['//evil.example.org', '/registry?x=1', '/registry#x', '/a b', '/\\evil.example.org',
@@ -96,6 +98,8 @@ test('describeError shows a fixed sentence for a code the client raised itself a
   // A programme replaces a sentence in the one table, and `detail` stays on the error.
   assert.equal(describeError(own('client.file-type'), { clientSentences: { 'client.file-type': 'Choisissez un PDF.' } }),
     'Choisissez un PDF.')
+  // An empty replacement never reaches the screen.
+  assert.equal(describeError(own('client.file-type'), { clientSentences: { 'client.file-type': '' } }), clientSentences['client.file-type'])
   assert.equal(describeError(own('client.other'), { clientSentences: Object.create({ 'client.other': 'Inherited.' }) }),
     clientFallbackSentence)
   assert.equal(own('client.file-type').detail, detail)

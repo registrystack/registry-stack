@@ -1,0 +1,119 @@
+{
+  "id": "prop-1",
+  "actionId": "correct-address",
+  "actionRevision": "rev-a",
+  "state": "submitted",
+  "turn": "party",
+  "submissionVersion": 1,
+  "revision": 5,
+  "title": "Correct address",
+  "createdAt": "2026-11-27T10:00:00.000000Z",
+  "input": {
+    "facilityId": "f-1",
+    "city": "Springfield"
+  },
+  "attachments": {
+    "supporting-document": {
+      "id": "supporting-document",
+      "required": true,
+      "maximumBytes": 1048576,
+      "contentTypes": [
+        "application/pdf"
+      ],
+      "classification": "internal",
+      "links": {
+        "download": {
+          "accessProfile": "facility-correction-author",
+          "method": "GET",
+          "operation": "download",
+          "path": "/v1/proposals/prop-1/attachments/supporting-document?submissionVersion=1",
+          "availability": {
+            "observedRevision": 3,
+            "available": true
+          }
+        }
+      },
+      "value": {
+        "submissionVersion": 1,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "byteSize": 4096,
+        "contentType": "application/pdf",
+        "verificationStatus": "notRequired"
+      }
+    }
+  },
+  "links": {
+    "self": {
+      "accessProfile": "facility-correction-author",
+      "method": "GET",
+      "operation": "get",
+      "path": "/v1/proposals/prop-1",
+      "availability": {
+        "observedRevision": 5,
+        "available": true
+      }
+    },
+    "edit": {
+      "accessProfile": "facility-correction-author",
+      "method": "POST",
+      "operation": "edit",
+      "path": "/v1/proposals/prop-1/edit",
+      "ifMatch": "\"etag-5\"",
+      "availability": {
+        "observedRevision": 5,
+        "available": false,
+        "reason": "stale-revision",
+        "recovery": "receipt-only"
+      }
+    },
+    "submit": {
+      "accessProfile": "facility-correction-author",
+      "method": "POST",
+      "operation": "submit",
+      "path": "/v1/proposals/prop-1/submit",
+      "ifMatch": "\"etag-5\"",
+      "availability": {
+        "observedRevision": 5,
+        "available": false,
+        "reason": "stale-revision",
+        "recovery": "receipt-only"
+      }
+    },
+    "revise": {
+      "accessProfile": "facility-correction-author",
+      "method": "POST",
+      "operation": "revise",
+      "path": "/v1/proposals/prop-1/revise",
+      "ifMatch": "\"etag-5\"",
+      "availability": {
+        "observedRevision": 5,
+        "available": false,
+        "reason": "package-changed",
+        "recovery": "rebase"
+      }
+    },
+    "cancel": {
+      "accessProfile": "facility-correction-author",
+      "method": "POST",
+      "operation": "cancel",
+      "path": "/v1/proposals/prop-1/cancel",
+      "ifMatch": "\"etag-5\"",
+      "availability": {
+        "observedRevision": 5,
+        "available": true
+      }
+    },
+    "rebase": {
+      "accessProfile": "facility-correction-author",
+      "method": "POST",
+      "operation": "rebase",
+      "path": "/v1/proposals/prop-1/rebase",
+      "ifMatch": "\"etag-5\"",
+      "availability": {
+        "observedRevision": 5,
+        "available": true
+      }
+    }
+  },
+  "blockedReason": "package-changed"
+}

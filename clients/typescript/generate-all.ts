@@ -23,10 +23,15 @@ const fixtures = {
 const services: Record<string, ServiceDescription> = {
   'breg-facility-documents-casework-evidence': {
     register: 'breg-facility', products: ['documents', 'casework', 'evidence'],
-    authorProfile: 'facility-registrar',
+    authorProfile: 'facility-correction-author',
+  },
+  'breg-minimal-casework': {
+    register: 'breg-minimal', products: ['casework'],
+    authorProfile: 'directory-editor',
   },
   'breg-facility-all-products': {
     register: 'breg-facility',
+    authorProfile: 'facility-correction-author',
     products: ['casework', 'coordinator', 'documents', 'evidence', 'evidence-oid4vci', 'messaging', 'scheduling'],
   },
 }

@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { registryClientHeader } from '../core.ts'
 import { Client as Facility } from '../generated/breg-facility.ts'
 import { Client as Minimal } from '../generated/breg-minimal.ts'
@@ -15,6 +17,10 @@ import {
 import {
   createRegistryClient as createAll, createRegistryServerClient as createAllServer,
 } from '../generated/services/breg-facility-all-products.ts'
+import {
+  createRegistryClient as createMinimal, createRegistryServerClient as createMinimalServer,
+} from '../generated/services/breg-minimal-casework.ts'
+import { fileURLToPath } from 'node:url'
 import { generateService } from '../generate-service.ts'
 
 const baseUrl = 'https://registry.example.org'
@@ -98,12 +104,13 @@ test('the server entry offers every installed product', () => {
   assert.ok(registry.coordinator instanceof Coordinator)
   assert.ok(registry.casework instanceof Casework)
   assert.ok(registry instanceof Facility)
-  assert.ok(!('proposals' in registry))
+  assert.equal(typeof registry.proposals.get, 'function')
 })
 
 test('only the installed products are present', () => {
   const registry = createThreeServer({ baseUrl, token: () => 'fixture' })
-  assert.ok(registry.documents instanceof Documents && registry.evidence instanceof Evidence)
+  assert.ok(registry.evidence instanceof Evidence)
+  assert.equal(typeof registry.documents.call, 'function')
   assert.ok(!('scheduling' in registry) && !('coordinator' in registry) && !('messaging' in registry))
 })
 
@@ -135,16 +142,96 @@ test('the generator refuses unknown products and a register that is not a BReg m
   assert.throws(() => generateService({ register: 'breg-facility', products: ['casework', 'casework'] }), /twice/u)
 })
 
-test('the generator is deterministic and names the hook point', () => {
-  const description = { register: 'breg-facility', products: ['casework', 'documents'] }
+test('the generator is deterministic and attaches the helpers in the generated file', () => {
+  const description = { register: 'breg-facility', products: ['casework', 'documents'], authorProfile: 'facility-correction-author' }
   const output = generateService(description)
   assert.equal(generateService(description), output)
-  assert.match(output, /HOOK POINT: task helpers/u)
-  assert.match(output, /must keep `call` reachable/u)
-  assert.match(output, /registry\.documents = documentCommands\(<the Document Store client>\)/u)
-  assert.match(output, /accessProfile: <the service's author profile, not set> \}\)/u)
-  assert.match(generateService({ ...description, authorProfile: 'facility-registrar' }),
-    /proposalCommands\(<the register client>, \{ accessProfile: "facility-registrar" \}\)/u)
+  assert.doesNotMatch(output, /HOOK POINT|withTaskHelpers/u)
+  assert.match(output, /proposals: proposalCommands\(register, \{ accessProfile: "facility-correction-author" \}\)/u)
+  assert.match(output, /documents: documentCommands\(new DocumentsClient\(transport\)\)/u)
+})
+
+test('the generated file attaches documentCommands only when the Document Store is installed', () => {
+  const output = generateService({ register: 'breg-facility', products: ['casework'], authorProfile: 'facility-correction-author' })
+  assert.doesNotMatch(output, /documentCommands/u)
+  assert.match(output, /proposalCommands/u)
+})
+
+test('a service that uses Proposals needs an author profile, and the refusal names the missing member', () => {
+  for (const register of ['breg-facility', 'breg-minimal']) {
+    assert.throws(() => generateService({ register, products: ['casework'] }), error =>
+      error instanceof Error && /authorProfile/u.test(error.message) && error.message.includes(register) && /Proposals/u.test(error.message))
+  }
+  assert.throws(() => generateService({ register: 'breg-facility', products: [], authorProfile: '' }), /authorProfile/u)
+})
+
+test('an author profile the register does not accept on its Proposal routes is refused at generation', () => {
+  assert.throws(() => generateService({ register: 'breg-facility', products: ['casework'], authorProfile: 'facility-registrar' }), error =>
+    error instanceof Error && error.message.includes('facility-registrar') && error.message.includes('facility-correction-author')
+      && error.message.includes('facility-correction-applier'))
+  assert.throws(() => generateService({ register: 'breg-minimal', products: [], authorProfile: 'facility-correction-author' }), /directory-editor/u)
+  generateService({ register: 'breg-facility', products: [], authorProfile: 'facility-correction-applier' })
+})
+
+test('a register has Proposals when its operations table says so, not when a string mentions them', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'register-source-'))
+  const source = join(directory, 'breg-quiet.ts')
+  writeFileSync(source, 'const note = JSON.parse("{\\"x\\":\\"proposals.read\\"}")\n')
+  const output = generateService({ register: 'breg-quiet', products: [] }, { registerSource: source })
+  assert.doesNotMatch(output, /proposalCommands/u)
+  writeFileSync(source, '  "proposals.get": { input: CallOptions & { query?: { "accessProfile"?: "quiet-author" } } }\n')
+  assert.throws(() => generateService({ register: 'breg-quiet', products: [] }, { registerSource: source }), /authorProfile/u)
+  assert.match(generateService({ register: 'breg-quiet', products: [], authorProfile: 'quiet-author' }, { registerSource: source }), /"quiet-author"/u)
+})
+
+test('a register with no Proposal operations needs no author profile and attaches no proposals', () => {
+  const output = generateService({ register: 'breg-list', products: ['documents'] },
+    { registerSource: fileURLToPath(new URL('./fixtures/breg-list.ts', import.meta.url)) })
+  assert.doesNotMatch(output, /proposalCommands|proposals:/u)
+  assert.match(output, /documentCommands/u)
+})
+
+test('every example author profile is one its generated register accepts on every Proposal read', () => {
+  const files = readdirSync(new URL('../generated/services/', import.meta.url)).filter(name => name.endsWith('.ts'))
+  assert.ok(files.length >= 3)
+  for (const file of files) {
+    const service = readFileSync(new URL('../generated/services/' + file, import.meta.url), 'utf8')
+    const profile = /proposalCommands\(register, \{ accessProfile: "([^"]+)" \}\)/u.exec(service)?.[1]
+    assert.ok(profile, `${file} names an author profile`)
+    const module = /^\/\/ Register: (breg-[a-z0-9-]+)\./mu.exec(service)![1]!
+    const register = readFileSync(new URL(`../generated/${module}.ts`, import.meta.url), 'utf8')
+    for (const operation of ['proposals.get', 'proposals.list']) {
+      const line = register.split('\n').find(row => row.startsWith(`  "${operation}": `))
+      assert.ok(line, operation)
+      const accepted = /"accessProfile"\??: ([^;}]+)/u.exec(line)![1]!
+      assert.ok(accepted.split('|').map(item => item.trim().replaceAll('"', '')).includes(profile), `${file} ${operation} accepts ${accepted}`)
+    }
+  }
+})
+
+test('both entries attach the task helpers: proposals under the author profile, documents with its typed calls', async () => {
+  for (const create of [createThree, options => createThreeServer({ ...options, token: () => 'fixture' })] satisfies
+    Array<(options: Parameters<typeof createThree>[0]) => { proposals: { get(id: string): Promise<unknown> }; documents: { upload: unknown; call: unknown } }>) {
+    const { seen, fetch } = recording()
+    const registry = create({ baseUrl, fetch })
+    assert.equal(typeof registry.documents.upload, 'function')
+    assert.equal(typeof registry.documents.call, 'function')
+    await registry.proposals.get('prop-1').catch(ignore)
+    await registry.documents.call('health').catch(ignore)
+    const sent = new URL(seen[0]!.url)
+    assert.equal(sent.pathname, '/v1/proposals/prop-1')
+    assert.equal(sent.searchParams.get('accessProfile'), 'facility-correction-author')
+  }
+})
+
+test('a service without the Document Store has no documents member, in the type and at run time', () => {
+  for (const registry of [createMinimal({ baseUrl }), createMinimalServer({ baseUrl, token: () => 'fixture' })]) {
+    assert.ok(!('documents' in registry))
+    assert.equal(typeof registry.proposals.start, 'function')
+    assert.equal(typeof registry.casework.call, 'function')
+    // @ts-expect-error this service does not install the Document Store
+    void registry.documents
+  }
 })
 
 // Type-checked by `npm run check:types`, never called: each service's object is typed to its
@@ -181,7 +268,7 @@ test('a route that requires an access profile refuses locally when neither the c
     Array<(options: Parameters<typeof createThree>[0]) => Pick<Facility, 'call'>>) {
     const { seen, fetch } = recording()
     const registry = create({ baseUrl, fetch })
-    const refusal = { name: 'TypeError', message: 'This list needs an access profile' }
+    const refusal = { name: 'TypeError', message: 'This call needs an access profile' }
     await assert.rejects(registry.call('proposals.list'), refusal)
     await assert.rejects(registry.call('proposals.get', { path: { proposal_id: 'p' } }), refusal)
     await assert.rejects(registry.call('proposals.list', { query: {} }), refusal)

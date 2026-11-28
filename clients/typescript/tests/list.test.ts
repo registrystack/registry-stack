@@ -240,11 +240,36 @@ void typeChecks
 test('continuation skips required filters and refuses new query options before dispatch', async () => {
   const { urls, client } = recording()
   await client.list('licence', { accessProfile: 'licence-holder', after: 'cursor' })
-  for (const extra of [{ where: { holderId } }, { orderBy: 'expiresOn' }, { select: ['status'] }, { count: false }]) {
+  for (const extra of [{ where: { holderId } }, { orderBy: 'expiresOn' }, { select: ['status'] }, { count: false }, { top: 5 }]) {
     await assert.rejects(client.list('licence', { accessProfile: 'licence-holder', after: 'private', ...extra } as never),
-      { name: 'TypeError', message: 'Use after without where, orderBy, select or count.' })
+      { name: 'TypeError', message: 'Use after without where, orderBy, select, count or top.' })
   }
+  await assert.rejects(client.list('licence', { accessProfile: 'licence-holder', after: '' }),
+    { name: 'TypeError', message: 'Use a nonempty cursor for after.' })
   assert.deepEqual(urls.map(query), [{ accessProfile: 'licence-holder', $skiptoken: 'cursor' }])
+})
+
+test('a list that requires its profile refuses without one, even when it publishes only one', async () => {
+  const { client, urls } = recording()
+  await assert.rejects(client.list('permit', {} as never), { name: 'TypeError', message: 'This list needs an access profile' })
+  assert.equal(urls.length, 0)
+  await client.list('permit', { accessProfile: 'permit-clerk' })
+  assert.deepEqual(urls.map(query), [{ accessProfile: 'permit-clerk' }])
+})
+
+test('a client default the record type does not publish is refused with a message that says so', async () => {
+  const unpublished = { name: 'TypeError', message: "The client's default access profile is not one this record type publishes, so name one on the call." }
+  const { client, urls } = recording(undefined, 'licence-officer')
+  await assert.rejects(client.list('permit', {} as never), unpublished)
+  await assert.rejects(client.list('permit', { after: 'cursor' } as never), unpublished)
+  assert.equal(urls.length, 0)
+  const facility = make(FacilityClient, { baseUrl, token: () => 'fixture', profile: 'facility-reader', fetch: async () => { throw new Error('nothing is sent') } })
+  await assert.rejects(facility.list('directory-entry'), unpublished)
+  await assert.rejects(facility.read('directory-entry', holderId), { name: 'TypeError', message: "The client's default access profile is not one this record type publishes, so name one on the call." })
+  // A profile the call names itself keeps the plain message.
+  await assert.rejects(facility.list('directory-entry', { accessProfile: 'private' } as never), { name: 'TypeError', message: 'Unknown access profile' })
+  await assert.rejects(facility.read('directory-entry', holderId, { accessProfile: 'private' } as never),
+    { name: 'TypeError', message: 'Unknown access profile for reading directory-entry.' })
 })
 
 test('list and read return the same facility row and preserve the sub-collection methods', async () => {
@@ -296,6 +321,8 @@ function readTypeChecks(client: FacilityClient, licence: Client) {
   void client.list('records.facility.path.operators')
   // @ts-expect-error a continuation carries the original filters
   void licence.list('licence', { accessProfile: 'licence-officer', after: 'cursor', count: false })
+  // @ts-expect-error a continuation keeps the first page's size, so it takes no top
+  void licence.list('licence', { accessProfile: 'licence-officer', after: 'cursor', top: 50 })
   void client.read('facility', holderId, { accessProfile: 'proposal-reviewer' }).then(row => {
     const name: string | undefined = row.data.name
     // @ts-expect-error the facility row only exposes declared domain fields

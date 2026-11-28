@@ -1,0 +1,13 @@
+{
+  "items": [
+    {
+      "id": "licence-evidence",
+      "version": "1",
+      "label": "Licence evidence",
+      "maximumDocumentBytes": 1024,
+      "allowedContentTypes": ["application/pdf", "image/png"],
+      "grantExpiryHours": 24,
+      "maximumGrantExpiryHours": 72
+    }
+  ]
+}

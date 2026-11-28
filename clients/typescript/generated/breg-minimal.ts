@@ -42,7 +42,7 @@ export interface ListRows {
   "contact": ({ "domainData": ({ "email"?: (string); "jurisdiction"?: (string); "name"?: (string) }); "recordIdentifier": (string); "revisionIdentifier": (string) })
 }
 export interface ListOptions {
-  "contact": (CallOptions & { accessProfile?: "directory-editor"; where?: never; orderBy?: never; select?: ReadonlyArray<"email" | "jurisdiction" | "name">; count?: never; top?: number; after?: never }) | (CallOptions & { accessProfile?: "directory-editor"; after: string; where?: never; orderBy?: never; select?: never; count?: never; top?: number })
+  "contact": (CallOptions & { accessProfile?: "directory-editor"; where?: never; orderBy?: never; select?: ReadonlyArray<"email" | "jurisdiction" | "name">; count?: never; top?: number; after?: never }) | (CallOptions & { accessProfile?: "directory-editor"; after: string; where?: never; orderBy?: never; select?: never; count?: never; top?: never })
 }
 const listRules: Record<string, ListRules & { operation: string }> = JSON.parse("{\"contact\":{\"operation\":\"records.contact.list\",\"requiresAccessProfile\":false,\"accessProfileParameter\":true,\"recordProperties\":[\"email\",\"jurisdiction\",\"name\"],\"profiles\":{\"directory-editor\":{\"maximumPageSize\":100,\"allowCount\":false,\"selectable\":[\"email\",\"jurisdiction\",\"name\"],\"filterable\":{},\"sortable\":{}}}}}")
 
@@ -203,8 +203,8 @@ export class Client {
     const rules = Object.hasOwn(listRules, recordType) ? listRules[recordType] : undefined
     if (!rules) throw new TypeError("Unknown record type for list")
     const { accessProfile, where, orderBy, select, count, top, after, ...call } = options
-    if (after !== undefined && [where, orderBy, select, count].some(value => value !== undefined)) {
-      throw new TypeError("Use after without where, orderBy, select or count.")
+    if (after !== undefined && [where, orderBy, select, count, top].some(value => value !== undefined)) {
+      throw new TypeError("Use after without where, orderBy, select, count or top.")
     }
     if (after !== undefined && (typeof after !== "string" || !after)) throw new TypeError("Use a nonempty cursor for after.")
     const query = listQuery(rules, options, after, this.#transport.profile)
@@ -222,7 +222,7 @@ export class Client {
     if (accessProfile !== undefined) {
       if (!route.takesProfile) throw new TypeError("Reading " + recordType + " takes no access profile.")
       if (typeof accessProfile !== "string" || (route.profiles && !route.profiles.includes(accessProfile))) {
-        throw new TypeError("Unknown access profile for reading " + recordType + ".")
+        throw new TypeError(explicitProfile === undefined ? "The client's default access profile is not one this record type publishes, so name one on the call." : "Unknown access profile for reading " + recordType + ".")
       }
     }
     const { data } = await this.#call<{ data: RecordEnvelope }>(route.operation, { ...call, path: { record_id: id }, query: { accessProfile } })

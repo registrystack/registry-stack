@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPT = ROOT / "products" / "platform" / "scripts" / "check-client-contract.py"
+SCRIPT = ROOT / "products" / "platform" / "scripts" / "check-client-assumptions.py"
 
 GENERATOR = "const inputs = {\n  casework: 'casework/generated/casework.openapi.json',\n}\n"
 CLEAN_DOCUMENT = {
@@ -84,9 +85,44 @@ class CheckClientContract(unittest.TestCase):
         (self.root / "products/casework/generated/casework.openapi.json").unlink()
         self.assertEqual(run(self.root).returncode, 2)
 
-    def test_the_repository_documents_pass(self) -> None:
+    def test_a_session_code_as_a_default_fails(self) -> None:
+        document = json.loads(json.dumps(CLEAN_DOCUMENT))
+        document["components"]["schemas"]["Problem"]["properties"]["code"] = {"default": "session.x"}
+        self.document(document)
+        self.assert_refused("session.x")
+
+    def test_every_table_entry_is_read_whatever_its_quotes(self) -> None:
+        self.write(
+            "clients/typescript/generate-all.ts",
+            "const inputs = {\n  // a comment with a } in it\n  casework: 'casework/generated/casework.openapi.json',\n"
+            '  "breg-facility": "breg/generated/facility.openapi.json",\n}\n',
+        )
+        bad = json.loads(json.dumps(CLEAN_DOCUMENT))
+        bad["paths"]["/v1/items"]["get"]["responses"]["302"] = {"description": "moved"}
+        self.write("products/breg/generated/facility.openapi.json", json.dumps(bad))
+        self.assert_refused("breg/generated/facility.openapi.json: GET /v1/items declares 302")
+        self.write("products/breg/generated/facility.openapi.json", json.dumps(CLEAN_DOCUMENT))
+        result = run(self.root)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("2 documents", result.stdout)
+
+    def test_a_table_line_that_names_no_document_is_an_error(self) -> None:
+        self.write(
+            "clients/typescript/generate-all.ts",
+            "const inputs = {\n  casework: 'casework/generated/casework.openapi.json',\n  odd: casework.path,\n}\n",
+        )
+        result = run(self.root)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("odd: casework.path", result.stderr)
+
+    def test_the_repository_documents_pass_and_all_are_read(self) -> None:
         result = run(ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        source = (ROOT / "clients" / "typescript" / "generate-all.ts").read_text(encoding="utf-8")
+        table = source[source.index("const inputs = {") :].split("\n}", 1)[0]
+        entries = len(re.findall(r"\.json['\"]", table))
+        self.assertGreater(entries, 1)
+        self.assertIn(f"{entries} documents", result.stdout)
 
 
 if __name__ == "__main__":

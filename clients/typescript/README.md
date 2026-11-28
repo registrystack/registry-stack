@@ -47,10 +47,13 @@ A product module exports its `Client` class and types, and no factory. A
 
 Both entry points accept `profile` as a default for routes with an
 `accessProfile` query parameter. An explicit `accessProfile` on a call takes
-precedence. Routes without that parameter receive no default. A route whose
-`accessProfile` parameter is required, whether called with `call()`, `invoke`,
-`targetConditions`, `list` or `read`, refuses with a `TypeError` before anything
-is sent when neither the call nor the client names a profile. See
+precedence. Routes without that parameter receive no default. The default
+reaches every route that takes the parameter. `list` and `read` refuse before
+sending when a record type does not publish the default, and say so. Name a
+profile on that call. `call()` sends the default, and the register decides. A
+route whose `accessProfile` parameter is required refuses with a `TypeError`
+before anything is sent when neither the call nor the client names a profile.
+This holds for `call()`, `invoke`, `targetConditions`, `list` and `read`. See
 [the service tests](tests/service.test.ts).
 
 The server entry refuses to construct where `globalThis.document` exists, with a
@@ -60,11 +63,13 @@ keeps Coordinator, Messaging and OID4VCI server-only, in the type and at run tim
 `createRegistryClient` and `createRegistryServerClient` have no audience
 parameter yet.
 
-Task helpers attach at one marked place, the `withTaskHelpers` function in the
-generated file. They are `proposalCommands` and `documentCommands`, and the
-comment there shows the two lines that attach them. The service description
-takes an optional `authorProfile` for the proposals helper. Until they exist `registry.documents` is the Document Store's
-typed operation client, and `registry.proposals` is absent.
+The generated file attaches the task helpers. `registry.proposals` is `proposalCommands` over the
+register client, under the `authorProfile` of the service description, and `registry.documents` is
+`documentCommands` over the Document Store client when that product is installed. It keeps the Document
+Store's typed `call` and page methods, so every other operation stays reachable. A service
+without the Document Store has no `documents` member, in the type and at run time. The generator refuses
+a register that has Proposals when the description gives no `authorProfile`, and the message names the
+missing member. The command line takes it as `--author-profile`.
 
 ## Create a credential offer
 
@@ -86,7 +91,9 @@ const { data } = await registry.oid4vci.call('createCredentialOffer', {
 const offerUri = data.credentialOfferUri
 ```
 
-The module also types `createDraft13CredentialOffer`, `health` and `readiness`.
+The module also types `createDraft13CredentialOffer`. It has no `health` or `readiness`:
+every module of a service shares one base URL, so those calls would reach whichever
+module the gateway maps `/health` to.
 Wallet exchanges and discovery metadata use the OID4VCI protocol directly.
 
 ## Generate a service
@@ -116,13 +123,32 @@ Compact Evidence credentials have `data.text` and
 policy before using its assertion.
 
 Use HTTPS for a remote registry. HTTP is accepted for `localhost`, IPv4
-loopback, and IPv6 loopback. `localhost` resolves through the operating system.
-With `allowInsecureHttp: true`, HTTP is also accepted for a host that cannot be
-on the public internet. That is a private or link-local IP address in
-`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `fc00::/7` or
-`fe80::/10`. It is also a host name without a dot, such as a container name on
-a compose network. HTTP to any other host is refused when the client is built,
-before any token is asked for, with or without the option.
+loopback, and IPv6 loopback, with or without a `token`. `localhost` resolves
+through the operating system.
+A client with a `token` never sends it over plain HTTP beyond loopback. That
+configuration is refused when the client is built, before any token is asked for.
+With `allowInsecureHttp: true`, a client with no `token` (a page, or a service that
+only makes signed calls) may use HTTP to a host that cannot be on the public
+internet. That is a private IP address in `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16` or `fc00::/7`, or a host name without a dot, such as a container
+name on a compose network. The client does not resolve names or check what they
+resolve to. Link-local addresses (`169.254.0.0/16`, `fe80::/10`) are refused over
+HTTP in every mode. A base that names a cloud metadata literal (`169.254.169.254`,
+`100.100.100.200`, `fd00:ec2::254`), the `0.0.0.0/8` block, `::` or a multicast
+address is refused under HTTPS too, in its IPv4-mapped, NAT64 and IPv4-compatible
+IPv6 spellings as well. Loopback means `127.0.0.0/8`, `::1` and `localhost` as
+written: an IPv4-mapped loopback literal such as `[::ffff:7f00:1]` is not loopback. HTTP to any other host is refused when the client is
+built, with or without the option.
+
+The way out for a client with a token is HTTPS or loopback. On a container
+network (Compose), put a TLS hop in front of the module and give the runtime its
+CA, or call through a gateway's HTTPS listener. In Supabase's edge runtime, set
+`DENO_TLS_CA_STORE=mozilla,system` and `SSL_CERT_FILE=/ca/ca.crt` on the functions
+service, with the deployment's CA mounted read-only at `/ca/ca.crt`. No function
+code changes. `DENO_CERT` does not work, and `SSL_CERT_FILE` alone does not work
+without the store setting. As a code fallback, use
+`Deno.createHttpClient({ caCerts: [pem] })` with the PEM taken from an
+environment variable, because a user worker cannot read a mounted file.
 Supply a base without credentials, query, fragment, or `.` and `..` segments
 (plain or percent-encoded). A path prefix is preserved. In a browser the base
 can be a path such as `/registry`. It resolves against
@@ -185,8 +211,9 @@ registry answers a cross-origin page call, and the browser refuses one. A page
 client whose base is an absolute URL on another origin refuses the call with a
 `TypeError` before anything is sent. The page's own origin must not redirect a
 registry route to another place. A redirect would carry the request, its body and
-its `Idempotency-Key` along with it. The client refuses a redirected answer, and a
-request's idempotency key makes a replay to the same URL harmless.
+its `Idempotency-Key` along with it. The client refuses a redirected answer. For a
+keyed operation, the idempotency key makes a 307 or 308 replay to the same URL
+harmless. A 303 replays as a GET with no body.
 
 - The client sends no `Authorization` header.
 - Fetch sends cookies with `credentials: 'same-origin'`, so they go to the
@@ -347,14 +374,15 @@ if (page.nextCursor !== null) {
   profile takes precedence. The client checks filters against the resolved profile.
 - A profile with `requiredFilters` lists only when `where` holds an equality
   filter on every property of one alternative. An `in` list does not count.
-- The types enforce these rules, and the client checks them again before it
-  sends anything. A refusal is a `TypeError` naming the property and profile,
+- When the call names its profile, the types enforce these rules. The client checks
+  the resolved profile before it sends anything. A refusal is a `TypeError` naming the property and profile,
   never a filter value.
 - The answer is `{ items, nextCursor }`, plus `count` when the answer carries
   it. A null cursor ends the list. With `after`, keep the same access profile.
   If the first page used the default, omit `accessProfile` again. If it named
   a profile, repeat that profile.
-  The client refuses `where`, `orderBy`, `select` and `count` alongside `after`.
+  The client refuses `where`, `orderBy`, `select`, `count` and `top` alongside `after`,
+  because the cursor carries them.
   The continuation sends only the access profile and the cursor.
 - Sub-collection lists use `call` by operation ID or their generated page method.
 
