@@ -68,17 +68,6 @@ fn scope_claim(case: &FixtureCase) -> &'static str {
     }
 }
 
-/// The first scope the fixture carries in the claim the configuration names.
-fn read_scope(case: &FixtureCase, claim: &str) -> String {
-    match case.fixture.claims.get(claim) {
-        Some(ClaimValue::Literal(Value::String(text))) => text.split_whitespace().next(),
-        Some(ClaimValue::Literal(Value::Array(items))) => items.first().and_then(Value::as_str),
-        _ => None,
-    }
-    .unwrap_or(PLACEHOLDER_SCOPE)
-    .to_owned()
-}
-
 fn write_private(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).expect("write a private file");
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("restrict the file");
@@ -115,7 +104,10 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
         &serde_json::to_vec(&static_key_set(&case.jwks)).expect("a key set"),
     );
     let claim = scope_claim(&case);
-    let scope = read_scope(&case, claim);
+    let scope = case
+        .fixture
+        .read_scope(claim)
+        .unwrap_or_else(|| PLACEHOLDER_SCOPE.to_owned());
     let runtime_path = root.path().join("runtime.json");
     fs::write(
         &runtime_path,

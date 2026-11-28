@@ -672,6 +672,251 @@ pub async fn run_configured(
     }
 }
 
+/// The table privileges the runtime role needs for a deployment, by table:
+/// the journal and the migration ledger always, idempotency state when it
+/// serves a write, the artifact fence when it declares an asynchronous or
+/// resumable write, and the checkpoint bindings when it declares a resumable
+/// write. Startup grants those the runtime role lacks and then checks them all.
+fn runtime_requirements(
+    serves_write: bool,
+    declares_recovery: bool,
+    declares_resume: bool,
+) -> Vec<(&'static str, &'static [&'static str])> {
+    let mut required: Vec<(&'static str, &'static [&'static str])> = vec![
+        ("adapter_journal_events", &journal::RUNTIME_PRIVILEGES),
+        ("adapter_schema_migrations", &["SELECT"]),
+    ];
+    if serves_write {
+        required.extend(idempotent::WRITE_RUNTIME_GRANTS);
+    }
+    if declares_recovery {
+        required.push(idempotent::RECOVERY_RUNTIME_GRANTS);
+    }
+    if declares_resume {
+        required.push(idempotent::RESUME_RUNTIME_GRANTS);
+    }
+    required
+}
+
+/// The advisory-lock key the grant step holds for its transaction, so
+/// replicas starting together do not rewrite the same catalog rows at once.
+/// Its ASCII bytes spell `adap_gnt`.
+const GRANT_LOCK_KEY: i64 = 0x6164_6170_5f67_6e74;
+
+/// A PostgreSQL identifier, quoted.
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+/// The server's own message for a failed statement, without its position or
+/// the statement text.
+fn database_message(error: &tokio_postgres::Error) -> String {
+    error
+        .as_db_error()
+        .map_or_else(|| error.to_string(), |db| db.message().to_owned())
+}
+
+fn grant_error(error: &tokio_postgres::Error) -> ServeError {
+    ServeError::Configuration(format!("database grants: {}", database_message(error)))
+}
+
+/// The `privileges` that `grantee` lacks on `relation` (an already-quoted,
+/// schema-qualified name), in the given order; all of them when the relation
+/// does not exist.
+async fn missing_for(
+    transaction: &tokio_postgres::Transaction<'_>,
+    grantee: &str,
+    relation: &str,
+    privileges: &[&'static str],
+) -> Result<Vec<&'static str>, tokio_postgres::Error> {
+    let names = privileges.to_vec();
+    let held = transaction
+        .query(
+            "SELECT coalesce(has_table_privilege($1, to_regclass($2), privilege), false) \
+             FROM unnest($3::text[]) WITH ORDINALITY AS wanted(privilege, position) \
+             ORDER BY position",
+            &[&grantee, &relation, &names],
+        )
+        .await?;
+    Ok(privileges
+        .iter()
+        .zip(held.iter())
+        .filter(|(_, row)| !row.get::<_, bool>(0))
+        .map(|(privilege, _)| *privilege)
+        .collect())
+}
+
+/// Everything `grantee` still lacks of `required` and of `USAGE` on `schema`,
+/// as "PRIVILEGES on object" phrases.
+async fn lacking(
+    transaction: &tokio_postgres::Transaction<'_>,
+    grantee: &str,
+    schema: &str,
+    required: &[(&'static str, &'static [&'static str])],
+) -> Result<Vec<String>, tokio_postgres::Error> {
+    let mut lacking = Vec::new();
+    for (table, privileges) in required {
+        let missing = missing_for(
+            transaction,
+            grantee,
+            &format!("{schema}.{table}"),
+            privileges,
+        )
+        .await?;
+        if !missing.is_empty() {
+            lacking.push(format!("{} on {table}", missing.join(", ")));
+        }
+    }
+    let usage: bool = transaction
+        .query_one(
+            "SELECT has_schema_privilege($1, current_schema(), 'USAGE')",
+            &[&grantee],
+        )
+        .await?
+        .get(0);
+    if !usage {
+        lacking.push(format!("USAGE on schema {schema}"));
+    }
+    Ok(lacking)
+}
+
+/// Grant `grantee`, the runtime session's own role, each privilege in
+/// `required` it lacks and `USAGE` on the schema the migrations ran in, from
+/// the migration session in one transaction under an advisory lock. A start
+/// that finds everything in place issues no GRANT. Nothing beyond `required`
+/// is granted: no default privileges, no grant on the idempotency migration
+/// ledger.
+///
+/// When something is missing and the role has members, no grant is made,
+/// because they would inherit it: the privilege check that follows then
+/// decides, as it does for a hand-granted deployment. A member that holds
+/// ADMIN OPTION on the role and has no members of its own does not count. It
+/// already controls the role, as the role that created it does when
+/// `adapterctl provision` runs. PostgreSQL ignores or refuses a GRANT the
+/// migration role has no right to make, so each privilege is checked again
+/// before the commit, and a shortfall rolls everything back.
+///
+/// Returns whether `grantee` ends holding everything `required` names: false
+/// when the members rule made no grant.
+async fn grant_runtime_privileges(
+    client: &mut deadpool_postgres::Client,
+    grantee: &str,
+    required: &[(&'static str, &'static [&'static str])],
+) -> Result<bool, ServeError> {
+    let transaction = client.transaction().await.map_err(|e| grant_error(&e))?;
+    transaction
+        .query_one("SELECT pg_advisory_xact_lock($1)", &[&GRANT_LOCK_KEY])
+        .await
+        .map_err(|e| grant_error(&e))?;
+    let schema: Option<String> = transaction
+        .query_one("SELECT quote_ident(current_schema())", &[])
+        .await
+        .map_err(|e| grant_error(&e))?
+        .get(0);
+    let schema = schema.ok_or_else(|| {
+        ServeError::Configuration(
+            "database: the migration role's search path names no schema to grant USAGE on"
+                .to_owned(),
+        )
+    })?;
+    let missing = lacking(&transaction, grantee, &schema, required)
+        .await
+        .map_err(|e| grant_error(&e))?;
+    if missing.is_empty() {
+        transaction.rollback().await.map_err(|e| grant_error(&e))?;
+        return Ok(true);
+    }
+    let has_members: bool = transaction
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM pg_auth_members m \
+                            JOIN pg_roles r ON r.oid = m.roleid \
+                            WHERE r.rolname = $1 \
+                              AND m.member NOT IN (SELECT a.member FROM pg_auth_members a \
+                                                   WHERE a.roleid = r.oid AND a.admin_option \
+                                                     AND NOT EXISTS (SELECT 1 FROM pg_auth_members g \
+                                                                     WHERE g.roleid = a.member)))",
+            &[&grantee],
+        )
+        .await
+        .map_err(|e| grant_error(&e))?
+        .get(0);
+    if has_members {
+        tracing::warn!(
+            role = grantee,
+            "the runtime role has members, so no privilege is granted to it automatically"
+        );
+        transaction.rollback().await.map_err(|e| grant_error(&e))?;
+        return Ok(false);
+    }
+    let mut granted = 0_usize;
+    let quoted_grantee = quote_identifier(grantee);
+    for (table, privileges) in required {
+        let missing = missing_for(
+            &transaction,
+            grantee,
+            &format!("{schema}.{table}"),
+            privileges,
+        )
+        .await
+        .map_err(|e| grant_error(&e))?;
+        if missing.is_empty() {
+            continue;
+        }
+        granted += missing.len();
+        let missing = missing.join(", ");
+        transaction
+            .batch_execute(&format!(
+                "GRANT {missing} ON TABLE {schema}.{table} TO {quoted_grantee}"
+            ))
+            .await
+            .map_err(|error| {
+                ServeError::Configuration(format!(
+                    "database: could not grant {missing} on {table} to the runtime role: {}",
+                    database_message(&error)
+                ))
+            })?;
+    }
+    let usage: bool = transaction
+        .query_one(
+            "SELECT has_schema_privilege($1, current_schema(), 'USAGE')",
+            &[&grantee],
+        )
+        .await
+        .map_err(|e| grant_error(&e))?
+        .get(0);
+    if !usage {
+        granted += 1;
+        transaction
+            .batch_execute(&format!(
+                "GRANT USAGE ON SCHEMA {schema} TO {quoted_grantee}"
+            ))
+            .await
+            .map_err(|error| {
+                ServeError::Configuration(format!(
+                    "database: could not grant USAGE on schema {schema} to the runtime role: {}",
+                    database_message(&error)
+                ))
+            })?;
+    }
+    let still_lacking = lacking(&transaction, grantee, &schema, required)
+        .await
+        .map_err(|e| grant_error(&e))?;
+    if !still_lacking.is_empty() {
+        transaction.rollback().await.map_err(|e| grant_error(&e))?;
+        return Err(ServeError::Configuration(format!(
+            "database: after its grants the runtime role still lacks {}; PostgreSQL ignores or refuses a grant the migration role has no right to make, most likely because the migration role does not own the object, so the grants were rolled back (https://docs.registrystack.org/operate/adapter/#grant-the-runtime-database-role says what to grant by hand)",
+            still_lacking.join("; lacks ")
+        )));
+    }
+    transaction.commit().await.map_err(|e| grant_error(&e))?;
+    tracing::info!(
+        role = grantee,
+        privileges = granted,
+        "granted the runtime role the privileges it lacked"
+    );
+    Ok(true)
+}
+
 async fn run_facade(
     project_directory: &std::path::Path,
     profile_path: Option<&std::path::Path>,
@@ -738,8 +983,42 @@ async fn run_facade(
                 .to_owned(),
         ));
     }
+    let declares_recovery = loaded
+        .served
+        .iter()
+        .any(|served| served.async_completion.is_some() || served.resume.is_some());
+    let declares_resume = loaded.served.iter().any(|served| served.resume.is_some());
+    // A configuration this refuses grants nothing: it settles before any
+    // database work.
+    let response_retention_seconds = if serves_write {
+        let retention = loaded.runtime.idempotency.ok_or_else(|| {
+            ServeError::Configuration(
+                "idempotency.responseRetentionSeconds is required when a write is served"
+                    .to_owned(),
+            )
+        })?;
+        let seconds = retention.response_retention_seconds.get();
+        if loaded.served.iter().any(|served| {
+            served
+                .write_support
+                .as_ref()
+                .is_some_and(|support| source_replay_window_seconds(support) < seconds)
+        }) {
+            return Err(ServeError::Configuration(
+                "a source write replay window is shorter than idempotency.responseRetentionSeconds; increase the source replayWindowSeconds or reduce response retention"
+                    .to_owned(),
+            ));
+        }
+        Some(seconds)
+    } else {
+        None
+    };
     let shutdown = shutdown_signal()?;
     let migration = pool(&loaded.runtime.database, &loaded.resolver, true)?;
+    let journal = pool(&loaded.runtime.database, &loaded.resolver, false)?;
+    // Whether the grant step found the runtime role holding everything the
+    // deployment requires in the schema the migrations ran in.
+    let mut grants_verified = false;
     {
         let mut client = migration
             .get()
@@ -751,13 +1030,32 @@ async fn run_facade(
         idempotent::migrate(&mut client).await.map_err(|error| {
             ServeError::Configuration(format!("idempotency migration: {error}"))
         })?;
+        // The grantee is the role the runtime session proves it holds, read
+        // before any grant: a runtime URL naming `public`, a role that cannot
+        // log in or a wrong password fails here, and the URL's text never
+        // chooses who receives privileges.
+        let runtime_role: String = journal
+            .get()
+            .await
+            .map_err(|error| ServeError::Configuration(format!("database runtime: {error}")))?
+            .query_one("SELECT current_user::text", &[])
+            .await
+            .map_err(|error| ServeError::Configuration(format!("database runtime: {error}")))?
+            .get(0);
+        let migration_role: String = client
+            .query_one("SELECT current_user::text", &[])
+            .await
+            .map_err(|error| ServeError::Configuration(format!("database: {error}")))?
+            .get(0);
+        if runtime_role != migration_role {
+            grants_verified = grant_runtime_privileges(
+                &mut client,
+                &runtime_role,
+                &runtime_requirements(serves_write, declares_recovery, declares_resume),
+            )
+            .await?;
+        }
     }
-    let journal = pool(&loaded.runtime.database, &loaded.resolver, false)?;
-    let declares_recovery = loaded
-        .served
-        .iter()
-        .any(|served| served.async_completion.is_some() || served.resume.is_some());
-    let declares_resume = loaded.served.iter().any(|served| served.resume.is_some());
     {
         // A runtime role that lacks a grant this deployment uses is refused
         // here, not at its first journal write, write claim or retention tick.
@@ -765,19 +1063,7 @@ async fn run_facade(
             .get()
             .await
             .map_err(|error| ServeError::Configuration(format!("database runtime: {error}")))?;
-        let mut required: Vec<(&str, &[&'static str])> = vec![
-            ("adapter_journal_events", &journal::RUNTIME_PRIVILEGES),
-            ("adapter_schema_migrations", &["SELECT"]),
-        ];
-        if serves_write {
-            required.extend(idempotent::WRITE_RUNTIME_GRANTS);
-        }
-        if declares_recovery {
-            required.push(idempotent::RECOVERY_RUNTIME_GRANTS);
-        }
-        if declares_resume {
-            required.push(idempotent::RESUME_RUNTIME_GRANTS);
-        }
+        let required = runtime_requirements(serves_write, declares_recovery, declares_resume);
         let mut lacking = Vec::new();
         for (table, privileges) in required {
             let missing = journal::missing_table_privileges(&client, table, privileges)
@@ -790,44 +1076,26 @@ async fn run_facade(
             }
         }
         if !lacking.is_empty() {
+            let remedy = if grants_verified {
+                "the role holds them in the schema the migrations ran in, so the runtime session's search path most likely resolves a different schema; point the runtime database URL's search path at the migration schema"
+            } else {
+                "grant them to the runtime role"
+            };
             return Err(ServeError::Configuration(format!(
-                "database: the runtime role lacks {}; grant them to the runtime role (https://docs.registrystack.org/operate/adapter/#grant-the-runtime-database-role lists every grant)",
+                "database: the runtime role lacks {}; {remedy} (https://docs.registrystack.org/operate/adapter/#grant-the-runtime-database-role lists every grant)",
                 lacking.join("; lacks "),
             )));
         }
     }
     let journal_window = journal_retention(loaded.runtime.audit.retention_days.get());
     let journal_sweep_pool = journal.clone();
-    let idempotency = match (serves_write, loaded.runtime.idempotency) {
-        (true, Some(retention)) => {
-            let response_retention_seconds = retention.response_retention_seconds.get();
-            if loaded.served.iter().any(|served| {
-                served.write_support.as_ref().is_some_and(|support| {
-                    source_replay_window_seconds(support) < response_retention_seconds
-                })
-            }) {
-                return Err(ServeError::Configuration(
-                    "a source write replay window is shorter than idempotency.responseRetentionSeconds; increase the source replayWindowSeconds or reduce response retention"
-                        .to_owned(),
-                ));
-            }
-            Some((
-                PostgresIdempotencyStore::new(
-                    journal.clone(),
-                    Duration::from_secs(response_retention_seconds),
-                )
-                .map_err(|error| ServeError::Configuration(format!("idempotency: {error}")))?,
-                Duration::from_secs(response_retention_seconds),
-            ))
-        }
-        (true, None) => {
-            return Err(ServeError::Configuration(
-                "idempotency.responseRetentionSeconds is required when a write is served"
-                    .to_owned(),
-            ));
-        }
-        (false, _) => None,
-    };
+    let idempotency = response_retention_seconds
+        .map(|seconds| {
+            PostgresIdempotencyStore::new(journal.clone(), Duration::from_secs(seconds))
+                .map(|store| (store, Duration::from_secs(seconds)))
+                .map_err(|error| ServeError::Configuration(format!("idempotency: {error}")))
+        })
+        .transpose()?;
     let artifact_digest = loaded_artifact_digest(&loaded.deployment)?;
     // Only a deployment that declares an asynchronous or resumable write
     // touches the durable artifact fence. Activation advances it and is
@@ -1004,6 +1272,52 @@ mod token_characterisation;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_requirements_follow_the_deployment_feature_set() {
+        const JOURNAL: (&str, &[&str]) =
+            ("adapter_journal_events", &["INSERT", "SELECT", "DELETE"]);
+        const LEDGER: (&str, &[&str]) = ("adapter_schema_migrations", &["SELECT"]);
+        const ENTRIES: (&str, &[&str]) = (
+            "adapter_idempotency_entries",
+            &["SELECT", "INSERT", "UPDATE", "DELETE"],
+        );
+        const RESUMES: (&str, &[&str]) = (
+            "adapter_idempotency_resumes",
+            &["SELECT", "INSERT", "UPDATE", "DELETE"],
+        );
+        const ARTIFACTS: (&str, &[&str]) = (
+            "adapter_idempotency_async_artifacts",
+            &["SELECT", "INSERT", "UPDATE"],
+        );
+        const BINDINGS: (&str, &[&str]) =
+            ("adapter_idempotency_resume_bindings", &["SELECT", "INSERT"]);
+        assert_eq!(runtime_requirements(false, false, false), [JOURNAL, LEDGER]);
+        assert_eq!(
+            runtime_requirements(true, false, false),
+            [JOURNAL, LEDGER, ENTRIES, RESUMES]
+        );
+        assert_eq!(
+            runtime_requirements(true, true, false),
+            [JOURNAL, LEDGER, ENTRIES, RESUMES, ARTIFACTS]
+        );
+        assert_eq!(
+            runtime_requirements(true, true, true),
+            [JOURNAL, LEDGER, ENTRIES, RESUMES, ARTIFACTS, BINDINGS]
+        );
+        assert!(runtime_requirements(true, true, true)
+            .iter()
+            .all(|(table, _)| *table != "adapter_idempotency_schema_migrations"));
+    }
+
+    #[test]
+    fn a_role_name_is_quoted_as_one_identifier() {
+        assert_eq!(quote_identifier("runtime"), "\"runtime\"");
+        assert_eq!(
+            quote_identifier("a\"; DROP ROLE x; --"),
+            "\"a\"\"; DROP ROLE x; --\""
+        );
+    }
 
     #[test]
     fn a_metrics_shutdown_timeout_is_not_fatal_but_other_faults_are() {

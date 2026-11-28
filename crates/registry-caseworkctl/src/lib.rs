@@ -6,6 +6,7 @@ mod project;
 mod project_types;
 mod provider_add;
 mod provider_pair;
+mod provision;
 mod report;
 #[cfg(feature = "schema")]
 pub mod schema;
@@ -110,6 +111,8 @@ enum Command {
         #[arg(long)]
         backup_reference: Vec<String>,
     },
+    /// Create the migration and runtime roles and the database named by the runtime file.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Call the Casework HTTP API with a saved connection or an explicit URL.
     Api(Box<registry_cli_api::ApiArgs>),
     /// Manage saved Casework API connections.
@@ -314,6 +317,9 @@ pub fn main_entry_from(
     let Cli { format, command } = cli;
     let command = match command {
         Command::Serve(args) => return serve(args, format, format_supplied, stdout, stderr),
+        Command::Provision(args) => {
+            return provision::run(args, matches!(format, OutputFormat::Json));
+        }
         Command::Api(args) => return api(*args, format_supplied, stderr),
         Command::Connection { command } => {
             return connection(command, format, format_supplied, stderr);
@@ -573,6 +579,7 @@ impl Command {
             Self::Plan(_) => "plan",
             Self::Status(_) => "status",
             Self::Apply { .. } => "apply",
+            Self::Provision(_) => "provision",
             Self::Api(_) => "api",
             Self::Connection { .. } => "connection",
             Self::RstackDev(_) => "rstack-dev",
@@ -693,6 +700,7 @@ fn run(command: Command) -> Result<Value> {
             operator_reference,
             backup_reference,
         } => project::apply(&runtime_config, operator_reference, backup_reference),
+        Command::Provision(_) => unreachable!("provision writes its own report"),
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("raw API commands bypass report dispatch")
         }

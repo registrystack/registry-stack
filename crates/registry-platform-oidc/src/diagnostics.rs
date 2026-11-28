@@ -47,7 +47,9 @@ impl OidcError {
     /// Never format the underlying error to diagnose a public authentication failure.
     pub fn authentication_stage(&self) -> AuthenticationStage {
         match self {
-            Self::MalformedToken | Self::InvalidToken => AuthenticationStage::Header,
+            Self::MalformedToken | Self::InvalidToken | Self::SubjectMismatch => {
+                AuthenticationStage::Header
+            }
             Self::AlgorithmNotAllowed => AuthenticationStage::Algorithm,
             Self::TokenTypeNotAllowed => AuthenticationStage::TokenType,
             Self::MissingKid | Self::KidTooLong | Self::UnknownKid => AuthenticationStage::Key,
@@ -87,6 +89,7 @@ impl OidcError {
             Self::SignatureInvalid => FailedCheck::TokenSignature,
             Self::IssuerMismatch { .. } => FailedCheck::TokenIssuer,
             Self::AudienceMismatch => FailedCheck::TokenAudience,
+            Self::SubjectMismatch => FailedCheck::TokenClaims,
             Self::TokenExpired | Self::TokenNotYetValid | Self::InvalidTimeClaims => {
                 FailedCheck::TokenTime
             }
@@ -201,8 +204,9 @@ mod tests {
 
 #[cfg(test)]
 mod failed_check_tests {
-    use crate::OidcError;
+    use crate::{OidcEndpoint, OidcError, StaticJwksError};
     use registry_platform_authcommon::FailedCheck;
+    use registry_platform_httputil::{BoundedReadError, FetchUrlError};
 
     #[test]
     fn issuer_mismatch_maps_without_the_issuers() {
@@ -222,28 +226,66 @@ mod failed_check_tests {
         assert!(!OidcError::SignatureInvalid.is_key_source_unavailable());
     }
 
+    /// One row per `OidcError` variant: the reviewable spec of the mapping.
+    /// A header the named key cannot serve is `AlgorithmNotAllowed`, a token
+    /// fault; `InvalidJwk` is reserved for a key the source should not have
+    /// published, a key-source fault.
     #[test]
-    fn every_simple_variant_maps_to_its_member() {
+    fn every_variant_maps_to_its_member() {
+        let transport = reqwest::Client::new()
+            .get("not a url")
+            .build()
+            .expect_err("an unparsable URL is a client error");
         let table = [
+            (
+                OidcError::Transport(transport),
+                FailedCheck::KeySourceUnavailable,
+            ),
+            (
+                OidcError::BoundedRead(BoundedReadError::LengthOverflow),
+                FailedCheck::KeySourceUnavailable,
+            ),
+            (
+                OidcError::FetchUrl(FetchUrlError::MissingHost),
+                FailedCheck::KeySourceUnavailable,
+            ),
+            (
+                OidcError::HttpStatus(503),
+                FailedCheck::KeySourceUnavailable,
+            ),
+            (OidcError::InvalidUrl, FailedCheck::KeySourceUnavailable),
+            (OidcError::Parse, FailedCheck::KeySourceUnavailable),
+            (
+                OidcError::IssuerMismatch {
+                    expected: String::new(),
+                    actual: String::new(),
+                },
+                FailedCheck::TokenIssuer,
+            ),
             (OidcError::MalformedToken, FailedCheck::CredentialMalformed),
-            (OidcError::InvalidToken, FailedCheck::CredentialMalformed),
             (OidcError::AlgorithmNotAllowed, FailedCheck::TokenAlgorithm),
             (OidcError::TokenTypeNotAllowed, FailedCheck::TokenType),
             (OidcError::MissingKid, FailedCheck::TokenKey),
             (OidcError::KidTooLong, FailedCheck::TokenKey),
             (OidcError::UnknownKid, FailedCheck::TokenKey),
-            (OidcError::SignatureInvalid, FailedCheck::TokenSignature),
-            (OidcError::AudienceMismatch, FailedCheck::TokenAudience),
+            (OidcError::InvalidJwk, FailedCheck::KeySourceUnavailable),
+            (OidcError::EmptyKeySet, FailedCheck::KeySourceUnavailable),
+            (
+                OidcError::StaticKeySet(StaticJwksError::Empty),
+                FailedCheck::KeySourceUnavailable,
+            ),
             (OidcError::TokenExpired, FailedCheck::TokenTime),
             (OidcError::TokenNotYetValid, FailedCheck::TokenTime),
+            (OidcError::AudienceMismatch, FailedCheck::TokenAudience),
+            (OidcError::SubjectMismatch, FailedCheck::TokenClaims),
+            (OidcError::SignatureInvalid, FailedCheck::TokenSignature),
+            (OidcError::InvalidToken, FailedCheck::CredentialMalformed),
             (OidcError::InvalidTimeClaims, FailedCheck::TokenTime),
             (OidcError::ClientNotAllowed, FailedCheck::TokenClient),
             (
                 OidcError::AssertionIssuerNotAllowed,
                 FailedCheck::TokenAssertionIssuer,
             ),
-            (OidcError::Parse, FailedCheck::KeySourceUnavailable),
-            (OidcError::InvalidJwk, FailedCheck::KeySourceUnavailable),
             (OidcError::MissingIssuer, FailedCheck::KeySourceUnavailable),
             (
                 OidcError::ConflictingEndpointConfiguration,
@@ -253,9 +295,21 @@ mod failed_check_tests {
                 OidcError::InsecureHttpRequiresOptIn,
                 FailedCheck::KeySourceUnavailable,
             ),
+            (
+                OidcError::EndpointRefused {
+                    endpoint: OidcEndpoint::DeclaredJwks,
+                    remedy: "a fixed remedy",
+                },
+                FailedCheck::KeySourceUnavailable,
+            ),
         ];
         for (error, expected) in table {
             assert_eq!(error.failed_check(), expected, "{error:?}");
+            assert_eq!(
+                error.is_key_source_unavailable(),
+                expected == FailedCheck::KeySourceUnavailable,
+                "{error:?}"
+            );
         }
     }
 }

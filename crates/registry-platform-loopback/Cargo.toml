@@ -1,0 +1,13 @@
+[package]
+name = "registry-platform-loopback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The one definition of loopback for outbound destinations and loopback origins."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true

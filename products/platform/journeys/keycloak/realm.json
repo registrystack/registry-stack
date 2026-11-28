@@ -1,0 +1,95 @@
+{
+  "realm": "registry-journey",
+  "displayName": "Registry Stack own-provider journey",
+  "enabled": true,
+  "sslRequired": "none",
+  "accessTokenLifespan": 300,
+  "roles": {
+    "client": {
+      "urn:breg:local-directory": [{"name": "access"}],
+      "urn:example:casework": [{"name": "access"}],
+      "urn:example:messaging": [{"name": "access"}],
+      "urn:example:scheduling": [{"name": "access"}],
+      "urn:example:documents": [{"name": "access"}],
+      "urn:example:coordinator": [{"name": "access"}],
+      "registry-adapter-example": [{"name": "access"}],
+      "urn:example:audience:local-evidence": [{"name": "access"}],
+      "urn:example:render": [{"name": "access"}]
+    }
+  },
+  "clients": [
+    {"clientId": "urn:breg:local-directory", "name": "BReg API", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "standardFlowEnabled": false, "implicitFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false},
+    {"clientId": "directory-client", "name": "BReg caller", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "secret": "${JOURNEY_CLIENT_SECRET_BREG}", "standardFlowEnabled": false, "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": false, "serviceAccountsEnabled": true},
+
+    {"clientId": "urn:example:casework", "name": "Casework API", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "standardFlowEnabled": false, "implicitFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false},
+    {"clientId": "casework-client", "name": "Casework caller", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "secret": "${JOURNEY_CLIENT_SECRET_CASEWORK}", "standardFlowEnabled": false, "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": false, "serviceAccountsEnabled": true},
+
+    {"clientId": "urn:example:messaging", "name": "Messaging API", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "standardFlowEnabled": false, "implicitFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false},
+    {"clientId": "case-system", "name": "Messaging caller", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "secret": "${JOURNEY_CLIENT_SECRET_MESSAGING}", "standardFlowEnabled": false, "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": false, "serviceAccountsEnabled": true},
+
+    {"clientId": "urn:example:scheduling", "name": "Scheduling API", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "standardFlowEnabled": false, "implicitFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false},
+    {"clientId": "scheduling-booking-agent", "name": "Scheduling caller", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "secret": "${JOURNEY_CLIENT_SECRET_SCHEDULING}", "standardFlowEnabled": false, "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": false, "serviceAccountsEnabled": true},
+
+    {"clientId": "urn:example:documents", "name": "Documents API", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "standardFlowEnabled": false, "implicitFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false},
+    {"clientId": "case-portal", "name": "Documents caller", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "secret": "${JOURNEY_CLIENT_SECRET_DOCUMENTS}", "standardFlowEnabled": false, "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": false, "serviceAccountsEnabled": true},
+
+    {"clientId": "urn:example:coordinator", "name": "Coordinator API", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "standardFlowEnabled": false, "implicitFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false},
+    {"clientId": "coordinator-producer", "name": "Coordinator caller", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "secret": "${JOURNEY_CLIENT_SECRET_COORDINATOR}", "standardFlowEnabled": false, "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": false, "serviceAccountsEnabled": true},
+
+    {"clientId": "registry-adapter-example", "name": "Adapter API", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "standardFlowEnabled": false, "implicitFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false},
+    {"clientId": "registry-adapter-example-client", "name": "Adapter caller", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "secret": "${JOURNEY_CLIENT_SECRET_ADAPTER}", "standardFlowEnabled": false, "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": false, "serviceAccountsEnabled": true},
+
+    {"clientId": "urn:example:audience:local-evidence", "name": "Evidence API", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "standardFlowEnabled": false, "implicitFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false},
+    {"clientId": "evidence-client", "name": "Evidence caller", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "secret": "${JOURNEY_CLIENT_SECRET_EVIDENCE}", "standardFlowEnabled": false, "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": false, "serviceAccountsEnabled": true},
+
+    {"clientId": "urn:example:render", "name": "Render API", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "standardFlowEnabled": false, "implicitFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false},
+    {"clientId": "portal", "name": "Render caller", "enabled": true, "protocol": "openid-connect", "publicClient": false,
+     "secret": "${JOURNEY_CLIENT_SECRET_RENDER}", "standardFlowEnabled": false, "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": false, "serviceAccountsEnabled": true}
+  ],
+  "users": [
+    {"username": "service-account-directory-client", "enabled": true, "serviceAccountClientId": "directory-client",
+     "clientRoles": {"urn:breg:local-directory": ["access"]}},
+    {"username": "service-account-casework-client", "enabled": true, "serviceAccountClientId": "casework-client",
+     "clientRoles": {"urn:example:casework": ["access"]}},
+    {"username": "service-account-case-system", "enabled": true, "serviceAccountClientId": "case-system",
+     "clientRoles": {"urn:example:messaging": ["access"]}},
+    {"username": "service-account-scheduling-booking-agent", "enabled": true, "serviceAccountClientId": "scheduling-booking-agent",
+     "clientRoles": {"urn:example:scheduling": ["access"]}},
+    {"username": "service-account-case-portal", "enabled": true, "serviceAccountClientId": "case-portal",
+     "clientRoles": {"urn:example:documents": ["access"]}},
+    {"username": "service-account-coordinator-producer", "enabled": true, "serviceAccountClientId": "coordinator-producer",
+     "clientRoles": {"urn:example:coordinator": ["access"]}},
+    {"username": "service-account-registry-adapter-example-client", "enabled": true, "serviceAccountClientId": "registry-adapter-example-client",
+     "clientRoles": {"registry-adapter-example": ["access"]}},
+    {"username": "service-account-evidence-client", "enabled": true, "serviceAccountClientId": "evidence-client",
+     "clientRoles": {"urn:example:audience:local-evidence": ["access"]}},
+    {"username": "service-account-portal", "enabled": true, "serviceAccountClientId": "portal",
+     "clientRoles": {"urn:example:render": ["access"]}}
+  ]
+}

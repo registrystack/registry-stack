@@ -60,6 +60,17 @@
         {
           "properties": {
             "basis": { "const": "observed" },
+            "observedFrom": { "const": "issuer" },
+            "observedOn": { "type": "string", "format": "date" },
+            "version": { "type": "string", "minLength": 1 },
+            "note": { "type": "string", "minLength": 1 }
+          },
+          "required": ["basis", "observedFrom", "observedOn", "version", "note"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "basis": { "const": "observed" },
             "observedFrom": { "const": "code" },
             "observedOn": { "type": "string", "format": "date" },
             "path": { "type": "string", "minLength": 1 },

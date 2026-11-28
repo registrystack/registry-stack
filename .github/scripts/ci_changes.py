@@ -36,9 +36,11 @@ SHARDS = {
         "registry-platform-hooks",
         "registry-platform-httpsec",
         "registry-platform-httputil",
+        "registry-platform-loopback",
         "registry-platform-metrics",
         "registry-platform-objectstore",
         "registry-platform-oidc",
+        "registry-platform-posture",
         "registry-platform-provision",
         "registry-platform-ratelimit",
         "registry-platform-resilience",
@@ -167,6 +169,66 @@ RSTACK_DEV_HARNESS_PACKAGES = frozenset({"registry-rstack", "registry-rstack-dev
 # registry-rstack dev_run tests drive the hosts built beside rstack, so a
 # change to either host runs them; the shard builds both before it tests.
 RSTACK_DEV_HOST_PACKAGES = frozenset({"registry-bregctl", "registry-caseworkctl"})
+
+# The acceptance journeys start every runtime and `*ctl` tool in their product
+# column (products/platform/journeys/products.yaml; test_ci_changes.py checks
+# this set against it), `rstack dev`, and the ThunderID tooling the product
+# tools link for their development issuer. The starters the journeys copy
+# live in product directories and product crates, whose paths already seed
+# these packages.
+JOURNEY_PACKAGES = frozenset(
+    {
+        "registry-adapter",
+        "registry-adapter-job",
+        "registry-adapterctl",
+        "registry-breg",
+        "registry-breg-mcp",
+        "registry-breg-review",
+        "registry-bregctl",
+        "registry-casework",
+        "registry-caseworkctl",
+        "registry-coordinator",
+        "registry-discovery",
+        "registry-discoveryctl",
+        "registry-documents",
+        "registry-documentsctl",
+        "registry-evidence",
+        "registry-evidence-oid4vci",
+        "registry-evidence-oid4vp",
+        "registry-evidencectl",
+        "registry-mcp",
+        "registry-messaging",
+        "registry-messagingctl",
+        "registry-render",
+        "registry-scheduling",
+        "registry-schedulingctl",
+        "registry-thunderid-tooling",
+    }
+) | RSTACK_DEV_HARNESS_PACKAGES
+# The journey scripts, their tables, the realm and the per-product inputs.
+JOURNEY_INPUTS = ("products/platform/journeys/**",)
+
+# The token fixture corpus, read by the corpus test in
+# registry-platform-testing and by the token characterisation test of every
+# runtime that verifies a token. The corpus is not a crate, so its path names
+# those crates directly instead of relying on the reverse-dependency closure.
+TOKEN_FIXTURE_CORPUS = "products/platform/conformance/tokens/"
+TOKEN_FIXTURE_PACKAGES = frozenset(
+    {
+        "registry-platform-testing",
+        "registry-adapter",
+        "registry-breg",
+        "registry-casework",
+        "registry-coordinator",
+        "registry-documents",
+        "registry-evidence",
+        "registry-evidence-oid4vci",
+        "registry-mcp-edge",
+        "registry-messaging",
+        "registry-render",
+        "registry-scheduling",
+    }
+)
 
 # The runtime configuration conformance gate reads the sources of the runtimes
 # it holds rows for, their generated runtime schemas, and the canonical shared
@@ -1238,6 +1300,8 @@ def classify(
                 seeds.update(MANIFEST_PACKAGES)
             elif path.startswith("products/platform/"):
                 seeds.update(PLATFORM_PACKAGES)
+                if path.startswith(TOKEN_FIXTURE_CORPUS):
+                    seeds.update(TOKEN_FIXTURE_PACKAGES)
             elif path.startswith("products/breg/"):
                 seeds.update(BREG_PACKAGES)
             elif path.startswith("products/casework/"):
@@ -1566,6 +1630,12 @@ def classify(
         or bool(affected & BREG_EVIDENCE_COMPOSITION_PACKAGES)
     )
 
+    acceptance_journeys = integration and (
+        complete
+        or any(matches(path, *JOURNEY_INPUTS) for path in paths)
+        or bool(affected & JOURNEY_PACKAGES)
+    )
+
     matrix = []
     for shard_name, shard_packages in SHARDS.items():
         selected = sorted(affected.intersection(shard_packages))
@@ -1596,6 +1666,12 @@ def classify(
             for path in paths
         )
     )
+    # The provisioning PostgreSQL suite runs in the contracts-journeys lane,
+    # after that lane's TLS proof makes its PostGIS 17 service TLS-only. It
+    # joins only the breg_contracts output: breg_integration and
+    # casework_postgres read the selection above, so the provisioning crate
+    # on its own does not select them.
+    provision_postgres = "registry-platform-provision" in affected
 
     outputs = {
         "full_sweep": full_sweep,
@@ -1617,7 +1693,7 @@ def classify(
         or bool(affected & DISCOVERY_PACKAGES)
         or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
         or any(matches(path, *DISCOVERY_TUTORIAL_INPUTS) for path in paths),
-        "breg_contracts": breg_contracts,
+        "breg_contracts": breg_contracts or provision_postgres,
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "evidence_assurance": evidence_assurance,
         "evidence_postgres": bool(affected & EVIDENCE_POSTGRES_PACKAGES),
@@ -1660,6 +1736,7 @@ def classify(
         "render_tutorial": render_tutorial,
         "scheduling_tutorial": scheduling_tutorial,
         "breg_evidence_composition": breg_evidence_composition,
+        "acceptance_journeys": acceptance_journeys,
         "identifiers": identifiers,
     }
     return outputs

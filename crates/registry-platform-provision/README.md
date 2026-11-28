@@ -28,3 +28,8 @@ computed in the client, never the password. No API in this crate prints,
 formats or logs a secret.
 
 This crate builds plans only. It opens no connection.
+
+The `test-support` feature adds `test_support`, a verified-TLS superuser
+session and the two `PROVISION_TEST_DATABASE_*` variables, for the provision
+tests of `registry-caseworkctl`, `registry-coordinator` and
+`registry-documentsctl`. Only their dev-dependencies enable it.

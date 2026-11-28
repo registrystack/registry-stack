@@ -27,7 +27,8 @@ use crate::physical_names::{
 const RECORD_ID_COLUMN: &str = "record_id";
 const GENERATED_TEXT_COLLATION: &str = "pg_catalog.pg_c_utf8";
 pub(crate) const REFERENCE_LIFECYCLE_COLUMN: &str = "record_reference_lifecycle";
-pub(crate) const POSTGIS_EXTENSION_SCHEMA: &str = "registry_spatial_ext";
+/// The schema the generated spatial SQL reads PostGIS from.
+pub const POSTGIS_EXTENSION_SCHEMA: &str = "registry_spatial_ext";
 pub(crate) const SPATIAL_BBOX_FUNCTION_NAME: &str = "spatial_bbox_geometry";
 pub(crate) const SPATIAL_POLYGON_CONTRACT_FUNCTION_NAME: &str = "valid_crs84_polygon";
 const SPATIAL_POLYGON_CONTRACT_ARGUMENTS: &str =

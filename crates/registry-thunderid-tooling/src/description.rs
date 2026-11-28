@@ -984,6 +984,20 @@ mod tests {
         description
     }
 
+    /// This crate keeps its own member list so the checks-only build links no
+    /// signing library. It must stay the platform's list.
+    #[test]
+    fn the_private_member_list_is_the_platform_list() {
+        assert_eq!(
+            PRIVATE_JWK_MEMBERS
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            registry_platform_crypto::PRIVATE_JWK_MEMBERS
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+    }
+
     #[test]
     fn a_machine_clients_jwks_may_carry_no_private_key_material() {
         for member in PRIVATE_JWK_MEMBERS {

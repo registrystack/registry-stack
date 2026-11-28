@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- `registry-platform-posture`, a `std`-only crate, holds `Posture`,
+  `PostureSource`, `DeclaredPosture`, `PostureError` and
+  `declared_from`/`declared`, which read the `--posture` flag and the
+  `REGISTRY_STACK_POSTURE` variable. Unset means production. A value that is
+  not a posture, or a flag and variable that disagree, is refused before any
+  file is read. No product reads it yet.
+
+- `registry-platform-yaml` exports `DEVELOPMENT_ONLY`, `GatedSite` and
+  `gated_site()`, which let a development-only value learn its pointer and
+  position while the reader decodes it: exact for a node, and the holding
+  mapping with `exact: false` under `#[serde(flatten)]`.
+
+- `registry-platform-httpsec` implements authcommon's `RefusalTraceId` for
+  `TraceId` behind the opt-in `refusal-trace-id` feature, not `server`. A
+  service that only serves HTTP no longer links `registry-platform-authcommon`
+  and the crypto stack. A service that passes its trace id to `record_refusal!`
+  enables the feature.
+
+- A `test-support` feature in `registry-platform-provision` gives the product
+  provision tests one verified-TLS superuser session, so they run against a
+  TLS-only PostgreSQL server. It is enabled only by dev-dependencies.
+
 - One rule for a static key set, in `registry-platform-oidc`
   (`public_jwks_document`, behind `parse_static_jwks`). A key set that holds
   a private or symmetric member (`d`, `k`, `p`, `q`, `dp`, `dq`, `qi`,
@@ -9,7 +31,69 @@
   refused. Members the rule does not name (`ext`, `x5c`, `x5t`, `x5u` and
   others) are ignored. A refusal is `OidcError::StaticKeySet` and names the
   key position and the rule, never a `kid` or a value. The member list is
-  `registry_platform_crypto::PRIVATE_JWK_MEMBERS`.
+  `registry_platform_crypto::PRIVATE_JWK_MEMBERS`. The whole document also
+  follows the strict JSON rule: an integer that a 64-bit floating-point
+  number cannot hold exactly is refused as `StaticJwksError::NotJson`.
+  `parse_static_jwks` refuses an OKP key with
+  `StaticJwksError::OctetKeyPair`, which names the key position and its
+  `kid` and `crv` when it has them, and says to use an RSA or EC key. A key
+  with a member of the wrong shape is refused with
+  `StaticJwksError::KeyShape`, which names the key position.
+  `StaticJwksError` is no longer `Copy`.
+
+- One definition of loopback, the std-only `registry-platform-loopback` crate
+  (re-exported as `registry_platform_httpsec::loopback` and
+  `registry_platform_httputil::loopback`), for outbound destinations and
+  loopback origins. A host is loopback when it is an address literal in
+  `127.0.0.0/8`, `::1` or an IPv4-mapped form of `127.0.0.0/8`, or the exact
+  name `localhost` with the connection pinned to loopback addresses.
+  `*.localhost`, `localhost.` and a bracketed IPv4 literal such as
+  `[127.0.0.1]` are never loopback. Sites that use it accept more literal
+  spellings than before, for example `127.0.0.2` and `[::ffff:127.0.0.1]`.
+
+- Every client built by `OutboundClientBuilder` resolves the name
+  `localhost` to `127.0.0.1` and `::1` itself, so no resolver is asked for
+  it. A host whose resolver or hosts file maps `localhost` elsewhere is no
+  longer followed.
+
+- BREAKING: a `PrivateServiceHttp` fixed destination needs at least one
+  private CIDR. In 0.48.0 an empty list admitted any eligible private
+  address. It is now refused when the destination is frozen, with
+  `DestinationPolicyError::PrivateServiceRequiresPrivateCidr`, so the
+  operator learns it at activation instead of at the first send. Name the
+  range that holds the service's addresses. `ProductionHttps` and loopback
+  destinations still take an empty list.
+
+- `registry-platform-hooks` gives a receiver that names no window of its own
+  a default one: `DEFAULT_DELIVERY_SKEW`, 300 seconds either side of the
+  receiver clock, through `DeliveryFreshness::default_at`.
+
+- `registry_platform_authcommon::FailedCheck` is the closed set of checks a
+  request can fail, with a stable kebab-case label for each. It is
+  operator-side only and is never written to a response. Behind the
+  `refusal-recorder` feature, `RefusalRecorder` counts every refusal in
+  `<product>_request_refusals_total{check}` and admits at most five log lines
+  per check per minute, and `record_refusal!` writes the line with
+  `failed_check`, `suppressed`, an optional code-defined `remedy` and an
+  optional `trace_id`, which must be a `RefusalTraceId`. The request's
+  `registry_platform_httpsec::TraceId` implements it under httpsec's `server`
+  feature, and authcommon does not depend on httpsec. Alert on the counter,
+  not on the log line.
+
+- A token whose header `alg` does not fit the key its `kid` names, or whose
+  `kid` names an encryption key such as an RSA-OAEP `use: enc` key, now fails
+  as `OidcError::AlgorithmNotAllowed` (`token-algorithm`) instead of
+  `OidcError::InvalidJwk` (`key-source-unavailable`). Products that answer a
+  key-source failure with 503 answer such a token with their 401 instead.
+  `InvalidJwk` stays a key-source failure for a key the source should not
+  publish.
+
+- `OidcError` names the claim a token failed: a missing `aud` is
+  `AudienceMismatch`, a missing `iss` is `IssuerMismatch`, and a malformed
+  `exp`, `nbf` or `iat` is `InvalidTimeClaims`, as a missing `exp` already
+  was. A UserInfo response about another subject than the access token is
+  the new `OidcError::SubjectMismatch` (`token-claims`). Each of these was
+  `InvalidToken` (`credential-malformed`) before.
 
 ## 0.48.0 - 2026-11-23
 

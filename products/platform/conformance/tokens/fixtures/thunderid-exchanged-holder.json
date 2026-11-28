@@ -1,0 +1,53 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "thunderid-exchanged-holder",
+  "class": "positive",
+  "provider": "thunderid",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "ThunderID 1.1.0",
+    "note": "Observed from a ThunderID 1.1.0 issuer on 27 November 2026. Header members and claim names are the observed ones. Claim values are synthetic. Signed by the corpus test key. Form requested with a resource and scope."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "at+jwt",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "aud": "https://resource.example.test",
+    "client_id": "portal-exchange",
+    "exp": {
+      "offsetSeconds": 900
+    },
+    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+    "holder_ref": "holder-0001",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "iss": {
+      "bind": "issuer"
+    },
+    "jti": "synthetic-jti-0031",
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "scope": "records:get",
+    "sub": "00000000-0000-4000-8000-000000000001"
+  },
+  "omits": [
+    "azp",
+    "registry_actor_kind",
+    "registry_scope",
+    "jurisdiction",
+    "role",
+    "individual_id"
+  ],
+  "notes": "RFC 8693 exchange, subject token the stand-in's ID token. ThunderID keeps the national subject as sub and replaces the mapped holder_ref. Every authority claim of the national token is dropped, and registry_actor_kind cannot be supplied on an exchange. The grant_type value is the RFC 8693 grant type, inferred: only the claim name was observed, not its value. The lifetime is 900 seconds, observed. aud is the exchange resource server, an absolute URI that a resource-bearing request needs. The scope claim holds the granted permission, from the connection's authorization mapping. A product whose audience is not that URI needs a configured audience line."
+}

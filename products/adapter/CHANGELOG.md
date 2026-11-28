@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- `adapter serve` grants the runtime database role the table privileges its
+  deployment needs, after it migrates and before it listens, when the runtime
+  and migration sessions run as different roles. The grantee is the role the
+  runtime session reports as its `current_user`, read before any grant, never
+  the name in a URL. A runtime connection that fails stops startup before any
+  grant. The grants are the ones the startup check already required, plus
+  `USAGE` on the schema. Only privileges the role lacks are granted, in one
+  transaction under an advisory lock, and nothing more: no default privileges,
+  no revoke. A successful grant logs one line naming the role and the number
+  of privileges. No grant is made to a role that lacks a privilege and has
+  members that would inherit it. A member that holds `ADMIN OPTION` on the
+  role and has no members of its own does not count. A grant the migration
+  role has no right to make (it does not own the object) stops startup with
+  the missing privilege named and rolls everything back. With one role in both
+  sessions, no grant is issued. Payment and G2P tables under
+  `--payments-config` still need your own grants. The runtime role must exist,
+  and the migration role must own the tables.
 - `adapter serve --payments-config` hosts typed synthetic payment collection
   operations on the shared listener and PostgreSQL store, including without
   a record project. Connections bind institution/service scope, admitted

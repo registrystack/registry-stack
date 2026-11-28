@@ -28,7 +28,10 @@ from ci_changes import (
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
+    JOURNEY_PACKAGES,
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
+    TOKEN_FIXTURE_CORPUS,
+    TOKEN_FIXTURE_PACKAGES,
     BREG_PACKAGES,
     CASEWORK_PACKAGES,
     DOCUMENTS_PACKAGES,
@@ -74,6 +77,74 @@ EVIDENCE_CONFIGURATION_GENERATOR = Path(
     "docs/site/scripts/generate-evidence-configuration.mjs"
 )
 AUTHORING_SCHEMA_DIRECTORY = Path("crates/registry-evidencectl/schemas/authoring")
+
+# The acceptance journeys' directory and the ratchet-mode options every CI
+# call of a journey script carries.
+JOURNEYS = Path("products/platform/journeys")
+JOURNEY_RATCHET = "--expected products/platform/journeys/expected-failures.yaml --strict"
+JOURNEY_SCRIPTS = {
+    "own-provider.sh": "own-provider",
+    "promote.sh": "own-provider",
+    "rstack-dev.sh": "rstack-dev",
+}
+
+# The Base Registry Engine lane that runs the provisioning PostgreSQL suite
+# after its own TLS proof.
+PROVISION_POSTGRES_LANE = "contracts-journeys"
+
+# The steps that give a coverage job the provisioning suite's two TLS
+# servers, in their order before the coverage run, and the step after it
+# that removes the PostgreSQL 16 server.
+PROVISION_SERVER_STEPS = (
+    "Serve the provisioning PostGIS service over TLS",
+    "Start PostgreSQL 16 for the provisioning floor test",
+    "Serve PostgreSQL 16 over TLS for the provisioning floor test",
+    "Bundle the provisioning servers' CAs",
+)
+PROVISION_STOP_STEP = "Stop PostgreSQL 16 for the provisioning floor test"
+# The steps a coverage job shares, key for key, with the contracts-journeys lane.
+PROVISION_LANE_STEPS = PROVISION_SERVER_STEPS[1:3] + (PROVISION_STOP_STEP,)
+
+
+def provision_test_variables() -> set[str]:
+    """Every PROVISION_TEST_* variable the provisioning PostgreSQL suite reads."""
+
+    return set(
+        re.findall(
+            r'"(PROVISION_TEST_[A-Z_]+)"',
+            Path("crates/registry-platform-provision/tests/postgres.rs").read_text(
+                encoding="utf-8"
+            ),
+        )
+    )
+
+
+def journey_products() -> dict[str, Any]:
+    """The journeys' product column, read from its checked-in table."""
+
+    return yaml.safe_load((JOURNEYS / "products.yaml").read_text(encoding="utf-8"))
+
+
+def without_dependency_edges(metadata: dict[str, Any]) -> dict[str, Any]:
+    """The same workspace with every dependency edge removed.
+
+    A path then reaches only the packages the classifier seeds for it, so a
+    test sees the path mapping itself rather than what the reverse-dependency
+    closure adds.
+    """
+
+    return {
+        **metadata,
+        "packages": [
+            {**package, "dependencies": []} for package in metadata["packages"]
+        ],
+    }
+
+
+def folded_command(step: dict[str, Any]) -> str:
+    """A step's run text with continuation lines joined and spaces collapsed."""
+
+    return " ".join(step.get("run", "").replace("\\\n", " ").split())
 
 
 def config_conformance_runner() -> Any:
@@ -427,6 +498,9 @@ class CiChangesTest(unittest.TestCase):
             "breg-evidence-composition": (
                 "needs.changes.outputs.breg_evidence_composition == 'true'"
             ),
+            "acceptance-journeys": (
+                "needs.changes.outputs.acceptance_journeys == 'true'"
+            ),
             "docs-archives": "needs.changes.outputs.docs_archives == 'true'",
             "config-conformance": (
                 "needs.changes.outputs.config_conformance == 'true'"
@@ -547,6 +621,7 @@ class CiChangesTest(unittest.TestCase):
             "render-tutorial",
             "scheduling-tutorial",
             "breg-evidence-composition",
+            "acceptance-journeys",
             "evidence-anchors",
             "docs",
             "docs-required",
@@ -626,6 +701,7 @@ class CiChangesTest(unittest.TestCase):
                 "render-tutorial",
                 "scheduling-tutorial",
                 "breg-evidence-composition",
+                "acceptance-journeys",
                 "evidence-anchors",
                 "docs",
                 "client-bindings",
@@ -668,6 +744,7 @@ class CiChangesTest(unittest.TestCase):
             "render-tutorial",
             "scheduling-tutorial",
             "breg-evidence-composition",
+            "acceptance-journeys",
             "evidence-anchors",
             "docs",
             "client-bindings",
@@ -678,7 +755,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(43, len(final_needs))
+        self.assertEqual(44, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -983,6 +1060,7 @@ class CiChangesTest(unittest.TestCase):
             "breg-tutorial": "breg_tutorial",
             "casework-tutorial": "casework_tutorial",
             "breg-evidence-composition": "breg_evidence_composition",
+            "acceptance-journeys": "acceptance_journeys",
             "deployment": "deployment",
         }
 
@@ -1821,23 +1899,127 @@ class CiChangesTest(unittest.TestCase):
     def test_nightly_platform_coverage_has_the_pull_request_database(self) -> None:
         # The nightly platform shard runs the same --all-features build as
         # platform-coverage, whose PostgreSQL tests fail rather than skip
-        # without their database, so it needs the same service and URLs.
+        # without their databases, so it needs the same services, the same
+        # provisioning servers and the same test variables.
         pull_request = self.workflow_jobs["platform-coverage"]
         nightly = yaml.safe_load(
             Path(".github/workflows/nightly-rust-coverage.yml").read_text()
         )["jobs"]["rust"]
         self.assertEqual(nightly.get("services"), pull_request["services"])
 
-        def database_urls(job: dict[str, Any], step_name: str) -> dict[str, str]:
+        def test_variables(job: dict[str, Any], step_name: str) -> dict[str, str]:
             step = next(step for step in job["steps"] if step.get("name") == step_name)
             return {
                 name: value for name, value in step.get("env", {}).items()
-                if name.endswith("_DATABASE_URL")
+                if "_TEST_" in name
             }
 
-        expected = database_urls(pull_request, "Enforce platform line coverage")
+        expected = test_variables(pull_request, "Enforce platform line coverage")
         self.assertTrue(expected)
-        self.assertEqual(database_urls(nightly, "Run shard with coverage"), expected)
+        self.assertLessEqual(provision_test_variables(), set(expected))
+        self.assertEqual(test_variables(nightly, "Run shard with coverage"), expected)
+
+        # The provisioning servers' steps match key for key. In the nightly
+        # sweep only the platform shard, built with --all-features, runs them.
+        pull_request_steps = {step.get("name"): step for step in pull_request["steps"]}
+        nightly_names = [step.get("name") for step in nightly["steps"]]
+        nightly_steps = dict(zip(nightly_names, nightly["steps"]))
+        for name in (*PROVISION_SERVER_STEPS, PROVISION_STOP_STEP):
+            with self.subTest(step=name):
+                for key in ("id", "shell", "env", "run"):
+                    self.assertEqual(
+                        pull_request_steps[name].get(key), nightly_steps[name].get(key), key
+                    )
+        for name in PROVISION_SERVER_STEPS:
+            with self.subTest(step=name):
+                self.assertEqual("matrix.name == 'platform'", nightly_steps[name]["if"])
+        self.assertEqual(
+            "always() && matrix.name == 'platform' && "
+            "steps.provision-postgres-16.outputs.container_id != ''",
+            nightly_steps[PROVISION_STOP_STEP]["if"],
+        )
+        indices = [nightly_names.index(name) for name in PROVISION_SERVER_STEPS]
+        run = nightly_names.index("Run shard with coverage")
+        self.assertEqual(sorted(indices), indices)
+        self.assertLess(nightly_names.index("Checkout"), indices[0])
+        self.assertLess(indices[-1], run)
+        self.assertLess(run, nightly_names.index(PROVISION_STOP_STEP))
+
+    def test_platform_coverage_serves_the_provisioning_suite(self) -> None:
+        # --all-features enables registry-platform-provision's postgres-test,
+        # whose suite fails rather than skips without its two TLS servers.
+        job = self.workflow_jobs["platform-coverage"]
+        lane = self.workflow_jobs["breg-contracts"]
+        service = job["services"]["postgis"]
+        self.assertEqual(lane["services"]["postgres"]["image"], service["image"])
+        self.assertEqual(["5432/tcp"], service["ports"])
+
+        steps = job["steps"]
+        names = [step.get("name") for step in steps]
+        coverage = names.index("Enforce platform line coverage")
+        indices = [names.index(name) for name in PROVISION_SERVER_STEPS]
+        self.assertEqual(sorted(indices), indices)
+        self.assertLess(names.index("Checkout"), indices[0])
+        self.assertLess(indices[-1], coverage)
+        stop = names.index(PROVISION_STOP_STEP)
+        self.assertLess(coverage, stop)
+        for index in indices:
+            with self.subTest(step=names[index]):
+                self.assertNotIn("if", steps[index])
+        self.assertEqual(
+            "always() && steps.provision-postgres-16.outputs.container_id != ''",
+            steps[stop]["if"],
+        )
+
+        # The PostgreSQL 16 server is started, secured and removed exactly as
+        # the contracts-journeys lane does it.
+        lane_steps = {step.get("name"): step for step in lane["steps"]}
+        for name in PROVISION_LANE_STEPS:
+            with self.subTest(step=name):
+                for key in ("id", "shell", "env", "run"):
+                    self.assertEqual(
+                        lane_steps[name].get(key), steps[names.index(name)].get(key), key
+                    )
+
+        # The service is made TLS-only by the lane's own script.
+        service_tls = steps[indices[0]]
+        self.assertEqual(
+            "${{ job.services.postgis.id }}", service_tls["env"]["SERVICE_CONTAINER_ID"]
+        )
+        self.assertIn("BREG_TEST_TLS_SETUP_ONLY=1", folded_command(service_tls))
+        self.assertIn(
+            "products/breg/scripts/test-postgres-tls.sh", folded_command(service_tls)
+        )
+
+        # The bundle joins the two CA files the TLS steps write.
+        bundle = steps[indices[3]]
+        self.assertEqual(
+            service_tls["env"]["SERVICE_CA_PEM_PATH"], bundle["env"]["SERVICE_CA_PEM_PATH"]
+        )
+        self.assertEqual(
+            lane_steps[PROVISION_SERVER_STEPS[2]]["env"]["OLD_CA_PEM_PATH"],
+            bundle["env"]["OLD_CA_PEM_PATH"],
+        )
+        self.assertIn(
+            'cat "${SERVICE_CA_PEM_PATH}" "${OLD_CA_PEM_PATH}" > "${BUNDLE_PATH}"',
+            bundle["run"],
+        )
+
+        # Every variable the suite reads is set on the coverage run; each URL
+        # verifies the server certificate and its host name.
+        env = steps[coverage]["env"]
+        self.assertEqual(bundle["env"]["BUNDLE_PATH"], env["PROVISION_TEST_DATABASE_CA"])
+        self.assertEqual(
+            "postgresql://provision:provision_test@localhost:"
+            "${{ job.services.postgis.ports['5432'] }}/postgres?sslmode=verify-full",
+            env["PROVISION_TEST_DATABASE_URL"],
+        )
+        self.assertEqual(
+            "postgresql://provision:provision_test@localhost:"
+            "${{ steps.provision-postgres-16.outputs.port }}/postgres?sslmode=verify-full",
+            env["PROVISION_TEST_OLD_DATABASE_URL"],
+        )
+        self.assertLessEqual(provision_test_variables(), set(env))
 
     def test_source_client_tutorial_includes_messaging_before_release_admission(self) -> None:
         script = next(
@@ -3857,6 +4039,364 @@ on:
         )
         self.assertFalse(outputs["release_tool"])
 
+    def test_journey_packages_are_the_journey_product_column(self) -> None:
+        column = journey_products()["products"]
+        products = {
+            package
+            for product in column
+            for package in (product["crate"], product["ctl"], *product["cargoPackages"])
+            if package is not None
+        }
+        self.assertEqual(
+            products
+            | {"registry-rstack", "registry-rstack-dev", "registry-thunderid-tooling"},
+            JOURNEY_PACKAGES,
+        )
+        self.assertLessEqual(JOURNEY_PACKAGES, self.workspace.package_names)
+
+    def test_acceptance_journeys_routing(self) -> None:
+        # Every package in the product column, and the rstack and ThunderID
+        # harness packages, selects the journeys in the merge queue.
+        for package in sorted(JOURNEY_PACKAGES):
+            path = f"{self.workspace.roots[package]}/Cargo.toml"
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["acceptance_journeys"])
+
+        # Without dependency edges a path reaches only what it seeds, so these
+        # select the journeys through their own mapping: the harness and its
+        # tables by path, each starter the journeys copy through the product
+        # directory or product crate that holds it.
+        edgeless = Workspace(without_dependency_edges(self.metadata))
+        for path in (
+            *sorted(path.as_posix() for path in JOURNEYS.iterdir() if path.is_file()),
+            "products/platform/journeys/own-provider.sh",
+            "products/platform/journeys/keycloak/realm.json",
+            "products/platform/journeys/projects/scheduling/runtime.yaml",
+            "crates/registry-bregctl/src/starters.rs",
+            "crates/registry-documentsctl/src/starter.rs",
+            "crates/registry-messagingctl/src/starter.rs",
+            "crates/registry-evidencectl/templates/starter/README.md",
+            "products/breg/evidence/starter/README.md",
+            "products/documents/examples/starter/documents.yaml",
+            "products/messaging/examples/starter/dev.yaml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(edgeless, (path,))["acceptance_journeys"])
+
+        # A platform path outside the journeys seeds only the platform crates,
+        # none of which the journeys start.
+        self.assertFalse(
+            classify(edgeless, ("products/platform/scripts/run-fuzz-smoke.sh",))[
+                "acceptance_journeys"
+            ]
+        )
+        # Review defers the journeys even for their own inputs.
+        self.assertFalse(
+            classify(
+                self.workspace,
+                ("products/platform/journeys/products.yaml",),
+                pull_request=True,
+            )["acceptance_journeys"]
+        )
+
+    def test_acceptance_journeys_job_runs_each_leg_in_ratchet_mode(self) -> None:
+        job = self.workflow_jobs["acceptance-journeys"]
+        self.assertEqual("Acceptance journeys (${{ matrix.title }})", job["name"])
+        self.assertEqual("ubuntu-24.04", job["runs-on"])
+        self.assertFalse(job["strategy"]["fail-fast"])
+        self.assertEqual(
+            [
+                {"leg": "own-provider", "title": "own-provider and promote"},
+                {"leg": "rstack-dev", "title": "rstack dev"},
+            ],
+            job["strategy"]["matrix"]["include"],
+        )
+        # A leg that passes 40 minutes moves to the nightly sweep and ci:full,
+        # so the limit is that condition, and nothing retries.
+        self.assertEqual(40, job["timeout-minutes"])
+        self.assertNotIn("continue-on-error", job)
+        steps = job["steps"]
+        for step in steps:
+            with self.subTest(step=step.get("name")):
+                self.assertNotIn("continue-on-error", step)
+                self.assertNotIn("retry", step.get("uses", "") + step.get("run", ""))
+
+        def index_of(predicate: Any) -> int:
+            found = [index for index, step in enumerate(steps) if predicate(step)]
+            self.assertEqual(1, len(found))
+            return found[0]
+
+        # The build covers the product column's packages and features and
+        # rstack, so every binary the journeys start comes from this commit.
+        products = journey_products()
+        build = index_of(lambda step: folded_command(step).startswith("cargo build "))
+        words = shlex.split(folded_command(steps[build]))
+        self.assertEqual(["cargo", "build", "--locked"], words[:3])
+        self.assertEqual("--bins", words[-1])
+        packages = {words[index + 1] for index, word in enumerate(words) if word == "-p"}
+        self.assertEqual(
+            {
+                package
+                for product in products["products"]
+                for package in product["cargoPackages"]
+            }
+            | {"registry-rstack"},
+            packages,
+        )
+        features = {
+            feature
+            for index, word in enumerate(words)
+            if word == "--features"
+            for feature in words[index + 1].split(",")
+        }
+        self.assertEqual(
+            {
+                feature
+                for product in products["products"]
+                for feature in product.get("cargoFeatures") or ()
+            },
+            features,
+        )
+        for feature in sorted(features):
+            package, name = feature.split("/")
+            with self.subTest(feature=feature):
+                self.assertIn(name, self.workspace.packages[package]["features"])
+
+        # Keycloak comes from quay.io by the digest the product column pins.
+        image = products["ownProviderIssuer"]["image"]
+        self.assertRegex(image, r"^quay\.io/keycloak/keycloak:[0-9.]+@sha256:[0-9a-f]{64}$")
+        pull = index_of(lambda step: folded_command(step).startswith("docker pull "))
+        self.assertEqual(f"docker pull {image}", folded_command(steps[pull]))
+        self.assertEqual("matrix.leg == 'own-provider'", steps[pull]["if"])
+
+        calls = {
+            script: index_of(
+                lambda step, script=script: f"products/platform/journeys/{script} "
+                in folded_command(step)
+            )
+            for script in JOURNEY_SCRIPTS
+        }
+        for script, leg in JOURNEY_SCRIPTS.items():
+            command = folded_command(steps[calls[script]])
+            with self.subTest(script=script):
+                self.assertEqual(f"matrix.leg == '{leg}'", steps[calls[script]]["if"])
+                self.assertTrue(
+                    command.startswith(f"products/platform/journeys/{script} --all ")
+                )
+                self.assertIn('--bin-dir "${GITHUB_WORKSPACE}/target/debug"', command)
+                self.assertIn(JOURNEY_RATCHET, command)
+                self.assertIn(f'--out "${{RUNNER_TEMP}}/journeys/{script[:-3]}"', command)
+                self.assertLess(build, calls[script])
+        # Promote takes over the own-provider run that ended with --keep.
+        self.assertIn("--keep", folded_command(steps[calls["own-provider.sh"]]))
+        self.assertIn(
+            '--from "${RUNNER_TEMP}/journeys/own-provider"',
+            folded_command(steps[calls["promote.sh"]]),
+        )
+        self.assertLess(pull, calls["own-provider.sh"])
+        self.assertLess(calls["own-provider.sh"], calls["promote.sh"])
+
+    def test_changes_job_checks_the_journey_tables_on_every_pull_request(self) -> None:
+        steps = self.workflow_jobs["changes"]["steps"]
+        names = [step.get("name") for step in steps]
+        tables = steps[names.index("Test the acceptance journey tables")]
+        self.assertEqual(
+            "uv run --no-project --with PyYAML==6.0.2 python -m unittest "
+            "products/platform/journeys/test_journey_tables.py",
+            tables["run"],
+        )
+        self.assertNotIn("if", tables)
+        self.assertNotIn("if", self.workflow_jobs["changes"])
+        self.assertLess(names.index("Install uv"), names.index("Test the acceptance journey tables"))
+
+    def test_token_fixture_packages_are_every_crate_that_characterises_tokens(
+        self,
+    ) -> None:
+        characterising = {
+            self.workspace.package_for_path(path.as_posix())
+            for path in Path("crates").glob("*/**/token_characterisation.rs")
+        }
+        self.assertNotIn(None, characterising)
+        self.assertEqual(
+            characterising | {"registry-platform-testing"}, TOKEN_FIXTURE_PACKAGES
+        )
+        self.assertTrue(Path(TOKEN_FIXTURE_CORPUS).is_dir())
+
+    def test_a_token_corpus_change_selects_every_crate_that_reads_it(self) -> None:
+        corpus = f"{TOKEN_FIXTURE_CORPUS}fixtures/entra-id-token.json"
+        edgeless = Workspace(without_dependency_edges(self.metadata))
+        outputs = classify(edgeless, (corpus,))
+        sharded = {
+            package
+            for entry in outputs["rust_matrix"]["include"]
+            for package in entry["packages"]
+        }
+        self.assertLessEqual(TOKEN_FIXTURE_PACKAGES, sharded)
+        # Elsewhere under products/platform/ seeds only the platform crates.
+        other = classify(edgeless, ("products/platform/scripts/run-fuzz-smoke.sh",))
+        self.assertFalse(
+            (TOKEN_FIXTURE_PACKAGES - set(SHARDS["platform"]))
+            & set(other["rust_packages"])
+        )
+        # The real graph reaches them as well.
+        self.assertLessEqual(
+            TOKEN_FIXTURE_PACKAGES, set(classify(self.workspace, (corpus,))["rust_packages"])
+        )
+
+    def test_platform_shard_runs_the_feature_gated_token_corpus_test(self) -> None:
+        # No platform crate enables token-fixtures, so the shard's own run
+        # skips the corpus test; this step runs it.
+        self.assertIn("registry-platform-testing", SHARDS["platform"])
+        manifest = Path("crates/registry-platform-testing/Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            '[[test]]\nname = "token_fixtures"\nrequired-features = ["token-fixtures"]',
+            manifest,
+        )
+        steps = [
+            step
+            for step in self.workflow_jobs["rust-tests"]["steps"]
+            if step.get("name") == "Test the token fixture corpus"
+        ]
+        self.assertEqual(1, len(steps))
+        self.assertEqual(
+            "matrix.name == 'platform' && "
+            "contains(matrix.packages, 'registry-platform-testing')",
+            steps[0]["if"],
+        )
+        self.assertEqual(
+            "cargo test --locked -p registry-platform-testing "
+            "--features token-fixtures --test token_fixtures",
+            steps[0]["run"],
+        )
+
+    def test_platform_shard_runs_the_feature_gated_refusal_trace_id_test(self) -> None:
+        # No platform crate enables refusal-trace-id, so the shard's own run
+        # compiles httpsec without the impl and skips its test; this step runs it.
+        self.assertIn("registry-platform-httpsec", SHARDS["platform"])
+        manifest = Path("crates/registry-platform-httpsec/Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('refusal-trace-id = ["server", "dep:registry-platform-authcommon"]', manifest)
+        steps = [
+            step
+            for step in self.workflow_jobs["rust-tests"]["steps"]
+            if step.get("name") == "Test the refusal trace id implementation"
+        ]
+        self.assertEqual(1, len(steps))
+        self.assertEqual(
+            "matrix.name == 'platform' && "
+            "contains(matrix.packages, 'registry-platform-httpsec')",
+            steps[0]["if"],
+        )
+        self.assertEqual(
+            "cargo test --locked -p registry-platform-httpsec "
+            "--features refusal-trace-id --lib",
+            steps[0]["run"],
+        )
+
+    def test_provisioning_changes_select_the_tls_postgres_lane(self) -> None:
+        # The suite runs in the contracts-journeys lane, which review keeps.
+        self.assertIn(PROVISION_POSTGRES_LANE, BREG_CONTRACTS_LANES[:2])
+        # Without dependency edges the provisioning crate reaches nothing
+        # else, so its own mapping has to select the lane, not a dependent
+        # that happens to link it.
+        edgeless = Workspace(without_dependency_edges(self.metadata))
+        for graph, workspace in (("real", self.workspace), ("edgeless", edgeless)):
+            for path in (
+                "crates/registry-platform-provision/src/lib.rs",
+                "crates/registry-platform-provision/tests/postgres.rs",
+            ):
+                for event, outputs in (
+                    ("pull_request", classify(workspace, (path,), pull_request=True)),
+                    ("merge_group", classify(workspace, (path,))),
+                ):
+                    with self.subTest(graph=graph, path=path, event=event):
+                        self.assertTrue(outputs["breg_contracts"])
+                        self.assertIn(
+                            PROVISION_POSTGRES_LANE, outputs["breg_contracts_lanes"]
+                        )
+        # The suite needs no other PostgreSQL job, so the provisioning crate on
+        # its own selects none.
+        alone = classify(edgeless, ("crates/registry-platform-provision/src/lib.rs",))
+        self.assertFalse(alone["breg_integration"])
+        self.assertFalse(alone["casework_postgres"])
+
+    def test_contracts_journeys_lane_runs_the_provisioning_postgres_suite(
+        self,
+    ) -> None:
+        steps = self.workflow_jobs["breg-contracts"]["steps"]
+        names = [step.get("name") for step in steps]
+        tls = names.index("Base Registry Engine PostgreSQL TLS proof")
+        start = names.index("Start PostgreSQL 16 for the provisioning floor test")
+        secure = names.index("Serve PostgreSQL 16 over TLS for the provisioning floor test")
+        suite = names.index("Provisioning PostgreSQL suite")
+        stop = names.index("Stop PostgreSQL 16 for the provisioning floor test")
+        self.assertLess(tls, start)
+        self.assertLess(start, secure)
+        self.assertLess(secure, suite)
+        self.assertLess(suite, stop)
+        lane = f"matrix.lane == '{PROVISION_POSTGRES_LANE}'"
+        for index in (start, secure, suite):
+            with self.subTest(step=names[index]):
+                self.assertEqual(lane, steps[index]["if"])
+        self.assertEqual("provision-postgres-16", steps[start]["id"])
+        self.assertEqual(
+            f"always() && {lane} && "
+            "steps.provision-postgres-16.outputs.container_id != ''",
+            steps[stop]["if"],
+        )
+
+        self.assertRegex(
+            steps[start]["run"],
+            r"image='docker\.io/library/postgres:16\.[0-9]+@sha256:[0-9a-f]{64}'",
+        )
+        self.assertIn("--label org.registrystack.ci.postgres-service=true", folded_command(steps[start]))
+        self.assertIn("--publish 127.0.0.1::5432", folded_command(steps[start]))
+
+        # The lane's own TLS script gives the old server a throwaway CA.
+        secure_command = folded_command(steps[secure])
+        self.assertIn("BREG_TEST_TLS_SETUP_ONLY=1", secure_command)
+        self.assertIn("products/breg/scripts/test-postgres-tls.sh", secure_command)
+
+        # Every variable the suite reads is set, each URL verifies the
+        # certificate and its host name, and a run that passes no test fails.
+        suite_run = steps[suite]["run"]
+        variables = provision_test_variables()
+        self.assertEqual(
+            {
+                "PROVISION_TEST_DATABASE_URL",
+                "PROVISION_TEST_DATABASE_CA",
+                "PROVISION_TEST_OLD_DATABASE_URL",
+            },
+            variables,
+        )
+        for variable in sorted(variables):
+            with self.subTest(variable=variable):
+                self.assertRegex(suite_run, rf"(?m)^export {variable}=\S")
+        self.assertEqual(2, suite_run.count("/postgres?sslmode=verify-full\""))
+        # The suite target and the library's command tests, which need cli.
+        for target, log in (("--lib", "lib"), ("--test postgres", "suite")):
+            with self.subTest(target=target):
+                self.assertIn(
+                    "cargo test --locked -p registry-platform-provision "
+                    f"--features postgres-test,cli {target} "
+                    f'| tee "${{RUNNER_TEMP}}/provision-postgres-{log}.log"',
+                    folded_command(steps[suite]),
+                )
+        self.assertIn(
+            "for target in lib suite; do grep -Eq "
+            "'^test result: ok\\. [1-9][0-9]* passed; 0 failed; 0 ignored' "
+            '"${RUNNER_TEMP}/provision-postgres-${target}.log"',
+            folded_command(steps[suite]),
+        )
+
+        stop_run = steps[stop]["run"]
+        self.assertIn("org.registrystack.ci.postgres-service", stop_run)
+        self.assertIn('docker rm --force "${CONTAINER_ID}"', stop_run)
+
+
 def edit_lock_package(text: str, name: str, **fields: str) -> str:
     """Return the lockfile with one uniquely named package's fields replaced."""
 
@@ -4114,6 +4654,7 @@ class EventScopedSelectionTest(unittest.TestCase):
             "breg_tutorial",
             "casework_tutorial",
             "breg_evidence_composition",
+            "acceptance_journeys",
         )
         # Each heavy selector keeps its own path gate; this change reaches all.
         paths = (

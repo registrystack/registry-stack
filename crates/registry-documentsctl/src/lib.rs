@@ -49,6 +49,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 mod operate;
+mod provision;
 mod report;
 mod starter;
 
@@ -90,6 +91,8 @@ enum Command {
     Package(PackageArgs),
     /// Report what apply would change in the database, writing nothing.
     Plan(ActivationArgs),
+    /// Create the roles and the database the runtime file names, or print the SQL.
+    Provision(registry_platform_provision::ProvisionArgs),
     /// Apply the schema and record the configured package as active.
     Apply(ApplyArgs),
     /// Report the active package and the activation history.
@@ -512,6 +515,7 @@ where
     };
     let command = command_path(&cli.command);
     let outcome = match &cli.command {
+        Command::Provision(args) => return provision(args, cli.format),
         Command::Init(args) => init(&args.directory),
         Command::Check(args) => check(args),
         Command::Package(args) => package(args),
@@ -556,6 +560,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Check(_) => "check",
         Command::Package(_) => "package",
         Command::Plan(_) => "plan",
+        Command::Provision(_) => "provision",
         Command::Apply(_) => "apply",
         Command::Status(_) => "status",
         Command::Verification(VerificationCommand::List(_)) => "verification list",
@@ -564,6 +569,23 @@ fn command_path(command: &Command) -> &'static str {
         Command::Erasure(ErasureCommand::List(_)) => "erasure list",
         Command::Erasure(ErasureCommand::Replay(_)) => "erasure replay",
     }
+}
+
+/// Runs the shared `provision` command, which writes its own report and sets
+/// its own exit code. The global `--format` selects its report as it selects
+/// every other command's.
+fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFormat) -> ExitCode {
+    let shared = match format {
+        OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
+        OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
+    };
+    registry_platform_provision::run_provision(
+        "documentsctl",
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        args,
+        shared,
+        provision::load,
+    )
 }
 
 fn init(directory: &Path) -> Outcome {

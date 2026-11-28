@@ -46,7 +46,7 @@ const EXPECTATIONS_FORMAT: FormatSpec<'static> = FormatSpec {
     },
     removed_keys: &[],
 };
-const PRIVATE_JWK_MEMBERS: [&str; 7] = ["d", "p", "q", "dp", "dq", "qi", "k"];
+const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
 const SIGNING_ALGORITHMS: [&str; 5] = ["RS256", "ES256", "EdDSA", "HS256", "HS512"];
 
 /// Why a corpus file did not load, validate, sign or run.
@@ -282,7 +282,37 @@ struct RawHeader {
     kid: Value,
 }
 
+/// OpenID Connect scopes. They select a claim set for the person. No product
+/// profile requires one of them as a permission.
+const OPENID_CONNECT_SCOPES: [&str; 6] = [
+    "openid",
+    "profile",
+    "email",
+    "address",
+    "phone",
+    "offline_access",
+];
+
 impl TokenFixture {
+    /// The first value of the claim `claim` that is not an OpenID Connect
+    /// scope: a space-separated string, or the first string of an array. `None`
+    /// when the claim is absent or holds only OpenID Connect scopes.
+    #[must_use]
+    pub fn read_scope(&self, claim: &str) -> Option<String> {
+        match self.claims.get(claim) {
+            Some(ClaimValue::Literal(Value::String(text))) => text
+                .split_whitespace()
+                .find(|scope| !OPENID_CONNECT_SCOPES.contains(scope))
+                .map(str::to_owned),
+            Some(ClaimValue::Literal(Value::Array(items))) => items
+                .iter()
+                .filter_map(Value::as_str)
+                .find(|scope| !OPENID_CONNECT_SCOPES.contains(scope))
+                .map(str::to_owned),
+            _ => None,
+        }
+    }
+
     /// Parse and validate one fixture file. `file_stem` is the file name without
     /// its extension and must equal the fixture's `id`.
     pub fn parse(file_stem: &str, text: &str) -> Result<Self, TokenFixtureError> {
@@ -890,6 +920,18 @@ impl ProductReport {
     /// Panics, listing each differing row, if any row mismatched.
     pub fn assert_matches(&self) {
         let mismatches = self.mismatches();
+        for row in self
+            .rows
+            .iter()
+            .filter(|row| row.comparison == Comparison::Unresolved)
+        {
+            if let Some(observed) = &row.observed {
+                eprintln!(
+                    "unresolved {} / {} / {:?} / {:?}: observed {observed}",
+                    self.product, row.fixture, row.against, row.configuration
+                );
+            }
+        }
         assert!(
             mismatches.is_empty(),
             "{} rows of `{}` differ from expected.yaml:\n{}",
@@ -1192,4 +1234,21 @@ fn finish(mut report: RowReport, observed: Option<Outcome>) -> RowReport {
         report.observed = Some(observed);
     }
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn the_private_member_list_is_the_platform_list() {
+        assert_eq!(
+            super::PRIVATE_JWK_MEMBERS
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            registry_platform_crypto::PRIVATE_JWK_MEMBERS
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        );
+    }
 }

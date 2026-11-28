@@ -7046,8 +7046,10 @@ pub fn plain_http_origin_admitted(
             .iter()
             .any(|cidr| cidr.contains(address)),
         // A named host resolves at send, where the same containment rule
-        // runs on the answers; the check cannot resolve, so it defers
-        // instead of refusing what the send admits.
+        // runs on the answers; the check cannot resolve, so it defers to the
+        // send. With an empty `allowedPrivateCidrs` the send admits no
+        // private address, and the destination policy refuses the origin
+        // when the runtime freezes it, naming the missing range.
         None => true,
     }
 }

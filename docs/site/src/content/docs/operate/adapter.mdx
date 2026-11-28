@@ -75,11 +75,22 @@ When the certificate comes from a private CA, name that CA with
 `adapter serve` migrates through `database.migrationUrlRef` and serves through
 `database.runtimeUrlRef`.
 The migration role owns the tables.
-Give the runtime role only the grants its deployment uses.
-The Adapter refuses a runtime role at startup, naming each missing grant and table, before it
-listens.
-In the statements that follow, `adapter` stands for the schema on the runtime role's search path and
-`runtime` for that role:
+After it migrates and before it grants anything, `adapter serve` connects as the runtime role and reads
+that session's role name.
+When it differs from the migration session's role name, `adapter serve` grants the runtime session's
+role the privileges its deployment uses.
+The grants run in one transaction, then `adapter serve` checks them and refuses to listen if one is
+missing.
+A runtime connection that fails stops startup before any grant.
+The runtime role must already exist, be able to log in and hold `CONNECT` on the database.
+When both sessions run as the same role, `adapter serve` issues no grant and the single role keeps
+every privilege it owns.
+The runtime role's search path must reach the same schema as the migration role's.
+
+The statements below are equivalent to what `adapter serve` runs for the facade tables, with
+`adapter` standing for the schema on the migration role's search path and `runtime` for the runtime
+role.
+`adapter serve` issues only the grants the role still lacks:
 
 ```sql
 -- Every deployment: append journal events, run audit.retentionDays, report readiness.
@@ -98,16 +109,61 @@ GRANT SELECT, INSERT, UPDATE ON adapter_idempotency_async_artifacts TO runtime;
 GRANT SELECT, INSERT ON adapter_idempotency_resume_bindings TO runtime;
 ```
 
-The runtime role needs no grant on `adapter_idempotency_schema_migrations`; only the migration role
-reads it.
+The Adapter grants nothing else: no default privileges, and nothing on
+`adapter_idempotency_schema_migrations`, which only the migration role reads.
+It never revokes a grant, so a feature you remove from a deployment leaves its earlier grants in
+place until you revoke them.
 
-{/* Evidence: crates/registry-adapter/src/serve.rs required, missing_table_privileges;
+You still grant the payment tables yourself when you start `adapter serve` with
+`--payments-config`.
+`adapter serve` refuses to start without these privileges, and it does not grant them:
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON adapter_payment_attempts TO runtime;
+GRANT SELECT, INSERT ON adapter_payment_commands, adapter_payment_events TO runtime;
+GRANT USAGE ON SEQUENCE adapter_payment_events_sequence_seq TO runtime;
+
+-- When payments.yaml declares disbursement connections.
+GRANT SELECT, INSERT, UPDATE ON adapter_g2p_attempts TO runtime;
+GRANT SELECT, INSERT ON adapter_g2p_commands, adapter_g2p_events TO runtime;
+GRANT USAGE ON SEQUENCE adapter_g2p_events_sequence_seq TO runtime;
+
+-- When you serve payments without a project, so no facade grant step runs.
+GRANT USAGE ON SCHEMA adapter TO runtime;
+```
+
+`adapter serve` makes no automatic grant in two cases:
+
+- The runtime role lacks a privilege and has members that would inherit it.
+  `adapter serve` leaves that decision to you: grant the privileges above to the runtime role
+  yourself, and startup then passes the check.
+  A member that holds `ADMIN OPTION` on the runtime role and has no members of its own does not
+  count, because it can already grant the role to itself.
+  A role with `CREATEROLE` that is not a superuser and created the runtime role is such a member.
+- The migration role does not own an object it must grant on, for example a table that an earlier
+  role created.
+  PostgreSQL ignores or refuses a grant its issuer has no right to make, so `adapter serve` rolls
+  the grants back and refuses to start.
+  Run the statements above as the object's owner, or make the migration role the owner.
+
+When the runtime role holds every privilege in the migration schema and startup still reports one
+missing, the runtime session's search path resolves a different schema.
+
+{/* Evidence: crates/registry-adapter/src/serve.rs runtime_requirements, grant_runtime_privileges;
+    crates/registry-adapter/src/payments/store.rs check_privileges;
+    crates/registry-adapter/src/payments/g2p_store.rs check_privileges;
     crates/registry-adapter/src/journal.rs RUNTIME_PRIVILEGES;
     crates/registry-adapter/src/idempotent.rs WRITE_RUNTIME_GRANTS, RECOVERY_RUNTIME_GRANTS,
     RESUME_RUNTIME_GRANTS;
     crates/registry-adapter/tests/postgres_journal_retention_served.rs
-    a_write_runtime_role_without_idempotency_grants_is_refused_by_name,
-    a_resumable_write_runtime_role_needs_the_recovery_grants_and_serves_on_first_run. */}
+    serve_grants_exactly_the_required_privileges, single_role_serve_issues_no_grant,
+    a_runtime_url_naming_public_is_refused_and_grants_nothing,
+    a_runtime_role_with_members_is_granted_nothing_and_refused,
+    a_runtime_role_whose_only_member_administers_it_is_granted_its_privileges,
+    a_provisioned_runtime_role_is_granted_its_privileges,
+    a_provisioned_runtime_role_with_a_plain_member_is_granted_nothing_and_refused,
+    an_administrator_with_members_of_its_own_blocks_the_grant,
+    a_migration_role_that_does_not_own_the_tables_fails_startup_and_grants_nothing. */}
 
 ## Operate an ingestion job
 

@@ -1,0 +1,56 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "thunderid-exchanged-holder-no-scope",
+  "class": "positive",
+  "provider": "thunderid",
+  "kind": "user-access",
+  "tokenUse": "access",
+  "subjectKind": "user",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "ThunderID 1.1.0",
+    "note": "Observed from a ThunderID 1.1.0 issuer on 27 November 2026. Header members and claim names are the observed ones. Claim values are synthetic. Signed by the corpus test key. Form requested with neither resource nor scope."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "at+jwt",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "aud": {
+      "bind": "audience"
+    },
+    "client_id": "portal-exchange",
+    "exp": {
+      "offsetSeconds": 900
+    },
+    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+    "holder_ref": "holder-0001",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "iss": {
+      "bind": "issuer"
+    },
+    "jti": "synthetic-jti-0032",
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "sub": "00000000-0000-4000-8000-000000000001"
+  },
+  "omits": [
+    "azp",
+    "scope",
+    "scp",
+    "registry_scope",
+    "registry_actor_kind",
+    "jurisdiction",
+    "role",
+    "individual_id"
+  ],
+  "notes": "RFC 8693 exchange, subject token the stand-in's ID token. ThunderID keeps the national subject as sub and replaces the mapped holder_ref. Every authority claim of the national token is dropped, and registry_actor_kind cannot be supplied on an exchange. The grant_type value is the RFC 8693 grant type, inferred: only the claim name was observed, not its value. The lifetime is 900 seconds, observed. aud falls back to the client's default audience, so it binds to the product's audience. The token grants no permission and carries no scope claim. It is positive, as the other scope-less fixtures are, because no result is defined yet for a token without a scope claim."
+}

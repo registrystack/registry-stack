@@ -1,4 +1,5 @@
-//! The one definition of "loopback" for outbound and bind decisions.
+//! The one definition of "loopback" for outbound destinations and loopback origins.
+//! Bind sites keep their own, stricter rule.
 //!
 //! A host is loopback when it is an address literal in `127.0.0.0/8`, `::1`, or an
 //! IPv4-mapped IPv6 form of an address in `127.0.0.0/8`, or when it is the exact
@@ -6,7 +7,7 @@
 //! caller has checked. `*.localhost`, `localhost.` and every other name are never
 //! loopback.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 
 /// The one name that may stand for the loopback interface.
 const LOCALHOST: &str = "localhost";
@@ -43,6 +44,11 @@ impl LoopbackHost {
 
 /// Classify a URL host. `[::1]` and `::1` are both accepted. Returns `None` for every
 /// other host.
+///
+/// `loopback_host(..).is_some()` treats the bare name `localhost` as loopback. A
+/// site that accepts the name that way must also pin the connection to loopback
+/// addresses, as [`LoopbackHost::pinned_by`] checks, or a hosts file or resolver
+/// can send it off the machine. A site that cannot pin uses [`loopback_literal`].
 #[must_use]
 pub fn loopback_host(host: &str) -> Option<LoopbackHost> {
     if host.eq_ignore_ascii_case(LOCALHOST) {
@@ -51,14 +57,17 @@ pub fn loopback_host(host: &str) -> Option<LoopbackHost> {
     loopback_literal(host).map(LoopbackHost::Literal)
 }
 
-/// The literal arm alone, for a site that cannot pin a name.
+/// The literal arm alone, for a site that cannot pin a name. Brackets are
+/// accepted around an IPv6 literal only, as in a URL host.
 #[must_use]
 pub fn loopback_literal(host: &str) -> Option<IpAddr> {
-    let bare = host
+    let ip = match host
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))
-        .unwrap_or(host);
-    let ip: IpAddr = bare.parse().ok()?;
+    {
+        Some(inner) => IpAddr::V6(inner.parse::<Ipv6Addr>().ok()?),
+        None => host.parse().ok()?,
+    };
     loopback_address(ip).then_some(ip)
 }
 
@@ -91,6 +100,9 @@ mod tests {
             "[::ffff:10.0.0.1]",
             "[::1",
             "::1]",
+            "[127.0.0.1]",
+            "[127.0.0.2]",
+            "[localhost]",
             "",
         ] {
             assert!(
@@ -112,6 +124,11 @@ mod tests {
         );
         assert!(loopback_literal("localhost").is_none());
         assert!(loopback_literal("[::1]").is_some());
+        assert!(loopback_literal("[::ffff:127.0.0.1]").is_some());
+        assert!(
+            loopback_literal("[127.0.0.1]").is_none(),
+            "a bracketed IPv4 literal is not a URL host"
+        );
     }
 
     #[test]

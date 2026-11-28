@@ -6414,6 +6414,7 @@ dependencies = [
  "registry-platform-hooks",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-provision",
  "registry-platform-testing",
  "registry-platform-yaml",
  "registry-rstack-dev",
@@ -6618,6 +6619,7 @@ dependencies = [
  "registry-cli-report",
  "registry-platform-buildinfo",
  "registry-platform-config",
+ "registry-platform-provision",
  "registry-platform-yaml",
  "registry-rstack-dev",
  "registry-thunderid-tooling",
@@ -6629,6 +6631,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -6739,6 +6742,7 @@ dependencies = [
  "registry-platform-httputil",
  "registry-platform-metrics",
  "registry-platform-oidc",
+ "registry-platform-provision",
  "registry-platform-script",
  "registry-platform-testing",
  "registry-platform-yaml",
@@ -7039,6 +7043,7 @@ dependencies = [
  "registry-documents-core",
  "registry-platform-buildinfo",
  "registry-platform-config",
+ "registry-platform-provision",
  "registry-platform-yaml",
  "serde",
  "serde_json",
@@ -7046,6 +7051,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -7676,6 +7682,7 @@ dependencies = [
  "registry-platform-dispatch",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-provision",
  "registry-platform-testing",
  "registry-platform-yaml",
  "registry-rstack-dev",
@@ -7842,7 +7849,7 @@ name = "registry-platform-config"
 version = "0.49.0"
 dependencies = [
  "registry-platform-canonical-json",
- "registry-platform-httpsec",
+ "registry-platform-loopback",
  "registry-platform-yaml",
  "rustix 1.1.6",
  "schemars",
@@ -7936,6 +7943,8 @@ version = "0.49.0"
 dependencies = [
  "axum",
  "http",
+ "registry-platform-authcommon",
+ "registry-platform-loopback",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -7967,7 +7976,7 @@ dependencies = [
  "registry-platform-authcommon",
  "registry-platform-canonical-json",
  "registry-platform-crypto",
- "registry-platform-httpsec",
+ "registry-platform-loopback",
  "reqwest 0.12.28",
  "rustls-native-certs",
  "serde",
@@ -7982,6 +7991,10 @@ dependencies = [
  "wiremock",
  "zeroize",
 ]
+
+[[package]]
+name = "registry-platform-loopback"
+version = "0.49.0"
 
 [[package]]
 name = "registry-platform-metrics"
@@ -8034,6 +8047,10 @@ dependencies = [
  "tracing",
  "uuid",
 ]
+
+[[package]]
+name = "registry-platform-posture"
+version = "0.49.0"
 
 [[package]]
 name = "registry-platform-provision"
@@ -8523,6 +8540,7 @@ dependencies = [
  "registry-platform-audit",
  "registry-platform-buildinfo",
  "registry-platform-config",
+ "registry-platform-provision",
  "registry-platform-yaml",
  "registry-scheduling",
  "registry-scheduling-core",
@@ -8532,6 +8550,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -1,0 +1,54 @@
+{
+  "schema": "registry.token-fixture/v1",
+  "id": "esignet-standin-id-token",
+  "class": "negative",
+  "provider": "thunderid",
+  "kind": "user-id",
+  "tokenUse": "id",
+  "subjectKind": "user",
+  "source": {
+    "basis": "observed",
+    "observedFrom": "issuer",
+    "observedOn": "2026-11-27",
+    "version": "ThunderID 1.1.0",
+    "note": "Observed from a ThunderID 1.1.0 issuer on 27 November 2026. Header members and claim names are the observed ones. Claim values are synthetic. Signed by the corpus test key. Token of the stand-in for eSignet, client portal."
+  },
+  "header": {
+    "alg": "ES256",
+    "typ": "JWT",
+    "kid": {
+      "generated": true
+    }
+  },
+  "claims": {
+    "aud": "portal",
+    "auth_time": {
+      "offsetSeconds": 0
+    },
+    "exp": {
+      "offsetSeconds": 900
+    },
+    "holder_ref": "holder-0002",
+    "iat": {
+      "offsetSeconds": 0
+    },
+    "individual_id": "holder-0001",
+    "iss": "https://standin.example.test",
+    "jti": "synthetic-jti-0041",
+    "jurisdiction": "north-synthetic",
+    "name": "Journey User",
+    "nbf": {
+      "offsetSeconds": 0
+    },
+    "registry_actor_kind": "service",
+    "registry_scope": "records:get",
+    "role": "service_role",
+    "sub": "00000000-0000-4000-8000-000000000001"
+  },
+  "omits": [
+    "scope",
+    "client_id",
+    "azp"
+  ],
+  "notes": "This token is from a second ThunderID that stands in for eSignet. Its tokens are the subject of the exchange and never reach a product. The documented eSignet fixtures (esignet-id-token, esignet-access-token) keep eSignet's own shape from its documentation. The ID token carries registry-shaped claims. The lifetime is a test choice."
+}

@@ -100,7 +100,9 @@ impl Shape {
             (None, true) => Vec::new(),
             (None, false) => vec![LISTED_CLIENT.to_owned()],
         };
-        let scope = first_scope(fixture, scope_claim).unwrap_or_else(|| FALLBACK_SCOPE.to_owned());
+        let scope = fixture
+            .read_scope(scope_claim)
+            .unwrap_or_else(|| FALLBACK_SCOPE.to_owned());
         Self {
             algorithm,
             access_token_type,
@@ -224,18 +226,6 @@ accessProfiles:
 fn literal_text(fixture: &TokenFixture, claim: &str) -> Option<String> {
     match fixture.claims.get(claim) {
         Some(ClaimValue::Literal(Value::String(text))) => Some(text.clone()),
-        _ => None,
-    }
-}
-
-/// The first scope the fixture carries in `claim`, a space-separated string or
-/// a list.
-fn first_scope(fixture: &TokenFixture, claim: &str) -> Option<String> {
-    match fixture.claims.get(claim) {
-        Some(ClaimValue::Literal(Value::String(text))) => text.split(' ').next().map(str::to_owned),
-        Some(ClaimValue::Literal(Value::Array(items))) => {
-            items.first().and_then(Value::as_str).map(str::to_owned)
-        }
         _ => None,
     }
 }

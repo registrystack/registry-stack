@@ -12,7 +12,19 @@ workspace = true
 
 [features]
 default = ["server"]
-server = ["dep:axum", "dep:tokio", "dep:tower", "dep:tower-http", "dep:ulid", "dep:url"]
+server = [
+    "dep:axum",
+    "dep:tokio",
+    "dep:tower",
+    "dep:tower-http",
+    "dep:ulid",
+    "dep:url",
+]
+
+# Implements authcommon's `RefusalTraceId` for `TraceId`, so a service passes
+# its request trace id to `record_refusal!`. Opt-in because authcommon reaches
+# the crypto stack, which a service that only serves HTTP does not carry.
+refusal-trace-id = ["server", "dep:registry-platform-authcommon"]
 
 [[test]]
 name = "integration"
@@ -21,6 +33,8 @@ required-features = ["server"]
 [dependencies]
 axum = { workspace = true, optional = true }
 http.workspace = true
+registry-platform-authcommon = { workspace = true, optional = true }
+registry-platform-loopback.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -31,4 +45,5 @@ ulid = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
 [dev-dependencies]
+registry-platform-authcommon = { workspace = true, features = ["refusal-recorder"] }
 tokio.workspace = true

@@ -18,7 +18,7 @@ use registry_evidence_client::{
     SelectorValue, StaticToken, SubjectBindingReceipt, SubjectExpectations, SubjectRequest,
     TokenError, TokenProvider,
 };
-use registry_platform_crypto::PrivateJwk;
+use registry_platform_crypto::{PrivateJwk, PRIVATE_JWK_MEMBERS};
 use registry_platform_httputil::{exchange_authorization_from_json, ExchangeAuthorization};
 use serde_json::{Map, Value};
 use url::Url;
@@ -595,15 +595,15 @@ fn response_format_from_json(value: &Value) -> Result<EvidenceResponseFormat, Co
     })
 }
 
-/// Every JWK member that carries a private key half, across the key types a
-/// caller could paste one from.
-///
-/// [`HolderPublicKey`] is `deny_unknown_fields`, so each of these already
-/// fails to deserialize. What that refusal cannot do is say why it matters: an
-/// unknown member reads as a typo. A caller who pasted a whole key pair here
-/// has done something materially different from mistyping a field name, and
-/// gets told exactly that by the check below instead.
-const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
+// `PRIVATE_JWK_MEMBERS`, the shared list in `registry-platform-crypto`, names
+// every JWK member that carries a private key half, across the key types a
+// caller could paste one from.
+//
+// [`HolderPublicKey`] is `deny_unknown_fields`, so each of these already
+// fails to deserialize. What that refusal cannot do is say why it matters: an
+// unknown member reads as a typo. A caller who pasted a whole key pair here
+// has done something materially different from mistyping a field name, and
+// gets told exactly that by the check below instead.
 
 /// Read one caller-supplied holder public key.
 ///

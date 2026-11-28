@@ -45,7 +45,7 @@ use registry_adapter_core::{
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::destination::{
-    DataDestinationPolicy, DestinationProfile, DestinationTlsMaterial,
+    DataDestinationPolicy, DestinationPolicyError, DestinationProfile, DestinationTlsMaterial,
     MAX_DESTINATION_CA_BUNDLE_BYTES,
 };
 use registry_platform_yaml::{Diagnostic, Report, SecretReference, Url};
@@ -833,9 +833,7 @@ fn destination_policy(
         profile,
         &networks,
     )
-    .map_err(|_| {
-        EgressFault::Refused("the destination is not admitted by the frozen policy".to_owned())
-    })?;
+    .map_err(|error| EgressFault::Refused(destination_refusal(&error)))?;
     if let Some(profile) = &binding.tls_trust_profile {
         let bundle = resolve_ca_bundle(runtime, profile.as_str()).map_err(|_| {
             EgressFault::Refused(
@@ -854,6 +852,16 @@ fn destination_policy(
         })?;
     }
     Ok(policy)
+}
+
+/// The report text for a refused destination. An empty private range list
+/// keeps the platform's own text, which says how to fix it. Any other refusal
+/// is a fixed sentence, so the report never repeats an origin.
+fn destination_refusal(error: &DestinationPolicyError) -> String {
+    match error {
+        DestinationPolicyError::PrivateServiceRequiresPrivateCidr => error.to_string(),
+        _ => "the destination is not admitted by the frozen policy".to_owned(),
+    }
 }
 
 fn destination_profile(base: &Url) -> DestinationProfile {
@@ -1170,6 +1178,17 @@ mod tests {
         assert_eq!(
             message,
             "the runtime credential's kind (`none`) does not match the endpoint's declared kind (`basic`)"
+        );
+    }
+
+    #[test]
+    fn an_empty_private_range_list_keeps_the_platform_remedy() {
+        let message =
+            destination_refusal(&DestinationPolicyError::PrivateServiceRequiresPrivateCidr);
+        assert!(message.contains("name the range"), "{message}");
+        assert_eq!(
+            destination_refusal(&DestinationPolicyError::OriginMissingPort),
+            "the destination is not admitted by the frozen policy"
         );
     }
 

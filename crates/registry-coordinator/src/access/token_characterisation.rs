@@ -37,10 +37,7 @@ fn client_of(fixture: &TokenFixture) -> Option<String> {
 }
 
 fn first_scope(fixture: &TokenFixture) -> Option<String> {
-    literal(fixture, "scope")?
-        .split_whitespace()
-        .next()
-        .map(str::to_owned)
+    fixture.read_scope("scope")
 }
 
 fn stage_of(error: &OidcError) -> Outcome {
