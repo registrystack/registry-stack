@@ -69,6 +69,7 @@ fn field() -> SignatureField {
         signing_time: Utc.with_ymd_and_hms(2026, 11, 6, 9, 30, 15).unwrap(),
         contents_capacity: CAPACITY,
         field_name: FIELD_NAME.to_owned(),
+        test_only: false,
     }
 }
 

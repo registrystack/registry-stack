@@ -46,6 +46,7 @@
 //! successful `preview` is the one exception: it prints the exact bytes the
 //! runtime's preview route answers.
 
+use registry_platform_config::DeclaredPosture;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
@@ -166,6 +167,12 @@ enum GenerateCommand {
 
 #[derive(Debug, Args)]
 struct GenerateIdentityFactsArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file: its authentication.oidc block and the
     /// package it names state the facts.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
@@ -187,6 +194,12 @@ struct GenerateTemplatesArgs {
 
 #[derive(Debug, Args)]
 struct ServeArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file passed unchanged to the Messaging runtime.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -204,6 +217,12 @@ enum RetentionCommand {
 
 #[derive(Debug, Args)]
 struct EraseExpiredArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -238,6 +257,12 @@ enum MessagesCommand {
 
 #[derive(Debug, Args)]
 struct ListArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -252,6 +277,12 @@ struct ListArgs {
 
 #[derive(Debug, Args)]
 struct MessageArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -346,6 +377,12 @@ struct PackageArgs {
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("source").required(true).multiple(false)))]
 struct PackageSource {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE", group = "source")]
     runtime_config: Option<PathBuf>,
@@ -368,6 +405,15 @@ struct PackageSource {
         .args(["runtime_config", "package", "project", "dev_state"])
 ))]
 struct CheckArgs {
+    /// Check under the production posture.
+    #[arg(long)]
+    production: bool,
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Generated development session state. Checked offline without secrets.
     #[arg(long, value_name = "FILE", conflicts_with_all = ["runtime_config", "package", "project"])]
     dev_state: Option<PathBuf>,
@@ -422,6 +468,12 @@ struct ApplyArgs {
 
 #[derive(Debug, Args)]
 struct ActivationArgs {
+    #[arg(
+        long = "posture",
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -745,9 +797,56 @@ where
         }
     };
     let command = command_path(&cli.command);
+    let (flag, production) = match &cli.command {
+        Command::Serve(args) => (Some(&args.posture), false),
+        Command::Provision(args) => (Some(&args.posture), false),
+        Command::Generate(GenerateCommand::IdentityFacts(args)) => (Some(&args.posture), false),
+        Command::Check(args) => (Some(&args.posture), args.production),
+        Command::Preview(args) => (Some(&args.source.posture), false),
+        Command::Plan(args) | Command::Status(args) => (Some(&args.posture), false),
+        Command::Apply(args) => (Some(&args.activation.posture), false),
+        Command::Messages(args) => (
+            Some(match args {
+                MessagesCommand::List(args) => &args.posture,
+                MessagesCommand::Show(args) => &args.posture,
+                MessagesCommand::Retry(args) | MessagesCommand::Cancel(args) => {
+                    &args.target.posture
+                }
+                MessagesCommand::Settle(args) => &args.action.target.posture,
+            }),
+            false,
+        ),
+        Command::Retention(RetentionCommand::EraseExpired(args)) => (Some(&args.posture), false),
+        _ => (None, false),
+    };
+    let posture = if let Some(flag) = flag {
+        let flag = flag.as_deref();
+        if production && flag == Some("development") {
+            let outcome = posture_refusal(
+                "platform.posture.conflict",
+                "--production and --posture development contradict each other",
+                "Use one of them.",
+            );
+            return finish(&outcome, command, cli.format, stdout, stderr);
+        }
+        let flag = flag.or(production.then_some("production"));
+        match registry_platform_config::declared(flag) {
+            Ok(declared) => Some(declared),
+            Err(error) => {
+                let outcome =
+                    posture_refusal(error.code(), error.message(), error.suggested_action());
+                return finish(&outcome, command, cli.format, stdout, stderr);
+            }
+        }
+    } else {
+        None
+    };
+    let declared = posture.unwrap_or(registry_messaging::config::DEFAULT_POSTURE);
     let outcome = match cli.command {
-        Command::Serve(args) => return serve(args, cli.format, format_requested, stdout, stderr),
-        Command::Provision(args) => return provision(&args, cli.format),
+        Command::Serve(args) => {
+            return serve(args, declared, cli.format, format_requested, stdout, stderr)
+        }
+        Command::Provision(args) => return provision(&args, cli.format, declared),
         Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
         Command::RstackDev(args) => return registry_rstack_dev::run(args, stdout, stderr),
         Command::Api(args) => return api(*args, format_requested, stderr),
@@ -757,16 +856,18 @@ where
         Command::Init(args) => init(&args.directory),
         Command::Package(args) => package(&args),
         Command::Generate(GenerateCommand::Templates(args)) => generate_templates(&args),
-        Command::Generate(GenerateCommand::IdentityFacts(args)) => generate_identity_facts(&args),
-        Command::Check(args) => check(&args),
-        Command::Preview(args) => preview(&args),
-        Command::Plan(args) => plan(&args.runtime_config),
-        Command::Apply(args) => apply(&args),
-        Command::Status(args) => status(&args.runtime_config),
-        Command::Messages(command) => messages(&command),
-        Command::Retention(RetentionCommand::EraseExpired(args)) => erase_expired(&args),
+        Command::Generate(GenerateCommand::IdentityFacts(args)) => {
+            generate_identity_facts(&args, declared)
+        }
+        Command::Check(args) => check(&args, declared),
+        Command::Preview(args) => preview(&args, declared),
+        Command::Plan(args) => plan(&args.runtime_config, declared),
+        Command::Apply(args) => apply(&args, declared),
+        Command::Status(args) => status(&args.runtime_config, declared),
+        Command::Messages(command) => messages(&command, declared),
+        Command::Retention(RetentionCommand::EraseExpired(args)) => erase_expired(&args, declared),
     };
-    finish(&outcome, command, cli.format, stdout, stderr)
+    finish_with_posture(&outcome, command, cli.format, stdout, stderr, posture)
 }
 
 /// The subcommand path a parsed invocation selected, as its report names it.
@@ -799,7 +900,11 @@ fn command_path(command: &Command) -> &'static str {
 /// Runs the shared `provision` command, which writes its own report and sets
 /// its own exit code. The global `--format` selects its report as it selects
 /// every other command's.
-fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFormat) -> ExitCode {
+fn provision(
+    args: &registry_platform_provision::ProvisionArgs,
+    format: OutputFormat,
+    declared: registry_platform_config::DeclaredPosture,
+) -> ExitCode {
     let shared = match format {
         OutputFormat::Human => registry_platform_provision::cli::OutputFormat::Human,
         OutputFormat::Json => registry_platform_provision::cli::OutputFormat::Json,
@@ -809,7 +914,7 @@ fn provision(args: &registry_platform_provision::ProvisionArgs, format: OutputFo
         registry_platform_buildinfo::DISPLAY_VERSION,
         args,
         shared,
-        provision::load,
+        |path| provision::load(path, declared),
     )
 }
 
@@ -871,6 +976,7 @@ fn connection(
 
 fn serve(
     args: ServeArgs,
+    declared: DeclaredPosture,
     format: OutputFormat,
     format_requested: bool,
     stdout: &mut dyn io::Write,
@@ -911,6 +1017,7 @@ fn serve(
     command
         .arg("--runtime-config")
         .arg(args.runtime_config)
+        .args(["--posture", declared.posture.as_str()])
         .arg("serve");
     replace_with_service(command, "messaging", stderr)
 }
@@ -1025,7 +1132,7 @@ fn generate_templates(args: &GenerateTemplatesArgs) -> Outcome {
     }
 }
 
-fn generate_identity_facts(args: &GenerateIdentityFactsArgs) -> Outcome {
+fn generate_identity_facts(args: &GenerateIdentityFactsArgs, declared: DeclaredPosture) -> Outcome {
     // Refuse before reading anything when the output cannot be created.
     if args.output.exists() {
         return Outcome::refused(
@@ -1035,7 +1142,7 @@ fn generate_identity_facts(args: &GenerateIdentityFactsArgs) -> Outcome {
             "the output file already exists; generate never overwrites".to_owned(),
         );
     }
-    let config = match load_runtime(&args.runtime_config) {
+    let config = match load_runtime(&args.runtime_config, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1115,10 +1222,13 @@ fn init(directory: &Path) -> Outcome {
 /// Load the package as `messaging serve` does: from the runtime
 /// configuration, which also verifies a pinned digest and the admitted
 /// clients, or from a bare package directory.
-fn load(source: &PackageSource) -> Result<(Option<RuntimeConfig>, LoadedPackage), Outcome> {
+fn load(
+    source: &PackageSource,
+    declared: DeclaredPosture,
+) -> Result<(Option<RuntimeConfig>, LoadedPackage), Outcome> {
     match (&source.runtime_config, &source.package, &source.project) {
         (Some(path), _, _) => {
-            let config = load_runtime(path)?;
+            let config = load_runtime(path, declared)?;
             let package = config
                 .load_package()
                 .map_err(|error| config_refusal(&error))?;
@@ -1175,10 +1285,12 @@ fn package_load_report(root: &Path, error: &PackageLoadError) -> Report {
 
 /// Read the runtime file at `path` as `messaging serve` does. A refusal of
 /// the file itself reports every rule it breaks, each at its position.
-fn load_runtime(path: &Path) -> Result<RuntimeConfig, Outcome> {
-    RuntimeConfig::load(path).map_err(|error| match startup_report(path, &error) {
-        Some(report) => Outcome::diagnosed(refusal_exit(&error), &report),
-        None => config_refusal(&error),
+fn load_runtime(path: &Path, declared: DeclaredPosture) -> Result<RuntimeConfig, Outcome> {
+    RuntimeConfig::load(path, declared).map_err(|error| {
+        match startup_report(path, &error, declared) {
+            Some(report) => Outcome::diagnosed(refusal_exit(&error), &report),
+            None => config_refusal(&error),
+        }
     })
 }
 
@@ -1219,7 +1331,7 @@ fn config_refusal(error: &RuntimeConfigError) -> Outcome {
 /// Check a runtime configuration offline (CFG-CHECK-1), a package, or an
 /// authoring project, and report what the runtime would serve, rendering
 /// each template's sample in every locale it declares.
-fn check(args: &CheckArgs) -> Outcome {
+fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
     if let Some(path) = &args.dev_state {
         return match dev::check_session_file(path) {
             Ok(report) if args.deny_warnings && report.warning_count() > 0 => {
@@ -1311,7 +1423,7 @@ fn check(args: &CheckArgs) -> Outcome {
         (None, Some(_)) => CheckedAgainst::Nothing,
         (None, None) => CheckedAgainst::NamedPackage,
     };
-    let runtime = check_runtime_file(&absolute, against, args.environment);
+    let runtime = check_runtime_file(&absolute, against, args.environment, declared);
     let mut report = runtime_report(path, &absolute, &runtime);
     if let Some((refused_exit, mut combined)) = refused.take() {
         combined.extend(report);
@@ -1436,8 +1548,8 @@ fn package_report(loaded: &LoadedPackage) -> Result<Value, Outcome> {
     }))
 }
 
-fn preview(args: &PreviewArgs) -> Outcome {
-    let (_, loaded) = match load(&args.source) {
+fn preview(args: &PreviewArgs, declared: DeclaredPosture) -> Outcome {
+    let (_, loaded) = match load(&args.source, declared) {
         Ok(loaded) => loaded,
         Err(refused) => return refused,
     };
@@ -1554,8 +1666,8 @@ fn async_runtime() -> Result<tokio::runtime::Runtime, Outcome> {
         })
 }
 
-fn plan(path: &Path) -> Outcome {
-    let config = match load_runtime(path) {
+fn plan(path: &Path, declared: DeclaredPosture) -> Outcome {
+    let config = match load_runtime(path, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1596,9 +1708,9 @@ fn plan(path: &Path) -> Outcome {
     }
 }
 
-fn apply(args: &ApplyArgs) -> Outcome {
+fn apply(args: &ApplyArgs, declared: DeclaredPosture) -> Outcome {
     let path = &args.activation.runtime_config;
-    let config = match load_runtime(path) {
+    let config = match load_runtime(path, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1637,8 +1749,8 @@ fn apply(args: &ApplyArgs) -> Outcome {
     }
 }
 
-fn status(path: &Path) -> Outcome {
-    let config = match load_runtime(path) {
+fn status(path: &Path, declared: DeclaredPosture) -> Outcome {
+    let config = match load_runtime(path, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1647,18 +1759,30 @@ fn status(path: &Path) -> Outcome {
         Err(refused) => return refused,
     };
     match runtime.block_on(activation_status(&config)) {
-        Ok(status) => Outcome::new(
-            json!({
-                "ok": true,
-                "runtimeConfig": path,
-                "active": status.active,
-                "history": status.history,
-                "schemaVersion": status.schema_version,
-                "runtimeRoleMode": status.runtime_role_mode,
-                "grantsCurrent": status.grants_current,
-            }),
-            View::Activation,
-        ),
+        Ok(status) => {
+            let finding = status.active.as_ref()
+                .and_then(|active| registry_messaging::activation::posture_mismatch(active.posture, declared.posture))
+                .map(|error| match error {
+                    ActivationError::PostureMismatch { message, action } => json!({
+                        "severity": "warning", "code": registry_messaging::activation::POSTURE_MISMATCH,
+                        "path": "/database", "message": message, "suggestedAction": action,
+                    }),
+                    _ => unreachable!("posture_mismatch only reports a posture mismatch"),
+                });
+            Outcome::new(
+                json!({
+                    "ok": true,
+                    "runtimeConfig": path,
+                    "active": status.active,
+                    "history": status.history,
+                    "schemaVersion": status.schema_version,
+                    "runtimeRoleMode": status.runtime_role_mode,
+                    "grantsCurrent": status.grants_current,
+                    "diagnostics": finding.into_iter().collect::<Vec<_>>(),
+                }),
+                View::Activation,
+            )
+        }
         Err(error) => apply_failure(error),
     }
 }
@@ -1667,6 +1791,26 @@ fn status(path: &Path) -> Outcome {
 fn apply_failure(error: RuntimeError) -> Outcome {
     match error {
         RuntimeError::Config(error) => config_refusal(&error),
+        RuntimeError::DatabaseTransport(error) => {
+            let mut outcome = Outcome::refused(
+                DOMAIN_REFUSAL_EXIT,
+                error.code(),
+                "/database/transport",
+                error.to_string(),
+            );
+            outcome.report["diagnostics"][0]["suggestedAction"] = json!(error.suggested_action());
+            outcome
+        }
+        RuntimeError::Activation(ActivationError::PostureMismatch { message, action }) => {
+            let mut outcome = Outcome::refused(
+                DOMAIN_REFUSAL_EXIT,
+                registry_messaging::activation::POSTURE_MISMATCH,
+                "/database",
+                message.to_owned(),
+            );
+            outcome.report["diagnostics"][0]["suggestedAction"] = json!(action);
+            outcome
+        }
         RuntimeError::Activation(ActivationError::Refused(refusals)) => {
             activation_refused(refusals)
         }
@@ -1769,14 +1913,14 @@ fn audit_unconfirmed(error: &RuntimeError) -> Outcome {
     )
 }
 
-fn messages(command: &MessagesCommand) -> Outcome {
+fn messages(command: &MessagesCommand, declared: DeclaredPosture) -> Outcome {
     let path = match command {
         MessagesCommand::List(args) => &args.runtime_config,
         MessagesCommand::Show(args) => &args.runtime_config,
         MessagesCommand::Retry(args) | MessagesCommand::Cancel(args) => &args.target.runtime_config,
         MessagesCommand::Settle(args) => &args.action.target.runtime_config,
     };
-    let config = match load_runtime(path) {
+    let config = match load_runtime(path, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -1837,11 +1981,11 @@ fn future_cutoff() -> Outcome {
 /// Report, and with `--apply` erase, what had expired by the cutoff. A
 /// future cutoff is refused before the configuration is read, and again
 /// against the database's clock.
-fn erase_expired(args: &EraseExpiredArgs) -> Outcome {
+fn erase_expired(args: &EraseExpiredArgs, declared: DeclaredPosture) -> Outcome {
     if args.before > chrono::Utc::now() {
         return future_cutoff();
     }
-    let config = match load_runtime(&args.runtime_config) {
+    let config = match load_runtime(&args.runtime_config, declared) {
         Ok(config) => config,
         Err(refused) => return refused,
     };
@@ -2106,11 +2250,30 @@ fn finish(
     stdout: &mut dyn io::Write,
     stderr: &mut dyn io::Write,
 ) -> ExitCode {
+    finish_with_posture(outcome, command, format, stdout, stderr, None)
+}
+
+fn posture_refusal(code: &str, message: &str, action: &str) -> Outcome {
+    let mut outcome = Outcome::refused(USAGE_EXIT, code, "/posture", message.to_owned());
+    outcome.report["diagnostics"][0]["suggestedAction"] = json!(action);
+    outcome
+}
+
+fn finish_with_posture(
+    outcome: &Outcome,
+    command: &str,
+    format: OutputFormat,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+    posture: Option<DeclaredPosture>,
+) -> ExitCode {
     let written = match (format, &outcome.raw_json) {
         (OutputFormat::Json, Some(bytes)) => stdout.write_all(bytes),
-        (OutputFormat::Json, None) => {
-            report::write(&completed(&outcome.report, command, outcome.exit), stdout)
-        }
+        (OutputFormat::Json, None) => report::write_with_posture(
+            &completed(&outcome.report, command, outcome.exit),
+            stdout,
+            posture,
+        ),
         (OutputFormat::Human, _) => render_human(outcome, command, stdout, stderr),
     };
     match written {
@@ -2262,7 +2425,8 @@ fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     writeln!(
         stdout,
         "next: rstack messaging dev token --client CLIENT, then rstack messaging api PATH --url URL --header @FILE; Ctrl-C stops the session"
-    )
+    )?;
+    writeln!(stdout, "To reuse the runtime file, start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.")
 }
 
 fn render_dev_token(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
@@ -2401,6 +2565,18 @@ fn render_activation(report: &Value, stdout: &mut dyn io::Write) -> io::Result<(
     }
     if let Some(mode) = report.get("runtimeRoleMode").and_then(Value::as_str) {
         writeln!(stdout, "runtime role mode: {mode}")?;
+    }
+    if let Some(diagnostics) = report["diagnostics"].as_array() {
+        for finding in diagnostics {
+            writeln!(
+                stdout,
+                "{}[{}] {}",
+                text(&finding["severity"]),
+                text(&finding["code"]),
+                text(&finding["message"])
+            )?;
+            writeln!(stdout, "  next: {}", text(&finding["suggestedAction"]))?;
+        }
     }
     Ok(())
 }
@@ -2826,7 +3002,7 @@ audit:
         let document = runtime(
             &safe_root,
             "providers:\n  mail-relay:\n    type: smtp\n    host: 127.0.0.1\n    \
-             port: 1025\n    tls: development-loopback\n",
+             port: 1025\n    tls: loopback-plaintext\n",
         )
         .replace(
             "tlsTermination: development-loopback",
@@ -2844,18 +3020,34 @@ audit:
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
     }
 
-    // A test feature admits the plaintext relay whatever the listener, so
-    // only a build without one can observe the refusal.
-    #[cfg(not(feature = "postgres-test"))]
     #[test]
-    fn a_plaintext_loopback_relay_is_refused_behind_a_production_listener() {
+    fn a_plaintext_loopback_relay_is_admitted_behind_a_tls_edge() {
         let (_root, path) = loopback_relay_project("operator-controlled-upstream");
         let (exit, report) = check_json(&path);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    }
+
+    #[test]
+    fn a_retired_smtp_mode_names_loopback_plaintext() {
+        let (_root, path) = loopback_relay_project("operator-controlled-upstream");
+        let document = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            document.replace("tls: loopback-plaintext", "tls: development-loopback"),
+        )
+        .unwrap();
+        let (exit, report) = check_json(&path);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report}");
-        let message = report["diagnostics"][0]["message"].as_str().unwrap();
+        assert_eq!(
+            report["diagnostics"][0]["path"],
+            "/providers/mail-relay/tls"
+        );
         assert!(
-            message.contains("development-loopback listener"),
-            "{message}"
+            report["diagnostics"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("loopback-plaintext"),
+            "{report}"
         );
     }
 
@@ -2993,7 +3185,12 @@ audit:
         assert_eq!(exit, ExitCode::SUCCESS, "{report}");
         report["project"] = json!(relative);
         let mut written = Vec::new();
-        report::write(&report, &mut written).unwrap();
+        report::write_with_posture(
+            &report,
+            &mut written,
+            Some(registry_messaging::config::DEFAULT_POSTURE),
+        )
+        .unwrap();
         let committed = std::fs::read_to_string(
             root.join("products/messaging/examples/formats/ctl-report.json"),
         )

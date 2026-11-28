@@ -180,7 +180,7 @@ impl Process {
             .unwrap();
         let mut command = Command::new(binary);
         command.arg("--runtime-config").arg(config);
-        command.arg("serve");
+        command.args(["serve", "--posture", "development"]);
         let mut process = Self(
             command
                 .stdout(Stdio::from(log.try_clone().unwrap()))
@@ -335,7 +335,7 @@ async fn native_citizen_gateway_and_review_share_engine_owned_authority() {
     )
     .await;
     let review_config = root.as_path().join("review.yaml");
-    std::fs::write(&review_config,format!("apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1\nkind: BRegReviewRuntimeConfig\nlistener:\n  bind: {review_address}\n  tlsTermination: development-loopback\npublicOrigin: {review_origin}\nsecretProviders:\n  file:\n    root: {}\nsignIn:\n  issuer: {}\n  clientId: citizen-review-page\n  clientKeyRef: secret:file/review-key\n  scopes: [{SCOPE}]\nregistry:\n  baseUrl: {}\n  resource: {AUDIENCE}\n  action: correct-address\n  targetInput: address\n  accessProfile: citizen-review\naudit:\n  hashKeyRef: secret:file/audit-key\n  path: {}\n",secrets.display(),issuer.issuer(),service.base_url,root.as_path().join("review-audit/events.jsonl").display())).unwrap();
+    std::fs::write(&review_config,format!("apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1\nkind: BRegReviewRuntimeConfig\nlistener:\n  bind: {review_address}\n  tlsTermination: loopback-plaintext\npublicOrigin: {review_origin}\nsecretProviders:\n  file:\n    root: {}\nsignIn:\n  issuer: {}\n  clientId: citizen-review-page\n  clientKeyRef: secret:file/review-key\n  scopes: [{SCOPE}]\nregistry:\n  baseUrl: {}\n  resource: {AUDIENCE}\n  action: correct-address\n  targetInput: address\n  accessProfile: citizen-review\naudit:\n  hashKeyRef: secret:file/audit-key\n  path: {}\n",secrets.display(),issuer.issuer(),service.base_url,root.as_path().join("review-audit/events.jsonl").display())).unwrap();
     let review_binary = std::env::var_os("BREG_REVIEW_NATIVE_BIN")
         .expect("BREG_REVIEW_NATIVE_BIN names matching built breg-review");
     let review_process =

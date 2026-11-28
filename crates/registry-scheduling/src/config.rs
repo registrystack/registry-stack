@@ -16,10 +16,12 @@ use registry_platform_audit::{
 pub(crate) use registry_platform_config::describe_secret_failure;
 use registry_platform_config::package::is_envelope_file;
 use registry_platform_config::{
-    sha256_uri, url_hook_destinations, ConfigBlockError, ConfigBlockErrorKind, MetricsBindError,
-    PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
-    VerifiedPackage, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    sha256_uri, url_hook_destinations, ConfigBlockError, ConfigBlockErrorKind,
+    DatabaseTransportError, DeclaredPosture, DevelopmentWitness, MetricsBindError,
+    PackageDigestMismatch, PackageError, PackageErrorKind, PackageLimits, Posture, PostureReport,
+    PostureSource, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck,
+    SecretReference, SecretResolver, VerifiedPackage, DEFAULT_STAND_IN,
+    REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 pub use registry_platform_config::{
     AuditKeyConfig, DatabaseConfig, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
@@ -135,6 +137,12 @@ pub const SCHEDULING_RETIRED_RUNTIME_API_VERSIONS: &[RetiredApiVersion<'static>]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeConfig {
+    #[serde(skip, default = "default_posture_report")]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    posture: PostureReport,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    development: Option<DevelopmentWitness>,
     pub api_version: String,
     pub kind: String,
     /// The logical identity of the database this deployment owns. The first
@@ -721,20 +729,52 @@ pub fn verify_scheduling_package(
     Ok(verified)
 }
 
+/// The declaration used when tests have no posture input.
+pub const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
+
+fn default_posture_report() -> PostureReport {
+    PostureReport::new(DEFAULT_POSTURE)
+}
+
 impl RuntimeConfig {
+    pub fn posture_report(&self) -> &PostureReport {
+        &self.posture
+    }
+
+    pub fn development_witness(&self) -> Option<&DevelopmentWitness> {
+        self.development.as_ref()
+    }
+
+    fn finish_load(
+        path: &Path,
+        loaded: registry_platform_config::LoadedRuntimeConfig<Self>,
+    ) -> Result<Self, RuntimeConfigError> {
+        loaded.posture.decide(path)?;
+        let mut config = loaded.config;
+        config.posture = loaded.posture;
+        config.development = loaded.development;
+        config.check()?;
+        Ok(config)
+    }
+
     /// Load and validate the operator document, reading the authored policy
     /// beside it. The bytes never re-enter a parser after startup.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
-        let loaded = Self::loader().load::<Self>(path.as_ref())?;
-        loaded.config.check()?;
-        Ok(loaded.config)
+    pub fn load(
+        path: impl AsRef<Path>,
+        declared: DeclaredPosture,
+    ) -> Result<Self, RuntimeConfigError> {
+        let path = path.as_ref();
+        Self::finish_load(path, Self::loader(declared).load(path)?)
     }
 
     /// The shared runtime configuration loader under Scheduling's envelope,
     /// removed keys, and retired apiVersions.
     #[must_use]
-    pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new_without_posture(SCHEDULING_RUNTIME_ENVELOPE)
+    pub const fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(SCHEDULING_RUNTIME_ENVELOPE, declared)
             .removed_keys(SCHEDULING_REMOVED_KEYS)
             .retired_api_versions(SCHEDULING_RETIRED_RUNTIME_API_VERSIONS)
             .require_trusted_ownership()
@@ -999,10 +1039,7 @@ impl RuntimeConfig {
 
     fn check_oidc(&self, findings: &mut Vec<RuntimeConfigError>) {
         let oidc = &self.authentication.oidc;
-        if let Err(error) = oidc.provider.check_without_posture(
-            "authentication.oidc",
-            self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
-        ) {
+        if let Err(error) = oidc.provider.check("authentication.oidc") {
             findings.push(error.into());
         }
         if let Err(error) = oidc.clients.check("authentication.oidc") {
@@ -1084,9 +1121,8 @@ impl RuntimeConfig {
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             findings.push(RuntimeConfigError::InvalidDatabaseReference);
         }
-        #[cfg(not(feature = "postgres-test"))]
-        if self.database.test_only_plaintext {
-            findings.push(RuntimeConfigError::PlaintextDatabase);
+        if let Err(error) = self.database.check(cfg!(feature = "postgres-test")) {
+            findings.push(RuntimeConfigError::DatabaseTransport(error));
         }
     }
 
@@ -1157,9 +1193,6 @@ impl RuntimeConfig {
         secrets: &SecretResolver,
     ) -> Result<(TokenVerifierConfig, std::sync::Arc<JwksFetcher>), RuntimeConfigError> {
         let provider = &self.authentication.oidc.provider;
-        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
         let network =
             IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
                 .map_err(|_| RuntimeConfigError::Oidc)?;
@@ -1213,16 +1246,6 @@ impl RuntimeConfig {
             }
         };
         Ok((self.verifier_profile(), std::sync::Arc::new(fetcher)))
-    }
-
-    fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.authentication
-            .oidc
-            .provider
-            .allow_insecure_http
-            .then_some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-            )
     }
 
     /// The access-token verifier profile this deployment's OIDC settings
@@ -1442,9 +1465,13 @@ pub fn check_runtime(
     path: &Path,
     policy: Option<&SchedulingPolicy>,
     substitute: bool,
+    declared: DeclaredPosture,
 ) -> RuntimeCheck {
-    let check =
-        RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
+    let check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+        path,
+        substitute,
+        stand_in_for,
+    );
     let mut diagnostics = Vec::new();
     if let Some(loaded) = &check.loaded {
         diagnostics.extend(
@@ -1474,13 +1501,18 @@ pub fn check_runtime(
 /// A refusal of the package or of a dependency is one diagnostic at the member
 /// that names it. `None` when the file itself cannot be read.
 #[must_use]
-pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report> {
+pub fn startup_report(
+    path: &Path,
+    error: &RuntimeConfigError,
+    declared: DeclaredPosture,
+) -> Option<Report> {
     match error {
         RuntimeConfigError::Load(error) => return Some(Report::new(error.diagnostics().to_vec())),
         RuntimeConfigError::Policy(report) => return Some(report.clone()),
         _ => {}
     }
-    let check = RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, true, stand_in_for);
+    let check =
+        RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(path, true, stand_in_for);
     if !error.in_file() {
         check.loaded.as_ref()?;
         return Some(Report::new(vec![positioned(&check, error)]));
@@ -1705,8 +1737,8 @@ pub enum RuntimeConfigError {
         "destinations.hooks must bind every destination scheduling.yaml hooks.*.handler.destinationId names"
     )]
     HookDestinationInventoryMismatch,
-    #[error("plaintext PostgreSQL is test-only")]
-    PlaintextDatabase,
+    #[error(transparent)]
+    DatabaseTransport(DatabaseTransportError),
     #[error("the OIDC issuer could not be initialized")]
     Oidc,
     #[error("the static OIDC signing keys could not be loaded: {0}")]
@@ -1765,7 +1797,10 @@ impl RuntimeConfigError {
                 "metricsListener.bind"
             }
             Self::InvalidDatabaseReference => "database",
-            Self::PlaintextDatabase => "database.testOnlyPlaintext",
+            Self::DatabaseTransport(DatabaseTransportError::TestOnlyPlaintext) => {
+                "database.testOnlyPlaintext"
+            }
+            Self::DatabaseTransport(_) => "database.transport",
             Self::InvalidAuditDestination(error) => audit_field(error),
             Self::HookDestinationInventoryMismatch => "destinations.hooks",
             Self::Policy(_) | Self::PolicyUnreadable | Self::PolicyChanged => {
@@ -1833,7 +1868,7 @@ impl RuntimeConfigError {
                 "scheduling.runtime.reminder-destination-origin-mismatch"
             }
             Self::HookDestinationInventoryMismatch => "scheduling.runtime.unbound-hook-destination",
-            Self::PlaintextDatabase => "scheduling.runtime.plaintext-database",
+            Self::DatabaseTransport(error) => error.code(),
             Self::Oidc => "scheduling.runtime-dependency.unavailable",
             Self::OidcJwksSecret(_) => "scheduling.runtime.unreadable-jwks-secret",
         }
@@ -1908,9 +1943,7 @@ impl RuntimeConfigError {
             Self::HookDestinationInventoryMismatch => {
                 "Add a destinations.hooks entry for each destination scheduling.yaml hooks.*.handler.destinationId names."
             }
-            Self::PlaintextDatabase => {
-                "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
-            }
+            Self::DatabaseTransport(error) => error.suggested_action(),
             Self::Oidc => {
                 "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
             }
@@ -2235,7 +2268,7 @@ holdPolicy:
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-        RuntimeConfig::loader()
+        RuntimeConfig::loader(DEFAULT_POSTURE)
             .load::<serde_json::Value>(&path)
             .expect("an owner-writable runtime in a private directory loads");
     }
@@ -2248,7 +2281,7 @@ holdPolicy:
         let directory = tempfile::tempdir().unwrap();
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
-        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        let result = RuntimeConfig::loader(DEFAULT_POSTURE).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
@@ -2264,7 +2297,7 @@ holdPolicy:
         std::fs::create_dir(&writable).unwrap();
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
         let path = write_ownership_test_runtime(&writable);
-        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        let result = RuntimeConfig::loader(DEFAULT_POSTURE).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         assert_unsafe_runtime(
@@ -2274,7 +2307,7 @@ holdPolicy:
 
     fn parse_runtime(document: &serde_json::Value) -> Result<RuntimeConfig, RuntimeConfigError> {
         let text = serde_norway::to_string(document).unwrap();
-        RuntimeConfig::loader()
+        RuntimeConfig::loader(DEFAULT_POSTURE)
             .parse_str::<RuntimeConfig>(&text, |_| None)
             .map(|loaded| loaded.config)
             .map_err(RuntimeConfigError::Load)
@@ -2295,20 +2328,93 @@ holdPolicy:
     }
 
     #[test]
+    fn default_posture_refuses_all_selected_development_settings() {
+        let mut document = operator_value(Path::new("/placeholder/package"), "loopback-plaintext");
+        document["database"]["transport"] = serde_json::json!("private-network-plaintext");
+        document["authentication"]["oidc"]["issuer"] =
+            serde_json::json!("http://identity.example.test");
+        document["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+        let text = serde_norway::to_string(&document).unwrap();
+        let error = RuntimeConfig::loader(DEFAULT_POSTURE)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect_err("default production must refuse development settings");
+        let codes: Vec<_> = error
+            .diagnostics()
+            .iter()
+            .map(|item| item.code.as_str())
+            .collect();
+        assert!(
+            codes.contains(&"platform.posture.database-private-plaintext"),
+            "{codes:?}"
+        );
+        assert!(
+            codes.contains(&"platform.posture.insecure-issuer-http"),
+            "{codes:?}"
+        );
+        for diagnostic in error.diagnostics() {
+            assert!(
+                diagnostic.suggested_action.contains("rstack dev"),
+                "{diagnostic:?}"
+            );
+            assert!(
+                diagnostic
+                    .suggested_action
+                    .contains("--posture development"),
+                "{diagnostic:?}"
+            );
+        }
+        let explicitly_production = DeclaredPosture {
+            source: PostureSource::Flag,
+            ..DEFAULT_POSTURE
+        };
+        assert!(RuntimeConfig::loader(explicitly_production)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .is_err());
+        let development = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let loaded = RuntimeConfig::loader(development)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect("development loads");
+        assert!(loaded.development.is_some());
+        assert_eq!(
+            loaded.posture.ready_member()["developmentSettings"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        tracing::dispatcher::with_default(&captured.subscriber(), || loaded.posture.log_startup());
+        let startup = captured.text();
+        assert!(startup.contains("posture declared"), "{startup}");
+        for code in codes {
+            assert!(startup.contains(code), "{startup}");
+        }
+    }
+
+    #[test]
     fn runtime_reads_the_explicit_http_issuer_opt_in() {
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["authentication"]["oidc"]["issuer"] =
             serde_json::json!("http://identity.example.test");
         document["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
-        let config = parse_runtime(&document).expect("explicit HTTP issuer opt-in");
-        assert!(config.authentication.oidc.provider.allow_insecure_http);
+        let declared = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let text = serde_norway::to_string(&document).unwrap();
+        let loaded = RuntimeConfig::loader(declared)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect("explicit HTTP issuer opt-in in development");
         assert_eq!(
-            config.insecure_http_startup_diagnostic(),
-            Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-            )
+            loaded.posture.ready_member()["developmentSettings"][0]["code"],
+            "platform.posture.insecure-issuer-http"
         );
+        let config = loaded.config;
+        assert!(config.authentication.oidc.provider.allow_insecure_http);
     }
 
     #[test]
@@ -2358,7 +2464,7 @@ holdPolicy:
     fn a_development_configuration_loads_and_exposes_its_defaults() {
         let root = canonical_tempdir();
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("configuration is accepted");
         assert_eq!(config.authentication.oidc.scope_claim, "scope");
         assert_eq!(config.authentication.oidc.reads_scope, "scheduling:read");
@@ -2678,7 +2784,7 @@ holdPolicy:
             entry[field] = serde_json::json!(value);
             let mut document = operator_value(&package, "development-loopback");
             document["taskGrantStatus"] = serde_json::json!([entry]);
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err(&format!("offline check must refuse {field}"));
             assert!(error.pointer().starts_with("/taskGrantStatus"), "{error:?}");
             if !value.trim().is_empty() {
@@ -2702,7 +2808,7 @@ holdPolicy:
                 .collect();
             document["taskGrantStatus"] = serde_json::json!(entries);
             assert_eq!(
-                RuntimeConfig::load(write_operator(root.path(), document))
+                RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                     .unwrap_err()
                     .pointer(),
                 "/taskGrantStatus"
@@ -2732,7 +2838,8 @@ holdPolicy:
                 "caBundleRef":"secret:file/missing-root-ca"
             }))
             .collect::<Vec<_>>());
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         assert_eq!(config.task_grant_status_authorities().len(), 32);
         assert!(!root.path().join("secrets").exists());
     }
@@ -2752,7 +2859,7 @@ holdPolicy:
             "statusResource": "urn:casework:test"
         }]);
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         assert!(!check.unavailable);
         let [diagnostic] = check.diagnostics.as_slice() else {
             panic!("one positioned status finding: {:?}", check.diagnostics);
@@ -2786,7 +2893,7 @@ holdPolicy:
             "statusPath": "${SCHEDULING_STATUS_CHECK_UNSET_PATH}"
         }]);
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         let found: Vec<_> = check
             .diagnostics
             .iter()
@@ -2818,7 +2925,7 @@ holdPolicy:
             "statusResource": "urn:example:casework",
             "caBundleRef": "secret:file/institution-root-ca"
         }]);
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("the status authority configuration is accepted");
         assert_eq!(config.task_grant_status_authorities().len(), 1);
         let status = &config.task_grant_status_authorities()[0];
@@ -2853,7 +2960,7 @@ holdPolicy:
         let load = |entry: serde_json::Value| {
             let mut document = operator_value(&package, "development-loopback");
             document["taskGrantStatus"] = serde_json::json!([entry]);
-            RuntimeConfig::load(write_operator(root.path(), document))
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect("the status authority configuration is accepted")
         };
 
@@ -2882,7 +2989,7 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document.as_object_mut().unwrap().remove("identity");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("a configuration without identity is refused");
         assert_eq!(
             refusal(&error),
@@ -2902,7 +3009,7 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document.as_object_mut().unwrap().remove("taskGrantStatus");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("a configuration without taskGrantStatus is refused");
         assert_eq!(
             refusal(&error),
@@ -2926,7 +3033,7 @@ holdPolicy:
         let mut document = operator_value(&root.path().join("package"), "development-loopback");
         document.as_object_mut().unwrap().remove("taskGrantStatus");
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         let [diagnostic] = check.diagnostics.as_slice() else {
             panic!("one missing-member finding: {:?}", check.diagnostics);
         };
@@ -2978,7 +3085,7 @@ holdPolicy:
     fn the_unchecked_keyword_selects_the_offline_path() {
         let root = canonical_tempdir();
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("the keyword is accepted");
         assert_eq!(
             config.task_grant_status,
@@ -2994,7 +3101,7 @@ holdPolicy:
         let load = |database_id: serde_json::Value| {
             let mut document = base.clone();
             document["identity"] = serde_json::json!({"databaseId": database_id});
-            RuntimeConfig::load(write_operator(root.path(), document))
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
         };
         let config = load(serde_json::json!("scheduling-production")).expect("valid id");
         assert_eq!(config.database_id(), "scheduling-production");
@@ -3019,7 +3126,7 @@ holdPolicy:
         }
         let mut document = base.clone();
         document["identity"]["extra"] = serde_json::json!("value");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("identity refuses an unknown key");
         assert_eq!(
             refusal(&error),
@@ -3038,7 +3145,7 @@ holdPolicy:
         let load = |audit: serde_json::Value| {
             let mut document = base.clone();
             document["audit"] = audit;
-            RuntimeConfig::load(write_operator(root.path(), document))
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
         };
 
         let config = load(serde_json::json!({
@@ -3160,7 +3267,8 @@ holdPolicy:
         ] {
             let mut document = base.clone();
             document[member][value] = serde_json::json!(7);
-            let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+                .unwrap_err();
             assert_eq!(
                 refusal(&error),
                 ("config.removed-key".to_owned(), pointer.to_owned())
@@ -3186,7 +3294,8 @@ holdPolicy:
             "privateKeyRef": "secret:file/missing-status-key",
             "caseworkResource": "urn:example:casework"
         }]);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3206,7 +3315,8 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["apiVersion"] = serde_json::json!(RETIRED_SCHEDULING_RUNTIME_API_VERSION);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3232,7 +3342,8 @@ holdPolicy:
             root.path(),
             operator_value(&package, "operator-controlled-upstream"),
         );
-        let config = RuntimeConfig::load(&operator).expect("configuration is accepted");
+        let config =
+            RuntimeConfig::load(&operator, DEFAULT_POSTURE).expect("configuration is accepted");
 
         let loaded = config
             .load_policy()
@@ -3251,14 +3362,15 @@ holdPolicy:
             let package = root.path().join("package");
             write_policy(&package);
             let operator = write_operator(root.path(), operator_value(&package, tls));
-            let config = RuntimeConfig::load(&operator).expect("the package is admitted");
+            let config =
+                RuntimeConfig::load(&operator, DEFAULT_POSTURE).expect("the package is admitted");
             assert_eq!(
                 config.package_digest().unwrap(),
                 sha256_uri(&std::fs::read(package.join(SUM_FILE)).unwrap())
             );
 
             let refused = |named: &str| {
-                let error = RuntimeConfig::load(&operator).unwrap_err();
+                let error = RuntimeConfig::load(&operator, DEFAULT_POSTURE).unwrap_err();
                 let message = error.to_string();
                 assert_eq!(error.pointer(), "/package/root", "{tls}: {message}");
                 assert!(!error.in_file(), "{tls}: {message}");
@@ -3282,14 +3394,17 @@ holdPolicy:
             std::fs::remove_file(&policy).unwrap();
             refused("missing: scheduling.yaml");
             std::fs::write(&policy, POLICY).unwrap();
-            RuntimeConfig::load(&operator).expect("the restored package is admitted");
+            RuntimeConfig::load(&operator, DEFAULT_POSTURE)
+                .expect("the restored package is admitted");
 
             // No unlisted file name is read as a manifest: a JSON manifest
             // beside the policy is one more extra file.
             std::fs::write(package.join("scheduling.package.json"), "{}").unwrap();
             refused("extra: scheduling.package.json");
             assert_eq!(
-                RuntimeConfig::load(&operator).unwrap_err().code(),
+                RuntimeConfig::load(&operator, DEFAULT_POSTURE)
+                    .unwrap_err()
+                    .code(),
                 "scheduling.package.invalid"
             );
             std::fs::remove_file(package.join("scheduling.package.json")).unwrap();
@@ -3414,7 +3529,7 @@ holdPolicy:
             } else {
                 document[member] = patch.clone();
             }
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err("the member is refused");
             assert_eq!(
                 refusal(&error),
@@ -3624,7 +3739,7 @@ holdPolicy:
                 "hmacSha256KeyRef": "secret:file/reminder",
             "purposes": purpose_urls
             });
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err("the purpose URL is refused");
             assert_eq!(
                 refusal(&error),
@@ -3723,8 +3838,11 @@ holdPolicy:
         let root = canonical_tempdir();
         let (package, mut document) = development(root.path());
         package_policy(&package, &format!("{POLICY}{OBSERVER}"));
-        let error = RuntimeConfig::load(write_operator(root.path(), document.clone()))
-            .expect_err("an unbound hook destination is refused");
+        let error = RuntimeConfig::load(
+            write_operator(root.path(), document.clone()),
+            DEFAULT_POSTURE,
+        )
+        .expect_err("an unbound hook destination is refused");
         assert_eq!(
             refusal(&error),
             (
@@ -3739,7 +3857,7 @@ holdPolicy:
                 "hmacSha256KeyRef": "secret:file/hook-key"
             }
         });
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("the hook destination is bound");
         let binding = &config.destinations.hooks["appointment-events"];
         assert_eq!(binding.attempt_timeout_milliseconds, 5_000);
@@ -3753,7 +3871,8 @@ holdPolicy:
         let (_, mut document) = development(root.path());
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
         document["database"]["testOnlyPlaintext"] = serde_json::json!(canary);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(error.pointer(), "/database/testOnlyPlaintext");
         let RuntimeConfigError::Load(load) = &error else {
             panic!("a reader refusal: {error}");
@@ -3774,11 +3893,12 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["database"]["testOnlyPlaintext"] = serde_json::json!(true);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
-                "scheduling.runtime.plaintext-database".to_owned(),
+                "platform.database.test-only-plaintext".to_owned(),
                 "/database/testOnlyPlaintext".to_owned()
             )
         );
@@ -3791,7 +3911,7 @@ holdPolicy:
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
         std::fs::write(&operator, format!("{canary}\n")).unwrap();
 
-        let error = RuntimeConfig::load(&operator).unwrap_err();
+        let error = RuntimeConfig::load(&operator, DEFAULT_POSTURE).unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
         assert_eq!(error.pointer(), "");
         assert!(!error.to_string().contains(canary), "{error}");
@@ -3799,14 +3919,15 @@ holdPolicy:
 
     #[test]
     fn the_runtime_configuration_is_read_through_the_shared_loader() {
-        let error = RuntimeConfig::load("runtime.yaml").unwrap_err();
+        let error = RuntimeConfig::load("runtime.yaml", DEFAULT_POSTURE).unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
         assert!(error.to_string().contains("absolute"), "{error}");
 
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["listener"].as_object_mut().unwrap().remove("bind");
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             ("config.missing-key".to_owned(), "/listener".to_owned())
@@ -3821,7 +3942,7 @@ holdPolicy:
         // A tab can never open an indented line, so the reader stops on it.
         std::fs::write(&operator, "apiVersion: v1\n\tkind: x\n").unwrap();
 
-        let error = RuntimeConfig::load(&operator).unwrap_err();
+        let error = RuntimeConfig::load(&operator, DEFAULT_POSTURE).unwrap_err();
         let RuntimeConfigError::Load(load) = &error else {
             panic!("a reader refusal: {error}");
         };
@@ -3841,7 +3962,8 @@ holdPolicy:
         let mut document = base.clone();
         document["authentication"]["oidc"]["jwksUri"] =
             serde_json::json!("https://identity.example.test/jwks");
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3859,7 +3981,8 @@ holdPolicy:
         let mut document = base;
         document["authentication"]["oidc"]["jwksSource"] =
             serde_json::json!({"type": "uri", "uri": "https://identity.example.test/jwks"});
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         assert_eq!(
             config.authentication.oidc.provider.jwks_source.uri(),
             Some("https://identity.example.test/jwks")
@@ -3872,7 +3995,8 @@ holdPolicy:
         let (_, mut document) = development(root.path());
         document["authentication"]["oidc"]["jwksSource"] =
             serde_json::json!({"kind": "uri", "uri": "https://identity.example.test/jwks"});
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3899,7 +4023,8 @@ holdPolicy:
         let mut document = base.clone();
         document["authentication"]["oidc"]["audience"] =
             serde_json::json!("${SCHEDULING_TEST_AUDIENCE:-urn:example:substituted}");
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         assert_eq!(
             config.authentication.oidc.provider.audience,
             "urn:example:substituted"
@@ -3908,7 +4033,8 @@ holdPolicy:
         let mut document = base;
         document["database"]["runtimeUrlRef"] =
             serde_json::json!("${SCHEDULING_TEST_REFERENCE:-secret:env/RUNTIME}");
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -3942,14 +4068,15 @@ holdPolicy:
             ),
         );
         let path = write_operator(root.path(), document);
-        let error = RuntimeConfig::load(&path).unwrap_err();
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE).unwrap_err();
         assert_eq!(
             policy_refusal(&error),
             ["/openings/counter-hours/because config.substitution-not-allowed"]
         );
         assert_eq!(error.code(), "scheduling.package.invalid-project");
         assert!(!error.in_file());
-        let report = startup_report(&path, &error).expect("the policy's own report");
+        let report =
+            startup_report(&path, &error, DEFAULT_POSTURE).expect("the policy's own report");
         assert_eq!(report.error_count(), 1);
     }
 
@@ -3962,7 +4089,8 @@ holdPolicy:
             &package,
             &POLICY.replace("ttlMinutes: 5", &format!("ttlMinutes: {canary}")),
         );
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             policy_refusal(&error),
             ["/holdPolicy/ttlMinutes config.expected-integer"]
@@ -3996,14 +4124,15 @@ holdPolicy:
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
         document["package"]["expectedDigest"] = serde_json::json!(digest);
-        let config =
-            RuntimeConfig::load(write_operator(root.path(), document)).expect("the pin matches");
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .expect("the pin matches");
         assert_eq!(config.package_digest().unwrap(), digest);
 
         let mut document = operator_value(&package, "operator-controlled-upstream");
         let expected = format!("sha256:{}", "0".repeat(64));
         document["package"]["expectedDigest"] = serde_json::json!(&expected);
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -4027,7 +4156,8 @@ holdPolicy:
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
         document["retention"]["receiptRetentionDays"] = serde_json::json!(canary);
 
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(error.pointer(), "/retention/receiptRetentionDays");
         let RuntimeConfigError::Load(load) = &error else {
             panic!("a reader refusal: {error}");
@@ -4062,14 +4192,14 @@ holdPolicy:
                 .as_object_mut()
                 .unwrap()
                 .remove("allowedClients");
-            let error = RuntimeConfig::load(write_operator(root.path(), omitted))
+            let error = RuntimeConfig::load(write_operator(root.path(), omitted), DEFAULT_POSTURE)
                 .expect_err("a deployment with no allowedClients was accepted");
             assert_eq!(error.code(), "config.missing-key", "{termination}: {error}");
             assert!(error.to_string().contains("allowedClients"), "{error}");
 
             let mut empty = operator_value(&package, termination);
             empty["authentication"]["oidc"]["allowedClients"] = serde_json::json!([]);
-            let error = RuntimeConfig::load(write_operator(root.path(), empty))
+            let error = RuntimeConfig::load(write_operator(root.path(), empty), DEFAULT_POSTURE)
                 .expect_err("a deployment with an empty allowedClients was accepted");
             assert_eq!(
                 refusal(&error),
@@ -4083,7 +4213,7 @@ holdPolicy:
             let mut repeated = operator_value(&package, termination);
             repeated["authentication"]["oidc"]["allowedClients"] =
                 serde_json::json!(["scheduling-booking-agent", "scheduling-booking-agent"]);
-            let error = RuntimeConfig::load(write_operator(root.path(), repeated))
+            let error = RuntimeConfig::load(write_operator(root.path(), repeated), DEFAULT_POSTURE)
                 .expect_err("a repeated client was accepted");
             assert_eq!(
                 refusal(&error),
@@ -4097,14 +4227,15 @@ holdPolicy:
             let mut unrestricted = operator_value(&package, termination);
             unrestricted["authentication"]["oidc"]["allowedClients"] =
                 serde_json::json!("unrestricted");
-            let error = RuntimeConfig::load(write_operator(root.path(), unrestricted))
-                .expect_err("a deployment admitting every client was accepted");
+            let error =
+                RuntimeConfig::load(write_operator(root.path(), unrestricted), DEFAULT_POSTURE)
+                    .expect_err("a deployment admitting every client was accepted");
             assert_eq!(refusal(&error), expected, "{termination}");
 
-            RuntimeConfig::load(write_operator(
-                root.path(),
-                operator_value(&package, termination),
-            ))
+            RuntimeConfig::load(
+                write_operator(root.path(), operator_value(&package, termination)),
+                DEFAULT_POSTURE,
+            )
             .expect("a named client list is accepted");
         }
     }
@@ -4116,7 +4247,7 @@ holdPolicy:
         document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
             "scheduling-booking-agent": ["https://authority.example.test"]
         });
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("an assertion authority is declarable");
         assert_eq!(
             config.verifier_profile().assertion_issuers,
@@ -4157,9 +4288,10 @@ holdPolicy:
         ] {
             let mut document = base.clone();
             document["authentication"]["oidc"]["assertionIssuers"] = refused.clone();
-            let error = RuntimeConfig::load(write_operator(root.path(), document)).expect_err(
-                &format!("an assertion-issuer map outside its bounds was accepted: {refused}"),
-            );
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+                .expect_err(&format!(
+                    "an assertion-issuer map outside its bounds was accepted: {refused}"
+                ));
             assert_eq!(
                 refusal(&error),
                 (
@@ -4179,7 +4311,7 @@ holdPolicy:
         let mut document = base.clone();
         document["authentication"]["oidc"]["issuer"] =
             serde_json::json!("http://identity.example.test");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("a remote http issuer");
         assert_eq!(error.pointer(), "/authentication/oidc/issuer");
 
@@ -4187,7 +4319,7 @@ holdPolicy:
         let mut document = base;
         document["authentication"]["oidc"]["issuerr"] =
             serde_json::json!("https://identity.example.test");
-        let error = RuntimeConfig::load(write_operator(root.path(), document))
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect_err("an unknown oidc member");
         assert_eq!(
             refusal(&error),
@@ -4219,7 +4351,7 @@ holdPolicy:
             "  hashKeyRef: secret:file/audit\n",
             "  hashKey: canary-c\n  paths: canary-d\n",
         );
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(DEFAULT_POSTURE)
             .parse_str::<RuntimeConfig>(&text, |_| None)
             .expect_err("unknown keys inside the shared blocks are refused");
         let line_of = |key: &str| {
@@ -4281,7 +4413,7 @@ holdPolicy:
             "scopes": "canary-b"
         }]);
         let text = serde_norway::to_string(&document).unwrap();
-        let error = RuntimeConfig::loader()
+        let error = RuntimeConfig::loader(DEFAULT_POSTURE)
             .parse_str::<RuntimeConfig>(&text, |_| None)
             .expect_err("unknown keys inside a status entry are refused");
         let position_of = |key: &str| {
@@ -4378,7 +4510,7 @@ holdPolicy:
         ] {
             let (_, mut document) = development(root.path());
             document["metricsListener"] = serde_json::json!({"bind": bind});
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err("the metrics listener is refused");
             assert!(
                 matches!(
@@ -4392,11 +4524,12 @@ holdPolicy:
         }
         let (_, mut document) = development(root.path());
         document["metricsListener"] = serde_json::json!({"bind": "127.0.0.1:9100"});
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("a private metrics listener is accepted");
         assert!(config.metrics_listener.is_some());
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         assert!(config.metrics_listener.is_none());
     }
 
@@ -4406,7 +4539,7 @@ holdPolicy:
         let load = |metrics: serde_json::Value| {
             let (_, mut document) = development(root.path());
             document["metricsListener"] = metrics;
-            RuntimeConfig::load(write_operator(root.path(), document))
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
         };
         assert!(matches!(
             load(serde_json::json!({"bind": "0.0.0.0:9100"})),
@@ -4442,7 +4575,7 @@ holdPolicy:
         let refusal = |bind: &str| {
             let (_, mut document) = development(root.path());
             document["metricsListener"] = serde_json::json!({"bind": bind});
-            let error = RuntimeConfig::load(write_operator(root.path(), document))
+            let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
                 .expect_err("the metrics listener is refused");
             (error.to_string(), error.suggested_action())
         };
@@ -4475,7 +4608,9 @@ holdPolicy:
             "networkExposure": "${SCHEDULING_OFFLINE_CHECK_UNSET_EXPOSURE}"
         });
         let path = write_operator(root.path(), document);
-        assert!(check_runtime(&path, None, false).diagnostics.is_empty());
+        assert!(check_runtime(&path, None, false, DEFAULT_POSTURE)
+            .diagnostics
+            .is_empty());
     }
 
     #[test]
@@ -4501,7 +4636,7 @@ holdPolicy:
     fn the_access_token_profile_accepts_exactly_rs256_and_es256() {
         let root = canonical_tempdir();
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("configuration is accepted");
         assert_eq!(
             config.verifier_profile().allowed_algorithms,
@@ -4516,7 +4651,7 @@ holdPolicy:
     fn the_access_token_profile_admits_only_the_rfc_9068_pair() {
         let root = canonical_tempdir();
         let (_, document) = development(root.path());
-        let config = RuntimeConfig::load(write_operator(root.path(), document))
+        let config = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
             .expect("configuration is accepted");
         let profile = config.verifier_profile();
         assert!(
@@ -4570,7 +4705,8 @@ holdPolicy:
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
         document["listener"]["bind"] = serde_json::json!("10.20.30.40:8105");
-        let error = RuntimeConfig::load(write_operator(root.path(), document)).unwrap_err();
+        let error = RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
+            .unwrap_err();
         assert_eq!(
             refusal(&error),
             (
@@ -4581,8 +4717,7 @@ holdPolicy:
     }
 
     /// `loopback-plaintext` places the listener on loopback in every posture
-    /// and relaxes nothing: a plain http issuer on loopback is admitted under
-    /// `development-loopback` and refused under `loopback-plaintext`.
+    /// and either spelling admits a loopback HTTP issuer in production.
     #[test]
     fn loopback_plaintext_places_the_listener_and_relaxes_nothing() {
         let root = canonical_tempdir();
@@ -4594,7 +4729,7 @@ holdPolicy:
             if let Some(issuer) = issuer {
                 document["authentication"]["oidc"]["issuer"] = serde_json::json!(issuer);
             }
-            RuntimeConfig::load(write_operator(root.path(), document))
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE)
         };
 
         load("loopback-plaintext", "127.0.0.1:8105", None).expect("a loopback bind is admitted");
@@ -4613,8 +4748,8 @@ holdPolicy:
         let issuer = "http://127.0.0.1:8082";
         load("development-loopback", "127.0.0.1:8105", Some(issuer))
             .expect("development-loopback admits a loopback http issuer");
-        let error = load("loopback-plaintext", "127.0.0.1:8105", Some(issuer)).unwrap_err();
-        assert_eq!(error.pointer(), "/authentication/oidc/issuer");
+        load("loopback-plaintext", "127.0.0.1:8105", Some(issuer))
+            .expect("loopback-plaintext admits a loopback http issuer");
     }
 
     /// The runtime's static JWKS arm hands the resolved document to the
@@ -4634,7 +4769,8 @@ holdPolicy:
         std::fs::create_dir(&secrets_root).unwrap();
         document["authentication"]["oidc"]["jwksSource"] =
             serde_json::json!({"type": "static", "documentRef": "secret:file/jwks.json"});
-        let config = RuntimeConfig::load(write_operator(root.path(), document)).unwrap();
+        let config =
+            RuntimeConfig::load(write_operator(root.path(), document), DEFAULT_POSTURE).unwrap();
         let secrets = config.secret_providers.resolver().unwrap();
         let jwks = secrets_root.join("jwks.json");
 
@@ -4751,7 +4887,7 @@ holdPolicy:
     fn cfg_check_1_every_rule_a_runtime_file_breaks_is_reported_at_its_position() {
         let root = canonical_tempdir();
         let path = file_breaking_three_rules(root.path());
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         assert!(!check.unavailable);
         let found: Vec<(&str, &str)> = check
             .diagnostics
@@ -4826,7 +4962,7 @@ holdPolicy:
             .any(RuntimeConfigError::is_identifier_collision));
         let path = write_operator(root.path(), document);
         let text = std::fs::read_to_string(&path).unwrap();
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         let collisions = check
             .diagnostics
             .iter()
@@ -4864,7 +5000,7 @@ holdPolicy:
             }
         });
         let path = write_operator(root.path(), independent);
-        assert!(check_runtime(&path, None, false)
+        assert!(check_runtime(&path, None, false, DEFAULT_POSTURE)
             .diagnostics
             .iter()
             .all(|diagnostic| !diagnostic.code.ends_with("-id-collision")));
@@ -4876,7 +5012,7 @@ holdPolicy:
         let mut document = operator_value(&root.path().join("package"), "development-loopback");
         document.as_object_mut().unwrap().remove("identity");
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
         let diagnostic = &check.diagnostics[0];
         assert_eq!(diagnostic.code, "scheduling.runtime.missing-identity");
@@ -4893,7 +5029,7 @@ holdPolicy:
                 serde_json::json!("${SCHEDULING_OFFLINE_CHECK_UNSET_BIND}");
             document["metricsListener"] = serde_json::json!({"bind": bind});
             let path = write_operator(root.path(), document);
-            check_runtime(&path, None, false)
+            check_runtime(&path, None, false, DEFAULT_POSTURE)
                 .diagnostics
                 .iter()
                 .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
@@ -4924,14 +5060,14 @@ holdPolicy:
         document["listener"]["tlsTermination"] =
             serde_json::json!("${SCHEDULING_OFFLINE_CHECK_UNSET_TLS}");
         let path = write_operator(root.path(), document);
-        let deferred = check_runtime(&path, None, false);
+        let deferred = check_runtime(&path, None, false, DEFAULT_POSTURE);
         assert!(
             deferred.diagnostics.is_empty(),
             "{:?}",
             deferred.diagnostics
         );
 
-        let substituted = check_runtime(&path, None, true);
+        let substituted = check_runtime(&path, None, true, DEFAULT_POSTURE);
         let found: Vec<(&str, &str)> = substituted
             .diagnostics
             .iter()
@@ -4955,7 +5091,7 @@ holdPolicy:
         );
         document["retention"]["hookPayloadRetentionDays"] = serde_json::json!(0);
         let path = write_operator(root.path(), document);
-        let check = check_runtime(&path, None, false);
+        let check = check_runtime(&path, None, false, DEFAULT_POSTURE);
         let found: Vec<(&str, &str)> = check
             .diagnostics
             .iter()
@@ -4972,7 +5108,9 @@ holdPolicy:
         let root = canonical_tempdir();
         let document = operator_value(&root.path().join("package"), "development-loopback");
         let path = write_operator(root.path(), document);
-        assert!(check_runtime(&path, None, false).diagnostics.is_empty());
+        assert!(check_runtime(&path, None, false, DEFAULT_POSTURE)
+            .diagnostics
+            .is_empty());
 
         let policy = SchedulingPolicy::read(
             AUTHORED_POLICY_FILE,
@@ -4980,7 +5118,7 @@ holdPolicy:
         )
         .unwrap()
         .value;
-        let check = check_runtime(&path, Some(&policy), false);
+        let check = check_runtime(&path, Some(&policy), false, DEFAULT_POSTURE);
         let found: Vec<(&str, &str)> = check
             .diagnostics
             .iter()
@@ -5000,9 +5138,9 @@ holdPolicy:
     fn a_startup_refusal_reports_every_rule_the_runtime_file_breaks() {
         let root = canonical_tempdir();
         let path = file_breaking_three_rules(root.path());
-        let error = RuntimeConfig::load(&path).unwrap_err();
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE).unwrap_err();
         assert_eq!(error.code(), "scheduling.runtime.invalid-database-id");
-        let report = startup_report(&path, &error).expect("a rule of the file");
+        let report = startup_report(&path, &error, DEFAULT_POSTURE).expect("a rule of the file");
         assert_eq!(report.error_count(), 3);
         assert!(report.diagnostics().iter().all(|diagnostic| diagnostic
             .source
@@ -5015,8 +5153,8 @@ holdPolicy:
         document["listener"]["unknownOne"] = serde_json::json!(1);
         document["retention"]["unknownTwo"] = serde_json::json!(2);
         let path = write_operator(root.path(), document);
-        let error = RuntimeConfig::load(&path).unwrap_err();
-        let report = startup_report(&path, &error).expect("a loader refusal");
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE).unwrap_err();
+        let report = startup_report(&path, &error, DEFAULT_POSTURE).expect("a loader refusal");
         let unknown: Vec<&str> = report
             .diagnostics()
             .iter()
@@ -5030,9 +5168,10 @@ holdPolicy:
         let root = canonical_tempdir();
         let document = operator_value(&root.path().join("package"), "development-loopback");
         let path = write_operator(root.path(), document);
-        let error = RuntimeConfig::load(&path).expect_err("no package exists");
+        let error = RuntimeConfig::load(&path, DEFAULT_POSTURE).expect_err("no package exists");
         assert!(!error.in_file(), "{error}");
-        let report = startup_report(&path, &error).expect("a positioned package refusal");
+        let report =
+            startup_report(&path, &error, DEFAULT_POSTURE).expect("a positioned package refusal");
         let [diagnostic] = report.diagnostics() else {
             panic!("one diagnostic expected: {report:?}");
         };

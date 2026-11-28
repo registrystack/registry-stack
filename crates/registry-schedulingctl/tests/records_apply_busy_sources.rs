@@ -62,18 +62,29 @@ fn scoped_url(base: &str, schema: &str) -> String {
 
 fn activate(config: &Path) {
     let config = config.to_path_buf();
-    std::thread::spawn(move || activation::apply(&config, None, &[]))
-        .join()
-        .expect("activation does not panic")
-        .expect("the package activates");
+    std::thread::spawn(move || {
+        activation::apply(
+            &config,
+            None,
+            &[],
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+    })
+    .join()
+    .expect("activation does not panic")
+    .expect("the package activates");
 }
 
 fn apply_error(config: &Path, records_path: &Path) -> String {
     let config = config.to_path_buf();
     let records_path = records_path.to_path_buf();
     std::thread::spawn(move || {
-        let error = records::apply(&config, &records_path)
-            .expect_err("missing configured busy-source coverage refuses records");
+        let error = records::apply(
+            &config,
+            &records_path,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .expect_err("missing configured busy-source coverage refuses records");
         format!("{error:#}")
     })
     .join()

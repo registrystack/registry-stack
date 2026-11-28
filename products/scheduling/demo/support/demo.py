@@ -411,7 +411,7 @@ identity:
   databaseId: scheduling-demo
 listener:
   bind: 127.0.0.1:{port}
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
 secretProviders:
   file:
     root: {secrets_root}

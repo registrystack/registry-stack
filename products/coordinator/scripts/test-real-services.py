@@ -992,12 +992,12 @@ class Journey:
             value = b"\0" + os.urandom(31) if key_name == "state-key" else os.urandom(32)
             private(keys / key_name, value)
         config = self.runtime(keys, connections)
-        config["database"] = {"runtimeUrlRef": "secret:file/runtime-database", "migrationUrlRef": "secret:file/migration-database"}
+        config["database"] = {"runtimeUrlRef": "secret:file/runtime-database", "migrationUrlRef": "secret:file/migration-database", "transport": "loopback-plaintext"}
         config["deployment"] = {
             "databaseId": "coordinator-native-" + uuid.uuid4().hex,
             "runtimeRole": role,
             "packages": packages,
-            "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "development-loopback"},
+            "listener": {"bind": f"127.0.0.1:{port}", "tlsTermination": "loopback-plaintext"},
             "authentication": {"issuer": self.urls["issuer"], "audience": COORDINATOR_RESOURCE,
                 "scopeClaim": "scope", "jwksSource": {"type": "static", "documentRef": "secret:file/jwks"},
                 # Admission accepts only the producer client's own service subject.

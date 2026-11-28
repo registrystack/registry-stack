@@ -192,6 +192,7 @@ fn try_spawn_server(
 ) -> Option<Server> {
     let stderr = tempfile::tempfile().expect("server stderr file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
+    command.env_remove("REGISTRY_STACK_POSTURE");
     command
         .arg("serve")
         .arg("--runtime-config")
@@ -580,6 +581,7 @@ fn api_key_with_stray_whitespace_is_refused_at_startup() {
     // startup error, not a silent permanent 401 with /health green.
     write_secret(&home.join("api.key"), &format!(" {API_KEY}"));
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -651,6 +653,7 @@ fn a_refused_bind_is_caught_before_startup_touches_the_filesystem() {
     );
     std::fs::write(&runtime, text).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdin(Stdio::null())
         .output()
@@ -700,6 +703,7 @@ fn serve_startup_package_digest_mismatch_uses_common_expected_and_found_shape() 
         );
     std::fs::write(&runtime, text).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .output()
         .unwrap();
@@ -1305,6 +1309,7 @@ fn package_changed_missing_and_extra_files_refuse_startup_by_name() {
             _ => unreachable!(),
         }
         let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+            .env_remove("REGISTRY_STACK_POSTURE")
             .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
             .output()
             .unwrap();
@@ -1712,6 +1717,7 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
     )
     .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .args(["serve", "--runtime-config", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

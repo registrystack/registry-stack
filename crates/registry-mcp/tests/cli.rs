@@ -60,6 +60,8 @@ fn offline_example_check_does_not_resolve_referenced_credentials() {
             .args([
                 "--runtime-config",
                 path.to_str().unwrap(),
+                "--posture",
+                "development",
                 "check",
                 "--format",
                 "json",
@@ -173,6 +175,8 @@ fn offline_check_resolves_a_relative_config_path_without_resolving_secrets() {
         .args([
             "--runtime-config",
             "runtime.yaml",
+            "--posture",
+            "development",
             "check",
             "--format",
             "json",
@@ -189,4 +193,61 @@ fn offline_check_resolves_a_relative_config_path_without_resolving_secrets() {
         true
     );
     assert!(result.stderr.is_empty());
+}
+
+#[test]
+fn check_requires_development_for_the_http_resource_and_reports_flag_conflicts() {
+    let file = example();
+    for (flags, exit, status, code) in [
+        (
+            vec![],
+            1,
+            "domain-refusal",
+            "platform.posture.mcp-http-resource",
+        ),
+        (
+            vec!["--production"],
+            1,
+            "domain-refusal",
+            "platform.posture.mcp-http-resource",
+        ),
+        (
+            vec!["--posture", "development"],
+            0,
+            "complete",
+            "platform.posture.mcp-http-resource",
+        ),
+        (
+            vec!["--production", "--posture", "development"],
+            2,
+            "usage-error",
+            "platform.posture.conflict",
+        ),
+        (
+            vec!["--posture", "Production"],
+            2,
+            "usage-error",
+            "platform.posture.invalid-value",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_registry-mcp"))
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .arg("--runtime-config")
+            .arg(&file)
+            .args(["check", "--format", "json"])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(exit), "{output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["status"], status);
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], code);
+        if exit == 1 {
+            let action = diagnostic["suggestedAction"].as_str().unwrap();
+            assert!(action.contains("rstack dev"));
+            assert!(action.contains("--posture development"));
+            assert!(action.contains("REGISTRY_STACK_POSTURE=development"));
+        }
+    }
 }

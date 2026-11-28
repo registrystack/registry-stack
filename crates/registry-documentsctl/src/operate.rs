@@ -11,11 +11,13 @@
 //! `documents serve` does, pinned digest included, and each refusal names
 //! its own code at the member it concerns.
 
+use registry_platform_config::DeclaredPosture;
+
 use std::path::{Path, PathBuf};
 
 use registry_documents::activation::{ActivationError, ActivationRefusal, ApplyRequest};
 use registry_documents::config::Erasure;
-use registry_documents::config::{startup_report, RuntimeConfig, RuntimeConfigError};
+use registry_documents::config::{startup_report_with_posture, RuntimeConfig, RuntimeConfigError};
 use registry_documents::package::PackageLoadError;
 use registry_documents::replay::{ReplayFailure, ReplayRefusal};
 use registry_documents::runtime::{
@@ -39,7 +41,7 @@ struct Runtime {
     config: RuntimeConfig,
 }
 
-fn load(path: &Path) -> Result<Runtime, Outcome> {
+fn load(path: &Path, declared: DeclaredPosture) -> Result<Runtime, Outcome> {
     let Ok(absolute) = std::path::absolute(path) else {
         return Err(Outcome::refused(
             OPERATIONAL_FAILURE_EXIT,
@@ -49,8 +51,8 @@ fn load(path: &Path) -> Result<Runtime, Outcome> {
                 .to_owned(),
         ));
     };
-    let config =
-        RuntimeConfig::load(&absolute).map_err(|error| config_refusal(&absolute, &error))?;
+    let config = RuntimeConfig::load_with_posture(&absolute, declared)
+        .map_err(|error| config_refusal(&absolute, declared, &error))?;
     Ok(Runtime {
         given: path.to_owned(),
         absolute,
@@ -74,14 +76,14 @@ fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, Outcome> {
         })
 }
 
-pub(crate) fn plan(path: &Path) -> Outcome {
-    let runtime = match load(path) {
+pub(crate) fn plan(path: &Path, declared: DeclaredPosture) -> Outcome {
+    let runtime = match load(path, declared) {
         Ok(runtime) => runtime,
         Err(refused) => return refused,
     };
     match block_on(activation_plan(&runtime.config)) {
         Err(refused) => refused,
-        Ok(Err(error)) => failure(&runtime.given, error),
+        Ok(Err(error)) => failure(&runtime.given, declared, error),
         Ok(Ok(plan)) => {
             let exit = if plan.refusals.is_empty() {
                 0
@@ -109,8 +111,13 @@ pub(crate) fn plan(path: &Path) -> Outcome {
     }
 }
 
-pub(crate) fn apply(path: &Path, operator_reference: Option<&str>, backups: &[String]) -> Outcome {
-    let runtime = match load(path) {
+pub(crate) fn apply(
+    path: &Path,
+    declared: DeclaredPosture,
+    operator_reference: Option<&str>,
+    backups: &[String],
+) -> Outcome {
+    let runtime = match load(path, declared) {
         Ok(runtime) => runtime,
         Err(refused) => return refused,
     };
@@ -120,7 +127,7 @@ pub(crate) fn apply(path: &Path, operator_reference: Option<&str>, backups: &[St
     };
     match block_on(apply_activation(&runtime.config, &request)) {
         Err(refused) => refused,
-        Ok(Err(error)) => failure(&runtime.given, error),
+        Ok(Err(error)) => failure(&runtime.given, declared, error),
         Ok(Ok(applied)) => {
             let active_digest = if applied.recorded {
                 applied.activation.predecessor_package_digest.clone()
@@ -144,19 +151,23 @@ pub(crate) fn apply(path: &Path, operator_reference: Option<&str>, backups: &[St
     }
 }
 
-pub(crate) fn status(path: &Path) -> Outcome {
-    let runtime = match load(path) {
+pub(crate) fn status(path: &Path, declared: DeclaredPosture) -> Outcome {
+    let runtime = match load(path, declared) {
         Ok(runtime) => runtime,
         Err(refused) => return refused,
     };
     match block_on(activation_status(&runtime.config)) {
         Err(refused) => refused,
-        Ok(Err(error)) => failure(&runtime.given, error),
+        Ok(Err(error)) => failure(&runtime.given, declared, error),
         Ok(Ok(status)) => Outcome::new(
             json!({
                 "runtimeConfig": runtime.given,
                 "active": status.active,
                 "history": status.history,
+                "diagnostics": activation_diagnostics(&status.findings).into_iter().map(|mut finding| {
+                    finding["severity"] = json!("warning");
+                    finding
+                }).collect::<Vec<_>>(),
                 "schemaVersion": status.schema_version,
                 "runtimeRoleMode": status.runtime_role_mode,
                 "grantsCurrent": status.grants_current,
@@ -166,14 +177,14 @@ pub(crate) fn status(path: &Path) -> Outcome {
     }
 }
 
-pub(crate) fn erasure_status(path: &Path) -> Outcome {
-    let runtime = match load(path) {
+pub(crate) fn erasure_status(path: &Path, declared: DeclaredPosture) -> Outcome {
+    let runtime = match load(path, declared) {
         Ok(runtime) => runtime,
         Err(refused) => return refused,
     };
     match block_on(erasure_report(&runtime.config)) {
         Err(refused) => refused,
-        Ok(Err(error)) => failure(&runtime.given, error),
+        Ok(Err(error)) => failure(&runtime.given, declared, error),
         Ok(Ok(status)) => Outcome::new(
             json!({
                 "runtimeConfig": runtime.given,
@@ -190,8 +201,13 @@ pub(crate) fn erasure_status(path: &Path) -> Outcome {
     }
 }
 
-pub(crate) fn dead_letters(job: Job, path: &Path, limit: u16) -> Outcome {
-    let runtime = match load(path) {
+pub(crate) fn dead_letters(
+    job: Job,
+    path: &Path,
+    declared: DeclaredPosture,
+    limit: u16,
+) -> Outcome {
+    let runtime = match load(path, declared) {
         Ok(runtime) => runtime,
         Err(refused) => return refused,
     };
@@ -201,7 +217,7 @@ pub(crate) fn dead_letters(job: Job, path: &Path, limit: u16) -> Outcome {
     };
     match listed {
         Err(refused) => refused,
-        Ok(Err(error)) => failure(&runtime.given, error),
+        Ok(Err(error)) => failure(&runtime.given, declared, error),
         Ok(Ok(dead_letters)) => Outcome::new(
             json!({
                 "runtimeConfig": runtime.given,
@@ -213,8 +229,14 @@ pub(crate) fn dead_letters(job: Job, path: &Path, limit: u16) -> Outcome {
     }
 }
 
-pub(crate) fn replay(job: Job, path: &Path, version: Uuid, expected_generation: i64) -> Outcome {
-    let runtime = match load(path) {
+pub(crate) fn replay(
+    job: Job,
+    path: &Path,
+    declared: DeclaredPosture,
+    version: Uuid,
+    expected_generation: i64,
+) -> Outcome {
+    let runtime = match load(path, declared) {
         Ok(runtime) => runtime,
         Err(refused) => return refused,
     };
@@ -233,7 +255,7 @@ pub(crate) fn replay(job: Job, path: &Path, version: Uuid, expected_generation: 
     };
     match replayed {
         Err(refused) => refused,
-        Ok(Err(error)) => failure(&runtime.given, error),
+        Ok(Err(error)) => failure(&runtime.given, declared, error),
         Ok(Ok(replayed)) => Outcome::new(
             json!({
                 "runtimeConfig": runtime.given,
@@ -248,7 +270,7 @@ pub(crate) fn replay(job: Job, path: &Path, version: Uuid, expected_generation: 
 }
 
 /// The report of a database command that did not finish.
-fn failure(path: &Path, error: RuntimeError) -> Outcome {
+fn failure(path: &Path, declared: DeclaredPosture, error: RuntimeError) -> Outcome {
     let refused = |exit, code, member| Outcome::refused(exit, code, member, error.to_string());
     let activation_refused = |activation: &ActivationError, member| {
         refused(
@@ -258,7 +280,7 @@ fn failure(path: &Path, error: RuntimeError) -> Outcome {
         )
     };
     match &error {
-        RuntimeError::Config(config) => config_refusal(path, config),
+        RuntimeError::Config(config) => config_refusal(path, declared, config),
         RuntimeError::ConfigurationRefused(report) => {
             Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, report)
         }
@@ -331,6 +353,18 @@ fn failure(path: &Path, error: RuntimeError) -> Outcome {
             "documentsctl.activation.schema-unresolved",
             "database",
         ),
+        RuntimeError::Database {
+            source: registry_documents::store::StoreError::Transport(error),
+            ..
+        } => {
+            let diagnostic = Diagnostic::error(
+                error.code(),
+                "/database/transport",
+                error.to_string(),
+                error.suggested_action(),
+            );
+            Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &Report::new(vec![diagnostic]))
+        }
         RuntimeError::Activation(ActivationError::Store(_)) | RuntimeError::Database { .. } => {
             refused(OPERATIONAL_FAILURE_EXIT, "database.unavailable", "database")
         }
@@ -400,8 +434,8 @@ fn replay_failure(
 /// The refusal of the runtime configuration at `path`: every rule it
 /// breaks, each at its position, or the one dependency it names that could
 /// not be prepared.
-fn config_refusal(path: &Path, error: &RuntimeConfigError) -> Outcome {
-    if let Some(report) = startup_report(path, error) {
+fn config_refusal(path: &Path, declared: DeclaredPosture, error: &RuntimeConfigError) -> Outcome {
+    if let Some(report) = startup_report_with_posture(path, error, declared) {
         let unavailable = report
             .diagnostics()
             .iter()
@@ -430,7 +464,7 @@ fn activation_diagnostics(refusals: &[ActivationRefusal]) -> Vec<Value> {
                 "artifact": artifact,
                 "path": refusal.path,
                 "message": refusal.message,
-                "suggestedAction": action,
+                "suggestedAction": refusal.suggested_action.unwrap_or(action),
             })
         })
         .collect()

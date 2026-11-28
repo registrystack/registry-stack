@@ -155,6 +155,7 @@ async fn world_with_project(project: &str) -> World {
     let prepared = prepare_with_verifier(
         &deployment.runtime,
         FakeVerifier::new("refusal-golden", APPROVE),
+        support::TEST_POSTURE,
     )
     .await
     .expect("the runtime prepares");

@@ -55,7 +55,7 @@ package:
   root: {package}
 listener:
   bind: 127.0.0.1:0
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
 secretProviders:
   file:
@@ -76,7 +76,10 @@ audit:
 storage:
   type: database
 contentVerification:
-  type: disabled
+  type: http
+  url: http://127.0.0.1:9/verify
+  authorizationRef: secret:file/hook-key
+  policyId: documents-test
 cleanup:
   erasure: active
 destinations:
@@ -103,6 +106,75 @@ fn ctl(arguments: &[&str]) -> Output {
 
 fn scratch() -> tempfile::TempDir {
     tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
+}
+
+#[test]
+fn print_sql_requires_declared_development_for_disabled_verification() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    let document = std::fs::read_to_string(&runtime).unwrap();
+    let start = document.find("contentVerification:").unwrap();
+    let end = document.find("cleanup:").unwrap();
+    std::fs::write(
+        &runtime,
+        format!(
+            "{}contentVerification:\n  type: disabled\n{}",
+            &document[..start],
+            &document[end..]
+        ),
+    )
+    .unwrap();
+    let output = ctl(&["provision", "--runtime-config", &runtime, "--print-sql"]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("documents.posture.content-verification-disabled"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("/contentVerification"), "{stderr}");
+    assert!(stderr.contains("rstack dev"), "{stderr}");
+    assert!(
+        stderr.contains("REGISTRY_STACK_POSTURE=development"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("--posture development"), "{stderr}");
+    let output = ctl(&[
+        "provision",
+        "--runtime-config",
+        &runtime,
+        "--print-sql",
+        "--posture",
+        "development",
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn check_reports_the_declared_posture() {
+    let directory = scratch();
+    let runtime = write_runtime(directory.path());
+    for (flags, posture, source) in [
+        (&[][..], "production", "default"),
+        (&["--posture", "development"][..], "development", "flag"),
+    ] {
+        let mut args = vec!["--format", "json", "check", "--runtime-config", &runtime];
+        args.extend(flags);
+        let output = ctl(&args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report["posture"],
+            serde_json::json!({"value": posture, "source": source})
+        );
+    }
 }
 
 #[test]
@@ -305,4 +377,57 @@ fn a_runtime_file_the_runtime_refuses_is_refused_with_its_diagnostic() {
         diagnostic["code"], "documents.runtime.allowed-clients-required",
         "{diagnostic}"
     );
+}
+
+#[test]
+fn check_production_refuses_development_settings_and_conflicting_declarations() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("runtime.yaml");
+    let contents =
+        include_str!("../../../products/documents/examples/starter/runtime.example.yaml");
+    let contents = contents.replace("  type: http\n  url: https://scanner.example.test/v1/verify\n  authorizationRef: secret:file/content-verifier-authorization\n  policyId: documents-default\n  attemptTimeoutMilliseconds: 10000", "  type: disabled");
+    std::fs::write(&config, contents).unwrap();
+    for (flags, environment, exit, code) in [
+        (
+            &["--posture", "development"][..],
+            None,
+            2,
+            "platform.posture.conflict",
+        ),
+        (&[][..], Some("development"), 2, "platform.posture.conflict"),
+        (
+            &[][..],
+            None,
+            1,
+            "documents.posture.content-verification-disabled",
+        ),
+    ] {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_documentsctl"));
+        command.env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(value) = environment {
+            command.env("REGISTRY_STACK_POSTURE", value);
+        }
+        let output = command
+            .args([
+                "--format",
+                "json",
+                "check",
+                "--production",
+                "--runtime-config",
+            ])
+            .arg(&config)
+            .args(flags)
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(output.status.code(), Some(exit), "{report}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| finding["code"] == code),
+            "{report}"
+        );
+    }
 }

@@ -145,6 +145,12 @@ fn selected(operations: &[&str]) -> BTreeSet<String> {
         .collect()
 }
 
+const PRODUCTION: registry_platform_config::DeclaredPosture =
+    registry_platform_config::DeclaredPosture {
+        posture: registry_platform_config::Posture::Production,
+        source: registry_platform_config::PostureSource::Default,
+    };
+
 #[test]
 fn producer_generated_facility_contract_matches_fixed_bytes_and_parses() {
     assert_eq!(
@@ -358,7 +364,7 @@ fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
     let selected_set = selected(&["records.list"]);
     let missing = directory.path().join("missing.json");
     assert_eq!(
-        AdapterContract::load_bound_checked(&missing, "sha256:unused", &selected_set)
+        AdapterContract::load_bound_checked(&missing, "sha256:unused", PRODUCTION, &selected_set)
             .err()
             .expect("missing contract is refused"),
         AdapterContractLoadError::Unreadable
@@ -371,7 +377,7 @@ fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
     )
     .unwrap();
     assert_eq!(
-        AdapterContract::load_bound_checked(&malformed, "sha256:unused", &selected_set)
+        AdapterContract::load_bound_checked(&malformed, "sha256:unused", PRODUCTION, &selected_set)
             .err()
             .expect("malformed contract is refused"),
         AdapterContractLoadError::Malformed
@@ -384,6 +390,7 @@ fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
         AdapterContract::load_bound_checked(
             &valid,
             &format!("sha256:{}", "0".repeat(64)),
+            PRODUCTION,
             &selected_set,
         )
         .err()
@@ -394,6 +401,7 @@ fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
         AdapterContract::load_bound_checked(
             &valid,
             document["digest"].as_str().unwrap(),
+            PRODUCTION,
             &selected(&["records.missing"]),
         )
         .err()
@@ -415,6 +423,7 @@ fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
         AdapterContract::load_bound_checked(
             &malformed_selection_path,
             malformed_selection["digest"].as_str().unwrap(),
+            PRODUCTION,
             &selected(&["records.missing"]),
         )
         .err()
@@ -445,6 +454,7 @@ fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
         AdapterContract::load_bound_checked(
             &unserved_write_path,
             unserved_write["digest"].as_str().unwrap(),
+            PRODUCTION,
             &selected(&["records.create"]),
         )
         .err()
@@ -472,6 +482,7 @@ fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
         AdapterContract::load_bound_checked(
             &unsupported_selection_path,
             unsupported_selection["digest"].as_str().unwrap(),
+            PRODUCTION,
             &selected_set,
         )
         .err()
@@ -492,6 +503,7 @@ fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
         AdapterContract::load_bound_checked(
             &malformed_write_path,
             malformed_write["digest"].as_str().unwrap(),
+            PRODUCTION,
             &selected_set,
         )
         .err()
@@ -511,6 +523,7 @@ fn checked_loader_distinguishes_unreadable_malformed_and_digest_mismatch() {
         AdapterContract::load_bound_checked(
             &inconsistent_path,
             inconsistent["digest"].as_str().unwrap(),
+            PRODUCTION,
             &selected_set,
         )
         .err()

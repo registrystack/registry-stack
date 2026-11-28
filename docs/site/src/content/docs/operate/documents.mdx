@@ -18,11 +18,10 @@ checkout, as the [overview](../../start/documents/#status) explains.
 
 ## What you provide
 
-- **PostgreSQL 17 or newer**, reached over TLS, with one database and two login roles: a migration
-  role that owns the schema, and a runtime role that serves. `documentsctl apply` uses the first
-  and grants the second what serving needs. Both connections verify the server certificate and its
-  host name, so a local database needs a certificate too; an operator build refuses
-  `database.testOnlyPlaintext`.
+- **PostgreSQL 17 or newer** with a migration role that owns the schema and a
+  runtime role that serves. The default transport verifies the server
+  certificate and host name. Set `database.transport: loopback-plaintext` for
+  PostgreSQL on the same host over a socket or loopback TCP.
 - **Your OpenID Connect issuer.** Every route except `GET /health` and `GET /ready` takes a
   bearer access token it signed; the token's client, scopes, and actor kind select one access profile in the project.
   [Access tokens](#access-tokens) lists what each token must carry.
@@ -252,6 +251,14 @@ checks the secret reference and its provider. Startup also reads and validates t
     crates/registry-documents/src/runtime.rs, connect_migration only in apply. */}
 
 ## Check, apply, and start
+Use the same declared posture for `plan`, `apply` and startup. The activation
+ledger records that posture, and existing activation rows read as production.
+Startup, `plan` and `apply` refuse a database activated under the other
+posture. To change postures, apply to a fresh database.
+`documentsctl status` reports a mismatch and returns the ledger.
+
+{/* Evidence: crates/registry-documents/src/activation.rs plan, status, apply, check_runtime. */}
+
 
 Check the file and the package before you deploy them:
 
@@ -351,6 +358,7 @@ and `503 service.unavailable` otherwise, with the cause in the operational log. 
 balancer's health check at `/ready`. Once `documentsctl apply` activates another package, a
 process still serving the previous one answers `/ready` with `503` until it restarts onto the
 new package.
+The 200 body contains `status: ready`, `posture` and `developmentSettings`. Development responses carry `Registry-Posture: development`.
 
 Every other route answers `401 authentication.refused` without a valid token. The operator
 commands write their own audit journal beside the service's.

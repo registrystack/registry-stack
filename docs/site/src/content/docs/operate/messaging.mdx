@@ -94,6 +94,29 @@ Neither acceptance nor `submitted` is proof of delivery to the recipient or of l
 
 {/* TODO[evidence]: cite a test that shows a message moving from accepted to failed or unknown after the 202. */}
 
+
+## Declare the deployment posture
+
+The runtime and ctl read `REGISTRY_STACK_POSTURE` or `--posture`.
+The default is `production`.
+For `messagingctl dev`, an unset posture means `development` and an explicit `production` declaration is refused.
+
+{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs PostureSource::Default, crates/registry-messagingctl/tests/dev_posture.rs dev_refuses_explicit_production_before_writing. */}
+For a laptop deployment that uses development settings, run with `rstack dev` or declare `development` explicitly.
+Use the same posture for the entire deployment. Production peers refuse development responses.
+
+`plan`, `apply`, and startup refuse a database activated under a different posture.
+`status` reports the mismatch alongside the ledger and schema information.
+To change posture, apply to a fresh database.
+
+A successful `/ready` returns `status`, `posture`, and `developmentSettings`.
+Each development setting lists its code and configuration pointer.
+In development, the public and metrics listeners add `Registry-Posture: development`.
+
+{/* Evidence: crates/registry-messaging/src/config.rs finish_load;
+    crates/registry-messaging/src/http.rs ready, http_edge;
+    crates/registry-messaging/src/activation.rs posture_mismatch. */}
+
 ## Write the runtime file
 
 The package carries no runtime file. `messagingctl init <directory>` writes a starter project with
@@ -104,7 +127,7 @@ Set `package.root` to the absolute path of the package directory. Optionally set
 `package.expectedDigest` to the digest the author reported, which pins the runtime to that package.
 
 Set `listener.bind` to the private address your proxy reaches, and `tlsTermination` to
-`operator-controlled-upstream`: the example's `development-loopback` is refused on any non-loopback
+`operator-controlled-upstream`: the example's `loopback-plaintext` is refused on any non-loopback
 bind, and a public unicast address is refused under every setting. Set `authentication.oidc` to your
 issuer and audience. Write `allowedClients: from-package` to admit exactly the clients the
 package's access profiles name, so the clients are written once, in `messaging.yaml`. A list is also

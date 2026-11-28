@@ -154,7 +154,8 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
         .expect("a runtime document"),
     )
     .expect("write the runtime file");
-    let config = RuntimeConfig::load(&runtime_path).expect("the runtime configuration loads");
+    let config = RuntimeConfig::load(&runtime_path, registry_messaging::config::DEFAULT_POSTURE)
+        .expect("the runtime configuration loads");
     let resolver = config.secret_resolver().expect("the secret resolver");
     let keys = config
         .jwks_fetcher(&resolver)

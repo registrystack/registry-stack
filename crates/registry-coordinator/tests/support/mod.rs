@@ -74,6 +74,8 @@ pub fn config(
         scopes: vec![scope.to_owned()],
     };
     RuntimeConfig {
+        posture: None,
+        development: None,
         minimum_observation_interval_seconds: registry_platform_yaml::BoundedU32::new(30).unwrap(),
         event_sources: BTreeMap::new(),
         deployment: None,

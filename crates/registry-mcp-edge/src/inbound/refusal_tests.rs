@@ -77,9 +77,10 @@ fn gateway_core() -> Arc<GatewayCore> {
         ["unused".to_owned()],
     )
     .expect("binding");
-    let audit = ToolAuditLog::new(AuditWriter::from_line_sink_without_posture(Box::new(
-        io::sink(),
-    )));
+    let audit = ToolAuditLog::new(AuditWriter::from_line_sink(
+        Box::new(io::sink()),
+        registry_platform_config::Posture::Production,
+    ));
     Arc::new(
         GatewayCore::new(
             [binding],
@@ -159,6 +160,12 @@ pub(super) fn application(
             resource: Url::parse(RESOURCE).expect("resource URL"),
             maximum_request_bytes: 4096,
             hsts: false,
+            posture: registry_platform_config::PostureReport::new(
+                registry_platform_config::DeclaredPosture {
+                    posture: registry_platform_config::Posture::Production,
+                    source: registry_platform_config::PostureSource::Default,
+                },
+            ),
         },
     );
     (app, resource_server)
@@ -545,4 +552,69 @@ fn a_retry_after_from_one_to_sixty_seconds_is_frozen_as_sixty() {
 #[should_panic(expected = "retry-after 61")]
 fn a_retry_after_beyond_the_refill_period_is_refused() {
     settle_retry_after(&mut json!({"headers": {"retry-after": "61"}}));
+}
+
+#[test]
+fn production_constructor_refuses_development_resource_server_options() {
+    use crate::ResourceServerError;
+    use registry_platform_config::Posture;
+    let production = ResourceServerOptions {
+        resource: RESOURCE.to_owned(),
+        issuer: "https://issuer.example.test".to_owned(),
+        allow_insecure_http: false,
+        algorithms: vec![AccessTokenAlgorithm::EdDSA],
+        allowed_clients: vec![CLIENT.to_owned()],
+        required_scopes: vec![SCOPE.to_owned()],
+        scope_claim: "scope".to_owned(),
+        maximum_token_lifetime: Duration::from_secs(300),
+        resource_name: "Test".to_owned(),
+        principal_audit_namespace: "test-principal-v1".to_owned(),
+        client_audit_namespace: "test-client-v1".to_owned(),
+    };
+    let http_resource = ResourceServerOptions {
+        resource: "http://localhost/mcp".to_owned(),
+        ..production.clone()
+    };
+    let http_issuer = ResourceServerOptions {
+        issuer: "http://localhost".to_owned(),
+        ..production.clone()
+    };
+    let insecure_opt_in = ResourceServerOptions {
+        allow_insecure_http: true,
+        ..production
+    };
+    let bucket = TokenBucketOptions {
+        requests_per_minute: 1,
+        burst: 1,
+    };
+    for (options, expected) in [
+        (http_resource, ResourceServerError::Resource),
+        (http_issuer, ResourceServerError::Issuer),
+        (insecure_opt_in, ResourceServerError::Issuer),
+    ] {
+        for posture in [Posture::Production, Posture::Development] {
+            let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                "https://issuer.example.test/jwks".to_owned(),
+                JwksFetcherConfig::defaults(),
+                FetchUrlPolicy::https_or_loopback(),
+            ));
+            let profile =
+                AuditProfile::production_from_secret_bytes(Zeroizing::new(vec![8; 32])).unwrap();
+            let result = ResourceServer::new_with_posture(
+                &options,
+                token_verifier(&options, fetcher),
+                profile.key_hasher(),
+                RateLimitOptions {
+                    per_principal: bucket,
+                    per_client: bucket,
+                },
+                posture,
+            );
+            if posture == Posture::Production {
+                assert_eq!(result.err(), Some(expected));
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
 }

@@ -2567,6 +2567,32 @@
       "ReadyStatus": {
         "additionalProperties": true,
         "properties": {
+          "developmentSettings": {
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "pointer"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "posture": {
+            "enum": [
+              "development",
+              "production"
+            ],
+            "type": "string"
+          },
           "status": {
             "enum": [
               "ready"
@@ -2575,7 +2601,9 @@
           }
         },
         "required": [
-          "status"
+          "status",
+          "posture",
+          "developmentSettings"
         ],
         "type": "object"
       },
@@ -3064,7 +3092,7 @@
     },
     "/readyz": {
       "get": {
-        "description": "Asks the Scheduling store to answer. A store that cannot answer is service.unavailable, with Retry-After. Answers an empty 200 and stays beside /ready for deployments that already probe it.",
+        "description": "Asks the Scheduling store to answer. A store that cannot answer is service.unavailable, with Retry-After.",
         "operationId": "getReadiness",
         "parameters": [
           {
@@ -3079,6 +3107,13 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyStatus"
+                }
+              }
+            },
             "description": "Success",
             "headers": {
               "cache-control": {

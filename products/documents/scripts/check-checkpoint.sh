@@ -124,8 +124,8 @@ expect_refusal unrestricted-clients --runtime-config /authentication/oidc/allowe
   documents.runtime.allowed-clients-required
 expect_refusal plaintext-hook --runtime-config /destinations/hooks/owning-system-events/url \
   documents.runtime.insecure-url
-expect_refusal verification-disabled --runtime-config /contentVerification/type \
-  documents.runtime.content-verification-disabled
+expect_refusal verification-disabled --runtime-config /contentVerification \
+  documents.posture.content-verification-disabled
 expect_refusal unknown-project-key --project /owner config.unknown-key
 
 # A project directory without documents.yaml is an operational failure, never

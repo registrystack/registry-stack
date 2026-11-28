@@ -56,6 +56,7 @@ use crate::source_busy::{
 };
 
 pub struct SchedulingAuthenticator {
+    peer_policy: registry_platform_httputil::PeerPolicy,
     verifier: TokenVerifier,
     claim_names: ClaimNames,
     audience: String,
@@ -87,6 +88,7 @@ impl SchedulingAuthenticator {
             .validate()
             .expect("the default contextual claim names are valid");
         Self {
+            peer_policy: registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
             audience: oidc.provider.audience.clone(),
@@ -100,6 +102,12 @@ impl SchedulingAuthenticator {
                 RefusalRecorder::new("scheduling").expect("the refusal counter is declared once"),
             ),
         }
+    }
+
+    #[must_use]
+    pub fn with_peer_policy(mut self, peer_policy: registry_platform_httputil::PeerPolicy) -> Self {
+        self.peer_policy = peer_policy;
+        self
     }
 
     /// The configured values a reads-scope refusal's log line names.
@@ -285,7 +293,7 @@ impl SchedulingAuthenticator {
             })?;
         if let Some(grant) = &grant {
             grant
-                .verify_context_without_peer_policy(&verified, &self.audience)
+                .verify_context(&verified, &self.audience, self.peer_policy)
                 .map_err(|_| AuthenticationError::Profile(FailedCheck::TaskGrantBinding))?;
         }
         let client = verified
@@ -805,6 +813,22 @@ mod tests {
             .actions()
             .iter()
             .any(|action| action == "hold.create"));
+    }
+
+    #[tokio::test]
+    async fn production_refuses_a_development_task_assertion() {
+        let mut grant = grant_claims_value(AUDIENCE);
+        grant["registry_posture"] = json!("development");
+        let credential = token(merged("scheduling-read", grant));
+        assert!(matches!(
+            authenticator().authenticate_mutate(&credential).await,
+            Err(AuthenticationError::Profile(FailedCheck::TaskGrantBinding))
+        ));
+        authenticator()
+            .with_peer_policy(registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer)
+            .authenticate_mutate(&credential)
+            .await
+            .expect("a development peer admits the same grant");
     }
 
     #[tokio::test]

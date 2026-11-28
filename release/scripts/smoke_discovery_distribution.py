@@ -527,12 +527,14 @@ def _wait_until_ready(base_url: str, process: subprocess.Popen[bytes]) -> None:
             )
         try:
             with urllib.request.urlopen(base_url + "ready", timeout=0.5) as response:
+                body = json.loads(response.read(65536))
                 if (
                     response.status == 200
-                    and response.read(1024) == b'{"status":"ready"}'
+                    and isinstance(body, dict)
+                    and body.get("status") == "ready"
                 ):
                     return
-        except (urllib.error.URLError, TimeoutError) as error:
+        except (urllib.error.URLError, TimeoutError, ValueError) as error:
             last_failure = error
         time.sleep(0.05)
     raise SmokeError(
@@ -573,6 +575,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
         if client is None:
             raise SmokeError("no unified client was selected")
         environment = os.environ.copy()
+        environment["REGISTRY_STACK_POSTURE"] = "development"
         _CatalogHandler.requests_seen = 0
         _CatalogHandler.authorization_seen = False
         provider = ThreadingHTTPServer(("127.0.0.1", 0), _CatalogHandler)
@@ -585,19 +588,22 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
             )
             _write_project(project, catalog_url)
             package = scratch / "package"
-            _run_checked(
+            project_report = _run_checked(
                 [
                     str(discoveryctl),
                     "check",
                     "--project",
                     str(project),
-                    "--allow-loopback",
-                    "--deny-warnings",
                     "--format",
                     "json",
                 ],
                 environment=environment,
             )
+            diagnostics = json.loads(project_report)["diagnostics"]
+            if [diagnostic["code"] for diagnostic in diagnostics] != [
+                "discovery.posture.loopback-catalog-url"
+            ] or diagnostics[0]["severity"] != "warning":
+                raise SmokeError("project check reported unexpected diagnostics")
             _run_checked(
                 [
                     str(discoveryctl),
@@ -606,7 +612,6 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
                     str(project),
                     "--output",
                     str(package),
-                    "--allow-loopback",
                     "--revision",
                     "distribution-smoke",
                 ],
@@ -672,7 +677,10 @@ def run_smoke(args: argparse.Namespace) -> dict[str, object]:
                     base_url,
                     EXPECTED_RECORD_ID,
                 ],
-                env=node_environment(os.environ.copy(), scratch),
+                env={
+                    **node_environment(environment, scratch),
+                    "REGISTRY_STACK_POSTURE": environment["REGISTRY_STACK_POSTURE"],
+                },
                 capture_output=True,
                 text=True,
                 timeout=30,

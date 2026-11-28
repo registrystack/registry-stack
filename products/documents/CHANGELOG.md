@@ -21,9 +21,43 @@
   deliveries. The previous reference is outside the binding a pending delivery
   pins. Startup refuses a previous key equal to the current key.
 
-- A migration adds a posture to the activation ledger. Every activation
-  records production until the runtime declares its posture, and the
-  activation objects in `documentsctl` reports carry it as `posture`.
+- BREAKING: An undeclared posture is production.
+  Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+
+- BREAKING: `check` reports development settings as errors under the production default.
+  Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+
+- BREAKING: Use `loopback-plaintext` for loopback listener placement.
+  Migration: Set `tlsTermination` to `loopback-plaintext` for a listener behind a TLS proxy on the same host.
+
+- BREAKING: Issuer `allowInsecureHttp: true` requires development.
+  Migration: Delete allowInsecureHttp where the issuer is on loopback: no setting is needed in any posture.
+
+- Development deployments can now set `database.transport` to `private-network-plaintext` for PostgreSQL on the private network.
+
+- BREAKING: Non-loopback HTTP hook receivers are refused in every posture, including with a `development-loopback` listener.
+  Migration: Use an HTTPS receiver or a receiver on this host.
+
+- Loopback HTTP storage, content verifier, hook and issuer URLs are accepted in either posture. Non-loopback storage, content verifier and hook URLs require HTTPS. A non-loopback HTTP issuer requires an explicit development opt-in.
+
+- PostgreSQL on the same host can now use `database.transport: loopback-plaintext` in either posture.
+
+- BREAKING: Activation records the declared posture. Startup, plan and apply refuse a different posture. Status reports a finding. Existing rows read production.
+  Migration: Recreate development databases: a fresh apply is the way.
+
+- BREAKING: `/ready` returns a JSON object with `posture` and `developmentSettings`.
+  Migration: No change for probes that read the status code.
+
+- BREAKING: Audit lines carry `posture`.
+  Migration: Audit readers with a closed line parser accept the posture member.
+
+- Development responses carry `Registry-Posture: development`. The Document Store Rust client refuses that mark.
+
+- BREAKING: `contentVerification: {type: disabled}` requires development.
+  Migration: Declare development to keep contentVerification: disabled, or configure a verifier.
+
+- BREAKING: `documents.posture.content-verification-disabled` and `platform.database.test-only-plaintext` replace the corresponding runtime refusal codes.
+  Migration: Update scripts that match the old codes.
 
 - `authentication.oidc.allowedClients` accepts the keyword `from-package`,
   which admits the requester clients of the package's access profiles, so the

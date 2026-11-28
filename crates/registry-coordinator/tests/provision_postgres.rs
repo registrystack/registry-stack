@@ -191,7 +191,7 @@ async fn run(superuser_url: String, ca_pem: Vec<u8>, owner_password: String, nam
     d["databaseId"] = json!("provision-test");
     d["runtimeRole"] = json!(names.runtime);
     d["packages"] = json!([{"root":package_path,"expectedDigest":digest}]);
-    d["listener"] = json!({"bind":"127.0.0.1:0","tlsTermination":"development-loopback"});
+    d["listener"] = json!({"bind":"127.0.0.1:0","tlsTermination":"loopback-plaintext"});
     d["auditFile"] = json!(root_path.join("audit.jsonl"));
     d["stateKeys"] = json!({"1":{"keyRef":"secret:file/state-key"}});
     d["admissionKeyRef"] = json!("secret:file/admission-key");
@@ -292,7 +292,7 @@ async fn run(superuser_url: String, ca_pem: Vec<u8>, owner_password: String, nam
         deployment::config(&runtime)
             .unwrap()
             .authentication
-            .authenticator(&runtime.secret_providers, true)
+            .authenticator(&runtime.secret_providers)
             .await
             .unwrap(),
     );

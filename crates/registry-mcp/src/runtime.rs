@@ -12,7 +12,10 @@ use registry_mcp_edge::{
     TokenBucketOptions, ToolAuditLog,
 };
 use registry_platform_audit::{AuditError, AuditProfile, AuditWriter};
-use registry_platform_config::{describe_secret_failure, JwksSource, SecretError, SecretResolver};
+use registry_platform_config::{
+    describe_secret_failure, DeclaredPosture, DevelopmentWitness, JwksSource, Posture,
+    PostureReport, SecretError, SecretResolver,
+};
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::client::StaticToken;
 use registry_platform_oidc::{
@@ -157,7 +160,48 @@ fn private_key(
 }
 
 pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
-    config.validate().map_err(|_| {
+    let declared = crate::config::default_posture();
+    assemble_router(config, &PostureReport::new(declared), None).await
+}
+
+pub async fn build_with_posture(
+    loaded: &registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
+) -> Result<Router, StartupError> {
+    assemble_router(&loaded.config, &loaded.posture, loaded.development.as_ref()).await
+}
+
+async fn assemble_router(
+    config: &RuntimeConfig,
+    posture: &PostureReport,
+    development: Option<&DevelopmentWitness>,
+) -> Result<Router, StartupError> {
+    if development.is_some() != (posture.posture() == Posture::Development) {
+        return Err(startup_failure(
+            "runtime configuration",
+            "the development witness does not match the declared posture",
+            "Use the configuration and posture returned by the runtime loader.",
+        ));
+    }
+    let declared = DeclaredPosture {
+        posture: posture.posture(),
+        source: crate::config::default_posture().source,
+    };
+    let peer_policy = match posture.posture() {
+        Posture::Production => registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
+        Posture::Development => registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer,
+    };
+    let mut checked = posture.clone();
+    config.record_posture(&mut checked);
+    if checked.posture() == Posture::Production
+        && (!checked.settings().is_empty() || config.resource_server.allow_insecure_http)
+    {
+        return Err(startup_failure(
+            "runtime configuration",
+            "production refuses development settings",
+            "Run registry-mcp check for exact diagnostics and correct every reported member.",
+        ));
+    }
+    config.validate(declared, development).map_err(|_| {
         startup_failure(
             "runtime configuration",
             "semantic validation refused the document",
@@ -181,6 +225,13 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         )
     })?;
     let resource = &config.resource_server;
+    let resource_url = resource.resource_url(development).map_err(|error| {
+        startup_failure(
+            "resourceServer.resource",
+            error.to_string(),
+            "Use an https resource identifier.",
+        )
+    })?;
     let policy = IssuerNetworkPolicy::new(resource.issuer.as_str(), resource.allow_insecure_http)
         .map_err(|_| {
         startup_failure(
@@ -189,7 +240,12 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
             "Use the checked issuer URL and its explicit insecure-HTTP policy.",
         )
     })?;
-    let fetcher = match &resource.jwks_source {
+    let jwks_source = resource.jwks_source.get(development).map_err(|error| startup_failure(
+        "resourceServer.jwksSource",
+        error.to_string(),
+        "Start with rstack dev or declare development with REGISTRY_STACK_POSTURE=development or --posture development.",
+    ))?;
+    let fetcher = match jwks_source {
         JwksSource::Uri { uri } => JwksFetcher::new_with_fetch_url_policy(
             uri.to_string(),
             JwksFetcherConfig::defaults(),
@@ -228,13 +284,19 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
             )
         }
     };
-    let options = config.resource_options();
+    let options = config.resource_options(development).map_err(|error| {
+        startup_failure(
+            "resourceServer.resource",
+            error.to_string(),
+            "Use an https resource identifier.",
+        )
+    })?;
     let limits = &config.rate_limits;
     let bucket = |limit: &registry_mcp_edge::config::RateLimitConfig| TokenBucketOptions {
         requests_per_minute: limit.requests_per_minute.get(),
         burst: limit.burst.get(),
     };
-    let resource_server = ResourceServer::new(
+    let resource_server = ResourceServer::new_with_posture(
         &options,
         registry_mcp_edge::token_verifier(&options, Arc::new(fetcher)),
         profile.key_hasher(),
@@ -242,6 +304,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
             per_principal: bucket(&limits.per_principal),
             per_client: bucket(&limits.per_client),
         },
+        posture.posture(),
     )
     .map_err(|error| {
         startup_failure(
@@ -281,7 +344,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                 registry,
                 exchange,
                 service,
-                resource.resource.as_str(),
+                resource_url.as_str(),
                 private_key(
                     &secrets,
                     exchange.private_key_ref.as_str(),
@@ -347,7 +410,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                         provider_field("authorization/exchange/privateKeyRef"),
                     )?,
                     assertion_audience: exchange.assertion_audience.as_str().to_owned(),
-                    gateway_resource: resource.resource.to_string(),
+                    gateway_resource: resource_url.to_string(),
                     downstream_resource: authorization.audience.to_string(),
                     downstream_scopes: authorization
                         .scopes
@@ -377,6 +440,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
             } => {
                 let contract = AdapterContract::load_bound(
                     contract_file, contract_digest,
+                    declared,
                     &operations.values().map(|binding| binding.operation.clone()).collect(),
                 )
                 .map_err(|_| {
@@ -386,12 +450,13 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
                         "Restore the reviewed contract file at its configured digest, then retry startup.",
                     )
                 })?;
-                let provider = AdapterProvider::new(
+                let provider = AdapterProvider::new_with_peer_policy(
                     base_url.to_url(),
                     contract,
                     operations.clone(),
                     audience.as_str(),
                     1024 * 1024,
+                    peer_policy,
                 )
                 .map_err(|_| {
                     startup_failure(
@@ -435,7 +500,7 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         )
     })?;
     let audit = ToolAuditLog::new(
-        AuditWriter::open_without_posture(destination)
+        AuditWriter::open(destination, posture.posture())
             .await
             .map_err(audit_failure)?,
     );
@@ -470,18 +535,21 @@ pub async fn build(config: &RuntimeConfig) -> Result<Router, StartupError> {
         Arc::new(core),
         Arc::new(resource_server),
         &ServerOptions {
-            resource: resource.resource.to_url(),
+            resource: resource_url.to_url(),
             maximum_request_bytes: config.limits.request_bytes(),
-            hsts: !config.development_loopback(),
+            hsts: posture.posture() != registry_platform_config::Posture::Development
+                || !config.loopback_listener(),
+            posture: posture.clone(),
         },
     ))
 }
 
 pub async fn serve<F: Future<Output = ()> + Send + 'static>(
-    config: &RuntimeConfig,
+    loaded: &registry_platform_config::LoadedRuntimeConfig<RuntimeConfig>,
     shutdown: F,
 ) -> Result<(), StartupError> {
-    let router = build(config).await?;
+    let config = &loaded.config;
+    let router = build_with_posture(loaded).await?;
     let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
         .await
         .map_err(|error| {

@@ -13,6 +13,7 @@
 //! the store refuses it, or its commit's outcome cannot be read back, to the
 //! `schedulingctl` sibling of the runtime's audit destination.
 
+use registry_platform_config::DeclaredPosture;
 use std::fs;
 use std::path::Path;
 
@@ -26,15 +27,15 @@ use registry_scheduling_core::{SchedulingFacts, SchedulingRecords};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
+pub fn apply(config_path: &Path, records_path: &Path, declared: DeclaredPosture) -> Result<Value> {
     let config_path =
         fs::canonicalize(config_path).context("resolving the Scheduling runtime configuration")?;
     let records_path =
         fs::canonicalize(records_path).context("resolving the Scheduling environment records")?;
-    let config = crate::project::load_runtime_config(&config_path)?;
+    let config = crate::project::load_runtime_config(&config_path, declared)?;
     let policy = config
         .load_policy()
-        .map_err(|error| crate::project::runtime_refusal(&config_path, error))?;
+        .map_err(|error| crate::project::runtime_refusal(&config_path, error, declared))?;
     let bytes = crate::project::read_input(&records_path)?;
     // The records are checked against the policy the configuration binds,
     // and every refusal is reported at its position before anything opens.
@@ -44,9 +45,10 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
             .into_facts();
     let counts = counts(&facts);
     let resolver = secret_resolver(&config)?;
-    let store = PostgresStore::connect_migration(&config.database, &resolver)
-        .context("the Scheduling migration database configuration is invalid")?
-        .with_busy_source_profiles(&config.authentication.oidc.busy_import_profiles);
+    let store =
+        PostgresStore::connect_migration(&config.database, &resolver, config.development_witness())
+            .context("the Scheduling migration database configuration is invalid")?
+            .with_busy_source_profiles(&config.authentication.oidc.busy_import_profiles);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -93,6 +95,7 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         ))
         .context("writing the records.apply request audit entry; nothing was replaced")?;
     let expected = ActivePackage {
+        posture: declared.posture,
         database_id: config.database_id(),
         package_digest: &policy.package_digest,
     };

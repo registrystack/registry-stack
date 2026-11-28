@@ -23,7 +23,7 @@ entries:
       - {path: crates/registry-documents/src/config.rs, name: plaintext_database_is_refused_outside_test_builds}
   - id: DOCUMENTS-SEC-04
     tests:
-      - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_development_loopback}
+      - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_declared_development}
   - id: DOCUMENTS-SEC-05
     tests:
       - {path: crates/registry-documents/src/config.rs, name: unrestricted_clients_are_refused}
@@ -43,7 +43,7 @@ entries:
       - {path: crates/registry-documents-core/src/wire.rs, name: a_problem_that_differs_from_the_vocabulary_is_not_recognized}
   - id: DOCUMENTS-SEC-08
     tests:
-      - {path: crates/registry-documents/src/config.rs, name: a_plaintext_hook_destination_is_refused_outside_development}
+      - {path: crates/registry-documents/src/config.rs, name: a_non_loopback_plaintext_hook_destination_is_refused_in_both_postures}
       - {path: crates/registry-documentsctl/src/lib.rs, name: a_refused_runtime_configuration_names_the_finding_without_the_value}
   - id: DOCUMENTS-SEC-09
     tests:

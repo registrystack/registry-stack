@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use registry_documents_core::HookTrigger;
-use registry_platform_config::SecretResolver;
+use registry_platform_config::{DevelopmentOnlyRefused, DevelopmentWitness, Gated, SecretResolver};
 use registry_platform_dispatch::postgres::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection, DispatchEvent,
     DispatchSql, DispatchStore, DispatchTransport, Dispatcher, JobKey, JobState, JobTable,
@@ -232,7 +232,7 @@ pub trait VerdictSource: Send + Sync {
 }
 
 /// No verifier: every version is approved under the `disabled` binding.
-/// Accepted only beside a development loopback listener.
+/// Accepted only when the runtime declares the development posture.
 #[derive(Debug)]
 pub struct DisabledVerifier;
 
@@ -263,13 +263,22 @@ impl VerdictSource for HttpVerifier {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum VerifierActivationError {
+    #[error(transparent)]
+    Posture(#[from] DevelopmentOnlyRefused),
+    #[error(transparent)]
+    Configuration(#[from] VerifierError),
+}
+
 /// Activate the verifier `config` names. Nothing is sent.
 pub fn activate_verifier(
-    config: &ContentVerificationConfig,
+    config: &Gated<ContentVerificationConfig>,
+    development: Option<&DevelopmentWitness>,
     max_content_bytes: u64,
     resolver: &SecretResolver,
-) -> Result<Arc<dyn VerdictSource>, VerifierError> {
-    match config {
+) -> Result<Arc<dyn VerdictSource>, VerifierActivationError> {
+    match config.get(development)? {
         ContentVerificationConfig::Disabled {} => Ok(Arc::new(DisabledVerifier)),
         ContentVerificationConfig::Http { settings } => {
             let verifier = HttpVerifierSettings::from_config_without_peer_policy(settings)?

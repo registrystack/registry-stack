@@ -18,7 +18,32 @@ fn bundle() -> PathBuf {
 }
 
 fn run(bundle: &Path, document: &str, data: &Path, output: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_registry-render"))
+    run_with_posture(
+        bundle,
+        document,
+        data,
+        output,
+        &["--posture", "development"],
+    )
+}
+
+fn run_with_posture(
+    bundle: &Path,
+    document: &str,
+    data: &Path,
+    output: &Path,
+    flags: &[&str],
+) -> Output {
+    seal_command(bundle, document, data, output)
+        .args(flags)
+        .output()
+        .expect("run registry-render")
+}
+
+fn seal_command(bundle: &Path, document: &str, data: &Path, output: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
+    command
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("test-seal")
         .arg("--bundle")
         .arg(bundle)
@@ -27,9 +52,41 @@ fn run(bundle: &Path, document: &str, data: &Path, output: &Path) -> Output {
         .arg(data)
         .arg("--output")
         .arg(output)
-        .args(["--issued-at", "2026-11-24T09:00:00Z", "--format", "json"])
+        .args(["--issued-at", "2026-11-24T09:00:00Z", "--format", "json"]);
+    command
+}
+
+#[test]
+fn test_seal_accepts_development_from_environment() {
+    let (dir, data) = example();
+    let destination = dir.path().join("specimen");
+    let result = seal_command(&bundle(), "notice", &data, &destination)
+        .env("REGISTRY_STACK_POSTURE", "development")
         .output()
-        .expect("run registry-render")
+        .unwrap();
+    let sealed = report(&result);
+    assert!(result.status.success(), "{sealed}");
+    assert_eq!(sealed["seal"]["testOnly"], true);
+    assert!(destination.join("document.pdf").is_file());
+}
+
+#[test]
+fn test_seal_refuses_production_without_writing_output() {
+    let (dir, data) = example();
+    let destination = dir.path().join("specimen");
+    for flags in [&[][..], &["--posture", "production"][..]] {
+        let result = run_with_posture(&bundle(), "notice", &data, &destination, flags);
+        let refused = report(&result);
+        assert_eq!(result.status.code(), Some(20), "{refused}");
+        assert!(
+            refused
+                .to_string()
+                .contains("REGISTRY_STACK_POSTURE=development"),
+            "{refused}"
+        );
+        assert!(!destination.exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 }
 
 fn example() -> (TempDir, PathBuf) {
@@ -68,7 +125,7 @@ fn verify_with_openssl(
     fs::write(&content, bytes).unwrap();
     fs::write(&cms, &signed.cms_der).unwrap();
     let mut command = Command::new("openssl");
-    command.arg("cms");
+    command.env_remove("REGISTRY_STACK_POSTURE").arg("cms");
     if let Some(time) = verification_time {
         command.arg("-attime").arg(time.to_string());
     }
@@ -120,6 +177,10 @@ fn generates_a_real_test_signature_and_a_fresh_public_root() {
     );
 
     let signed = read_signed_file(&pdf, 0);
+    let reason = b"/Reason (Registry Stack test seal: not an official document)";
+    assert!(signed.signed_parts[0]
+        .windows(reason.len())
+        .any(|field| field == reason));
     assert!(signed.reserved >= signed.cms_der.len());
     let verified = verify_with_openssl(
         dir.path(),
@@ -278,6 +339,7 @@ fn preserves_package_identity_and_refuses_changed_package_bytes() {
     let physical = dir.path().canonicalize().expect("physical temp directory");
     let package = physical.join("package");
     let result = Command::new(env!("CARGO_BIN_EXE_registry-render"))
+        .env_remove("REGISTRY_STACK_POSTURE")
         .arg("package")
         .arg("--bundle")
         .arg(bundle())
@@ -305,4 +367,60 @@ fn preserves_package_identity_and_refuses_changed_package_bytes() {
     assert!(!result.status.success());
     assert_eq!(report(&result)["title"], "bundle-tampered");
     assert!(!refused.exists());
+}
+
+#[test]
+fn runtime_check_requires_declared_development_for_local_assurance() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = dir.path().join("runtime.yaml");
+    let config = |profile| {
+        format!(
+        "apiVersion: id.registrystack.org/formats/render/runtime/v1alpha1\nkind: RenderRuntimeConfig\nlistener: {{bind: '127.0.0.1:8080'}}\npackage: {{root: /srv/render/package}}\nsecretProviders: {{file: {{root: /srv/render/secrets}}}}\nauthentication: {{apiKeyRef: 'secret:file/api.key'}}\naudit: {{destination: stdout}}\nassuranceProfile: {profile}\n"
+    )
+    };
+    fs::write(&runtime, config("local")).unwrap();
+    let check = |flags: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_registry-render"))
+            .env_remove("REGISTRY_STACK_POSTURE")
+            .args(["check", "--runtime-config"])
+            .arg(runtime.canonicalize().unwrap())
+            .args(["--format", "json"])
+            .args(flags)
+            .output()
+            .unwrap()
+    };
+    for flags in [&[][..], &["--posture", "production"][..]] {
+        let result = check(flags);
+        let report = report(&result);
+        assert_eq!(result.status.code(), Some(1), "{report}");
+        assert_eq!(
+            report["diagnostics"][0]["code"],
+            "render.posture.local-assurance"
+        );
+        let action = report["diagnostics"][0]["suggestedAction"]
+            .as_str()
+            .unwrap();
+        assert!(action.contains("rstack dev"), "{action}");
+        assert!(
+            action.contains("REGISTRY_STACK_POSTURE=development"),
+            "{action}"
+        );
+    }
+    let result = check(&["--posture", "development"]);
+    let accepted = report(&result);
+    assert!(result.status.success(), "{accepted}");
+    assert_eq!(accepted["posture"]["value"], "development");
+    assert_eq!(
+        accepted["diagnostics"][0]["code"],
+        "render.posture.local-assurance"
+    );
+
+    fs::write(&runtime, config("production")).unwrap();
+    let result = check(&["--posture", "development"]);
+    let refused = report(&result);
+    assert_eq!(result.status.code(), Some(1), "{refused}");
+    assert_eq!(
+        refused["diagnostics"][0]["code"],
+        "render.posture.assurance-profile-conflict"
+    );
 }

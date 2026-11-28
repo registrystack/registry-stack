@@ -63,6 +63,7 @@ async fn an_unreachable_key_source_answers_unavailable_and_counts_the_check() {
     let prepared = prepare_with_verifier(
         &deployment.runtime,
         FakeVerifier::new("refusal-key-source", APPROVE),
+        support::TEST_POSTURE,
     )
     .await
     .expect("the runtime prepares without reaching the key source");

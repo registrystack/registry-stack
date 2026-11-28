@@ -36,8 +36,8 @@ invariants:
       comparison stays textual. The declared issuer may use a private address,
       while discovered private JWKS addresses are accepted only on the same
       origin. Cloud metadata and redirects remain denied. Non-loopback HTTP
-      requires the explicit `allowInsecureHttp: true` runtime exception and a
-      fixed startup warning; loopback HTTP remains available for development.
+      requires development and explicit `allowInsecureHttp: true`, with a
+      startup warning. A loopback HTTP issuer needs no opt-in in either posture.
       For a development session borrowing a ready BReg issuer, `messagingctl`
       obtains each requester client's credential only through public
       `bregctl dev export-client`, then uses the explicit Messaging resource,
@@ -228,12 +228,13 @@ invariants:
       in one locked transaction. Split-role runtime grants allow product work
       and ledger reads while withholding ledger writes, ownership, schema
       creation, and migration-owned write paths. Startup verifies the exact
-      schema, database identity, package digest, and effective role boundary.
+      schema, database identity, package digest, declared posture, and role
+      boundary. Journal lines record the process posture.
       Activation and startup require PostgreSQL 17 or newer.
     refusal: >-
       Nothing to refuse at the caller for minimized telemetry. Refuse apply
       before commit when identity or role authority is wrong, and refuse
-      startup before binding when schema, activation, or role grants differ.
+      startup before binding when schema, activation, posture, or role grants differ.
       Audit records are minimized JSON envelopes, not a keyed hash chain.
     negativeTest:
       path: crates/registry-messaging/tests/postgres_callbacks.rs

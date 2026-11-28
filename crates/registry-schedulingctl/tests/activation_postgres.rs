@@ -279,10 +279,12 @@ impl Deployment {
 
     /// The migration store, for fixtures that must reach the schema directly.
     fn migration_store(&self, config: &Path) -> PostgresStore {
-        let config = RuntimeConfig::load(config).expect("the runtime configuration loads");
+        let config = RuntimeConfig::load(config, registry_scheduling::config::DEFAULT_POSTURE)
+            .expect("the runtime configuration loads");
         let resolver = SecretResolver::new([SecretProvider::Environment], "")
             .expect("the environment secret provider configures");
-        PostgresStore::connect_migration(&config.database, &resolver).unwrap()
+        PostgresStore::connect_migration(&config.database, &resolver, config.development_witness())
+            .unwrap()
     }
 
     async fn scalar_i64(&self, sql: &str) -> i64 {
@@ -362,17 +364,26 @@ where
 
 fn apply(config: &Path) -> anyhow::Result<Value> {
     let config = config.to_path_buf();
-    ctl(move || activation::apply(&config, None, &[]))
+    ctl(move || {
+        activation::apply(
+            &config,
+            None,
+            &[],
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+    })
 }
 
 fn plan(config: &Path) -> Value {
     let config = config.to_path_buf();
-    ctl(move || activation::plan(&config)).expect("plan reports")
+    ctl(move || activation::plan(&config, registry_scheduling::config::DEFAULT_POSTURE))
+        .expect("plan reports")
 }
 
 fn status(config: &Path) -> Value {
     let config = config.to_path_buf();
-    ctl(move || activation::status(&config)).expect("status reports")
+    ctl(move || activation::status(&config, registry_scheduling::config::DEFAULT_POSTURE))
+        .expect("status reports")
 }
 
 fn refusal(result: anyhow::Result<Value>) -> String {
@@ -385,6 +396,69 @@ fn add_hook_destination(config: &Path, url: &str, key_secret: &str) {
         "destinations:\n  hooks:\n    appointment-events:\n      url: {url}\n      hmacSha256KeyRef: secret:env/{key_secret}\n"
     ));
     std::fs::write(config, text).expect("the hook destination is written");
+}
+
+#[tokio::test]
+async fn activation_posture_is_fixed_and_status_reports_the_mismatch() {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+
+    let production = registry_scheduling::config::DEFAULT_POSTURE;
+    let development = DeclaredPosture {
+        posture: Posture::Development,
+        source: PostureSource::Flag,
+    };
+    for (applied, other) in [(production, development), (development, production)] {
+        let deployment = Deployment::single("activation_posture").await;
+        let package = deployment.package("package", POLICY);
+        let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+        let yaml = std::fs::read_to_string(&config).unwrap();
+        let yaml = yaml.replace("testOnlyPlaintext: true", "transport: loopback-plaintext");
+        assert!(yaml.contains("transport: loopback-plaintext"));
+        std::fs::write(&config, yaml).unwrap();
+
+        let path = config.clone();
+        ctl(move || activation::apply(&path, None, &[], applied)).expect("initial apply");
+        let path = config.clone();
+        let plan = ctl(move || activation::plan(&path, other)).expect("refused plan report");
+        assert!(
+            plan["refusals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| { finding["code"] == "platform.activation.posture-mismatch" }),
+            "{plan}"
+        );
+        let path = config.clone();
+        let refused = refusal(ctl(move || activation::apply(&path, None, &[], other)));
+        assert!(
+            refused.contains(&format!(
+                "activated in the {} posture",
+                applied.posture.as_str()
+            )),
+            "{refused}"
+        );
+
+        let startup = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            registry_scheduling::runtime::serve_from_path(&config, other),
+        )
+        .await
+        .expect("startup refuses promptly")
+        .unwrap_err();
+        assert!(
+            startup
+                .to_string()
+                .contains("platform.activation.posture-mismatch"),
+            "{startup}"
+        );
+        let status = ctl(move || activation::status(&config, other)).expect("status reports");
+        assert_eq!(
+            status["diagnostics"][0]["code"],
+            "platform.activation.posture-mismatch"
+        );
+        assert_eq!(status["history"].as_array().unwrap().len(), 1);
+        assert_eq!(status["history"][0]["posture"], applied.posture.as_str());
+    }
 }
 
 #[tokio::test]
@@ -531,6 +605,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
                 &config,
                 Some("CHG-4242"),
                 &["snapshot-2026-09-27".to_owned()],
+                registry_scheduling::config::DEFAULT_POSTURE,
             )
         }
     })
@@ -601,7 +676,14 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     // activation, so two rows cannot be linked by it.
     let rehashed = ctl({
         let config = first_config.clone();
-        move || activation::apply(&config, Some("CHG-4242"), &[])
+        move || {
+            activation::apply(
+                &config,
+                Some("CHG-4242"),
+                &[],
+                registry_scheduling::config::DEFAULT_POSTURE,
+            )
+        }
     })
     .expect("the previous package activates again");
     let second_hash: String = deployment
@@ -695,7 +777,11 @@ async fn successor_activation_checks_retained_hook_bindings_on_the_version_100_b
     );
     assert_eq!(initial["applyOrder"], 1);
 
-    let config = RuntimeConfig::load(&initial_config).expect("the runtime configuration loads");
+    let config = RuntimeConfig::load(
+        &initial_config,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .expect("the runtime configuration loads");
     let loaded = config.load_policy().expect("the initial package verifies");
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment secret provider configures");
@@ -717,6 +803,7 @@ async fn successor_activation_checks_retained_hook_bindings_on_the_version_100_b
         &config.destinations.hooks,
         &resolver,
         HookRuntimeIdentity {
+            posture: registry_platform_config::Posture::Production,
             database_id: config.database_id().to_owned(),
             package_digest: loaded.package_digest.clone(),
             scheduling_id: loaded.policy.project.id.to_string(),
@@ -1181,7 +1268,14 @@ async fn apply_waits_for_the_migration_lock_another_apply_holds() {
         .unwrap();
     let waiting = std::thread::spawn({
         let config = config.clone();
-        move || activation::apply(&config, None, &[])
+        move || {
+            activation::apply(
+                &config,
+                None,
+                &[],
+                registry_scheduling::config::DEFAULT_POSTURE,
+            )
+        }
     });
 
     let mut blocked = false;
@@ -1251,7 +1345,14 @@ async fn successor_apply_waits_for_publication_locks_before_it_publishes() {
         .unwrap();
     let waiting = std::thread::spawn({
         let config = successor_config.clone();
-        move || activation::apply(&config, None, &[])
+        move || {
+            activation::apply(
+                &config,
+                None,
+                &[],
+                registry_scheduling::config::DEFAULT_POSTURE,
+            )
+        }
     });
 
     let mut blocked = false;
@@ -1365,7 +1466,9 @@ async fn refuses_a_pre_1_0_ledger_by_name_at_plan_apply_and_startup(prefix: &str
 
     let planned = {
         let config = config.clone();
-        refusal(ctl(move || activation::plan(&config)))
+        refusal(ctl(move || {
+            activation::plan(&config, registry_scheduling::config::DEFAULT_POSTURE)
+        }))
     };
     assert!(planned.contains(&expected), "{planned}");
     let applied = refusal(apply(&config));
@@ -1403,10 +1506,13 @@ async fn startup_refuses_a_database_the_ledger_does_not_name_for_this_package() 
         .migrate()
         .await
         .expect("the schema migrates");
-    let error = registry_scheduling::runtime::serve_from_path(&config)
-        .await
-        .expect_err("startup refuses a database with no active package")
-        .to_string();
+    let error = registry_scheduling::runtime::serve_from_path(
+        &config,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses a database with no active package")
+    .to_string();
     assert!(
         error.contains("no Scheduling package has been applied to this database; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`"),
         "{error}"
@@ -1418,10 +1524,13 @@ async fn startup_refuses_a_database_the_ledger_does_not_name_for_this_package() 
     // Another package on disk than the one the ledger names.
     let successor = deployment.package("successor", &successor_policy());
     let other = deployment.config("other.yaml", &successor, ConfigOptions::default());
-    let error = registry_scheduling::runtime::serve_from_path(&other)
-        .await
-        .expect_err("startup refuses a package the ledger does not name")
-        .to_string();
+    let error = registry_scheduling::runtime::serve_from_path(
+        &other,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses a package the ledger does not name")
+    .to_string();
     assert!(
         error.contains(&format!(
             "is not the active package {} on this database; run `schedulingctl plan --runtime-config FILE` then `schedulingctl apply --runtime-config FILE`",
@@ -1439,10 +1548,13 @@ async fn startup_refuses_a_database_the_ledger_does_not_name_for_this_package() 
             ..ConfigOptions::default()
         },
     );
-    let error = registry_scheduling::runtime::serve_from_path(&foreign)
-        .await
-        .expect_err("startup refuses a foreign ledger")
-        .to_string();
+    let error = registry_scheduling::runtime::serve_from_path(
+        &foreign,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses a foreign ledger")
+    .to_string();
     assert!(error.contains("identity.databaseId"), "{error}");
 
     // A pin naming another package than the one at package.root.
@@ -1456,9 +1568,12 @@ async fn startup_refuses_a_database_the_ledger_does_not_name_for_this_package() 
             ..ConfigOptions::default()
         },
     );
-    let error = registry_scheduling::runtime::serve_from_path(&pinned)
-        .await
-        .expect_err("startup refuses a package its pin does not name");
+    let error = registry_scheduling::runtime::serve_from_path(
+        &pinned,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses a package its pin does not name");
     let report = error
         .configuration_report()
         .unwrap_or_else(|| panic!("startup refusal carries a report: {error}"));
@@ -1553,7 +1668,13 @@ async fn split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serve
     // The service starts under the runtime credential and serves.
     let server = tokio::spawn({
         let config = config.clone();
-        async move { registry_scheduling::runtime::serve_from_path(&config).await }
+        async move {
+            registry_scheduling::runtime::serve_from_path(
+                &config,
+                registry_scheduling::config::DEFAULT_POSTURE,
+            )
+            .await
+        }
     });
     let mut ready = None;
     for _ in 0..300 {
@@ -1699,10 +1820,13 @@ async fn a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_ap
         ))
         .await
         .unwrap();
-    let error = registry_scheduling::runtime::serve_from_path(&config)
-        .await
-        .expect_err("startup refuses a split ledger the runtime role can write")
-        .to_string();
+    let error = registry_scheduling::runtime::serve_from_path(
+        &config,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses a split ledger the runtime role can write")
+    .to_string();
     assert!(
         error.contains("records split role mode")
             && error.contains("run `schedulingctl apply --runtime-config FILE`"),
@@ -1772,7 +1896,10 @@ async fn a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_ap
 async fn startup_refusal(config: &Path) -> String {
     tokio::time::timeout(
         Duration::from_secs(20),
-        registry_scheduling::runtime::serve_from_path(config),
+        registry_scheduling::runtime::serve_from_path(
+            config,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        ),
     )
     .await
     .expect("startup refuses instead of serving")
@@ -2169,7 +2296,7 @@ async fn plan_as_a_rotated_runtime_role_that_cannot_read_the_ledger_names_apply(
     );
     let planned = |config: &Path| {
         let config = config.to_path_buf();
-        ctl(move || activation::plan(&config))
+        ctl(move || activation::plan(&config, registry_scheduling::config::DEFAULT_POSTURE))
     };
     let expected = format!(
         "the Scheduling runtime role cannot read the activation ledger in schema {}; run `schedulingctl apply --runtime-config FILE` to grant the runtime role its privileges, then rerun `schedulingctl plan --runtime-config FILE`",
@@ -2186,9 +2313,12 @@ async fn plan_as_a_rotated_runtime_role_that_cannot_read_the_ledger_names_apply(
         "{error:#}"
     );
     assert!(format!("{error:#}").ends_with(&expected), "{error:#}");
-    let startup = registry_scheduling::runtime::serve_from_path(&config)
-        .await
-        .expect_err("startup refuses the unreadable ledger before listening");
+    let startup = registry_scheduling::runtime::serve_from_path(
+        &config,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses the unreadable ledger before listening");
     assert!(startup.to_string().ends_with(&expected), "{startup}");
 
     // With USAGE but without SELECT on the ledger tables.
@@ -2202,17 +2332,26 @@ async fn plan_as_a_rotated_runtime_role_that_cannot_read_the_ledger_names_apply(
         .unwrap();
     let error = planned(&config).expect_err("a role that cannot read the ledger is refused");
     assert!(format!("{error:#}").ends_with(&expected), "{error:#}");
-    let startup = registry_scheduling::runtime::serve_from_path(&config)
-        .await
-        .expect_err("startup refuses the unreadable ledger before listening");
+    let startup = registry_scheduling::runtime::serve_from_path(
+        &config,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
+    .await
+    .expect_err("startup refuses the unreadable ledger before listening");
     assert!(startup.to_string().ends_with(&expected), "{startup}");
 
     apply(&config).expect("the active package applies for the rotated role");
     assert_eq!(plan(&config)["changesPending"], false);
-    let repaired = RuntimeConfig::load(&config).expect("the repaired runtime configuration loads");
+    let repaired = RuntimeConfig::load(&config, registry_scheduling::config::DEFAULT_POSTURE)
+        .expect("the repaired runtime configuration loads");
     let resolver = SecretResolver::new([SecretProvider::Environment], "")
         .expect("the environment secret provider configures");
-    let store = PostgresStore::connect_runtime(&repaired.database, &resolver).unwrap();
+    let store = PostgresStore::connect_runtime(
+        &repaired.database,
+        &resolver,
+        repaired.development_witness(),
+    )
+    .unwrap();
     store
         .ready()
         .await

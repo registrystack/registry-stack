@@ -86,7 +86,7 @@ package:
   expectedDigest: {digest}
 listener:
   bind: 127.0.0.1:0
-  tlsTermination: development-loopback
+  tlsTermination: loopback-plaintext
   networkExposure: private-address
 secretProviders:
   file:
@@ -94,7 +94,7 @@ secretProviders:
 database:
   runtimeUrlRef: secret:file/runtime-database-url
   migrationUrlRef: secret:file/migration-database-url
-  testOnlyPlaintext: true
+  transport: loopback-plaintext
 authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry
@@ -108,7 +108,10 @@ audit:
 storage:
   type: database
 contentVerification:
-  type: disabled
+  type: http
+  url: http://127.0.0.1:9/verify
+  authorizationRef: secret:file/hook-key
+  policyId: documents-test
 cleanup:
   erasure: active
 destinations:
@@ -174,6 +177,71 @@ fn ctl(arguments: &[&str]) -> (i32, Value) {
     let report = serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stdout)));
     (output.status.code().unwrap(), report)
+}
+
+#[tokio::test]
+async fn activation_posture_refuses_opposite_plan_apply_and_startup_and_status_reports_it() {
+    for (recorded, opposite) in [("production", "development"), ("development", "production")] {
+        let deployment = Deployment::new().await;
+        deployment.deploy();
+        let runtime = deployment.runtime();
+        let code = "platform.activation.posture-mismatch";
+        let (exit, applied) = ctl(&["apply", "--runtime-config", &runtime, "--posture", recorded]);
+        assert_eq!(exit, 0, "{applied}");
+        assert_eq!(applied["activation"]["posture"], recorded);
+        for verb in ["plan", "apply", "status"] {
+            let (exit, report) = ctl(&[verb, "--runtime-config", &runtime, "--posture", opposite]);
+            assert_eq!(exit, if verb == "status" { 0 } else { 1 }, "{report}");
+            assert_eq!(report["diagnostics"][0]["code"], code, "{report}");
+            if verb == "status" {
+                assert_eq!(
+                    report["diagnostics"].as_array().unwrap().len(),
+                    1,
+                    "{report}"
+                );
+                assert_eq!(
+                    report["diagnostics"][0]["path"], "/database/runtimeUrlRef",
+                    "{report}"
+                );
+                assert!(report.get("findings").is_none(), "{report}");
+            }
+        }
+        let declared = registry_platform_config::declared_from(Some(opposite), None).unwrap();
+        let config = registry_documents::config::RuntimeConfig::load_with_posture(
+            std::path::Path::new(&runtime),
+            declared,
+        )
+        .unwrap();
+        let status = registry_documents::runtime::activation_status(&config)
+            .await
+            .unwrap();
+        assert_eq!(status.findings[0].path, "/database/runtimeUrlRef");
+        let refused = registry_documents::runtime::prepare_with_posture(&runtime, declared)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(refused, registry_documents::runtime::RuntimeError::Activation(error) if error.code() == Some(code))
+        );
+    }
+}
+
+#[tokio::test]
+async fn status_names_the_transport_when_a_private_database_host_is_refused() {
+    let deployment = Deployment::new().await;
+    deployment.deploy();
+    let url_file = deployment.path("secrets/runtime-database-url");
+    std::fs::write(url_file, "postgresql://synthetic@10.0.0.5/documents").unwrap();
+
+    let (exit, report) = ctl(&["status", "--runtime-config", &deployment.runtime()]);
+    assert_eq!(exit, 1, "{report}");
+    assert_eq!(
+        report["diagnostics"][0]["code"], "platform.database.transport-host-mismatch",
+        "{report}"
+    );
+    assert_eq!(
+        report["diagnostics"][0]["path"], "/database/transport",
+        "{report}"
+    );
 }
 
 #[tokio::test]

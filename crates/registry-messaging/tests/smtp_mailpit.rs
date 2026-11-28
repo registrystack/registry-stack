@@ -44,14 +44,14 @@ fn provider() -> SmtpProvider {
     let settings = SmtpProviderSettings {
         host: relay.ip().to_string(),
         port: Some(relay.port()),
-        tls: SmtpTlsMode::DevelopmentLoopback,
+        tls: SmtpTlsMode::LoopbackPlaintext,
         ca_bundle_ref: None,
         authentication: None,
         attempt_timeout_milliseconds: 10_000,
         allowed_private_cidrs: Vec::new(),
     };
     let secrets = SecretResolver::new([SecretProvider::Environment], "/").expect("resolver");
-    settings.activate(&secrets, false).expect("activation")
+    settings.activate(&secrets).expect("activation")
 }
 
 /// Send one message and return Mailpit's full view of it.

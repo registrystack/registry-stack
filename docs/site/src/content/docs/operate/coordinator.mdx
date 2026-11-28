@@ -356,7 +356,7 @@ Its [connections](../../reference/coordinator-configuration/#connections) sectio
 
 The service listener uses the shared private listener and TLS policy.
 Use `operator-controlled-upstream` behind your controlled TLS terminator.
-The explicit `development-loopback` option binds only loopback and permits local plaintext PostgreSQL.
+Use `loopback-plaintext` to bind the listener on loopback. For plaintext PostgreSQL on the same host, set `database.transport: loopback-plaintext` separately.
 Downstream bindings use HTTPS, or explicit loopback HTTP for supervised local fixtures.
 Token signing-key rotation preserves the registered downstream client identity, endpoint, audience, resource, scopes, and approved task authority.
 
@@ -522,6 +522,14 @@ coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml check
     crates/registry-coordinator/src/http.rs review-completions. */}
 
 ## Apply and start
+Use the same declared posture for `plan`, `apply` and startup. The activation
+ledger records that posture, and existing activation rows read as production.
+Startup, `plan` and `apply` refuse a database activated under the other
+posture. To change postures, apply to a fresh database.
+`coordinatorctl deployment-status` reports a mismatch and returns the deployment status.
+
+{/* Evidence: crates/registry-coordinator/src/deployment.rs plan, check_status, apply, check_deployment. */}
+
 
 ```sh
 coordinatorctl --runtime-config /etc/registry-coordinator/runtime.yaml plan
@@ -668,7 +676,7 @@ coordinatorctl doctor --url https://coordinator.example.org --token-file /run/op
 ```
 
 `/health` answers `{"live":true,"status":"ok"}` while the process answers.
-`/ready` answers `{"ready":true,"status":"ready"}`, or HTTP 503 with `{"ready":false}` while the service cannot accept work.
+`/ready` answers with `ready: true`, `status: ready`, `posture` and `developmentSettings`, or HTTP 503 with `{"ready":false}` while the service cannot accept work. Development responses carry `Registry-Posture: development`.
 Every `/ready` probe checks mutable schema, activation, role, state-key custody, audit, and recovery holds; a held run does not make the service unready.
 The retained live-binding scan is coalesced and cached for 30 seconds, including failures.
 A cache miss still waits for that scan, so the cache bounds frequency rather than latency.

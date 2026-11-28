@@ -19,6 +19,7 @@
       "testId": "discoveryctl::origin_target_confined",
       "tests": [
         {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "production_policy_refuses_loopback_before_connecting"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "package_requires_declared_development_for_a_loopback_catalog"},
         {"path": "crates/registry-platform-httputil/src/lib.rs", "name": "outbound_client_does_not_follow_redirects"},
         {"path": "crates/registry-platform-httputil/src/lib.rs", "name": "outbound_clients_ignore_ambient_proxy_variables_in_an_isolated_process"},
         {"path": "crates/registry-platform-httputil/src/lib.rs", "name": "immediate_get_does_not_follow_redirect_to_unvalidated_destination"},
@@ -92,7 +93,8 @@
         {"path": "crates/registry-discovery/src/startup.rs", "name": "startup_refuses_changed_missing_and_extra_package_files_by_name"},
         {"path": "crates/registry-discovery/src/startup.rs", "name": "startup_refuses_a_hash_covered_non_index_file_by_name"},
         {"path": "crates/registry-discovery/src/startup.rs", "name": "exact_consumed_index_bytes_remain_bound_to_the_verified_package"},
-        {"path": "crates/registry-discovery/tests/http_journey.rs", "name": "verified_package_startup_serves_the_packaged_index_through_the_real_router"}
+        {"path": "crates/registry-discovery/tests/http_journey.rs", "name": "verified_package_startup_serves_the_packaged_index_through_the_real_router"},
+        {"path": "crates/registry-discovery/tests/http_journey.rs", "name": "production_refuses_loopback_package_urls"}
       ]
     },
     {

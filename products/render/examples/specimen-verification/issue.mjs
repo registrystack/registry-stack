@@ -30,7 +30,7 @@ export async function issueSpecimen({ registry, origin, verificationPage, render
     await writeFile(data, JSON.stringify({ ...example, reference, "verify-url": url }), { mode: 0o600 });
 
     const signed = join(scratch, "signed");
-    const { stdout } = await run(render, ["test-seal", "--bundle", bundle, "--type", documentType,
+    const { stdout } = await run(render, ["test-seal", "--posture", "development", "--bundle", bundle, "--type", documentType,
       "--data", data, "--issued-at", issuedAt, "--output", signed, "--format", "json"]);
     const report = JSON.parse(stdout);
     const pdf = await readFile(join(signed, "document.pdf"));

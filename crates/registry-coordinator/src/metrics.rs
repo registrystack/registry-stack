@@ -527,11 +527,19 @@ async fn sample<T>(
 /// The operator-private router the metrics listener serves, with the public
 /// listener's JSON body limit and security headers. It has no other route.
 pub fn metrics_router(store: Arc<Store>) -> Router {
+    metrics_router_with_posture(store, registry_platform_config::Posture::Production)
+}
+
+pub fn metrics_router_with_posture(
+    store: Arc<Store>,
+    posture: registry_platform_config::Posture,
+) -> Router {
     Router::new()
         .route(METRICS_PATH, get(serve_metrics))
         .layer(registry_platform_httpsec::request_body_limit(65_536))
-        .layer(registry_platform_httpsec::security_headers_without_posture(
+        .layer(registry_platform_httpsec::security_headers(
             registry_platform_httpsec::CspBuilder::deny_by_default(),
+            posture,
         ))
         .with_state(MetricsState { store })
 }

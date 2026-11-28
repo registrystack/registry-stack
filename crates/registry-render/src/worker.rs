@@ -945,6 +945,7 @@ pub(crate) mod seal_tests {
             signing_time: chrono::DateTime::from_timestamp(1_793_000_000, 0).expect("a time"),
             contents_capacity: 16 * 1024,
             field_name: "RegistrySeal".to_owned(),
+            test_only: false,
         };
         crate::pdf_signature::prepare(&first_revision, &field)
             .expect("the parent can prepare a single revision");

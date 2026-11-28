@@ -140,7 +140,8 @@ async fn observe(package_root: PathBuf, case: FixtureCase) -> Outcome {
         .expect("a runtime document"),
     )
     .expect("write the runtime file");
-    let config = RuntimeConfig::load(&runtime_path).expect("the runtime configuration loads");
+    let config = RuntimeConfig::load(&runtime_path, registry_scheduling::config::DEFAULT_POSTURE)
+        .expect("the runtime configuration loads");
     let resolver = secret_resolver(&config).expect("the secret resolver");
     let (verifier, keys) = config
         .oidc_verifier(&resolver)

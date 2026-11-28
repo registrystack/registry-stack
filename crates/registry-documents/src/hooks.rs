@@ -31,7 +31,7 @@ use registry_platform_config::{
 };
 use registry_platform_dispatch::postgres::PooledClient;
 use registry_platform_hooks::delivery::{
-    activate_url_hook_destinations, hook_audit_entry, insert_delivery, verify_active_package,
+    activate_url_hook_destinations, hook_audit_entry, insert_delivery,
     ActivatedUrlHookDestinations, DeliveryAuditRecord, DeliveryCapture, DeliveryConfig,
     DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliveryOutcome, DeliverySeams,
     DeliveryService, DeliveryWorker, HookHandlerBinding, NoLocalHandler, ProposalApplication,
@@ -801,6 +801,48 @@ struct DocumentsDeliverySeams {
     identity: HookRuntimeIdentity,
 }
 
+/// Check that the Documents activation ledger names `database_id` and
+/// `package_digest` as the active package under the declared posture.
+///
+/// Set the transaction's `lock_timeout` to `IDENTITY_LOCK_TIMEOUT_MS` to
+/// bound waits on a DDL or migration lock over the activation table. An
+/// activation only inserts into the ledger, which never blocks this plain
+/// read, so the read is not serialized against an activation: one may commit
+/// between this check and egress, and the finalize transaction checks again.
+/// The read takes no advisory lock: an activation takes its own exclusive
+/// lock and may verify retained deliveries on another connection, and a
+/// shared advisory lock held here would wait on it while it waits on this
+/// worker.
+///
+/// # Errors
+///
+/// [`DeliveryError::Unavailable`] when the read fails, nothing is activated,
+/// or the active package, database or posture differs. The reason is never carried.
+async fn verify_active_package(
+    transaction: &Transaction<'_>,
+    database_id: &str,
+    package_digest: &str,
+    posture: registry_platform_config::Posture,
+) -> Result<(), DeliveryError> {
+    transaction
+        .execute(
+            "SELECT set_config('lock_timeout', $1::text, true)",
+            &[&format!("{IDENTITY_LOCK_TIMEOUT_MS}ms")],
+        )
+        .await
+        .map_err(|_| DeliveryError::Unavailable)?;
+    registry_platform_activation::check_active_package(
+        transaction,
+        &activation::layout(),
+        database_id,
+        package_digest,
+        posture,
+    )
+    .await
+    .map(drop)
+    .map_err(|_| DeliveryError::Unavailable)
+}
+
 #[async_trait::async_trait]
 impl DeliverySeams for DocumentsDeliverySeams {
     type Destination = SharedUrlDestination;
@@ -824,10 +866,9 @@ impl DeliverySeams for DocumentsDeliverySeams {
         })?;
         verify_active_package(
             transaction,
-            &activation::layout(),
             &self.identity.database_id,
             &self.identity.package_digest,
-            IDENTITY_LOCK_TIMEOUT_MS,
+            self.store.posture,
         )
         .await
     }

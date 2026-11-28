@@ -46,7 +46,9 @@ fn project(
     let mut package = package_value();
     adjust_package(&mut package);
     let file = write_project(&path, &runtime, &package);
-    let config = RuntimeConfig::load_with_environment(&file, &|_| None).expect("runtime config");
+    let config =
+        RuntimeConfig::load_with_environment(&file, &|_| None, crate::config::DEFAULT_POSTURE)
+            .expect("runtime config");
     let loaded = config.load_package().expect("package");
     let secrets = config.secret_resolver().expect("secret resolver");
     Project {
@@ -68,7 +70,7 @@ fn smtp_connection(stub: &Stub) -> Value {
         "type": "smtp",
         "host": "127.0.0.1",
         "port": stub.address.port(),
-        "tls": "development-loopback"
+        "tls": "loopback-plaintext"
     })
 }
 
@@ -292,6 +294,31 @@ async fn the_idempotency_key_follows_the_capability_persisted_at_acceptance() {
             .and_then(|value| value.to_str().ok()),
         Some(IDEMPOTENCY_KEY)
     );
+}
+
+#[test]
+fn production_http_provider_accepts_only_loopback_plaintext() {
+    let connection = http_connection_to("http://127.0.0.1:9/v1/", json!({"type": "none"}));
+    let project = project(
+        json!({"sms-gateway": connection.clone()}),
+        |_| {},
+        &[("callback-token", b"synthetic-token")],
+    );
+    activate_providers(
+        &project.config,
+        &project.loaded,
+        &project.secrets,
+        &mut Transports::new(),
+    )
+    .expect("the loopback HTTP provider activates in production");
+
+    let mut remote = connection;
+    remote["baseUrl"] = json!("http://10.0.0.5:9/v1/");
+    remote.as_object_mut().unwrap().remove("type");
+    let settings: crate::http_provider::HttpProviderSettings =
+        serde_json::from_value(remote).unwrap();
+    let source = project.loaded.providers.get("sms-gateway").unwrap();
+    assert!(settings.check_connection(&source.package, None).is_err());
 }
 
 #[test]

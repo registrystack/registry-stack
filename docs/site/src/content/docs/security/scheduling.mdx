@@ -90,15 +90,27 @@ A refused `request` entry opens no transaction; a refused `response` entry after
     crates/registry-scheduling/src/http.rs ready and readyz;
     crates/registry-scheduling/src/service.rs audit_ready. */}
 
+
+## Deployment posture
+
+Production is the default.
+Development responses carry `Registry-Posture: development`, and audit lines carry the process posture.
+Production peers refuse development neighbours.
+Scheduling refuses development task-grant status answers and task assertions in production.
+Activate a fresh database to change the deployment posture.
+
+{/* Evidence: crates/registry-scheduling/src/runtime.rs open_audit;
+    crates/registry-scheduling/src/http.rs http_edge;
+    crates/registry-scheduling/src/store/activation.rs posture_mismatch. */}
+
 ## Operator obligations
 
 The guarantees hold only when you meet these obligations.
 
 1. Run PostgreSQL 17 or newer.
    Activation and startup refuse older servers.
-2. Reach PostgreSQL over TLS.
-   The runtime requires it; `database.testOnlyPlaintext` is honoured only in `postgres-test` builds,
-   and the shipped runtime refuses it with `scheduling.runtime.plaintext-database`.
+2. Use verified TLS for PostgreSQL across the network in production.
+   Only a `postgres-test` build accepts `database.testOnlyPlaintext`.
 3. Bind the listener to a loopback or private address, or declare
    `networkExposure: container-private`.
    Anything else refuses to start.

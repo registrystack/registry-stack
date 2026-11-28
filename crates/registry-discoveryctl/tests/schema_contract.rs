@@ -176,11 +176,11 @@ fn accepted_by_rust(contract: &str, document: &Value) -> bool {
     match contract {
         "origins" => {
             let project = write_project(document, &positive_document("evidence-mapping"));
-            check_project(project.path(), false).is_ok()
+            check_project(project.path(), production()).is_ok()
         }
         "evidence-mapping" => {
             let project = write_project(&positive_document("origins"), document);
-            check_project(project.path(), false).is_ok()
+            check_project(project.path(), production()).is_ok()
         }
         "runtime" => {
             let temporary = tempfile::tempdir_in(
@@ -215,7 +215,7 @@ fn accepted_by_rust(contract: &str, document: &Value) -> bool {
             }
             let path = temporary.path().join("runtime.yaml");
             fs::write(&path, yaml_text(&runtime)).expect("runtime write");
-            prepare(&path).is_ok()
+            prepare(&path, production()).is_ok()
         }
         "index" => canonicalize_json(document).is_ok_and(|bytes| parse_index(&bytes).is_ok()),
         "profile" => {
@@ -586,4 +586,12 @@ fn a_null_jurisdiction_is_refused_by_both_schema_and_rust() {
         !accepted_by_rust("evidence-mapping", &mapping),
         "the reader accepts a null jurisdiction"
     );
+}
+
+fn production() -> registry_platform_config::DeclaredPosture {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureSource};
+    DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Default,
+    }
 }

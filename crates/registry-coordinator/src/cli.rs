@@ -5,6 +5,8 @@ use crate::{
     runtime::RuntimeConfig, scenarios, CoordinatorError, Result,
 };
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_platform_config::{declared, DeclaredPosture, Posture, PostureSource};
+use registry_platform_httputil::{validate_response_headers, PeerPolicy, ResponseHeaderError};
 use serde_json::{json, Value};
 use std::{
     fs::File,
@@ -31,6 +33,13 @@ struct Cli {
     #[arg(long, global = true, value_name = "FILE")]
     /// Runtime configuration file.
     runtime_config: Option<PathBuf>,
+    #[arg(
+        long,
+        global = true,
+        value_name = "POSTURE",
+        help = "Declared posture: development or production. Unset means production."
+    )]
+    posture: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -138,6 +147,9 @@ enum Command {
         #[arg(long)]
         /// Substitute runtime environment expressions; secret values are never resolved.
         environment: bool,
+        #[arg(long)]
+        /// Check under the production posture.
+        production: bool,
     },
     /// Explain a checked graph, mappings and execution bounds offline, or the helpers Functions may call.
     #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -411,6 +423,7 @@ fn check(
     explain: bool,
     deny_warnings: bool,
     environment: bool,
+    declared: DeclaredPosture,
 ) -> Result<Value> {
     use registry_platform_yaml::{Report, Severity};
     if project.is_none() && runtime.is_none() {
@@ -439,6 +452,7 @@ fn check(
             path,
             loaded.as_ref().map(|(definition, _)| definition),
             environment,
+            declared,
         );
         report.extend(findings);
         exit_code = exit_code.max(runtime_exit);
@@ -451,6 +465,7 @@ fn check(
                 .map(|(definition, workflow)| (definition, workflow)),
             runtime,
             environment,
+            declared,
         );
         report.extend(findings);
         exit_code = exit_code.max(project_exit);
@@ -585,11 +600,14 @@ fn token_text_file(path: &Path, maximum: usize) -> Result<String> {
                 .suggest("Write the --token-file file as UTF-8 text.")
         })
 }
-fn runtime(cli: &Cli) -> Result<RuntimeConfig> {
-    RuntimeConfig::load(&runtime_config(cli)?.ok_or_else(|| {
-        CoordinatorError::new("runtime-config-required", "supply --runtime-config FILE")
-            .suggest("Add --runtime-config with the deployment's runtime.yaml.")
-    })?)
+fn runtime(cli: &Cli, declared: DeclaredPosture) -> Result<RuntimeConfig> {
+    RuntimeConfig::load_with_posture(
+        &runtime_config(cli)?.ok_or_else(|| {
+            CoordinatorError::new("runtime-config-required", "supply --runtime-config FILE")
+                .suggest("Add --runtime-config with the deployment's runtime.yaml.")
+        })?,
+        declared,
+    )
 }
 fn runtime_config(cli: &Cli) -> Result<Option<PathBuf>> {
     cli.runtime_config
@@ -625,6 +643,17 @@ async fn remote(
     path: &str,
     body: Option<Value>,
     key: Option<&str>,
+) -> Result<Value> {
+    remote_with_peer_policy(service, method, path, body, key, None).await
+}
+
+async fn remote_with_peer_policy(
+    service: &Service,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+    key: Option<&str>,
+    peer_policy: Option<PeerPolicy>,
 ) -> Result<Value> {
     let mut url = service.url.clone().ok_or_else(|| {
         CoordinatorError::new(
@@ -694,6 +723,20 @@ async fn remote(
         )
         .suggest("Check that --url reaches the running Coordinator service, then inspect the original run before repeating the command.")
     })?;
+    if let Some(policy) = peer_policy {
+        validate_response_headers(response.headers(), policy).map_err(|error| match error {
+            ResponseHeaderError::DevelopmentPeer => CoordinatorError::new(
+                "service-refused",
+                "The Coordinator declared development and this command runs as production.",
+            )
+            .suggest("Use a production Coordinator, or declare development with --posture development or REGISTRY_STACK_POSTURE=development."),
+            _ => CoordinatorError::new(
+                "service-unavailable",
+                "the service response headers exceeded their bounds",
+            )
+            .suggest("Check that --url names the Coordinator service origin."),
+        })?;
+    }
     let status = response.status();
     let bytes = registry_platform_httputil::read_bounded(response, 1_048_576)
         .await
@@ -820,7 +863,7 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
         | ProblemCode::RuntimeFailure => return None,
     })
 }
-async fn execute(cli: &Cli) -> Result<Value> {
+async fn execute(cli: &Cli, declared: DeclaredPosture) -> Result<Value> {
     match &cli.command {
         Command::Api(_) | Command::Connection { .. } => {
             unreachable!("API commands handle their output before report dispatch")
@@ -835,16 +878,16 @@ async fn execute(cli: &Cli) -> Result<Value> {
             let created = project::init(directory, id.as_deref())?;
             Ok(json!({"status":"initialized","project":directory,"created":created}))
         }
-        Command::Check { project, explain, deny_warnings, environment } => check(project.as_deref(), runtime_config(cli)?.as_deref(), *explain, *deny_warnings, *environment),
+        Command::Check { project, explain, deny_warnings, environment, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), *explain, *deny_warnings, *environment, declared),
         Command::Explain { topic: Some(ExplainTopic::Functions), .. } => Ok(crate::functions::explain()),
-        Command::Explain { project, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), true, false, false),
+        Command::Explain { project, .. } => check(project.as_deref(), runtime_config(cli)?.as_deref(), true, false, false, declared),
         Command::Test { project, scenarios } => test(project, scenarios.as_deref()),
         Command::Package { project, output } => {
             Ok(json!({"packageDigest":deployment::package(project,output)?,"root":output}))
         }
         Command::Plan { remove_workflow } | Command::Apply { remove_workflow } => {
             let apply = matches!(cli.command, Command::Apply { .. });
-            let r = runtime(cli)?;
+            let r = runtime(cli, declared)?;
             let workflows = deployment::load_workflows(deployment::config(&r)?)?;
             let store = deployment::open_ctl(&r, apply).await?;
             if apply {
@@ -855,13 +898,13 @@ async fn execute(cli: &Cli) -> Result<Value> {
             }
         }
         Command::DeploymentStatus => {
-            let r = runtime(cli)?;
+            let r = runtime(cli, declared)?;
             let workflows = deployment::load_workflows(deployment::config(&r)?)?;
             workflows.validate(&r)?;
             let store = deployment::open_ctl(&r, false).await?;
-            let (active, held_runs) = deployment::check_status(&store, &r, workflows.digest()).await?;
+            let (active, held_runs, findings) = deployment::check_status(&store, &r, workflows.digest()).await?;
             let d = deployment::config(&r)?;
-            Ok(json!({"status":"checked","databaseId":d.database_id,"workflowsDigest":workflows.digest(),"workflows":workflows.package_digests(),"schemaVersion":crate::store::SCHEMA_VERSION,"runtimeRole":d.runtime_role,"active":active,"heldRuns":held_runs}))
+            Ok(json!({"status":"checked","databaseId":d.database_id,"workflowsDigest":workflows.digest(),"workflows":workflows.package_digests(),"schemaVersion":crate::store::SCHEMA_VERSION,"runtimeRole":d.runtime_role,"active":active,"heldRuns":held_runs,"diagnostics":findings}))
         }
         Command::Openapi => Ok(http::openapi()),
         Command::Types { project, language, output } => {
@@ -984,7 +1027,13 @@ async fn execute(cli: &Cli) -> Result<Value> {
             )
             .await
         }
-        Command::Doctor { service } => remote(service, reqwest::Method::GET, "/v1/doctor", None, None).await,
+        Command::Doctor { service } => {
+            let peer_policy = match declared.posture {
+                Posture::Production => PeerPolicy::RefuseDevelopmentPeer,
+                Posture::Development => PeerPolicy::AcceptDevelopmentPeer,
+            };
+            remote_with_peer_policy(service, reqwest::Method::GET, "/v1/doctor", None, None, Some(peer_policy)).await
+        }
         Command::RestoreHold { reason, service } | Command::ReleaseRestoreHold { reason, service } => {
             remote(
                 service,
@@ -1185,15 +1234,78 @@ pub async fn run() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+    let posture_flag = match &cli.command {
+        Command::Provision(args) => args.posture.as_deref().or(cli.posture.as_deref()),
+        _ => cli.posture.as_deref(),
+    };
+    let production = matches!(
+        cli.command,
+        Command::Check {
+            production: true,
+            ..
+        }
+    );
+    let posture_error = |code, message, action| {
+        let error = CoordinatorError::new(code, message)
+            .suggest(action)
+            .with_exit(2);
+        match cli.format {
+            Format::Human => eprint!("{}", error.report().render_human()),
+            Format::Json => write_report(false, cli.command.name(), failure_value(&error, 2)),
+        }
+        std::process::ExitCode::from(2)
+    };
+    // The root and provision flags share a Clap argument ID. The parsed value
+    // can lose the earlier occurrence, so check the accepted spellings here.
+    if matches!(cli.command, Command::Provision(_)) {
+        let postures = os_arguments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, argument)| {
+                let argument = argument.to_str()?;
+                if argument == "--posture" {
+                    os_arguments.get(index + 1)?.to_str()
+                } else {
+                    argument.strip_prefix("--posture=")
+                }
+            });
+        if let Some(first) = postures.clone().next() {
+            if postures.skip(1).any(|other| other != first) {
+                return posture_error(
+                    "platform.posture.conflict",
+                    "the global and provision --posture flags declare different postures",
+                    "Declare the posture once, or give both flags the same value.",
+                );
+            }
+        }
+    }
+    if production && posture_flag == Some("development") {
+        return posture_error(
+            "platform.posture.conflict",
+            "--production and --posture development contradict each other",
+            "Use one of them.",
+        );
+    }
+    let posture_flag = if production {
+        posture_flag.or(Some("production"))
+    } else {
+        posture_flag
+    };
+    let declared = match declared(posture_flag) {
+        Ok(declared) => declared,
+        Err(error) => {
+            return posture_error(error.code(), error.message(), error.suggested_action())
+        }
+    };
     if let Command::Serve { coordinator_bin } = &cli.command {
-        return serve(&cli, coordinator_bin.as_deref(), format_requested);
+        return serve(&cli, coordinator_bin.as_deref(), format_requested, declared);
     }
     if let Command::Provision(args) = &cli.command {
         let format = match cli.format {
             Format::Human => registry_platform_provision::cli::OutputFormat::Human,
             Format::Json => registry_platform_provision::cli::OutputFormat::Json,
         };
-        return crate::provision::run(args.clone(), format).await;
+        return crate::provision::run(args.clone(), format, declared).await;
     }
     let cli = match cli {
         Cli {
@@ -1242,13 +1354,13 @@ pub async fn run() -> std::process::ExitCode {
         }
         cli => cli,
     };
-    match execute(&cli).await {
+    match execute(&cli, declared).await {
         Ok(value) => {
             let tested = matches!(cli.command, Command::Test { .. });
             let ok = !(tested && value["status"] == "failed");
             match cli.format {
                 Format::Json if matches!(cli.command, Command::Openapi) => println!("{value}"),
-                Format::Json => write_report(ok, cli.command.name(), value),
+                Format::Json => write_report(ok, cli.command.name(), with_posture(value, declared)),
                 Format::Human => {
                     if let Some(diagnostics) = value["diagnostics"].as_array() {
                         if !diagnostics.is_empty() {
@@ -1274,9 +1386,11 @@ pub async fn run() -> std::process::ExitCode {
         Err(e) => {
             match cli.format {
                 Format::Human => eprint!("{}", e.report().render_human()),
-                Format::Json => {
-                    write_report(false, cli.command.name(), failure_value(&e, e.exit_code))
-                }
+                Format::Json => write_report(
+                    false,
+                    cli.command.name(),
+                    with_posture(failure_value(&e, e.exit_code), declared),
+                ),
             }
             std::process::ExitCode::from(e.exit_code)
         }
@@ -1295,7 +1409,12 @@ fn api_result(
     }
 }
 
-fn serve(cli: &Cli, explicit: Option<&Path>, format_requested: bool) -> std::process::ExitCode {
+fn serve(
+    cli: &Cli,
+    explicit: Option<&Path>,
+    format_requested: bool,
+    declared: DeclaredPosture,
+) -> std::process::ExitCode {
     if format_requested {
         let error = CoordinatorError::new(
             "coordinator.cli.usage",
@@ -1327,6 +1446,9 @@ fn serve(cli: &Cli, explicit: Option<&Path>, format_requested: bool) -> std::pro
     };
     let mut command = std::process::Command::new(binary);
     command.arg("--runtime-config").arg(runtime_config);
+    if declared.source == PostureSource::Flag {
+        command.arg("--posture").arg(declared.posture.as_str());
+    }
     replace_with_service(command, "coordinator")
 }
 
@@ -1613,6 +1735,21 @@ fn failure_value(error: &CoordinatorError, exit: u8) -> Value {
     json!({"status": match exit { 2 => "usage-error", 3 => "operational-failure", _ => "domain-refusal" }, "diagnostics":error.report().to_json_value()})
 }
 
+fn with_posture(mut value: Value, declared: DeclaredPosture) -> Value {
+    if !value.is_object() {
+        value = json!({"result": value});
+    }
+    value["posture"] = json!({
+        "value": declared.posture.as_str(),
+        "source": match declared.source {
+            PostureSource::Flag => "flag",
+            PostureSource::Environment => "environment",
+            PostureSource::Default => "default",
+        },
+    });
+    value
+}
+
 /// One report envelope for local commands and authenticated operation results.
 pub fn write_report(ok: bool, command: &str, mut value: Value) {
     if !value.is_object() {
@@ -1628,7 +1765,56 @@ pub fn write_report(ok: bool, command: &str, mut value: Value) {
     if value.get("status").is_none() {
         value["status"] = json!("completed");
     }
-    println!("{value}");
+    if let Some(posture) = value.get("posture") {
+        let ordered = PostureReport {
+            value: value.as_object().expect("a report is an object"),
+            posture,
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&ordered).expect("a report of JSON values serializes")
+        );
+    } else {
+        println!("{value}");
+    }
+}
+
+struct PostureReport<'a> {
+    value: &'a serde_json::Map<String, Value>,
+    posture: &'a Value,
+}
+
+impl serde::Serialize for PostureReport<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        #[derive(serde::Serialize)]
+        struct PostureMember<'a> {
+            value: &'a Value,
+            source: &'a Value,
+        }
+        let mut map = serializer.serialize_map(Some(self.value.len()))?;
+        for (key, value) in self.value {
+            if !matches!(key.as_str(), "posture" | "outcome" | "diagnostics") {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.serialize_entry(
+            "posture",
+            &PostureMember {
+                value: &self.posture["value"],
+                source: &self.posture["source"],
+            },
+        )?;
+        for key in ["outcome", "diagnostics"] {
+            if let Some(value) = self.value.get(key) {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.end()
+    }
 }
 
 /// Public command tree used by the supported CLI reference generator.

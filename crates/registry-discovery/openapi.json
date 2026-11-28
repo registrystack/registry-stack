@@ -630,6 +630,46 @@
       "get": {
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "developmentSettings": {
+                      "items": {
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "posture": {
+                      "enum": [
+                        "development",
+                        "production"
+                      ]
+                    },
+                    "status": {
+                      "const": "ready"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "posture",
+                    "developmentSettings"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Immutable index is loaded"
           },
           "400": {

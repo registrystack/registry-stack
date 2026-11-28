@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: 2026-11-17
+last_reviewed: 2026-11-27
 doc_type: reference
 locale: en
 standards_referenced:
@@ -52,6 +52,23 @@ that every value is accepted.
 
 {/* Generated from src/data/generated/scheduling-configuration.json by
     docs/site/scripts/generate-scheduling-configuration.mjs. Run npm run generate from docs/site. */}
+
+
+## Deployment posture
+
+With neither `--posture` nor `REGISTRY_STACK_POSTURE`, the deployment uses `production`.
+The two inputs must agree when both are present.
+Use `--posture development` for a development runtime file.
+`check` reports development settings as errors in production and warnings in development.
+
+The listener's `tlsTermination: loopback-plaintext` restricts its bind address to loopback in either posture.
+`database.transport: loopback-plaintext` allows a PostgreSQL socket, a loopback IP, or `localhost`.
+`database.transport: private-network-plaintext` requires development.
+A non-loopback HTTP issuer requires development and `authentication.oidc.allowInsecureHttp: true`.
+A loopback HTTP issuer needs no opt-in.
+
+{/* Evidence: crates/registry-scheduling/src/config.rs finish_load, check_database, check_oidc;
+    crates/registry-platform-config/src/blocks.rs plaintext_permitted. */}
 
 ## Runtime file
 
@@ -153,7 +170,7 @@ Each refusal names `schedulingctl plan --runtime-config FILE` then
 `listener` is required.
 `listener.bind` is required and is one numeric socket address, including bracketed IPv6 forms.
 `listener.tlsTermination` is required.
-Use `operator-controlled-upstream` behind an operator-managed TLS edge, or `development-loopback`
+Use `operator-controlled-upstream` behind an operator-managed TLS edge, or `loopback-plaintext`
 for direct local development, which the runtime refuses on any non-loopback bind.
 `listener.networkExposure` defaults to `private-address`; `container-private` permits an
 unspecified bind only for a listener kept on a private container network.
@@ -209,15 +226,9 @@ the last apply, is refused with `schedulingctl.activation.ledger-unreadable`.
 The refusal names `schedulingctl apply --runtime-config FILE` to grant the read, then
 `schedulingctl plan --runtime-config FILE`.
 
-Scheduling sets `sslmode` to `Require` on both connections and refuses a connection it cannot
-protect.
-`database.caBundleRef` is optional and selects the PEM bundle of a private CA in
-front of PostgreSQL.
-The one plaintext escape is `database.testOnlyPlaintext: true`, and only a build carrying the
-`postgres-test` feature accepts it; a production build refuses the setting at startup instead of
-opening an unencrypted connection.
-A test build that skips because its database URL is absent is not database verification, and the
-escape never turns a deployed runtime into a plaintext client.
+Scheduling uses verified TLS by default.
+`database.caBundleRef` adds a private CA.
+A `postgres-test` build also accepts `database.testOnlyPlaintext: true`.
 
 {/* Evidence: crates/registry-scheduling/src/config.rs plaintext_postgres_is_refused_outside_the_test_suite;
     crates/registry-scheduling/src/store.rs test_only_plaintext;

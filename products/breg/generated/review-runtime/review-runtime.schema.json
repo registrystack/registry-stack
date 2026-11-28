@@ -240,7 +240,7 @@
         },
         "baseUrl": {
           "$ref": "#/$defs/Url",
-          "description": "The registry deployment's base URL. An https URL with no query or\nfragment; plain http is accepted only on a loopback host under\n`development-loopback`."
+          "description": "The registry deployment's base URL. An https URL with no query or\nfragment. Plain HTTP is accepted on loopback in both postures."
         },
         "resource": {
           "$ref": "#/$defs/ResourceUri",
@@ -368,7 +368,7 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "The provider's issuer. An https URL with no query or fragment; plain\nhttp is accepted only on a loopback host under `development-loopback`,\nbecause the page sends its client credentials to the token endpoint."
+          "description": "The provider's issuer. An https URL with no query or fragment; plain\nHTTP is accepted on loopback in both postures."
         },
         "scopes": {
           "description": "Scopes requested beside `openid`, such as the review scope the\nregistry profile requires. The page always requests `openid`, so the\nlist does not name it.",
@@ -445,7 +445,10 @@
     },
     "publicOrigin": {
       "$ref": "#/$defs/Url",
-      "description": "The browser-facing origin, such as `https://review.example`: an https\nURL with no path, query, or fragment; plain http is accepted only on\na loopback host under `development-loopback`. The sign-in redirect\nURI is this origin with `/signin/callback`."
+      "description": "The browser-facing origin, such as `https://review.example`: an https\nURL with no path, query, or fragment. Plain HTTP requires declared\ndevelopment posture. The sign-in redirect\nURI is this origin with `/signin/callback`.",
+      "x-registry-development-only": [
+        "breg.posture.review-http-public-origin"
+      ]
     },
     "rateLimits": {
       "$ref": "#/$defs/RateLimitsConfig"

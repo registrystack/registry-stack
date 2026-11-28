@@ -90,6 +90,29 @@
           "activationReady": {
             "type": "boolean"
           },
+          "findings": {
+            "items": {
+              "properties": {
+                "code": {
+                  "const": "platform.activation.posture-mismatch"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "suggestedAction": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "suggestedAction"
+              ],
+              "type": "object"
+            },
+            "maxItems": 1,
+            "type": "array"
+          },
           "state": {
             "properties": {
               "admissionsHold": {
@@ -169,7 +192,8 @@
         },
         "required": [
           "activationReady",
-          "state"
+          "state",
+          "findings"
         ],
         "type": "object"
       },
@@ -1249,6 +1273,30 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "developmentSettings": {
+                      "items": {
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "pointer": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "pointer"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "posture": {
+                      "enum": [
+                        "production",
+                        "development"
+                      ]
+                    },
                     "ready": {
                       "type": "boolean"
                     },
@@ -1258,7 +1306,9 @@
                   },
                   "required": [
                     "ready",
-                    "status"
+                    "status",
+                    "posture",
+                    "developmentSettings"
                   ],
                   "type": "object"
                 }

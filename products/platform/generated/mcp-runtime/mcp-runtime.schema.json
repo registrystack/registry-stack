@@ -264,7 +264,7 @@
         },
         "tokenEndpoint": {
           "$ref": "#/$defs/Url",
-          "description": "The authorization server's token endpoint. An https URL with no query\nor fragment; plain http is accepted only on a loopback host under\n`development-loopback`."
+          "description": "The authorization server's token endpoint. An https URL with no query\nor fragment; plain HTTP is accepted on loopback in both postures."
         }
       },
       "required": [
@@ -620,7 +620,7 @@
         },
         "baseUrl": {
           "$ref": "#/$defs/Url",
-          "description": "The registry deployment's base URL. An https URL with no query or\nfragment; plain http is accepted only on a loopback host under\n`development-loopback`."
+          "description": "The registry deployment's base URL. An https URL with no query or\nfragment; plain HTTP is accepted on loopback in both postures."
         },
         "scopes": {
           "description": "The scopes requested for the delegated registry token.",
@@ -657,8 +657,11 @@
         },
         "allowInsecureHttp": {
           "default": false,
-          "description": "Permit plain HTTP beyond loopback to the declared issuer and to a JWKS\nURI declared in `jwksSource`.",
-          "type": "boolean"
+          "description": "Permit plain HTTP beyond loopback to the declared issuer and to a JWKS\nURI declared in `jwksSource`. Requires declared development posture.",
+          "type": "boolean",
+          "x-registry-development-only": [
+            "platform.posture.insecure-issuer-http"
+          ]
         },
         "allowedClients": {
           "description": "The chat-host clients whose tokens the gateway accepts.",
@@ -672,14 +675,20 @@
         },
         "issuer": {
           "$ref": "#/$defs/Url",
-          "description": "The exact issuer accepted in access-token `iss` claims. An https URL\nwith no query or fragment; plain http is accepted only on a loopback\nhost under `development-loopback`."
+          "description": "The exact issuer accepted in access-token `iss` claims. An https URL\nwith no query or fragment. Plain HTTP requires development. Beyond\nloopback it also requires `allowInsecureHttp`.",
+          "x-registry-development-only": [
+            "platform.posture.mcp-http-published-issuer"
+          ]
         },
         "jwksSource": {
           "$ref": "#/$defs/JwksSource",
           "default": {
             "type": "discovery"
           },
-          "description": "Where the issuer's signing keys come from. Omitted, they are read\nthrough the issuer's OpenID Connect discovery document."
+          "description": "Where the issuer's signing keys come from. Omitted, they are read\nthrough the issuer's OpenID Connect discovery document.",
+          "x-registry-development-only": [
+            "platform.posture.test-issuer"
+          ]
         },
         "maximumTokenLifetimeSeconds": {
           "default": 3600,
@@ -701,7 +710,10 @@
         },
         "resource": {
           "$ref": "#/$defs/Url",
-          "description": "This gateway's resource identifier: the exact URL of its MCP endpoint,\nwhich every accepted token must name as its audience. An https URL\nwhose path is `/mcp`, with no query or fragment; plain http is\naccepted only on a loopback host under `development-loopback`."
+          "description": "This gateway's resource identifier: the exact URL of its MCP endpoint,\nwhich every accepted token must name as its audience. An https URL\nwhose path is `/mcp`, with no query or fragment; plain http is\naccepted when the process declares development.",
+          "x-registry-development-only": [
+            "platform.posture.mcp-http-resource"
+          ]
         },
         "scopeClaim": {
           "$ref": "#/$defs/ExternalId",
@@ -796,7 +808,10 @@
         },
         "reviewBaseUrl": {
           "$ref": "#/$defs/Url",
-          "description": "The citizen-facing review page; an application is reviewed and\nsubmitted there, never through the chat host. The review page's\n`publicOrigin`, with no path, query, or fragment."
+          "description": "The citizen-facing review page; an application is reviewed and\nsubmitted there, never through the chat host. The review page's\n`publicOrigin`, with no path, query, or fragment. Plain HTTP requires\ndeclared development posture.",
+          "x-registry-development-only": [
+            "breg.posture.review-http-public-origin"
+          ]
         }
       },
       "required": [

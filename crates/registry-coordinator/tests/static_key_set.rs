@@ -56,7 +56,7 @@ async fn build(document: &Value) -> Result<(), registry_coordinator::Coordinator
             },
         )]),
     };
-    access.authenticator(&secrets, false).await.map(|_| ())
+    access.authenticator(&secrets).await.map(|_| ())
 }
 
 #[tokio::test]

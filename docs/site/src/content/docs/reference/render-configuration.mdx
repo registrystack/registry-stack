@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: 2026-11-27
 doc_type: reference
 locale: en
 standards_referenced:
@@ -102,6 +102,10 @@ rules are not in the tables.
   with a `local-jwk` key file. A seal with the other signer is refused as
   `render.runtime.signer-assurance-mismatch`, at its `signer.type`. A runtime without seals
   needs no `assuranceProfile`.
+- Render defaults to production. Set `--posture development` or `REGISTRY_STACK_POSTURE=development` to use `assuranceProfile: local`.
+  A deployment that seals with a key file runs as development across the stack.
+  Production peers refuse responses marked as development.
+  Production sealing uses Transit.
 - `signer` names how the seal key signs. `type: transit` signs through a Vault or OpenBao Transit
   signing proxy on the Render host: `unixSocketPath` is the proxy's socket, an absolute path with no
   `.` or `..` segment; `mount` and `keyName` are local identifiers naming the key; `keyVersion`
@@ -123,9 +127,10 @@ rules are not in the tables.
 - `allowedClients` is a list of at least one named client. `unrestricted` and any item containing
   `*` are refused. When `authentication.oidc.allowedClients` lists clients, each seal client must be in it.
 - `assuranceProfile: local` sets `signing.testOnly` in the template payload, and every answer about the
-  seal says so: `testOnly: true` in the JSON `seal` member, the `/ready` entry, and each audit entry
-  of the call, and `X-Registry-Seal-Test-Only: true` on the PDF answer. `serve` logs one `test-only
-  seal` warning per such seal at startup. Under `assuranceProfile: production` a seal carries none of these.
+  seal reports `testOnly: true` in the JSON `seal` member, the `/ready` entry and the call's audit records.
+  The PDF answer carries `X-Registry-Seal-Test-Only: true`.
+  The signed PDF dictionary carries `/Reason (Registry Stack test seal: not an official document)`.
+  Startup logs and `/ready` list `render.posture.local-assurance` when the runtime uses this profile.
 - A document type's `seal` must name a seal in `signing.seals`. A package that names an unbound
   seal is refused at `serve`; `check` reports it, and warns about a runtime seal no document type
   names.
@@ -153,7 +158,7 @@ Serve and `check` report these as runtime problems at the position of the key.
 | `render.runtime.signer-assurance-mismatch` | A seal's signer does not suit `assuranceProfile`: `local` signs with `local-jwk`, `production` signs through `transit`. |
 | `render.runtime.seal-not-bound` | A document type names a seal `signing.seals` does not bind (error). |
 | `render.runtime.seal-unused` | A runtime seal is named by no document type (warning). |
-| `render.runtime.seals-not-served` | Document types name seals and the runtime has no `signing` block: they render unsealed (warning). |
+| `render.posture.seals-not-served` | Document types name seals and the runtime has no `signing` block. Production refuses the combination. Development warns and renders the documents unsealed. |
 
 `check --environment` and `serve` read the chain file and report:
 
@@ -266,6 +271,7 @@ A `timestamp-failed` response entry adds `reason`, the failing check, and the lo
 | `reason` | Piece |
 |---|---|
 | `connection-failed`, `timed-out` | The authority could not be reached within the attempt timeout. |
+| `response-headers` | The reply exceeds the header limits or declares development to a production caller. |
 | `http-status`, `not-granted` | The authority answered with an HTTP error, or a status that grants no token. |
 | `not-a-timestamp-reply`, `malformed-response`, `missing-token`, `not-tst-info`, `malformed-tst-info` | The answer is not a DER timestamp reply carrying a token. |
 | `message-imprint-mismatch`, `nonce-mismatch` | The token does not answer this request. |
@@ -278,7 +284,8 @@ The key tables above are generated from the runtime schema by
 `docs/site/scripts/generate-render-configuration.mjs`; this section is hand-written.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, SigningRuntime, SealRuntime, signing_findings
-    and seal_binding_findings;
+    and record_seal_binding_posture;
+    crates/registry-render/tests/serve_seal.rs, production_refuses_a_development_timestamp_authority;
     crates/registry-render/src/seal.rs, SIGNATURE_ALLOWANCE, STRUCTURE_ALLOWANCE,
     TIMESTAMP_TOKEN_ALLOWANCE, contents_capacity, check_chain and Seal::load;
     crates/registry-render/src/pdf_signature.rs, MAX_CONTENTS_CAPACITY;

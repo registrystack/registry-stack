@@ -5,12 +5,12 @@ use serde_json::{json, Value};
 fn citizen() -> Value {
     json!({
         "apiVersion":"id.registrystack.org/formats/platform/mcp-runtime/v1alpha1","kind":"PlatformMcpRuntimeConfig","name":"Synthetic citizen service",
-        "listener":{"bind":"127.0.0.1:8110","tlsTermination":"development-loopback","networkExposure":"private-address"},
+        "listener":{"bind":"127.0.0.1:8110","tlsTermination":"loopback-plaintext","networkExposure":"private-address"},
         "secretProviders":{"environment":{}},
-        "resourceServer":{"resource":"http://127.0.0.1:8110/mcp","issuer":"http://127.0.0.1:8111/","jwksSource":{"type":"static","documentRef":"secret:env/MCP_TEST_JWKS"},"algorithms":["EdDSA"],"allowedClients":["chat-host"],"requiredScopes":["citizen:self"]},
+        "resourceServer":{"resource":"https://127.0.0.1:8110/mcp","issuer":"https://127.0.0.1:8111/","jwksSource":{"type":"static","documentRef":"secret:env/MCP_TEST_JWKS"},"algorithms":["EdDSA"],"allowedClients":["chat-host"],"requiredScopes":["citizen:self"]},
         "audit":{"hashKeyRef":"secret:env/MCP_TEST_AUDIT_KEY","destination":"stdout"},
         "rateLimits":{"perPrincipal":{"requestsPerMinute":30,"burst":10},"perClient":{"requestsPerMinute":600,"burst":100}},
-        "bindings":[{"name":"citizen","tools":["get_my_details"],"provider":{"type":"breg","registry":{"baseUrl":"http://127.0.0.1:8112/","accessProfile":"citizen-agent","audience":"urn:fixture:breg","scopes":["citizen:self"]},"exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"citizen-gateway","privateKeyRef":"secret:env/MCP_TEST_PRIVATE_KEY","assertionAudience":"http://127.0.0.1:8111/"},"service":{"name":"Synthetic address correction","description":"Correct a synthetic record.","disclosure":"The assistant sees the values you authorize.","details":{"recordType":"person-address"},"application":{"action":"correct-address","targetInput":"address"},"reviewBaseUrl":"http://127.0.0.1:8113/"}}}]
+        "bindings":[{"name":"citizen","tools":["get_my_details"],"provider":{"type":"breg","registry":{"baseUrl":"http://127.0.0.1:8112/","accessProfile":"citizen-agent","audience":"urn:fixture:breg","scopes":["citizen:self"]},"exchange":{"tokenEndpoint":"http://127.0.0.1:8111/token","clientId":"citizen-gateway","privateKeyRef":"secret:env/MCP_TEST_PRIVATE_KEY","assertionAudience":"http://127.0.0.1:8111/"},"service":{"name":"Synthetic address correction","description":"Correct a synthetic record.","disclosure":"The assistant sees the values you authorize.","details":{"recordType":"person-address"},"application":{"action":"correct-address","targetInput":"address"},"reviewBaseUrl":"https://127.0.0.1:8113/"}}}]
     })
 }
 fn check(value: &Value) -> registry_platform_yaml::Report {
@@ -51,7 +51,7 @@ fn audience_reuse_exchange_client_reuse_and_invalid_review_origins_are_refused()
     for (pointer, value, code, path) in [
         (
             "/bindings/0/provider/registry/audience",
-            json!("http://127.0.0.1:8110/mcp"),
+            json!("https://127.0.0.1:8110/mcp"),
             "downstream-audience-reused",
             "/bindings/0/provider/registry/audience",
         ),
@@ -169,7 +169,7 @@ fn casework_binding_refusals_name_the_exact_member() {
     for (pointer, value, code, path) in [
         (
             "/bindings/0/provider/authorization/audience",
-            json!("http://127.0.0.1:8110/mcp"),
+            json!("https://127.0.0.1:8110/mcp"),
             "downstream-audience-reused",
             "/bindings/0/provider/authorization/audience",
         ),
@@ -318,4 +318,144 @@ fn old_citizen_rate_bucket_names_the_replacement() {
         report.render_human()
     );
     assert!(report.render_human().contains("perPrincipal"));
+}
+
+#[test]
+fn production_refuses_http_published_endpoints() {
+    let mut config = citizen();
+    config["bindings"][0]["provider"]["service"]["reviewBaseUrl"] = json!("http://127.0.0.1:8113/");
+    config["resourceServer"]["issuer"] = json!("http://127.0.0.1:8111/");
+    assert_code_and_path(
+        &config,
+        "breg.posture.review-http-public-origin",
+        "/bindings/0/provider/service/reviewBaseUrl",
+    );
+    assert_code_and_path(
+        &config,
+        "platform.posture.mcp-http-published-issuer",
+        "/resourceServer/issuer",
+    );
+}
+
+#[test]
+fn malformed_configuration_still_reports_http_resource() {
+    let mut config = citizen();
+    config["unknown"] = json!(true);
+    config["resourceServer"]["resource"] = json!("http://127.0.0.1:8110/mcp");
+    assert_code_and_path(
+        &config,
+        "platform.posture.mcp-http-resource",
+        "/resourceServer/resource",
+    );
+}
+
+#[test]
+fn development_lists_http_published_endpoints() {
+    let mut config = citizen();
+    config["bindings"][0]["provider"]["service"]["reviewBaseUrl"] =
+        json!("http://review.example.test/");
+    config["resourceServer"]["issuer"] = json!("http://127.0.0.1:8111/");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().canonicalize().unwrap().join("runtime.json");
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let loaded = RuntimeConfig::load_with_posture(
+        &path,
+        registry_platform_config::DeclaredPosture {
+            posture: registry_platform_config::Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        },
+    )
+    .unwrap();
+    let ready = loaded.posture.ready_member();
+    let settings = ready["developmentSettings"].as_array().unwrap();
+    for (code, pointer) in [
+        (
+            "breg.posture.review-http-public-origin",
+            "/bindings/0/provider/service/reviewBaseUrl",
+        ),
+        (
+            "platform.posture.mcp-http-published-issuer",
+            "/resourceServer/issuer",
+        ),
+    ] {
+        assert!(settings
+            .iter()
+            .any(|setting| setting["code"] == code && setting["pointer"] == pointer));
+    }
+}
+
+#[tokio::test]
+async fn production_report_cannot_be_paired_with_a_development_witness() {
+    use registry_platform_config::{DeclaredPosture, Posture, PostureReport, PostureSource};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().canonicalize().unwrap().join("runtime.json");
+    std::fs::write(&path, serde_json::to_vec(&citizen()).unwrap()).unwrap();
+    let mut loaded = RuntimeConfig::load_with_posture(
+        &path,
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        },
+    )
+    .unwrap();
+    loaded.posture = PostureReport::new(DeclaredPosture {
+        posture: Posture::Production,
+        source: PostureSource::Flag,
+    });
+    let error = registry_mcp::runtime::build_with_posture(&loaded)
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("the development witness does not match the declared posture"));
+}
+
+#[test]
+fn published_endpoint_refusals_name_both_migrations() {
+    let mut config = citizen();
+    config["resourceServer"]["resource"] = json!("http://127.0.0.1:8110/mcp");
+    config["resourceServer"]["issuer"] = json!("http://issuer.example.test");
+    config["bindings"][0]["provider"]["service"]["reviewBaseUrl"] =
+        json!("http://review.example.test/");
+    let report = check(&config).to_json_value();
+    for (code, subject, replacement) in [
+        (
+            "platform.posture.mcp-http-resource",
+            "The protected resource identifier is plain http",
+            "Use an https resource identifier.",
+        ),
+        (
+            "platform.posture.mcp-http-published-issuer",
+            "The published resource server issuer is plain http",
+            "Use an https issuer.",
+        ),
+        (
+            "breg.posture.review-http-public-origin",
+            "The review base URL is plain http",
+            "Use an https review base URL.",
+        ),
+    ] {
+        let diagnostic = report
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap();
+        assert_eq!(
+            diagnostic["message"],
+            format!("{subject}; it is accepted only when the process declares development")
+        );
+        assert_eq!(diagnostic["suggestedAction"], format!("{replacement} For a laptop or test run, start it with `rstack dev`, or declare development with REGISTRY_STACK_POSTURE=development or --posture development."));
+    }
+    let diagnostic = report
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "platform.mcp-runtime.insecure-resource-server")
+        .unwrap();
+    assert_eq!(
+        diagnostic["message"],
+        "Production resource-server URLs must protect credentials."
+    );
+    assert_eq!(diagnostic["suggestedAction"], "Write an https URL without credentials or a plain http loopback URL. For plain http beyond loopback, set resourceServer.allowInsecureHttp: true and start with rstack dev, or declare development with REGISTRY_STACK_POSTURE=development or --posture development.");
 }

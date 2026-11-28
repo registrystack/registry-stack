@@ -76,7 +76,10 @@ impl AuditCapture {
 
 fn capture_audit() -> (ToolAuditLog, AuditCapture) {
     let buffer = AuditBuffer::default();
-    let writer = AuditWriter::from_line_sink_without_posture(Box::new(buffer.clone()));
+    let writer = AuditWriter::from_line_sink(
+        Box::new(buffer.clone()),
+        registry_platform_config::Posture::Production,
+    );
     (
         ToolAuditLog::new(writer.clone()),
         AuditCapture { writer, buffer },
@@ -133,7 +136,7 @@ impl Fixture {
         let audit = match override_audit {
             Some(audit) => audit,
             None => ToolAuditLog::new(
-                AuditWriter::open_without_posture(destination)
+                AuditWriter::open(destination, registry_platform_config::Posture::Production)
                     .await
                     .expect("audit opens"),
             ),

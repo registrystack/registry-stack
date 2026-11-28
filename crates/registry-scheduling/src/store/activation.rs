@@ -8,6 +8,7 @@
 //! Startup, `schedulingctl plan`, and `schedulingctl status` read it and write
 //! nothing.
 
+use registry_platform_config::Posture;
 use std::future::Future;
 
 use registry_platform_activation::{
@@ -180,6 +181,7 @@ pub struct DeployedPolicy {
 /// package the operator's configuration names.
 #[derive(Clone, Copy, Debug)]
 pub struct ActivePackage<'a> {
+    pub posture: Posture,
     pub database_id: &'a str,
     pub package_digest: &'a str,
 }
@@ -187,6 +189,7 @@ pub struct ActivePackage<'a> {
 /// Everything one apply records.
 #[derive(Clone, Debug)]
 pub struct ActivationRequest<'a> {
+    pub posture: Posture,
     pub activation_id: Uuid,
     pub package_digest: &'a str,
     pub database_id: &'a str,
@@ -236,6 +239,25 @@ pub struct ActivationPlan {
     /// Whether an apply of the candidate would record an activation: false
     /// whenever the plan names a refusal.
     pub changes_pending: bool,
+}
+
+/// The shared code used when the database and process postures differ.
+pub const POSTURE_MISMATCH: &str = "platform.activation.posture-mismatch";
+
+pub fn posture_mismatch(recorded: Posture, declared: Posture) -> Option<StoreError> {
+    let (message, action) = match (recorded, declared) {
+        (Posture::Production, Posture::Development) => (
+            "this database was activated in the production posture; a development process never opens it",
+            "Start it as production. To develop, use a fresh database: a fresh apply is the way.",
+        ),
+        (Posture::Development, Posture::Production) => (
+            "this database was activated in the development posture; development data and settings are never promoted in place",
+            "Create a fresh database and apply the package as production: a fresh apply is the way.",
+        ),
+        (Posture::Production, Posture::Production)
+        | (Posture::Development, Posture::Development) => return None,
+    };
+    Some(StoreError::PostureMismatch { message, action })
 }
 
 impl PostgresStore {
@@ -343,6 +365,9 @@ impl PostgresStore {
             .await?
             .get(0);
         if let Some(active) = &active {
+            if let Some(error) = posture_mismatch(active.posture, request.posture) {
+                return Err(error);
+            }
             if active.database_id != request.database_id {
                 return Err(StoreError::DatabaseIdMismatch);
             }
@@ -451,15 +476,16 @@ impl PostgresStore {
         let activation = platform_activation::append_activation(
             &*transaction,
             &activation_layout(),
-            &NewActivation::without_posture(
-                request.activation_id,
-                request.package_digest,
-                request.database_id,
-                request.operator_reference_hash,
-                request.backup_references,
+            &NewActivation {
+                activation_id: request.activation_id,
+                package_digest: request.package_digest,
+                database_id: request.database_id,
+                operator_reference_hash: request.operator_reference_hash,
+                backup_references: request.backup_references,
                 role_mode,
-                Some(request.runtime_role),
-            ),
+                posture: request.posture,
+                runtime_role: Some(request.runtime_role),
+            },
         )
         .await
         .map_err(platform_error)?;
@@ -483,6 +509,7 @@ impl PostgresStore {
         database_id: &str,
         package_digest: &str,
         policy: &SchedulingPolicy,
+        posture: Posture,
         verify_retained: F,
     ) -> Result<ActivationPlan, StoreError>
     where
@@ -513,6 +540,9 @@ impl PostgresStore {
         }
         let mut changes_pending = true;
         if let Some(active) = &active {
+            if let Some(error) = posture_mismatch(active.posture, posture) {
+                refusals.push(error);
+            }
             if active.database_id != database_id {
                 refusals.push(StoreError::DatabaseIdMismatch);
             }
@@ -1030,11 +1060,12 @@ pub(super) async fn check_active_package_in(
     client: &impl GenericClient,
     expected: &ActivePackage<'_>,
 ) -> Result<Activation, StoreError> {
-    platform_activation::check_active_package_without_posture(
+    platform_activation::check_active_package(
         client,
         &activation_layout(),
         expected.database_id,
         expected.package_digest,
+        expected.posture,
     )
     .await
     .map_err(|error| match error {
@@ -1045,13 +1076,8 @@ pub(super) async fn check_active_package_in(
         platform_activation::ActivePackageError::PackageNotActive { active, candidate } => {
             StoreError::PackageNotActive { active, candidate }
         }
-        // Until this product declares a posture it checks as production, so a
-        // ledger recorded in development is not its active package.
-        platform_activation::ActivePackageError::PostureMismatch { recorded, .. } => {
-            StoreError::PackageNotActive {
-                active: format!("recorded in the {} posture", recorded.as_str()),
-                candidate: expected.package_digest.to_owned(),
-            }
+        platform_activation::ActivePackageError::PostureMismatch { recorded, declared } => {
+            posture_mismatch(recorded, declared).expect("different postures")
         }
         platform_activation::ActivePackageError::Activation(error) => platform_error(error),
     })

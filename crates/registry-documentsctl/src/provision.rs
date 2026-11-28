@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use registry_documents::config::{startup_report, RuntimeConfig};
+use registry_documents::config::{startup_report_with_posture, RuntimeConfig};
 use registry_documents_core::DOCUMENTS_RUNTIME_KIND;
 use registry_platform_config::describe_secret_failure;
 use registry_platform_provision::{ProductDatabase, ProvisionInput, SchemaLayout};
@@ -33,7 +33,10 @@ fn refused(code: &str, path: &str, message: String, action: &str) -> Box<Diagnos
 
 /// Reads the runtime file exactly as `apply` does and resolves the two
 /// database URLs and the CA behind `database.caBundleRef`.
-pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
+pub(crate) fn load(
+    path: &Path,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ProvisionInput, Box<Diagnostic>> {
     let absolute = std::path::absolute(path).map_err(|_| {
         refused(
             "config.unresolvable",
@@ -43,8 +46,8 @@ pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
             "Pass --runtime-config as a path that exists.",
         )
     })?;
-    let config = RuntimeConfig::load(&absolute).map_err(|error| {
-        match startup_report(&absolute, &error)
+    let config = RuntimeConfig::load_with_posture(&absolute, declared).map_err(|error| {
+        match startup_report_with_posture(&absolute, &error, declared)
             .and_then(|report| report.diagnostics().first().cloned())
         {
             Some(diagnostic) => Box::new(diagnostic),

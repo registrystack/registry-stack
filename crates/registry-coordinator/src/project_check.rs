@@ -45,10 +45,12 @@ pub(crate) fn check_runtime(
     path: &Path,
     definition: Option<&Definition>,
     environment: bool,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> (Report, u8) {
-    let checked = runtime::RuntimeConfig::check_file_with(path, environment, |checked, config| {
-        workflow_binding_diagnostics(checked, config, definition)
-    });
+    let checked =
+        runtime::RuntimeConfig::check_file_with(path, environment, declared, |checked, config| {
+            workflow_binding_diagnostics(checked, config, definition)
+        });
     (
         Report::new(checked.diagnostics),
         if checked.unavailable { 3 } else { 1 },
@@ -132,6 +134,7 @@ pub(crate) fn check_directory(
     project: Option<(&Definition, &Document)>,
     explicit_runtime: Option<&Path>,
     environment: bool,
+    declared: registry_platform_config::DeclaredPosture,
 ) -> (Report, u8) {
     let definition = project.map(|(definition, _)| definition);
     let mut report = Report::default();
@@ -266,7 +269,7 @@ pub(crate) fn check_directory(
             continue;
         }
         if expected == "runtime.yaml" {
-            let (findings, runtime_exit) = check_runtime(&path, definition, environment);
+            let (findings, runtime_exit) = check_runtime(&path, definition, environment, declared);
             report.extend(findings);
             exit = exit.max(runtime_exit);
         } else {

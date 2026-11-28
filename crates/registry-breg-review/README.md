@@ -48,7 +48,7 @@ apiVersion: id.registrystack.org/formats/breg/review-runtime/v1alpha1
 kind: BRegReviewRuntimeConfig
 listener:
   bind: 127.0.0.1:8115                           # required
-  tlsTermination: operator-controlled-upstream   # or development-loopback
+  tlsTermination: operator-controlled-upstream   # or loopback-plaintext
   networkExposure: private-address               # or container-private
 publicOrigin: https://review.example
 secretProviders:
@@ -85,9 +85,11 @@ Secrets are references (`secret:file/...` or `secret:env/...`), never inline
 values. Ordinary deployment values accept `${NAME}`, `${NAME:-fallback}`, and
 `${NAME:?message}` substitution. Secret references and the `secretProviders`
 block must stay literal. The redirect URI registered with the provider is
-`publicOrigin` followed by `/signin/callback`. `development-loopback` is for a
-loopback listener only: it drops `Secure`, the `__Host-` cookie prefix, and
-HSTS, and relaxes the provider endpoint policy to loopback HTTP.
+`publicOrigin` followed by `/signin/callback`. `loopback-plaintext` is for a
+loopback listener. It omits `Secure`, the `__Host-` cookie prefix, and HSTS.
+The review service defaults to production. HTTP transport to loopback works
+in either posture. For a local HTTP `publicOrigin`, start with `rstack dev`,
+set `REGISTRY_STACK_POSTURE=development`, or pass `--posture development`.
 
 `BREG_REVIEW_LOG` selects the operational log level when set, otherwise the
 runtime file's top-level `logLevel` applies, with `info` as its default. Both

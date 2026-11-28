@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: how-to
 locale: en
 standards_referenced: [pades, rfc-3161]
@@ -198,7 +198,7 @@ curl -s http://127.0.0.1:8080/ready
 
 ```text
 {"bundleHash":"<package-digest>","bundleVersion":1,"rendererVersion":"<version> (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
-{"status":"ready"}
+{"developmentSettings":[],"posture":"production","status":"ready"}
 ```
 
 `bundleHash` is the package digest without `sha256:`; compare it with what you deployed.
@@ -429,9 +429,9 @@ an unreadable key or CA bundle, stops
 `serve` with exit code 20 (`runtime-invalid`) and an error at the member's line in the runtime
 file. If the runtime names a seal the package does not use, or the package names a seal the
 runtime does not bind, `check` reports it, and `serve` refuses the second case. If the package
-names seals and the runtime has no `signing` block at all, `check` and `serve` warn
-(`render.runtime.seals-not-served`): sealing is off, those document types render unsealed on the
-render route, and the seal route does not exist.
+names seals and the runtime has no `signing` block, production refuses it. Under development,
+`check` and `serve` warn with `render.posture.seals-not-served`. The render route serves those
+document types unsealed, and the seal route is absent.
 
 Then call the route with a token that carries `render:seal`. The request body is the render
 route's. The PDF answer carries `X-Registry-Document-Digest`, `X-Registry-Signed-File-Digest`,
@@ -448,6 +448,10 @@ problems, and response shapes.
 ### Use a test seal in development
 
 Issue a test certificate from your own test authority and set `assuranceProfile: local` in the runtime file.
+Set `REGISTRY_STACK_POSTURE=development` or pass `--posture development` to `check` and `serve`.
+A deployment that seals with a key file runs as development across the stack.
+Production peers refuse responses marked as development.
+Production sealing uses Transit.
 Under that profile every seal keeps its key in a file instead of Transit: `signer.type: local-jwk` with
 `privateKeyRef` naming one ES256, ES384, RS256, or RS384 private JWK under the file secret
 provider, such as `secret:file/seal.jwk`; an environment reference is refused
@@ -458,8 +462,9 @@ template then receives `signing.testOnly: true` in its payload on the seal route
 visible test marking (the [payload contract](../../reference/render-payload/#the-signing-member)); the
 `registry-render init` scaffold prints it. Render also says so where a template cannot hide it:
 `testOnly: true` in the JSON answer's `seal`, in `/ready` and in the audit, an
-`X-Registry-Seal-Test-Only: true` header on the PDF answer, and one `test-only seal` warning per
-seal when `serve` starts. Use a loopback timestamp authority (`http://127.0.0.1:<port>/...`
+`X-Registry-Seal-Test-Only: true` header on the PDF answer, and a signed `/Reason (Registry Stack test seal: not an official document)` in the PDF signature dictionary.
+Startup logs and `/ready` list `render.posture.local-assurance`.
+Development responses carry `Registry-Posture: development`, and audit lines record `posture`. Use a loopback timestamp authority (`http://127.0.0.1:<port>/...`
 is accepted on loopback only) or `withoutTimestamp` while you develop. Never copy a test seal's
 runtime into production.
 
@@ -473,7 +478,7 @@ bundle or a verified package. For a scaffold created with
 `signing.testOnly` is true.
 
 ```bash
-registry-render test-seal --bundle ./letter --type letter \
+registry-render test-seal --posture development --bundle ./letter --type letter \
   --data ./letter/fixtures/data.json --output ./letter-specimen
 ```
 
@@ -578,8 +583,8 @@ signing:
 
 Put `assuranceProfile` and this `signing` block in a runtime file that has the `authentication` block from
 [Enable a seal](#enable-a-seal). Name the seal in the document type's `manifest.yaml` entry with
-`seal: ministry`, and run `registry-render package` again. Then run `check --environment` and
-`serve` as above. Callers need a token from your issuer that carries `render:seal`, issued to a
+`seal: ministry`, and run `registry-render package` again. Then run `check --environment --posture development` and
+`serve --posture development` with the runtime file. Callers need a token from your issuer that carries `render:seal`, issued to a
 client the seal's `allowedClients` names. `test-root.key` can issue certificates: keep it out of
 every deployment, and never trust the test root outside development.
 

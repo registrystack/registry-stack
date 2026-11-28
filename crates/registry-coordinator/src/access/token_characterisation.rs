@@ -68,7 +68,7 @@ async fn authenticator_for(case: &FixtureCase, secrets: &SecretProvidersConfig) 
         policies: BTreeMap::from([(client, policy)]),
     };
     access
-        .authenticator(secrets, false)
+        .authenticator(secrets)
         .await
         .expect("the authenticator builds over the static key set")
 }

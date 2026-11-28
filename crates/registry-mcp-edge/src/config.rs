@@ -9,7 +9,8 @@ use registry_platform_audit::{
     MIN_AUDIT_ROTATE_BYTES,
 };
 use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockError, JwksSource, SecretProvidersConfig, SecretReference,
+    AuditKeyConfig, ConfigBlockError, DevelopmentSetting, DevelopmentWitness, FoundSetting, Gated,
+    InsecureHttp, JwksSource, PostureReport, SecretProvidersConfig, SecretReference, SettingOrigin,
 };
 use registry_platform_httputil::{loopback::loopback_host, valid_resource_uri, valid_scope_token};
 use registry_platform_yaml::{BoundedU32, BoundedU64, ExternalId, Invalid, UniqueList, Url};
@@ -62,19 +63,27 @@ pub struct ResourceServerConfig {
     /// This gateway's resource identifier: the exact URL of its MCP endpoint,
     /// which every accepted token must name as its audience. An https URL
     /// whose path is `/mcp`, with no query or fragment; plain http is
-    /// accepted only on a loopback host under `development-loopback`.
-    pub resource: Url,
+    /// accepted when the process declares development.
+    #[cfg_attr(feature = "schema", schemars(extend("x-registry-development-only" = ["platform.posture.mcp-http-resource"])))]
+    #[cfg_attr(feature = "schema", schemars(with = "Url"))]
+    resource: Gated<PublishedResource>,
     /// The exact issuer accepted in access-token `iss` claims. An https URL
-    /// with no query or fragment; plain http is accepted only on a loopback
-    /// host under `development-loopback`.
+    /// with no query or fragment. Plain HTTP requires development. Beyond
+    /// loopback it also requires `allowInsecureHttp`.
+    #[cfg_attr(feature = "schema", schemars(extend("x-registry-development-only" = ["platform.posture.mcp-http-published-issuer"])))]
     pub issuer: Url,
     /// Where the issuer's signing keys come from. Omitted, they are read
     /// through the issuer's OpenID Connect discovery document.
-    #[serde(default)]
-    pub jwks_source: JwksSource,
+    #[serde(default = "default_jwks_source")]
+    #[cfg_attr(feature = "schema", schemars(default = "default_jwks_source"))]
+    pub jwks_source: Gated<JwksSource>,
     /// Permit plain HTTP beyond loopback to the declared issuer and to a JWKS
-    /// URI declared in `jwksSource`.
-    #[serde(default)]
+    /// URI declared in `jwksSource`. Requires declared development posture.
+    #[serde(default, deserialize_with = "deserialize_insecure_http")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(extend("x-registry-development-only" = ["platform.posture.insecure-issuer-http"]))
+    )]
     pub allow_insecure_http: bool,
     /// The asymmetric signature algorithms an accepted token may use.
     #[serde(deserialize_with = "bounded_restricting_list")]
@@ -105,17 +114,43 @@ pub struct ResourceServerConfig {
     pub maximum_token_lifetime_seconds: BoundedU64<1, MAXIMUM_TOKEN_LIFETIME_SECONDS>,
 }
 
+static HTTP_RESOURCE: DevelopmentSetting = DevelopmentSetting {
+    code: "platform.posture.mcp-http-resource",
+    key: "resource",
+    summary: "The protected resource identifier is plain http",
+    production: "Use an https resource identifier.",
+};
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(transparent)]
+struct PublishedResource(Url);
+
+impl registry_platform_config::DevelopmentClass for PublishedResource {
+    const SETTINGS: &'static [&'static DevelopmentSetting] = &[&HTTP_RESOURCE];
+
+    fn development_setting(&self) -> Option<&'static DevelopmentSetting> {
+        (self.0.to_url().scheme() == "http").then_some(&HTTP_RESOURCE)
+    }
+}
+
 impl ResourceServerConfig {
+    pub fn resource_url(
+        &self,
+        development: Option<&DevelopmentWitness>,
+    ) -> Result<&Url, registry_platform_config::DevelopmentOnlyRefused> {
+        self.resource.get(development).map(|value| &value.0)
+    }
+
     /// The runtime options passed to the product-neutral authenticated edge.
-    #[must_use]
     pub fn options(
         &self,
+        development: Option<&DevelopmentWitness>,
         resource_name: impl Into<String>,
         principal_audit_namespace: impl Into<String>,
         client_audit_namespace: impl Into<String>,
-    ) -> ResourceServerOptions {
-        ResourceServerOptions {
-            resource: self.resource.as_str().to_owned(),
+    ) -> Result<ResourceServerOptions, registry_platform_config::DevelopmentOnlyRefused> {
+        Ok(ResourceServerOptions {
+            resource: self.resource_url(development)?.as_str().to_owned(),
             issuer: self.issuer.as_str().to_owned(),
             allow_insecure_http: self.allow_insecure_http,
             algorithms: self.algorithms.iter().copied().collect(),
@@ -134,7 +169,7 @@ impl ResourceServerConfig {
             resource_name: resource_name.into(),
             principal_audit_namespace: principal_audit_namespace.into(),
             client_audit_namespace: client_audit_namespace.into(),
-        }
+        })
     }
 
     /// Validate the authored resource-server boundary shared by every MCP
@@ -142,50 +177,67 @@ impl ResourceServerConfig {
     #[must_use]
     pub fn validate(
         &self,
-        development_loopback: bool,
+        allow_http_resource: bool,
         secret_providers: &SecretProvidersConfig,
+        development: Option<&DevelopmentWitness>,
     ) -> Vec<ResourceServerConfigError> {
         let mut errors = Vec::new();
-        let resource = self.resource.to_url();
-        if !protected_endpoint(&resource, development_loopback) {
+        if let Ok(resource) = self.resource_url(development) {
+            let resource = resource.to_url();
+            if !protected_endpoint(&resource, allow_http_resource) {
+                errors.push(ResourceServerConfigError::InsecureResource);
+            } else if resource.query().is_some() || resource.fragment().is_some() {
+                errors.push(ResourceServerConfigError::InvalidResource);
+            }
+            if resource.path() != MCP_PATH {
+                errors.push(ResourceServerConfigError::ResourceNotMcpEndpoint);
+            }
+        } else if !allow_http_resource {
             errors.push(ResourceServerConfigError::InsecureResource);
-        } else if resource.query().is_some() || resource.fragment().is_some() {
-            errors.push(ResourceServerConfigError::InvalidResource);
-        }
-        if resource.path() != MCP_PATH {
-            errors.push(ResourceServerConfigError::ResourceNotMcpEndpoint);
         }
 
         let issuer = self.issuer.to_url();
-        if !issuer_endpoint(&issuer, development_loopback, self.allow_insecure_http) {
+        if !issuer_endpoint(&issuer, self.allow_insecure_http) {
             errors.push(ResourceServerConfigError::InsecureIssuer);
         } else if issuer.query().is_some() || issuer.fragment().is_some() {
             errors.push(ResourceServerConfigError::InvalidIssuer);
         }
 
-        if let Err(error) = self.jwks_source.check_with_insecure_http(
-            "resourceServer.jwksSource",
-            development_loopback,
-            self.allow_insecure_http,
-        ) {
-            errors.push(ResourceServerConfigError::JwksSource(error));
-        }
-        if let Some(document_ref) = self.jwks_source.document_ref() {
-            if let Err(error) = secret_providers
-                .check_reference("resourceServer.jwksSource.documentRef", document_ref)
-            {
-                errors.push(ResourceServerConfigError::JwksDocumentReference(error));
+        if let Ok(source) = self.jwks_source.get(development) {
+            if let Err(error) = source.check_with_insecure_http(
+                "resourceServer.jwksSource",
+                true,
+                self.allow_insecure_http,
+            ) {
+                errors.push(ResourceServerConfigError::JwksSource(error));
+            }
+            if let Some(document_ref) = source.document_ref() {
+                if let Err(error) = secret_providers
+                    .check_reference("resourceServer.jwksSource.documentRef", document_ref)
+                {
+                    errors.push(ResourceServerConfigError::JwksDocumentReference(error));
+                }
             }
         }
         errors
     }
 
-    /// Value-free operational warning for the explicit insecure opt-in.
-    #[must_use]
-    pub fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.allow_insecure_http.then_some(
-            "resourceServer.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-        )
+    /// Record the published HTTP issuer in the deployment report.
+    pub fn record_posture(&self, report: &mut PostureReport) {
+        static HTTP_ISSUER: DevelopmentSetting = DevelopmentSetting {
+            code: "platform.posture.mcp-http-published-issuer",
+            key: "issuer",
+            summary: "The published resource server issuer is plain http",
+            production: "Use an https issuer.",
+        };
+        if self.issuer.to_url().scheme() == "http" {
+            report.record(FoundSetting {
+                setting: &HTTP_ISSUER,
+                pointer: Some("/resourceServer/issuer".to_owned()),
+                position: None,
+                origin: SettingOrigin::RuntimeFile,
+            });
+        }
     }
 }
 
@@ -202,17 +254,26 @@ pub enum ResourceServerConfigError {
     JwksDocumentReference(ConfigBlockError),
 }
 
-fn protected_endpoint(url: &url::Url, development_loopback: bool) -> bool {
-    url.host().is_some()
-        && (url.scheme() == "https"
-            || development_loopback && url.scheme() == "http" && is_loopback(url))
+fn default_jwks_source() -> Gated<JwksSource> {
+    Gated::everywhere(JwksSource::default()).expect("discovery is valid in every posture")
 }
 
-fn issuer_endpoint(url: &url::Url, development_loopback: bool, allow_insecure_http: bool) -> bool {
+fn deserialize_insecure_http<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<bool, D::Error> {
+    Gated::<InsecureHttp>::deserialize(deserializer)
+        .map(|value| value.development_setting().is_some())
+}
+
+fn protected_endpoint(url: &url::Url, allow_http_resource: bool) -> bool {
+    url.host().is_some()
+        && (url.scheme() == "https" || allow_http_resource && url.scheme() == "http")
+}
+
+fn issuer_endpoint(url: &url::Url, allow_insecure_http: bool) -> bool {
     url.host().is_some()
         && (url.scheme() == "https"
-            || url.scheme() == "http"
-                && (allow_insecure_http || development_loopback && is_loopback(url)))
+            || url.scheme() == "http" && (allow_insecure_http || is_loopback(url)))
 }
 
 fn is_loopback(url: &url::Url) -> bool {
@@ -235,8 +296,7 @@ fn default_maximum_token_lifetime() -> BoundedU64<1, MAXIMUM_TOKEN_LIFETIME_SECO
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExchangeConfig {
     /// The authorization server's token endpoint. An https URL with no query
-    /// or fragment; plain http is accepted only on a loopback host under
-    /// `development-loopback`.
+    /// or fragment; plain HTTP is accepted on loopback in both postures.
     pub token_endpoint: Url,
     /// The gateway's client identifier at the authorization server. It may
     /// not also be one of `resourceServer.allowedClients`.
@@ -485,9 +545,9 @@ mod tests {
 
     fn resource_server() -> ResourceServerConfig {
         ResourceServerConfig {
-            resource: Url::new("https://gateway.example.test/mcp").expect("resource"),
+            resource: test_resource("https://gateway.example.test/mcp"),
             issuer: Url::new("https://login.example.test").expect("issuer"),
-            jwks_source: JwksSource::Discovery {},
+            jwks_source: default_jwks_source(),
             allow_insecure_http: false,
             algorithms: UniqueList::new(vec![AccessTokenAlgorithm::EdDSA]).expect("algorithms"),
             allowed_clients: UniqueList::new(vec![ExternalId::new("chat-host").expect("client")])
@@ -501,6 +561,10 @@ mod tests {
         }
     }
 
+    fn test_resource(url: impl AsRef<str>) -> Gated<PublishedResource> {
+        serde_json::from_value(serde_json::json!(url.as_ref())).expect("resource URL")
+    }
+
     fn secret_providers() -> SecretProvidersConfig {
         SecretProvidersConfig {
             environment: Some(EnvironmentSecretProviderConfig {}),
@@ -511,7 +575,9 @@ mod tests {
     #[test]
     fn resource_options_preserve_the_authored_identity_and_algorithms() {
         let config = resource_server();
-        let options = config.options("Address correction", "mcp.principal", "mcp.client");
+        let options = config
+            .options(None, "Address correction", "mcp.principal", "mcp.client")
+            .unwrap();
         assert_eq!(options.resource, "https://gateway.example.test/mcp");
         assert_eq!(options.issuer, "https://login.example.test");
         assert_eq!(options.algorithms, vec![AccessTokenAlgorithm::EdDSA]);
@@ -523,41 +589,33 @@ mod tests {
     #[test]
     fn authored_resource_validation_is_shared_and_development_is_explicit() {
         let mut config = resource_server();
-        config.resource = Url::new("http://127.0.0.1:8110/mcp").expect("loopback resource");
+        config.resource = test_resource("http://127.0.0.1:8110/mcp");
         config.issuer = Url::new("http://localhost:8111").expect("loopback issuer");
         assert!(config
-            .validate(false, &secret_providers())
+            .validate(false, &secret_providers(), None)
             .iter()
             .any(|error| { matches!(error, ResourceServerConfigError::InsecureResource) }));
-        assert!(config
-            .validate(false, &secret_providers())
-            .iter()
-            .any(|error| { matches!(error, ResourceServerConfigError::InsecureIssuer) }));
-        assert!(config.validate(true, &secret_providers()).is_empty());
+
+        assert!(config.validate(true, &secret_providers(), None).is_empty());
     }
 
     #[test]
-    fn development_loopback_admits_only_the_loopback_forms() {
+    fn unsecured_issuer_transport_admits_only_the_loopback_forms() {
         for host in ["127.0.0.2", "[::1]", "LOCALHOST", "[::ffff:127.0.0.1]"] {
             let mut config = resource_server();
-            config.resource = Url::new(format!("http://{host}:8110/mcp")).expect("resource");
+            config.resource = test_resource(format!("http://{host}:8110/mcp"));
             config.issuer = Url::new(format!("http://{host}:8111")).expect("issuer");
             assert!(
-                config.validate(true, &secret_providers()).is_empty(),
+                config.validate(true, &secret_providers(), None).is_empty(),
                 "{host}"
             );
         }
         for host in ["localhost.", "app.localhost", "10.0.0.1"] {
             let mut config = resource_server();
-            config.resource = Url::new(format!("http://{host}:8110/mcp")).expect("resource");
+            config.resource = test_resource(format!("http://{host}:8110/mcp"));
             config.issuer = Url::new(format!("http://{host}:8111")).expect("issuer");
-            let errors = config.validate(true, &secret_providers());
-            assert!(
-                errors
-                    .iter()
-                    .any(|error| matches!(error, ResourceServerConfigError::InsecureResource)),
-                "{host}"
-            );
+            let errors = config.validate(true, &secret_providers(), None);
+
             assert!(
                 errors
                     .iter()
@@ -570,11 +628,12 @@ mod tests {
     #[test]
     fn authored_resource_validation_reports_the_mcp_path_and_static_secret() {
         let mut config = resource_server();
-        config.resource = Url::new("https://gateway.example.test/other").expect("other path");
-        config.jwks_source = JwksSource::Static {
+        config.resource = test_resource("https://gateway.example.test/other");
+        config.jwks_source = Gated::everywhere(JwksSource::Static {
             document_ref: "secret:file/jwks".to_owned(),
-        };
-        let errors = config.validate(false, &secret_providers());
+        })
+        .unwrap();
+        let errors = config.validate(false, &secret_providers(), None);
         assert!(errors
             .iter()
             .any(|error| { matches!(error, ResourceServerConfigError::ResourceNotMcpEndpoint) }));

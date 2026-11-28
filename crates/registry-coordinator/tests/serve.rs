@@ -60,6 +60,8 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_status_and_lease(
             "serve",
             "--runtime-config",
             "/tmp/runtime.yaml",
+            "--posture",
+            "development",
         ])
         .env("CTL_BIN", env!("CARGO_BIN_EXE_coordinatorctl"))
         .env("COORDINATOR_BIN", &binary)
@@ -85,7 +87,7 @@ fn unmanaged_serve_preserves_runtime_arguments_streams_process_status_and_lease(
     assert_eq!(fs::read_to_string(lease).unwrap(), "lease-inherited\n");
     assert_eq!(
         fs::read_to_string(capture).unwrap(),
-        format!("{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\n")
+        format!("{expected_pid}\n--runtime-config\n/tmp/runtime.yaml\n--posture\ndevelopment\n")
     );
 }
 
@@ -100,6 +102,7 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
     .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
         .args(["serve", "--runtime-config", "/tmp/path.yaml"])
+        .env_remove("REGISTRY_STACK_POSTURE")
         .env("PATH", path)
         .env("RUNTIME_CAPTURE", &capture)
         .env_remove("COORDINATOR_BIN")
@@ -136,6 +139,7 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_coordinatorctl"))
         .args(["serve", "--runtime-config", "/tmp/managed.yaml"])
+        .env("REGISTRY_STACK_POSTURE", "development")
         .env("PATH", poisoned_path)
         .env("RUNTIME_CAPTURE", &capture)
         .env("RSTACK_GENERATION_DIR", &generation)

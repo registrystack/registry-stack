@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn render_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_registry-render"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
+    command.env_remove("REGISTRY_STACK_POSTURE");
+    command
 }
 
 fn tempdir() -> PathBuf {
@@ -1117,6 +1119,11 @@ fn openapi_document_has_no_drift() {
     for path in expected_paths {
         assert!(paths.contains_key(path), "missing {path}: {paths:?}");
     }
+    assert_eq!(
+        paths["/ready"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+            ["required"],
+        serde_json::json!(["status", "posture", "developmentSettings"])
+    );
     let render = &paths["/v1/render/{type}"]["post"];
     assert!(
         render["security"][0]["bearerAuth"].is_array(),

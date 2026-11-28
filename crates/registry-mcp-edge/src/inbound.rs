@@ -50,8 +50,7 @@ pub struct ResourceServerOptions {
     /// and protected-resource metadata. URL parsing validates this value but
     /// must not normalize it, because JWT issuer matching is exact.
     pub issuer: String,
-    /// Permit a non-loopback HTTP issuer for an explicitly insecure deployment.
-    /// The protected resource URL remains HTTPS or loopback HTTP only.
+    /// Permit a non-loopback HTTP issuer when the process declares development.
     pub allow_insecure_http: bool,
     pub algorithms: Vec<AccessTokenAlgorithm>,
     pub allowed_clients: Vec<String>,
@@ -69,7 +68,13 @@ impl ResourceServerOptions {
     /// Validates resource admission settings without constructing a verifier,
     /// acquiring credentials, or opening a socket.
     pub fn validate(&self) -> Result<(), ResourceServerError> {
-        validate_options(self)
+        validate_options(self, None)
+    }
+    pub fn validate_with_posture(
+        &self,
+        posture: registry_platform_config::Posture,
+    ) -> Result<(), ResourceServerError> {
+        validate_options(self, Some(posture))
     }
 }
 
@@ -296,6 +301,26 @@ impl ResourceServer {
         limits: RateLimitOptions,
     ) -> Result<Self, ResourceServerError> {
         options.validate()?;
+        Self::build(options, verifier, hasher, limits)
+    }
+
+    pub fn new_with_posture(
+        options: &ResourceServerOptions,
+        verifier: TokenVerifier,
+        hasher: AuditKeyHasher,
+        limits: RateLimitOptions,
+        posture: registry_platform_config::Posture,
+    ) -> Result<Self, ResourceServerError> {
+        options.validate_with_posture(posture)?;
+        Self::build(options, verifier, hasher, limits)
+    }
+
+    fn build(
+        options: &ResourceServerOptions,
+        verifier: TokenVerifier,
+        hasher: AuditKeyHasher,
+        limits: RateLimitOptions,
+    ) -> Result<Self, ResourceServerError> {
         let resource = Url::parse(&options.resource).map_err(|_| ResourceServerError::Resource)?;
         let metadata_url = metadata_url(&resource).ok_or(ResourceServerError::Resource)?;
         let challenge = format!("Bearer resource_metadata=\"{metadata_url}\"");
@@ -480,17 +505,23 @@ impl ResourceServer {
     }
 }
 
-fn validate_options(options: &ResourceServerOptions) -> Result<(), ResourceServerError> {
+fn validate_options(
+    options: &ResourceServerOptions,
+    posture: Option<registry_platform_config::Posture>,
+) -> Result<(), ResourceServerError> {
     let Ok(resource) = Url::parse(&options.resource) else {
         return Err(ResourceServerError::Resource);
     };
-    if !valid_protected_url(&resource) || resource.path() != crate::MCP_PATH {
+    if !valid_protected_url(&resource, posture) || resource.path() != crate::MCP_PATH {
         return Err(ResourceServerError::Resource);
     }
     let Ok(issuer) = Url::parse(&options.issuer) else {
         return Err(ResourceServerError::Issuer);
     };
-    if !valid_issuer_url(&issuer, options.allow_insecure_http) {
+    if (posture == Some(registry_platform_config::Posture::Production)
+        && (options.allow_insecure_http || issuer.scheme() != "https"))
+        || !valid_issuer_url(&issuer, options.allow_insecure_http)
+    {
         return Err(ResourceServerError::Issuer);
     }
     if options.algorithms.is_empty()
@@ -508,11 +539,17 @@ fn validate_options(options: &ResourceServerOptions) -> Result<(), ResourceServe
     Ok(())
 }
 
-fn valid_protected_url(url: &Url) -> bool {
+fn valid_protected_url(url: &Url, posture: Option<registry_platform_config::Posture>) -> bool {
+    use registry_platform_config::Posture;
+    let http_allowed = match posture {
+        Some(Posture::Development) => true,
+        Some(Posture::Production) => false,
+        None => loopback(url),
+    };
     url.host().is_some()
         && url.query().is_none()
         && url.fragment().is_none()
-        && (url.scheme() == "https" || url.scheme() == "http" && loopback(url))
+        && (url.scheme() == "https" || url.scheme() == "http" && http_allowed)
 }
 
 fn valid_issuer_url(url: &Url, allow_insecure_http: bool) -> bool {

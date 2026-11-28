@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: An undeclared posture is production. Migration: Set REGISTRY_STACK_POSTURE=development for laptop and test runs; rstack dev sets it for you.
+- BREAKING: `check` without a declared posture reports development settings as errors. Migration: Pass --posture development, or set REGISTRY_STACK_POSTURE, when checking a laptop file.
+- BREAKING: `discoveryctl --allow-loopback` is removed and the runtime refuses loopback URLs in production. Migration: Use --posture development for local catalogs, and publish https URLs for production.
+- BREAKING: `/ready` gains `posture` and `developmentSettings`. Migration: No change for probes that read the status code.
+- BREAKING: Development responses carry `Registry-Posture: development` and production refuses development peers. Migration: Point production runtimes at production peers.
+
 ## 0.47.0 - 2026-11-21
 
 - BREAKING: in `origins.yaml` (`DiscoveryOrigins`), `origins` is a mapping

@@ -191,8 +191,11 @@ pub fn correlation() -> String {
 impl RenderAudit {
     /// Open the configured destination. A file destination takes the
     /// single-writer lock and creates an owner-only parent directory.
-    pub async fn open(destination: AuditDestination) -> Result<Self, RenderProblem> {
-        let writer = AuditWriter::open_without_posture(destination)
+    pub async fn open(
+        destination: AuditDestination,
+        posture: registry_platform_config::Posture,
+    ) -> Result<Self, RenderProblem> {
+        let writer = AuditWriter::open(destination, posture)
             .await
             .map_err(|err| {
                 RenderProblem::new(

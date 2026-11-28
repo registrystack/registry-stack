@@ -343,6 +343,25 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
                 "bearer": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
             },
             "schemas": {
+                "ReadyStatus": {
+                    "type": "object",
+                    "required": ["status", "posture", "developmentSettings"],
+                    "properties": {
+                        "status": {"const": "ready"},
+                        "posture": {"enum": ["development", "production"]},
+                        "developmentSettings": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["code", "pointer"],
+                                "properties": {
+                                    "code": {"type": "string"},
+                                    "pointer": {"type": "string"}
+                                }
+                            }
+                        }
+                    }
+                },
                 "Problem": {
                     "type": "object",
                     "additionalProperties": false,

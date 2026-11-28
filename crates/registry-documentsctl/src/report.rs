@@ -158,13 +158,35 @@ impl Serialize for Ordered<'_> {
         for (key, value) in FORMAT {
             map.serialize_entry(key, value)?;
         }
+        let posture = members.get("posture");
         for (key, value) in members {
-            if !named(key) {
+            if !named(key)
+                && (posture.is_none()
+                    || !matches!(key.as_str(), "posture" | "diagnostics" | "outcome"))
+            {
                 map.serialize_entry(key, value)?;
+            }
+        }
+        if let Some(posture) = posture {
+            let member = PostureMember {
+                value: &posture["value"],
+                source: &posture["source"],
+            };
+            map.serialize_entry("posture", &member)?;
+            for key in ["outcome", "diagnostics"] {
+                if let Some(value) = members.get(key) {
+                    map.serialize_entry(key, value)?;
+                }
             }
         }
         map.end()
     }
+}
+
+#[derive(serde::Serialize)]
+struct PostureMember<'a> {
+    value: &'a Value,
+    source: &'a Value,
 }
 
 #[cfg(test)]

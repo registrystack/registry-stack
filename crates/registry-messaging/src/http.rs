@@ -34,6 +34,8 @@
 
 use std::sync::Arc;
 
+use registry_platform_config::{Posture, PostureReport};
+
 use axum::extract::rejection::PathRejection;
 use axum::extract::{FromRequest, Path, Request, State};
 use axum::http::header::{
@@ -55,8 +57,8 @@ use registry_platform_authcommon::{
 };
 use registry_platform_canonical_json::parse_json_strict;
 use registry_platform_httpsec::{
-    normalize_framework_rejection, request_body_limit_default, security_headers_without_posture,
-    CspBuilder, FrameworkRejection, ProblemBody, TraceContext,
+    normalize_framework_rejection, request_body_limit_default, security_headers, CspBuilder,
+    FrameworkRejection, ProblemBody, TraceContext,
 };
 use serde::Serialize;
 
@@ -95,7 +97,7 @@ pub enum Readiness {
 }
 
 impl Readiness {
-    async fn is_ready(&self) -> bool {
+    async fn is_ready(&self, posture: Posture) -> bool {
         match self {
             Self::Store {
                 store,
@@ -107,7 +109,9 @@ impl Readiness {
                     tracing::warn!("the Messaging audit destination is not ready");
                     return false;
                 }
-                match crate::activation::check_runtime(store, database_id, package_digest).await {
+                match crate::activation::check_runtime(store, database_id, package_digest, posture)
+                    .await
+                {
                     Ok(_) => true,
                     Err(error) => {
                         tracing::warn!(error = %error, "the Messaging store is not ready");
@@ -123,6 +127,7 @@ impl Readiness {
 
 #[derive(Clone)]
 pub struct HttpState {
+    pub posture: PostureReport,
     pub authenticator: Arc<MessagingAuthenticator>,
     pub readiness: Readiness,
     pub metrics: Arc<Metrics>,
@@ -208,7 +213,7 @@ pub const OPERATIONS: &[Operation] = &[
         success_status: 200,
         idempotency_key: false,
         request_body: RequestBody::None,
-        response_body: None,
+        response_body: Some("ReadyStatus"),
         problems: &EDGE_PROBLEMS,
     },
     Operation {
@@ -383,6 +388,7 @@ const CALLBACK_PROBLEMS: [ProblemCode; 7] = [
 ];
 
 pub fn router(state: HttpState) -> Router {
+    let posture = state.posture.posture();
     let metrics = Arc::clone(&state.metrics);
     let refusals = Arc::clone(&state.metrics);
     http_edge(
@@ -402,26 +408,32 @@ pub fn router(state: HttpState) -> Router {
             .with_state(state)
             .layer(middleware::from_fn_with_state(refusals, record_refusals))
             .layer(middleware::from_fn_with_state(metrics, count_requests)),
+        posture,
     )
 }
 
 /// The operator-private router the metrics listener serves: the counters,
 /// and the dispatch queue sampled from `store` when there is one.
-pub fn metrics_router(metrics: Arc<Metrics>, store: Option<PostgresStore>) -> Router {
+pub fn metrics_router(
+    metrics: Arc<Metrics>,
+    store: Option<PostgresStore>,
+    posture: Posture,
+) -> Router {
     http_edge(
         Router::new()
             .route(METRICS_PATH, get(serve_metrics))
             .with_state(MetricsState { metrics, store }),
+        posture,
     )
 }
 
-fn http_edge(router: Router) -> Router {
+fn http_edge(router: Router, posture: Posture) -> Router {
     router
         .fallback(route_not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(request_body_limit_default())
         .layer(middleware::from_fn(http_boundary))
-        .layer(security_headers_without_posture(CspBuilder::restrictive()).without_hsts())
+        .layer(security_headers(CspBuilder::restrictive(), posture).without_hsts())
 }
 
 async fn http_boundary(request: axum::http::Request<axum::body::Body>, next: Next) -> Response {
@@ -465,9 +477,11 @@ async fn health() -> StatusCode {
     StatusCode::OK
 }
 
-async fn ready(State(state): State<HttpState>) -> Result<StatusCode, HttpError> {
-    if state.readiness.is_ready().await {
-        Ok(StatusCode::OK)
+async fn ready(State(state): State<HttpState>) -> Result<Json<serde_json::Value>, HttpError> {
+    if state.readiness.is_ready(state.posture.posture()).await {
+        let mut body = state.posture.ready_member();
+        body.insert("status".to_owned(), serde_json::Value::from("ready"));
+        Ok(Json(serde_json::Value::Object(body)))
     } else {
         Err(HttpError::problem(ProblemCode::ServiceUnavailable))
     }
@@ -1263,6 +1277,7 @@ mod tests {
     ) -> HttpState {
         let package = starter_package();
         HttpState {
+            posture: PostureReport::new(crate::config::DEFAULT_POSTURE),
             authenticator: Arc::new(authenticator),
             readiness: Readiness::Fixed(ready),
             metrics: Arc::new(Metrics::default()),
@@ -1445,6 +1460,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn development_marks_readiness_and_the_metrics_listener() {
+        let mut state = state_with(authenticator(), true);
+        state.posture = PostureReport::new(registry_platform_config::DeclaredPosture {
+            posture: Posture::Development,
+            source: registry_platform_config::PostureSource::Flag,
+        });
+        let metrics = metrics_router(Arc::clone(&state.metrics), None, Posture::Development);
+        let ready = call(router(state), "GET", READY_PATH, None).await;
+        assert_eq!(ready.headers()["registry-posture"], "development");
+        let body = to_bytes(ready.into_body(), 4096).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"status":"ready", "posture":"development", "developmentSettings":[]}),
+        );
+        let metrics = call(metrics, "GET", METRICS_PATH, None).await;
+        assert_eq!(metrics.headers()["registry-posture"], "development");
+    }
+
+    #[tokio::test]
     async fn ready_answers_unavailable_when_the_store_is_not_ready() {
         let app = router(state_with(authenticator(), false));
         let headers = expect_problem(
@@ -1469,7 +1503,7 @@ mod tests {
     async fn the_metrics_listener_serves_counters_and_nothing_else() {
         let (app, metrics) = app();
         call(app, "GET", "/v1/messages/m-1", None).await;
-        let metrics_app = metrics_router(metrics, None);
+        let metrics_app = metrics_router(metrics, None, Posture::Production);
         let response = call(metrics_app.clone(), "GET", METRICS_PATH, None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();

@@ -13,6 +13,7 @@
 //! and `status` reports the ledger; both use the runtime credential and
 //! write nothing.
 
+use registry_platform_config::DeclaredPosture;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -73,13 +74,13 @@ struct Loaded {
     resolver: SecretResolver,
 }
 
-fn load(config_path: &Path) -> Result<Loaded> {
+fn load(config_path: &Path, declared: DeclaredPosture) -> Result<Loaded> {
     let config_path =
         fs::canonicalize(config_path).context("resolving the Scheduling runtime configuration")?;
-    let config = crate::project::load_runtime_config(&config_path)?;
+    let config = crate::project::load_runtime_config(&config_path, declared)?;
     let loaded = config
         .load_policy()
-        .map_err(|error| crate::project::runtime_refusal(&config_path, error))?;
+        .map_err(|error| crate::project::runtime_refusal(&config_path, error, declared))?;
     let resolver = crate::records::secret_resolver(&config)?;
     Ok(Loaded {
         config_path,
@@ -98,8 +99,12 @@ fn operator_runtime() -> Result<tokio::runtime::Runtime> {
 }
 
 fn connect_runtime(loaded: &Loaded) -> Result<PostgresStore> {
-    PostgresStore::connect_runtime(&loaded.config.database, &loaded.resolver)
-        .context("the Scheduling runtime database configuration is invalid")
+    PostgresStore::connect_runtime(
+        &loaded.config.database,
+        &loaded.resolver,
+        loaded.config.development_witness(),
+    )
+    .context("the Scheduling runtime database configuration is invalid")
 }
 
 fn hook_payload_retention(config: &RuntimeConfig) -> Duration {
@@ -146,6 +151,7 @@ async fn verify_retained(
         &loaded.config.destinations.hooks,
         &loaded.resolver,
         HookRuntimeIdentity {
+            posture: loaded.config.posture_report().posture(),
             database_id: deployed.database_id,
             package_digest: deployed.package_digest,
             scheduling_id: deployed.scheduling_id,
@@ -203,6 +209,7 @@ fn unanswered_activation(error: &StoreError) -> (&'static str, &'static str) {
 /// The closed code of a refusal apply would raise.
 pub(crate) fn refusal_code(error: &StoreError) -> &'static str {
     match error {
+        StoreError::PostureMismatch { .. } => registry_scheduling::store::POSTURE_MISMATCH,
         StoreError::DatabaseIdMismatch => "schedulingctl.activation.database-id-mismatch",
         StoreError::PackageAlreadyActive { .. } => {
             "schedulingctl.activation.package-already-active"
@@ -237,6 +244,7 @@ fn activation_json(activation: &Activation) -> Value {
         "operatorReferenceHash": activation.operator_reference_hash,
         "backupReferences": activation.backup_references,
         "roleMode": activation.role_mode.as_str(),
+        "posture": activation.posture.as_str(),
         "runtimeRole": activation.runtime_role,
     })
 }
@@ -257,13 +265,14 @@ fn refusing_audit() -> SchedulingAudit {
             Ok(())
         }
     }
-    SchedulingAudit::new(AuditWriter::from_line_sink_without_posture(Box::new(
-        RefusingSink,
-    )))
+    SchedulingAudit::new(AuditWriter::from_line_sink(
+        Box::new(RefusingSink),
+        registry_platform_config::Posture::Production,
+    ))
 }
 
-pub fn plan(config_path: &Path) -> Result<Value> {
-    let loaded = load(config_path)?;
+pub fn plan(config_path: &Path, declared: DeclaredPosture) -> Result<Value> {
+    let loaded = load(config_path, declared)?;
     let store = connect_runtime(&loaded)?;
     let runtime = operator_runtime()?;
     let audit = refusing_audit();
@@ -274,6 +283,7 @@ pub fn plan(config_path: &Path) -> Result<Value> {
             loaded.config.database_id(),
             &loaded.package_digest,
             &loaded.policy,
+            declared.posture,
             |deployed| async {
                 let schema = store.schema_name().await?;
                 verify_retained(&loaded, &store, &audit, &schema, deployed).await
@@ -294,7 +304,14 @@ pub fn plan(config_path: &Path) -> Result<Value> {
     let mut refusals = plan
         .refusals
         .iter()
-        .map(|refusal| json!({"code": refusal_code(refusal), "message": refusal.to_string()}))
+        .map(|refusal| {
+            let mut diagnostic =
+                json!({"code": refusal_code(refusal), "message": refusal.to_string()});
+            if let StoreError::PostureMismatch { action, .. } = refusal {
+                diagnostic["suggestedAction"] = json!(action);
+            }
+            diagnostic
+        })
         .collect::<Vec<_>>();
     // Validate the candidate's signing inventory without changing the
     // deployment. Use the same reminder activation as the serving runtime.
@@ -376,8 +393,9 @@ pub fn apply(
     config_path: &Path,
     operator_reference: Option<&str>,
     backups: &[String],
+    declared: DeclaredPosture,
 ) -> Result<Value> {
-    apply_audited(config_path, operator_reference, backups, None)
+    apply_audited(config_path, operator_reference, backups, None, declared)
 }
 
 /// Apply with the schedulingctl audit written to `sink` instead of the
@@ -390,7 +408,13 @@ pub fn apply_with_audit_sink(
     backups: &[String],
     sink: Box<dyn io::Write + Send>,
 ) -> Result<Value> {
-    apply_audited(config_path, operator_reference, backups, Some(sink))
+    apply_audited(
+        config_path,
+        operator_reference,
+        backups,
+        Some(sink),
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )
 }
 
 fn apply_audited(
@@ -398,11 +422,16 @@ fn apply_audited(
     operator_reference: Option<&str>,
     backups: &[String],
     sink: Option<Box<dyn io::Write + Send>>,
+    declared: DeclaredPosture,
 ) -> Result<Value> {
-    let loaded = load(config_path)?;
+    let loaded = load(config_path, declared)?;
     let runtime_store = connect_runtime(&loaded)?;
-    let store = PostgresStore::connect_migration(&loaded.config.database, &loaded.resolver)
-        .context("the Scheduling migration database configuration is invalid")?;
+    let store = PostgresStore::connect_migration(
+        &loaded.config.database,
+        &loaded.resolver,
+        loaded.config.development_witness(),
+    )
+    .context("the Scheduling migration database configuration is invalid")?;
     let runtime = operator_runtime()?;
     let runtime_role = runtime
         .block_on(runtime_store.current_user())
@@ -424,6 +453,7 @@ fn apply_audited(
     candidate_hooks(
         &loaded,
         HookRuntimeIdentity {
+            posture: loaded.config.posture_report().posture(),
             database_id: loaded.config.database_id().to_owned(),
             package_digest: loaded.package_digest.clone(),
             scheduling_id: loaded.policy.project.id.to_string(),
@@ -440,7 +470,7 @@ fn apply_audited(
         ))
         .context("opening the schedulingctl audit destination")?;
     let audit = match sink {
-        Some(sink) => SchedulingAudit::new(AuditWriter::from_line_sink_without_posture(sink)),
+        Some(sink) => SchedulingAudit::new(AuditWriter::from_line_sink(sink, declared.posture)),
         None => audit,
     };
     let activation_id = Uuid::new_v4();
@@ -468,6 +498,7 @@ fn apply_audited(
         .context("writing the activation.apply request audit entry; nothing was applied")?;
 
     let request = ActivationRequest {
+        posture: declared.posture,
         activation_id,
         package_digest: &loaded.package_digest,
         database_id: loaded.config.database_id(),
@@ -570,8 +601,8 @@ fn record_response(
         .map_err(anyhow::Error::new)
 }
 
-pub fn status(config_path: &Path) -> Result<Value> {
-    let loaded = load(config_path)?;
+pub fn status(config_path: &Path, declared: DeclaredPosture) -> Result<Value> {
+    let loaded = load(config_path, declared)?;
     let store = connect_runtime(&loaded)?;
     let runtime = operator_runtime()?;
     let history = runtime
@@ -602,6 +633,16 @@ pub fn status(config_path: &Path) -> Result<Value> {
         "pendingSchemaVersions": schema.pending,
         "roleMode": role_mode.map(RoleMode::as_str),
     });
+    if let Some(StoreError::PostureMismatch { message, action }) =
+        history.last().and_then(|active| {
+            registry_scheduling::store::posture_mismatch(active.posture, declared.posture)
+        })
+    {
+        report["diagnostics"] = json!([{
+            "severity": "warning", "code": registry_scheduling::store::POSTURE_MISMATCH,
+            "path": "/database", "message": message, "suggestedAction": action,
+        }]);
+    }
     if role_mode == Some(RoleMode::Single) {
         report["roleModeStatement"] = json!(SINGLE_ROLE_STATEMENT);
     }

@@ -31,6 +31,7 @@
 //! sends the stale reminder, and the receiver gets no ordering promise
 //! across processes: that is inherent to at-least-once delivery.
 
+use registry_platform_config::DeclaredPosture;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::num::NonZeroUsize;
@@ -102,34 +103,54 @@ pub fn command() -> Command {
                 .help("Runtime configuration file")
                 .required(true),
         )
+        .arg(
+            Arg::new("posture")
+                .long("posture")
+                .global(true)
+                .value_name("POSTURE")
+                .help("Declared posture: development or production. Unset means production."),
+        )
         .subcommand_required(true)
         .subcommand(Command::new("serve").about("Run the Scheduling HTTP service"))
 }
 
-pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
+pub async fn run(
+    matches: &clap::ArgMatches,
+    declared: DeclaredPosture,
+) -> Result<(), RuntimeError> {
     let path = matches
         .get_one::<String>("runtime-config")
         .ok_or(RuntimeError::Arguments)?;
     match matches.subcommand_name() {
-        Some("serve") => serve_from_path(path).await,
+        Some("serve") => serve_from_path(path, declared).await,
         _ => Err(RuntimeError::Arguments),
     }
 }
 
 /// Name the provisioning or startup act a store failure happened in.
 fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
-    move |source| RuntimeError::Database { stage, source }
+    move |source| match source {
+        StoreError::DatabaseTransport(error) => RuntimeError::DatabaseTransport(error),
+        StoreError::PostureMismatch { message, action } => {
+            RuntimeError::PostureMismatch { message, action }
+        }
+        source => RuntimeError::Database { stage, source },
+    }
 }
 
-pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
+pub async fn serve_from_path(
+    path: impl AsRef<Path>,
+    declared: DeclaredPosture,
+) -> Result<(), RuntimeError> {
     let path = path.as_ref();
     let config =
-        RuntimeConfig::load(path).map_err(|error| {
-            match crate::config::startup_report(path, &error) {
+        RuntimeConfig::load(path, declared).map_err(
+            |error| match crate::config::startup_report(path, &error, declared) {
                 Some(report) => RuntimeError::ConfigurationRefused(report),
                 None => RuntimeError::Config(error),
-            }
-        })?;
+            },
+        )?;
+    config.posture_report().log_startup();
     let loaded = config.load_policy()?;
     let package_digest = loaded.package_digest;
     tracing::info!(package_digest = %package_digest, "verified Scheduling package");
@@ -137,9 +158,10 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let scheduling_id = policy.project.id.to_string();
     let policy_digest = policy.policy_digest();
     let secrets = secret_resolver(&config)?;
-    let store = PostgresStore::connect_runtime(&config.database, &secrets)
-        .map_err(database_step("runtime database configuration"))?
-        .with_busy_source_profiles(&config.authentication.oidc.busy_import_profiles);
+    let store =
+        PostgresStore::connect_runtime(&config.database, &secrets, config.development_witness())
+            .map_err(database_step("runtime database configuration"))?
+            .with_busy_source_profiles(&config.authentication.oidc.busy_import_profiles);
     store
         .ready()
         .await
@@ -150,6 +172,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // the ledger recorded, and writes no activation state of its own.
     let active = store
         .check_active_package(&crate::store::ActivePackage {
+            posture: declared.posture,
             database_id: config.database_id(),
             package_digest: &package_digest,
         })
@@ -223,6 +246,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         &config.destinations.hooks,
         &secrets,
         HookRuntimeIdentity {
+            posture: declared.posture,
             database_id: config.database_id().to_owned(),
             package_digest: package_digest.clone(),
             scheduling_id: scheduling_id.clone(),
@@ -255,11 +279,18 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .map_err(|_| RuntimeError::HookDelivery)?;
 
     let (verifier, keys) = config.oidc_verifier(&secrets).await?;
-    let authenticator = Arc::new(SchedulingAuthenticator::new(
-        &config.authentication.oidc,
-        verifier,
-        keys,
-    ));
+    let peer_policy = match declared.posture {
+        registry_platform_config::Posture::Production => {
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer
+        }
+        registry_platform_config::Posture::Development => {
+            registry_platform_httputil::PeerPolicy::AcceptDevelopmentPeer
+        }
+    };
+    let authenticator = Arc::new(
+        SchedulingAuthenticator::new(&config.authentication.oidc, verifier, keys)
+            .with_peer_policy(peer_policy),
+    );
 
     // A deployment that lists status authorities resolves every commitment
     // through that exact registry. An unlisted source therefore fails closed
@@ -269,10 +300,11 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let task_grant_status = match &config.task_grant_status {
         Some(TaskGrantStatus::UncheckedFinalFifteenMinutes) => None,
         Some(TaskGrantStatus::Authorities(authorities)) => Some(Arc::new(
-            TaskGrantStatusRegistry::activate_without_peer_policy(
+            TaskGrantStatusRegistry::activate(
                 &crate::config::task_grant_status_endpoints(authorities),
                 &config.authentication.oidc.provider.audience,
                 &secrets,
+                peer_policy,
             )
             .map_err(|_| RuntimeError::TaskGrantStatus)?,
         )),
@@ -415,6 +447,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     }));
 
     let app = router(HttpState {
+        posture: config.posture_report().clone(),
         service,
         authenticator,
     })
@@ -428,7 +461,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let metrics_listener = match &config.metrics_listener {
         Some(metrics_listener) => Some((
             tokio::net::TcpListener::bind(metrics_listener.bind.socket_addr()).await?,
-            metrics_router(metrics, store.clone()),
+            metrics_router(metrics, store.clone(), config.posture_report().posture()),
         )),
         None => None,
     };
@@ -445,6 +478,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
+    #[error("{}: {}\n  next: {}", .0.code(), .0, .0.suggested_action())]
+    DatabaseTransport(registry_platform_config::DatabaseTransportError),
+    #[error("{}: {message}\n  next: {action}", crate::store::POSTURE_MISMATCH)]
+    PostureMismatch {
+        message: &'static str,
+        action: &'static str,
+    },
     #[error("the scheduling command arguments are invalid")]
     Arguments,
     #[error(transparent)]
@@ -609,7 +649,7 @@ pub async fn open_audit(
             .for_process(process)
             .map_err(|error| RuntimeError::AuditDestination(error.to_string()))?;
     }
-    let writer = AuditWriter::open_without_posture(destination)
+    let writer = AuditWriter::open(destination, config.posture_report().posture())
         .await
         .map_err(|error| RuntimeError::AuditDestination(error.operator_description()))?;
     Ok((audit_profile.key_hasher(), SchedulingAudit::new(writer)))
@@ -1480,6 +1520,22 @@ mod tests {
             crate::store::policy_pool_ids(&policy),
             vec!["north".to_owned()]
         );
+    }
+
+    #[test]
+    fn production_reminder_transport_accepts_only_loopback_plaintext() {
+        let secrets =
+            SecretResolver::new([registry_platform_config::SecretProvider::Environment], "")
+                .unwrap();
+        for (host, accepted) in [("127.0.0.1", true), ("10.0.0.5", false)] {
+            let destination = ReminderDestinationConfig {
+                url: format!("http://{host}:8080/reminders"),
+                purpose_urls: Default::default(),
+                bearer_token_ref: None,
+                hmac_sha256_key_ref: None,
+            };
+            assert_eq!(reminder_transport(&destination, &secrets).is_ok(), accepted);
+        }
     }
 
     #[test]

@@ -144,7 +144,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "No verifier, accepted only beside `tlsTermination:\ndevelopment-loopback`. Every finalized version is recorded as\napproved under the `disabled` verifier binding.",
+          "description": "No verifier, accepted only when the process declares development.\nEvery finalized version is recorded as\napproved under the `disabled` verifier binding.",
           "properties": {
             "type": {
               "const": "disabled",
@@ -864,7 +864,10 @@
       "$ref": "#/$defs/CleanupConfig"
     },
     "contentVerification": {
-      "$ref": "#/$defs/ContentVerificationConfig"
+      "$ref": "#/$defs/ContentVerificationConfig",
+      "x-registry-development-only": [
+        "documents.posture.content-verification-disabled"
+      ]
     },
     "database": {
       "$ref": "#/$defs/DatabaseConfig"

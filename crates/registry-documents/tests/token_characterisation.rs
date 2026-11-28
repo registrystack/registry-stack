@@ -213,7 +213,10 @@ audit:
 storage:
   type: database
 contentVerification:
-  type: disabled
+  type: http
+  url: http://127.0.0.1:9/verify
+  authorizationRef: secret:file/verifier-fixture
+  policyId: token-characterisation
 cleanup:
   erasure: active
 destinations:

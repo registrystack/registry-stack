@@ -326,15 +326,31 @@ The table below gives each key. Rules that span keys or services:
   takes the input's identifier, not its API name.
 - `service.reviewBaseUrl` is the review page's `publicOrigin`. Review links take the form
   `<reviewBaseUrl>/proposals/<applicationId>`.
-- Plain `http` URLs are accepted only on a loopback host under
-  `tlsTermination: development-loopback`.
-- A fetched key set may not sit at a loopback, private, or cloud-metadata address. Use
-  `jwksSource.type: static` for an issuer on a private network.
+- The gateway and review service default to production. For a laptop run, start with
+  `rstack dev`, set `REGISTRY_STACK_POSTURE=development`, or pass `--posture development`.
+  Use one posture across the deployment. In production, Registry MCP's Live Adapter client
+  refuses Adapter responses marked as development.
+- Use `tlsTermination: loopback-plaintext` behind a TLS proxy on the same host.
+  Production keeps HSTS and the review page uses secure cookies with `__Host-` names.
+  Use HTTPS for `resourceServer.resource`, `resourceServer.issuer`, `service.reviewBaseUrl`,
+  the review page's `publicOrigin`, and the issuer's discovered `authorization_endpoint`.
+  The review page can fetch discovery from a loopback HTTP `signIn.issuer`.
+- `resourceServer.allowInsecureHttp: true` requires development and permits plain HTTP
+  to a non-loopback issuer and to a configured JWKS URI.
+- For an explicitly configured JWKS URI, HTTPS can reach loopback and private addresses.
+  Plain HTTP works on loopback, and beyond loopback requires `resourceServer.allowInsecureHttp: true`.
+  The fetch policy blocks cloud-metadata addresses.
 
 {/* Evidence: crates/registry-breg-mcp/src/config.rs, RuntimeConfig, REMOVED_KEYS, findings,
     cross_member_findings, audience-reused, exchange-client-admitted-inbound;
     crates/registry-platform-oidc/src/lib.rs, declared_jwks_fetch_policy;
     crates/registry-mcp-edge/src/server.rs, METADATA_PREFIX;
+    crates/registry-mcp-edge/src/config.rs, record_posture, deserialize_insecure_http;
+    crates/registry-platform-config/src/posture.rs, diagnostics;
+    crates/registry-mcp/src/adapter.rs, response_bytes;
+    crates/registry-mcp/src/runtime.rs, build_with_posture;
+    crates/registry-breg-review/src/lib.rs, build;
+    crates/registry-breg-mcp/src/runtime.rs, build_with_posture;
     crates/registry-breg-mcp/src/gateway.rs, prepare_review;
     crates/registry-platform-config/src/blocks.rs, PrivateListenerConfig. */}
 
@@ -389,7 +405,7 @@ Rules that span keys or services:
 - `session.maximumPendingSignIns` must hold every sign-in that `rateLimits.globalSignIn` admits
   within `session.signInLifetimeSeconds`.
 - One citizen holds at most three sessions, and a fourth sign-in ends the oldest.
-- `development-loopback` also drops the `Secure` attribute and the `__Host-` prefix from the
+- `loopback-plaintext` also drops the `Secure` attribute and the `__Host-` prefix from the
   session cookie.
 
 {/* Evidence: crates/registry-breg-review/src/config.rs, RuntimeConfig, REMOVED_KEYS, CALLBACK_PATH,
@@ -439,9 +455,11 @@ Neither service terminates TLS. Your proxy forwards plain HTTP to the private li
 - Rate limits by client address, more tightly on `/signin` and `/signin/callback`. The review page
   reads no peer address, so its `rateLimits.globalSignIn` is shared by everyone.
 
-`GET /health` answers 200 `{"status":"alive"}`. `GET /ready` answers 200 `{"status":"ready"}`
-while the audit journal is writable, and 503 `{"status":"not-ready"}` otherwise. Neither probe
-calls BReg or the issuer.
+`GET /health` answers 200 with `status: "alive"`. While the audit journal is writable,
+`GET /ready` answers 200 with `status: "ready"`, `posture`, and `developmentSettings`.
+Each development setting has a `code` and a configuration `pointer`. When the journal is
+unwritable, readiness answers 503 with `status: "not-ready"`. The probes use local state.
+In development, both services include `Registry-Posture: development` on every response.
 
 {/* Evidence: crates/registry-mcp-edge/src/server.rs, require_resource_host, forbidden, health, ready;
     crates/registry-mcp-edge/src/inbound.rs, authenticate;

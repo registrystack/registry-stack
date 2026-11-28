@@ -349,13 +349,20 @@ fn input_schema(operation: &Operation) -> Value {
     json!({"type":"object","additionalProperties":false,"properties":properties,"required":required})
 }
 
+use registry_platform_config::DeclaredPosture;
+use registry_platform_httputil::PeerPolicy;
+
 impl AdapterContract {
-    fn loaded_bytes_checked(path: &std::path::Path) -> Result<Vec<u8>, AdapterContractLoadError> {
-        let loaded = registry_platform_config::RuntimeConfigLoader::new_without_posture(
+    fn loaded_bytes_checked(
+        path: &std::path::Path,
+        declared: DeclaredPosture,
+    ) -> Result<Vec<u8>, AdapterContractLoadError> {
+        let loaded = registry_platform_config::RuntimeConfigLoader::new(
             registry_platform_config::RuntimeEnvelope {
                 api_version: "id.registrystack.org/formats/adapter/effective-contract/v1alpha1",
                 kind: "AdapterEffectiveContract",
             },
+            declared,
         )
         .load_with::<Value>(path, |_| None)
         .map_err(|error| {
@@ -373,7 +380,8 @@ impl AdapterContract {
     }
 
     fn loaded_bytes(path: &std::path::Path) -> Result<Vec<u8>, InvalidAdapterContract> {
-        Self::loaded_bytes_checked(path).map_err(|_| InvalidAdapterContract)
+        Self::loaded_bytes_checked(path, crate::config::default_posture())
+            .map_err(|_| InvalidAdapterContract)
     }
 
     /// Compatibility loader that compiles every served operation.
@@ -391,9 +399,10 @@ impl AdapterContract {
     pub fn load_bound(
         path: &std::path::Path,
         expected_digest: &str,
+        declared: DeclaredPosture,
         selected_operations: &BTreeSet<String>,
     ) -> Result<Self, InvalidAdapterContract> {
-        Self::load_bound_checked(path, expected_digest, selected_operations)
+        Self::load_bound_checked(path, expected_digest, declared, selected_operations)
             .map_err(|_| InvalidAdapterContract)
     }
 
@@ -401,9 +410,10 @@ impl AdapterContract {
     pub fn load_bound_checked(
         path: &std::path::Path,
         expected_digest: &str,
+        declared: DeclaredPosture,
         selected_operations: &BTreeSet<String>,
     ) -> Result<Self, AdapterContractLoadError> {
-        let bytes = Self::loaded_bytes_checked(path)?;
+        let bytes = Self::loaded_bytes_checked(path, declared)?;
         let document: Document =
             serde_json::from_slice(&bytes).map_err(|_| AdapterContractLoadError::Malformed)?;
         let computed =
@@ -970,6 +980,7 @@ pub struct AdapterProvider {
     contract: AdapterContract,
     bindings: BTreeMap<String, AdapterToolBinding>,
     maximum_response_bytes: u64,
+    peer_policy: PeerPolicy,
 }
 
 impl AdapterProvider {
@@ -979,6 +990,24 @@ impl AdapterProvider {
         bindings: BTreeMap<String, AdapterToolBinding>,
         expected_audience: &str,
         maximum_response_bytes: u64,
+    ) -> Result<Self, InvalidAdapterContract> {
+        Self::new_with_peer_policy(
+            base_url,
+            contract,
+            bindings,
+            expected_audience,
+            maximum_response_bytes,
+            PeerPolicy::RefuseDevelopmentPeer,
+        )
+    }
+
+    pub fn new_with_peer_policy(
+        base_url: Url,
+        contract: AdapterContract,
+        bindings: BTreeMap<String, AdapterToolBinding>,
+        expected_audience: &str,
+        maximum_response_bytes: u64,
+        peer_policy: PeerPolicy,
     ) -> Result<Self, InvalidAdapterContract> {
         contract.validate_binding(&bindings, expected_audience)?;
         if !(1..=1024 * 1024).contains(&maximum_response_bytes) {
@@ -998,6 +1027,7 @@ impl AdapterProvider {
             contract,
             bindings,
             maximum_response_bytes,
+            peer_policy,
         })
     }
 
@@ -1024,6 +1054,7 @@ impl AdapterProvider {
         let request_id = adapter_request_id(response.headers());
         let (_, bytes) = response_bytes(
             response,
+            self.peer_policy,
             MAXIMUM_CONTRACT_BYTES,
             Some(reqwest::StatusCode::OK),
             request_id.as_deref(),
@@ -1124,8 +1155,14 @@ impl AdapterProvider {
         let trace = adapter_request_id(response.headers()).ok_or_else(|| {
             adapter_failure(AdapterFailureClass::ProtocolInvalid, Some(status), None)
         })?;
-        let (status, bytes) =
-            response_bytes(response, self.maximum_response_bytes, None, Some(&trace)).await?;
+        let (status, bytes) = response_bytes(
+            response,
+            self.peer_policy,
+            self.maximum_response_bytes,
+            None,
+            Some(&trace),
+        )
+        .await?;
         let value = decode_response_value(&bytes).map_err(|_| {
             adapter_failure(
                 AdapterFailureClass::ProtocolInvalid,
@@ -1246,6 +1283,7 @@ fn operation_url(
 }
 async fn response_bytes(
     response: reqwest::Response,
+    peer_policy: PeerPolicy,
     maximum: u64,
     expected_status: Option<reqwest::StatusCode>,
     request_id: Option<&str>,
@@ -1256,7 +1294,7 @@ async fn response_bytes(
     } else {
         "application/problem+json"
     };
-    if registry_platform_httputil::validate_response_headers_without_peer_policy(response.headers())
+    if registry_platform_httputil::validate_response_headers(response.headers(), peer_policy)
         .is_err()
         || response
             .headers()
@@ -1385,6 +1423,32 @@ mod response_json_tests {
             decode_response_value(&bytes).expect("schema-valid JSON data"),
             value
         );
+    }
+
+    #[tokio::test]
+    async fn adapter_response_refuses_a_development_peer_in_production() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(|| async {
+                ([("registry-posture", "development")], axum::Json(json!({})))
+            }),
+        );
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for (policy, accepted) in [
+            (super::PeerPolicy::RefuseDevelopmentPeer, false),
+            (super::PeerPolicy::AcceptDevelopmentPeer, true),
+        ] {
+            let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+            assert_eq!(
+                super::response_bytes(response, policy, 128, None, None)
+                    .await
+                    .is_ok(),
+                accepted
+            );
+        }
+        task.abort();
     }
 
     #[test]

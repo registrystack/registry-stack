@@ -469,15 +469,14 @@ decisions:
     subject: A development-only content verifier that approves every version
     decision: >-
       contentVerification may be type disabled, which approves every finalized
-      version without asking a verifier, and the runtime accepts it only when
-      the listener declares development-loopback. Any other listener mode
-      refuses the configuration before anything binds. There is no production
-      state in which content is released unverified.
+      version without asking a verifier. The runtime accepts this setting only
+      when the process declares development. Production refuses the
+      configuration before binding.
     alsoTrue: >-
-      The refusal is the same one that keeps plaintext hook and verifier
-      URLs out of production.
+      Either posture can use loopback HTTP for a verifier or hook destination.
+      Plain HTTP beyond loopback is refused in both postures.
     evidence:
-      - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_development_loopback}
+      - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_declared_development}
   - id: DOCUMENTS-DEC-35
     subject: Only the custodian lists a document's grants
     decision: >-

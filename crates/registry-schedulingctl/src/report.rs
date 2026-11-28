@@ -151,11 +151,25 @@ fn envelope(report: &Value) -> io::Result<Value> {
 }
 
 /// Write one report, envelope members first, and its trailing newline.
+#[cfg(test)]
 pub(crate) fn write(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    write_with_posture(report, stdout, None)
+}
+
+pub(crate) fn write_with_posture(
+    report: &Value,
+    stdout: &mut dyn io::Write,
+    posture: Option<registry_platform_config::DeclaredPosture>,
+) -> io::Result<()> {
     let value = envelope(report)?;
     let report =
         registry_cli_report::Report::new(&value, registry_platform_buildinfo::DISPLAY_VERSION)
             .map_err(io::Error::other)?;
+    let report = if let Some(declared) = posture {
+        report.with_posture(declared)
+    } else {
+        report
+    };
     serde_json::to_writer_pretty(&mut *stdout, &report).map_err(io::Error::other)?;
     writeln!(stdout)
 }

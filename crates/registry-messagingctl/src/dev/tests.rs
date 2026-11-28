@@ -56,7 +56,14 @@ fn the_generated_configuration_is_one_the_runtime_accepts() {
     let path = root.join("runtime.yaml");
     private::create(&path, document.as_bytes()).unwrap();
 
-    let checked = RuntimeConfig::load(&path).unwrap();
+    let checked = RuntimeConfig::load(
+        &path,
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        },
+    )
+    .unwrap();
     assert_eq!(
         checked.load_package().unwrap().package.digest(),
         loaded.package.digest()
@@ -86,7 +93,8 @@ fn the_generated_configuration_is_one_the_runtime_accepts() {
         );
     }
     assert!(document.contains("hmac-sha256-body"));
-    assert!(document.contains("development-loopback"));
+    assert!(document.contains("loopback-plaintext"));
+    assert!(document.contains("development-generated"));
 }
 
 /// An egress allowlist is written from the dev help, so the help names the
@@ -350,7 +358,14 @@ fn borrowed_configuration_uses_scope_and_static_issuer_keys() {
     .unwrap();
     let path = root.join("runtime.yaml");
     private::create(&path, document.as_bytes()).unwrap();
-    let checked = RuntimeConfig::load(&path).unwrap();
+    let checked = RuntimeConfig::load(
+        &path,
+        DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        },
+    )
+    .unwrap();
     assert_eq!(checked.authentication.oidc.scope_claim, "scope");
     assert!(document.contains(&binding.issuer));
     assert!(document.contains(&binding.resource));

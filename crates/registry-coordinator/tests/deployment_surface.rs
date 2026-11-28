@@ -45,7 +45,7 @@ fn immutable_package_closure_tamper_and_abi_are_checked() {
 }
 
 #[test]
-fn runtime_reads_the_explicit_http_issuer_opt_in() {
+fn runtime_reads_the_explicit_http_issuer_opt_in_only_in_development() {
     let runtime_file = tempfile::NamedTempFile::new().unwrap();
     let template = include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml")
         .replace(
@@ -57,7 +57,13 @@ fn runtime_reads_the_explicit_http_issuer_opt_in() {
         include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml")
     );
     fs::write(runtime_file.path(), template).unwrap();
-    let runtime = RuntimeConfig::load(&runtime_file.path().canonicalize().unwrap()).unwrap();
+    let path = runtime_file.path().canonicalize().unwrap();
+    let error = RuntimeConfig::load(&path)
+        .err()
+        .expect("production refuses the opt-in");
+    assert_eq!(error.code, "platform.posture.insecure-issuer-http");
+    let development = registry_platform_config::declared_from(Some("development"), None).unwrap();
+    let runtime = RuntimeConfig::load_with_posture(&path, development).unwrap();
     let authentication = runtime.deployment.unwrap().authentication;
     assert!(authentication.issuer.allow_insecure_http);
     assert!(serde_norway::to_string(&authentication)
@@ -682,7 +688,7 @@ async fn runtime_authenticator_derives_exact_admission_from_policy_keys() {
     policy.subjects = vec!["actual-subject".into()];
     access.policies = [("urn:client:producer.v1".into(), policy)].into();
     let auth = access
-        .authenticator(&runtime.secret_providers, true)
+        .authenticator(&runtime.secret_providers)
         .await
         .unwrap();
     for (client, scopes, permitted) in [
@@ -712,4 +718,59 @@ async fn runtime_authenticator_derives_exact_admission_from_policy_keys() {
         }
     }
     issuer.stop().await;
+}
+
+#[test]
+fn check_production_refuses_development_settings_and_conflicting_declarations() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("runtime.yaml");
+    let contents = include_str!("../../../products/coordinator/examples/single-flow-runtime.yaml");
+    let contents = contents.replace(
+        "database:\n",
+        "database:\n  transport: private-network-plaintext\n",
+    );
+    std::fs::write(&config, contents).unwrap();
+    for (flags, environment, exit, code) in [
+        (
+            &["--posture", "development"][..],
+            None,
+            2,
+            "platform.posture.conflict",
+        ),
+        (&[][..], Some("development"), 2, "platform.posture.conflict"),
+        (
+            &[][..],
+            None,
+            1,
+            "platform.posture.database-private-plaintext",
+        ),
+    ] {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_coordinatorctl"));
+        command.env_remove("REGISTRY_STACK_POSTURE");
+        if let Some(value) = environment {
+            command.env("REGISTRY_STACK_POSTURE", value);
+        }
+        let output = command
+            .args([
+                "--format",
+                "json",
+                "check",
+                "--production",
+                "--runtime-config",
+            ])
+            .arg(&config)
+            .args(flags)
+            .output()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(output.status.code(), Some(exit), "{report}");
+        assert!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| finding["code"] == code),
+            "{report}"
+        );
+    }
 }

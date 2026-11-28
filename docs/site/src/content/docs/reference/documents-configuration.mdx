@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-17"
+last_reviewed: "2026-11-27"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -99,6 +99,25 @@ Expressions are refused in or under members whose names end in `Ref` and in secr
     products/documents/generated/runtime/runtime.schema.json. */}
 {/* TODO[evidence]: the one-mebibyte limit and the group-or-other-writable refusal need a cited constant or test. */}
 
+## Deployment posture
+
+Declare `development` or `production` with `REGISTRY_STACK_POSTURE` or `--posture`.
+An undeclared posture is production. If you set both, use the same value.
+Run `rstack dev` for development, or declare it on the command you run. The
+`check` command reports development settings as warnings in development and
+errors in production. `check --production` declares production.
+
+Use `listener.tlsTermination: loopback-plaintext` for a loopback bind. Configure
+PostgreSQL separately with `database.transport`. Its default is `verified-tls`.
+Use `loopback-plaintext` for a socket or a loopback host, or
+`private-network-plaintext` in development for a private-network host. A
+loopback HTTP issuer needs no exception. `allowInsecureHttp: true` and
+`jwksSource.type: test-issuer` require development.
+
+{/* Evidence: crates/registry-platform-posture/src/lib.rs declared_from;
+    crates/registry-platform-config/src/blocks.rs DatabaseTransport, plaintext_permitted, OidcIssuerConfig;
+    crates/registry-documents/src/config.rs loader_with_posture, check_database. */}
+
 ## Runtime keys
 
 The runtime reads and checks every key in the schema.
@@ -111,7 +130,7 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   `package.expectedDigest` optionally pins it.
 - `listener.bind` is the socket address the HTTP listener binds.
   The starter uses `127.0.0.1:8116`.
-- `listener.tlsTermination` is `operator-controlled-upstream` behind a TLS proxy, or `development-loopback` for local work only.
+- `listener.tlsTermination` is `operator-controlled-upstream` behind a TLS proxy, or `loopback-plaintext` for a loopback bind.
 - `listener.networkExposure` is the shared network exposure declaration for the listener.
 - `metricsListener.bind` is optional and absent by default.
   When it is present, `/metrics` is served on that socket only, and the document listener never routes it.
@@ -130,7 +149,7 @@ The other blocks are checked, so a deployment written now keeps its meaning when
 - `database.caBundleRef` is an optional secret reference to a PEM bundle of the CA certificates that sign the database certificate, for a private CA.
   When it is set, these are the only roots trusted; when it is omitted, the system's trusted roots are used.
 - `database.testOnlyPlaintext` is accepted only by builds with the `postgres-test` feature, for the PostgreSQL test suites.
-  An operator build refuses it with `documents.runtime.plaintext-database`, so a local run needs a database that serves TLS too.
+  An operator build refuses it with `platform.database.test-only-plaintext`.
 - `authentication.oidc` is the shared OIDC issuer block (`issuer`, `audience`, `jwksSource`), with `allowedClients` and `scopeClaim` (default `scope`).
   `allowedClients` is required. Write `from-package` to admit exactly the `requesterClients` of the package's access profiles, so the clients are written once, in `documents.yaml`. A list is also accepted, and it must include every client an access profile names, or the runtime refuses to start with `documents.runtime.profile-client-not-allowed`. Clients in the list that no profile names are admitted by the verifier but reach no profile. `unrestricted` and an empty list are refused.
   Each client named under `assertionIssuers` must be one of the admitted clients, or the runtime refuses to start with `documents.runtime.assertion-issuer-client-not-allowed`.
@@ -146,7 +165,7 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   Startup refuses a package whose policy asks for more.
   The storage binding is pinned at the first upload, and a later start under another backend, bucket, or scope is refused.
 - `contentVerification` is `type: http` with `url`, `authorizationRef`, `policyId`, and `attemptTimeoutMilliseconds` (100 to 60000).
-  `type: disabled` is accepted only beside `tlsTermination: development-loopback`.
+  `type: disabled` is accepted only in the development posture.
 - `transfers.minimumDeadlineSeconds` is 1 to 3600, default 60: the deadline of the smallest upload or download.
 - `transfers.mebibyteAllowanceSeconds` is 1 to 600, default 8: the time added to a transfer's deadline for every started mebibyte of the document.
 - `cleanup.erasure` is `active` or `paused`.
@@ -155,8 +174,7 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   Each entry takes `url`, `hmacSha256KeyRef`, `attemptTimeoutMilliseconds` (100 to 10000, 5000 when omitted), and `maximumAttempts` (1 to 20, 8 when omitted), with at most 128 destinations.
   Set the optional `previousHmacSha256KeyRef` to keep signing with the previous key during rotation.
   Startup refuses a project hook whose destination is not bound here and any unavailable, invalid, or repeated signing key.
-  Plain `http` needs both a loopback address (`127.0.0.1`, `localhost`, or `[::1]`) and `listener.tlsTermination: development-loopback`.
-  Without the listener mode it is refused with `documents.runtime.insecure-url`, and a non-loopback `http` address is refused at startup.
+  S3, verifier and hook URLs accept HTTPS or HTTP over loopback in either posture. Other HTTP hosts are refused with `documents.runtime.insecure-url`.
   A pending or leased delivery pins the binding it was captured under (id, URL, current key reference, timeout, attempts), so startup refuses while one remains whose binding is no longer here.
   To move a hook, bind a new destination id, point the hook at it and apply, and remove the old entry once its deliveries have drained or expired.
 - `retention.receiptRetentionDays` is 1 to 365, default 7: how long a replay of an `Idempotency-Key` on a reservation or a grant is answered with the original outcome.

@@ -24,5 +24,9 @@
       }
     ]
   },
+  "posture": {
+    "value": "production",
+    "source": "default"
+  },
   "diagnostics": []
 }

@@ -18,6 +18,9 @@ pub struct Cli {
     /// Runtime configuration file.
     #[arg(long, value_name = "FILE")]
     pub runtime_config: PathBuf,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE", global = true)]
+    pub posture: Option<String>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -32,6 +35,9 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct CheckArgs {
+    /// Declare production posture.
+    #[arg(long)]
+    pub production: bool,
     /// Emit the selected command's report in this format.
     #[arg(long, value_enum, default_value_t = Format::Human)]
     pub format: Format,

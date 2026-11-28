@@ -202,7 +202,7 @@ pub const OPERATIONS: &[Operation] = &[
         paged: false,
         request: Payload::Empty,
         success: 200,
-        response: Payload::Empty,
+        response: Payload::Json("Readiness"),
         problems: &[
             ProblemCode::RequestMethodNotAllowed,
             ProblemCode::ServiceUnavailable,
@@ -628,6 +628,21 @@ pub fn openapi_documents() -> Result<BTreeMap<&'static str, String>, serde_json:
         .iter()
         .map(|problem| problem.code())
         .collect();
+    schemas.insert(
+        "Readiness".to_owned(),
+        json!({
+            "type": "object",
+            "required": ["status", "posture", "developmentSettings"],
+            "properties": {
+                "status": {"const": "ready"},
+                "posture": {"enum": ["production", "development"]},
+                "developmentSettings": {"type": "array", "items": {
+                    "type": "object", "required": ["code", "pointer"],
+                    "properties": {"code": {"type": "string"}, "pointer": {"type": "string"}}
+                }}
+            }
+        }),
+    );
     schemas.insert(
         "Problem".to_owned(),
         json!({

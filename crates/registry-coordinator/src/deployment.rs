@@ -12,8 +12,9 @@ use registry_platform_activation::{self as activation, Layout, NewActivation, Ro
 use registry_platform_audit::{AuditDestination, AuditProfile, AuditWriter, FileDestination};
 use registry_platform_config::{
     package::{write_package, PackageLimits},
-    DatabaseConfig, ListenerNetworkExposure, MetricsListenerConfig, PackageConfig,
-    PrivateListenerConfig, SecretProvidersConfig, SecretReference, TlsTermination,
+    DatabaseConfig, DatabaseHost, DatabaseTransport, ListenerNetworkExposure,
+    MetricsListenerConfig, PackageConfig, Posture, PrivateListenerConfig, SecretProvidersConfig,
+    SecretReference,
 };
 use registry_platform_yaml::{Diagnostic, Document, Source};
 use serde::{Deserialize, Serialize};
@@ -105,9 +106,6 @@ mod state_key_map {
     }
 }
 impl DeploymentConfig {
-    pub fn local(&self) -> bool {
-        self.listener.tls_termination == TlsTermination::DevelopmentLoopback
-    }
     pub fn validate(&self, secrets: &SecretProvidersConfig) -> Result<()> {
         self.findings(secrets)
             .into_iter()
@@ -209,7 +207,7 @@ impl DeploymentConfig {
         {
             errors.push(config_fail("deployment.stateKeys", "configure 1..=16 deployment.stateKeys with canonical nonzero u32 versions and select an existing version in deployment.activeStateKey"));
         }
-        errors.extend(self.authentication.findings(secrets, self.local()));
+        errors.extend(self.authentication.findings(secrets));
         for (field, r) in [
             ("deployment.auditKeyRef", &self.audit_key_ref),
             ("deployment.admissionKeyRef", &self.admission_key_ref),
@@ -537,7 +535,7 @@ async fn open_named(
     } else {
         destination
     };
-    let audit = AuditWriter::open_without_posture(destination)
+    let audit = AuditWriter::open(destination, runtime.posture())
         .await
         .map_err(audit_open_refusal)?;
     let security = StoreSecurity {
@@ -557,12 +555,47 @@ async fn open_named(
     };
     let url = std::str::from_utf8(raw.expose_secret())
         .map_err(|_| fail("database reference must resolve to UTF-8"))?;
-    let tls = if d.local() && runtime.database.ca_bundle_ref.is_none() {
+    let mut postgres: tokio_postgres::Config = url
+        .parse()
+        .map_err(|_| fail("supply a valid PostgreSQL connection URL"))?;
+    let mut hosts: Vec<_> = postgres
+        .get_hosts()
+        .iter()
+        .map(|host| match host {
+            tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
+            #[cfg(unix)]
+            tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
+        })
+        .collect();
+    runtime
+        .database
+        .check(cfg!(feature = "postgres-test"))
+        .map_err(|error| runtime.database_transport_error(error))?;
+    hosts.extend(
+        postgres
+            .get_hostaddrs()
+            .iter()
+            .map(|address| DatabaseHost::Tcp(address.to_string())),
+    );
+    let transport = runtime
+        .database
+        .plaintext_permitted(&hosts, runtime.development.as_ref())
+        .map_err(|error| runtime.database_transport_error(error))?;
+    let tls = if runtime.database.test_only_plaintext || transport != DatabaseTransport::VerifiedTls
+    {
+        postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
         None
     } else {
+        if postgres.get_ssl_mode() != tokio_postgres::config::SslMode::Require {
+            return Err(CoordinatorError::new(
+                "database-tls-required",
+                "verified TLS requires sslmode=require in the database URL",
+            )
+            .suggest("Add sslmode=require for a TLS database, or set database.transport: loopback-plaintext for PostgreSQL on this host."));
+        }
         Some(tls(&runtime.database, &secrets)?)
     };
-    let store = Store::open(url, &runtime.namespace, security, tls).await?;
+    let store = Store::open_config(postgres, &runtime.namespace, security, tls).await?;
     let store = if migration {
         store
     } else {
@@ -639,10 +672,34 @@ async fn check_control_role(client: &impl tokio_postgres::GenericClient, role: &
     }
     Ok(())
 }
+fn posture_mismatch(recorded: Posture, declared: Posture) -> Option<CoordinatorError> {
+    let (message, action) = match (recorded, declared) {
+        (Posture::Production, Posture::Development) => (
+            "this database was activated in the production posture; a development process never opens it",
+            "Start it as production. To develop, use a fresh database: a fresh apply is the way.",
+        ),
+        (Posture::Development, Posture::Production) => (
+            "this database was activated in the development posture and cannot be opened by a production process",
+            "Create a fresh database and apply the package as production: a fresh apply is the way.",
+        ),
+        _ => return None,
+    };
+    Some(CoordinatorError::new("platform.activation.posture-mismatch", message).suggest(action))
+}
+
 pub async fn check(
     store: &Store,
     runtime: &RuntimeConfig,
     digest: &str,
+) -> Result<activation::Activation> {
+    check_deployment(store, runtime, digest, false).await
+}
+
+async fn check_deployment(
+    store: &Store,
+    runtime: &RuntimeConfig,
+    digest: &str,
+    observe_posture: bool,
 ) -> Result<activation::Activation> {
     let d = config(runtime)?;
     // Unreachable is not refused: the service waits this out and checks again.
@@ -651,11 +708,20 @@ pub async fn check(
             .suggest("restore database connectivity")
     })?;
     let l = layout()?;
-    let active = activation::check_active_package_without_posture(&*client, &l, &d.database_id, digest)
-        .await
-        .map_err(|_| {
-            fail("run coordinatorctl plan/apply with the correct database identity and packages, then restart every service")
-        })?;
+    let checked =
+        activation::check_active_package(&*client, &l, &d.database_id, digest, runtime.posture())
+            .await;
+    let active = match checked {
+        Ok(active) => active,
+        Err(activation::ActivePackageError::PostureMismatch { recorded, declared }) => {
+            if !observe_posture {
+                return Err(posture_mismatch(recorded, declared).expect("the postures differ"));
+            }
+            activation::check_active_package(&*client, &l, &d.database_id, digest, recorded)
+                .await.map_err(|_| fail("restore the activation ledger"))?
+        }
+        Err(_) => return Err(fail("run coordinatorctl plan/apply with the correct database identity and packages, then restart every service")),
+    };
     let schema = activation::schema_state(&*client, &l, &[SCHEMA_VERSION])
         .await
         .map_err(|_| fail("restore the migration ledger"))?;
@@ -721,10 +787,21 @@ pub async fn check_status(
     store: &Store,
     runtime: &RuntimeConfig,
     digest: &str,
-) -> Result<(activation::Activation, Vec<HeldRun>)> {
-    let active = check(store, runtime, digest).await?;
+) -> Result<(activation::Activation, Vec<HeldRun>, Vec<Diagnostic>)> {
+    let active = check_deployment(store, runtime, digest, true).await?;
     let held = store.observe_runtime_bindings(runtime).await?;
-    Ok((active, held))
+    let findings = posture_mismatch(active.posture, runtime.posture())
+        .map(|error| {
+            Diagnostic::warning(
+                &error.code,
+                "/database/runtimeUrlRef",
+                error.message,
+                error.suggested_action.unwrap_or_default(),
+            )
+        })
+        .into_iter()
+        .collect();
+    Ok((active, held, findings))
 }
 /// What one plan or apply does to one workflow's active package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -886,6 +963,12 @@ pub async fn plan(
     let active = activation::active_activation(&*client, &l)
         .await
         .map_err(|_| fail("restore the activation ledger"))?;
+    if let Some(error) = active
+        .as_ref()
+        .and_then(|active| posture_mismatch(active.posture, runtime.posture()))
+    {
+        return Err(error);
+    }
     let schema = activation::schema_state(&*client, &l, &[SCHEMA_VERSION])
         .await
         .map_err(|_| fail("restore the migration ledger"))?;
@@ -956,6 +1039,12 @@ pub async fn apply(
     let prior = activation::active_activation(&tx, &l)
         .await
         .map_err(|_| fail("restore ledger"))?;
+    if let Some(error) = prior
+        .as_ref()
+        .and_then(|active| posture_mismatch(active.posture, runtime.posture()))
+    {
+        return Err(error);
+    }
     if prior
         .as_ref()
         .is_some_and(|a| a.database_id != d.database_id)
@@ -984,15 +1073,16 @@ pub async fn apply(
             "runtime role must not own the schema, migrate or write activation ledgers",
         ));
     }
-    let request = NewActivation::without_posture(
-        Uuid::new_v4(),
-        workflows.digest(),
-        &d.database_id,
-        None,
-        &[],
-        RoleMode::Split,
-        Some(&d.runtime_role),
-    );
+    let request = NewActivation {
+        activation_id: Uuid::new_v4(),
+        package_digest: workflows.digest(),
+        database_id: &d.database_id,
+        operator_reference_hash: None,
+        backup_references: &[],
+        role_mode: RoleMode::Split,
+        posture: runtime.posture(),
+        runtime_role: Some(&d.runtime_role),
+    };
     let active = activation::append_activation(&tx, &l, &request)
         .await
         .map_err(|_| fail("restore activation ledger"))?;
@@ -1108,10 +1198,18 @@ mod tests {
             AuditDestination::File(FileDestination::new(root.path().join("audit.jsonl")).unwrap())
                 .for_process("apply")
                 .unwrap();
-        let first = AuditWriter::open_without_posture(destination.clone())
-            .await
-            .unwrap();
-        let error = match AuditWriter::open_without_posture(destination.clone()).await {
+        let first = AuditWriter::open(
+            destination.clone(),
+            registry_platform_config::Posture::Production,
+        )
+        .await
+        .unwrap();
+        let error = match AuditWriter::open(
+            destination.clone(),
+            registry_platform_config::Posture::Production,
+        )
+        .await
+        {
             Ok(_) => panic!("a second writer must not acquire the same companion"),
             Err(error) => error,
         };
@@ -1122,9 +1220,10 @@ mod tests {
             Some("restore writable durable audit custody (sink-locked)")
         );
         drop(first);
-        let reopened = AuditWriter::open_without_posture(destination)
-            .await
-            .unwrap();
+        let reopened =
+            AuditWriter::open(destination, registry_platform_config::Posture::Production)
+                .await
+                .unwrap();
         drop(reopened);
         root.close().unwrap();
     }

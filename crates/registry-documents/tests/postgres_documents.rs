@@ -43,9 +43,10 @@ async fn deployment() -> Deployment {
 }
 
 async fn start(deployment: &Deployment, verifier: &Arc<FakeVerifier>) -> (Prepared, Api) {
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares");
+    let prepared =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares");
     let api = Api::new(&prepared);
     (prepared, api)
 }
@@ -504,7 +505,7 @@ async fn the_storage_binding_is_pinned_at_the_first_write() {
 
     // A start whose storage is not the pinned one is refused.
     drop((prepared, api));
-    let error = prepare_with_verifier(&deployment.runtime, verifier.clone())
+    let error = prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
         .await
         .expect_err("startup is refused");
     assert!(
@@ -975,7 +976,7 @@ async fn a_start_refused_at_its_listener_does_not_suspend_verified_versions() {
     )
     .unwrap();
     let candidate = FakeVerifier::new("binding-b", APPROVE);
-    let error = prepare_with_verifier(&candidate_runtime, candidate.clone())
+    let error = prepare_with_verifier(&candidate_runtime, candidate.clone(), support::TEST_POSTURE)
         .await
         .expect_err("the candidate cannot bind its listener");
     assert!(matches!(error, RuntimeError::Listen(_)), "{error}");
@@ -1024,7 +1025,7 @@ async fn a_worker_under_another_binding_leaves_the_job_pending_for_its_own() {
     )
     .unwrap();
     let new = FakeVerifier::new("binding-b", APPROVE);
-    let new_instance = prepare_with_verifier(&second_runtime, new.clone())
+    let new_instance = prepare_with_verifier(&second_runtime, new.clone(), support::TEST_POSTURE)
         .await
         .expect("the second instance prepares");
     let new_api = Api::new(&new_instance);
@@ -1118,7 +1119,7 @@ async fn a_verdict_that_records_nothing_under_the_current_binding_is_retried() {
         schema: deployment.schema.clone(),
         tampered: AtomicBool::new(false),
     });
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier)
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier, support::TEST_POSTURE)
         .await
         .expect("the runtime prepares");
     let api = Api::new(&prepared);
@@ -1174,13 +1175,14 @@ async fn a_verification_audit_failure_refuses_the_claim_and_records_no_verdict()
     let (_prepared, api) = start(&deployment, &verifier).await;
     let (document, _) = upload(&api, &pdf(300, 34)).await;
 
-    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let config =
+        RuntimeConfig::load_with_posture(&deployment.runtime, support::TEST_POSTURE).unwrap();
     let secrets = Arc::new(config.secret_resolver().unwrap());
     let store = registry_documents::runtime::activated_store_for_test(&config)
         .await
         .unwrap();
     let audit = DocumentsAudit::new(
-        AuditWriter::from_line_sink_without_posture(Box::new(FailingSink)),
+        AuditWriter::from_line_sink(Box::new(FailingSink), support::TEST_POSTURE.posture),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))
@@ -2516,10 +2518,11 @@ async fn a_request_audit_failure_refuses_the_upload_and_the_download() {
         (document, version, path)
     };
 
-    let failing = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares again")
-        .with_audit(failing_audit());
+    let failing =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares again")
+            .with_audit(failing_audit());
     let refused = Api::new(&failing);
     refused
         .download(CITIZEN, &document, &version)
@@ -2537,7 +2540,7 @@ async fn a_request_audit_failure_refuses_the_upload_and_the_download() {
 
 fn failing_audit() -> DocumentsAudit {
     DocumentsAudit::new(
-        AuditWriter::from_line_sink_without_posture(Box::new(FailingSink)),
+        AuditWriter::from_line_sink(Box::new(FailingSink), support::TEST_POSTURE.posture),
         AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
             b"documents-test-audit-key-not-a-secret".to_vec(),
         ))
@@ -2748,19 +2751,21 @@ async fn a_response_audit_failure_after_commit_answers_unavailable_and_the_retry
         PDF,
     );
     let kept = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let failing = prepare_with_verifier(&deployment.runtime, verifier.clone())
-        .await
-        .expect("the runtime prepares")
-        .with_audit(DocumentsAudit::new(
-            AuditWriter::from_line_sink_without_posture(Box::new(FirstLineSink {
-                kept: kept.clone(),
-            })),
-            AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
-                b"documents-test-audit-key-not-a-secret".to_vec(),
-            ))
-            .unwrap()
-            .key_hasher(),
-        ));
+    let failing =
+        prepare_with_verifier(&deployment.runtime, verifier.clone(), support::TEST_POSTURE)
+            .await
+            .expect("the runtime prepares")
+            .with_audit(DocumentsAudit::new(
+                AuditWriter::from_line_sink(
+                    Box::new(FirstLineSink { kept: kept.clone() }),
+                    support::TEST_POSTURE.posture,
+                ),
+                AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
+                    b"documents-test-audit-key-not-a-secret".to_vec(),
+                ))
+                .unwrap()
+                .key_hasher(),
+            ));
     Api::new(&failing)
         .reserve_body(APP, "committed-before-the-journal-failed", &body)
         .await
@@ -2810,7 +2815,8 @@ async fn a_verification_attempt_waits_for_transfer_budget_only_within_its_attemp
 
     let deployment = deployment().await;
     let verifier = FakeVerifier::new("binding-a", APPROVE);
-    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let config =
+        RuntimeConfig::load_with_posture(&deployment.runtime, support::TEST_POSTURE).unwrap();
     let secrets = Arc::new(config.secret_resolver().unwrap());
     let store = registry_documents::runtime::activated_store_for_test(&config)
         .await
@@ -3318,7 +3324,8 @@ async fn the_erasure_status_counts_grace_due_and_dead_lettered() {
             documents[2],
         ))
         .await;
-    let config = RuntimeConfig::load(&deployment.runtime).unwrap();
+    let config =
+        RuntimeConfig::load_with_posture(&deployment.runtime, support::TEST_POSTURE).unwrap();
     let secrets = Arc::new(config.secret_resolver().unwrap());
     let store = PostgresStore::connect_runtime(&config.database, &secrets).unwrap();
     assert_eq!(
@@ -3727,7 +3734,7 @@ async fn an_approval_after_a_removal_request_releases_nothing() {
         client,
         schema: deployment.schema.clone(),
     });
-    let prepared = prepare_with_verifier(&deployment.runtime, verifier)
+    let prepared = prepare_with_verifier(&deployment.runtime, verifier, support::TEST_POSTURE)
         .await
         .expect("the runtime prepares");
     let api = Api::new(&prepared);
@@ -3798,9 +3805,13 @@ async fn a_verification_job_leased_across_a_removal_is_set_aside() {
         schema: deployment.schema.clone(),
         calls: std::sync::atomic::AtomicUsize::new(0),
     });
-    let prepared = prepare_with_verifier(&deployment.runtime, Arc::clone(&verifier) as _)
-        .await
-        .expect("the runtime prepares");
+    let prepared = prepare_with_verifier(
+        &deployment.runtime,
+        Arc::clone(&verifier) as _,
+        support::TEST_POSTURE,
+    )
+    .await
+    .expect("the runtime prepares");
     let api = Api::new(&prepared);
     upload(&api, &pdf(300, 77)).await;
     prepared.verify_due().await;
@@ -3885,7 +3896,8 @@ async fn the_runtime_is_ready_only_while_the_ledger_names_its_package_active() {
         "{}",
         String::from_utf8_lossy(&ready.body)
     );
-    assert!(ready.body.is_empty());
+    assert_eq!(ready.json()["posture"], "development");
+    assert_eq!(ready.json()["status"], "ready");
 
     deployment
         .execute(&format!(

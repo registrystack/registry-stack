@@ -21,6 +21,8 @@ pub mod build_info {
 pub mod cli;
 pub mod model;
 pub mod openapi;
+#[cfg(feature = "runtime-config")]
+mod package;
 #[cfg(feature = "server")]
 pub mod problem;
 pub mod query;
@@ -32,16 +34,17 @@ pub mod server;
 pub mod startup;
 
 pub use model::*;
+#[cfg(feature = "runtime-config")]
+pub use package::{load_index, load_verified_index, package_limits, StartupError};
 pub use query::{parse_service_filters, Directory, QueryError};
 #[cfg(feature = "runtime-config")]
 pub use runtime_config::{
-    check_runtime, LogLevel, RuntimeCheck, RuntimeConfig, RuntimeLimits, RuntimeListener,
-    RUNTIME_API_VERSION, RUNTIME_KIND,
+    check_runtime, check_runtime_with_package, LogLevel, RuntimeCheck, RuntimeConfig,
+    RuntimeLimits, RuntimeListener, RUNTIME_API_VERSION, RUNTIME_KIND,
 };
 #[cfg(feature = "server")]
 pub use server::{router, DiscoveryService, ServiceConfigError};
 #[cfg(feature = "server")]
 pub use startup::{
-    load_index, load_runtime, load_verified_index, package_limits, prepare, serve,
-    PreparedDiscovery, StartupError, MAXIMUM_LISTENER_BIND_CHARACTERS,
+    load_runtime, prepare, serve, PreparedDiscovery, MAXIMUM_LISTENER_BIND_CHARACTERS,
 };

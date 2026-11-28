@@ -88,10 +88,10 @@ and the restore drill is in
 - Host users who can write audit files are trusted; the journal is only as strong as the storage it
   is written to.
 
-Weakened configuration (plaintext database transport, a disabled verifier or `http` verifier or
-hook URL outside `development-loopback`, environment expressions in secret references, undeclared
-secret providers) is refused before anything binds.
-Findings name the member and rule, never the value.
+Production refuses a disabled verifier and private-network plaintext
+PostgreSQL before binding. Both postures refuse non-loopback HTTP storage,
+verifier and hook URLs, environment expressions in secret references and
+undeclared secret providers. Findings name the member and rule.
 
 {/* Evidence: products/documents/contracts/security-invariant-matrix.yaml DOCUMENTS-SEC-01,
     DOCUMENTS-SEC-03, DOCUMENTS-SEC-04, DOCUMENTS-SEC-05, DOCUMENTS-SEC-06, DOCUMENTS-SEC-08,
@@ -106,8 +106,8 @@ Findings name the member and rule, never the value.
     crates/registry-platform-oidc/src/static_jwks.rs, StaticJwksError;
     crates/registry-documents/src/config.rs check_secret_providers, unrestricted_clients_are_refused,
     plaintext_database_is_refused_outside_test_builds,
-    disabled_content_verification_requires_development_loopback,
-    a_plaintext_hook_destination_is_refused_outside_development,
+    disabled_content_verification_requires_declared_development,
+    a_non_loopback_plaintext_hook_destination_is_refused_in_both_postures,
     shared_runtime_loader_refuses_environment_expressions_in_secret_references;
     crates/registry-documents/tests/postgres_documents.rs the_storage_binding_is_pinned_at_the_first_write,
     under_institutional_custody_the_named_person_has_no_standing_without_a_grant,
@@ -115,15 +115,17 @@ Findings name the member and rule, never the value.
     crates/registry-documents/tests/postgres_startup.rs
     a_prepared_runtime_serves_documents_only_to_a_verified_caller. */}
 
-`development-loopback` is the only listener setting that permits a disabled verifier or an `http`
-hook URL, and the hook URL must also be a loopback address.
-Loopback means an address in `127.0.0.0/8`, `::1` or an IPv4-mapped form of a `127.0.0.0/8` address, or the name `localhost` in any letter case, which the Document Store connects to only through the loopback addresses it resolved. `a.localhost` and `localhost.` are ordinary named hosts.
-Do not set it in production.
+Use one posture across a deployment. Development responses carry
+`Registry-Posture: development`, which the Document Store Rust client refuses. Development can
+approve finalized versions with `contentVerification: {type: disabled}`.
+Loopback HTTP storage, verifier and hook URLs are valid in either posture.
 
 {/* Evidence: crates/registry-documents/src/config.rs
-    disabled_content_verification_requires_development_loopback, check_hook_destinations;
+    disabled_content_verification_requires_declared_development, check_hook_destinations;
     crates/registry-platform-hooks/src/delivery/destination.rs
-    url_address_accepts_https_and_loopback_http_only. */}
+    url_address_accepts_https_and_loopback_http_only;
+    crates/registry-documents/tests/postgres_startup.rs
+    a_prepared_runtime_serves_documents_only_to_a_verified_caller. */}
 
 ## Operator obligations
 

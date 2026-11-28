@@ -33,7 +33,10 @@ fn refused(code: &str, path: &str, message: String, action: &str) -> Box<Diagnos
 
 /// Reads the runtime file exactly as `apply` does and resolves the two
 /// database URLs and the CA behind `database.caBundleRef`.
-pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
+pub(crate) fn load(
+    path: &Path,
+    declared: registry_platform_config::DeclaredPosture,
+) -> Result<ProvisionInput, Box<Diagnostic>> {
     let absolute = std::path::absolute(path).map_err(|_| {
         refused(
             "config.unresolvable",
@@ -43,19 +46,20 @@ pub(crate) fn load(path: &Path) -> Result<ProvisionInput, Box<Diagnostic>> {
             "Pass --runtime-config as a path that exists.",
         )
     })?;
-    let config = RuntimeConfig::load(&absolute).map_err(|error| {
-        match startup_report(&absolute, &error)
-            .and_then(|report| report.diagnostics().first().cloned())
-        {
-            Some(diagnostic) => Box::new(diagnostic),
-            None => refused(
-                "config.refused",
-                "",
-                error.to_string(),
-                "Correct the runtime file, then run provision again.",
-            ),
-        }
-    })?;
+    let config =
+        RuntimeConfig::load(&absolute, declared).map_err(|error| {
+            match startup_report(&absolute, &error, declared)
+                .and_then(|report| report.diagnostics().first().cloned())
+            {
+                Some(diagnostic) => Box::new(diagnostic),
+                None => refused(
+                    "config.refused",
+                    "",
+                    error.to_string(),
+                    "Correct the runtime file, then run provision again.",
+                ),
+            }
+        })?;
     let secrets = config.secret_providers.resolver().map_err(|error| {
         refused(
             "config.refused",

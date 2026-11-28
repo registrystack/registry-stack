@@ -40,7 +40,7 @@ fn the_default_feature_runtime_refuses_test_only_plaintext() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("messaging.runtime.plaintext-database"),
+        stderr.contains("platform.database.test-only-plaintext"),
         "{stderr}"
     );
     assert!(stderr.contains("testOnlyPlaintext"), "{stderr}");

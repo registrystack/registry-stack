@@ -9,7 +9,9 @@ use std::process::Command;
 const SEAL: &str = "    ministry:\n      signer:\n        type: local-jwk\n        privateKeyRef: secret:file/seal.jwk\n      certificateChainFile: /etc/render/seal/chain.pem\n      timestampAuthority:\n        url: https://tsa.example.test/tsr\n      allowedClients: [records-service]\n";
 
 fn registry_render() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_registry-render"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
+    command.env_remove("REGISTRY_STACK_POSTURE");
+    command
 }
 
 /// A scaffolded bundle whose first document type names the seal `ministry`.
@@ -46,12 +48,21 @@ fn runtime(home: &Path, signing: &str) -> PathBuf {
 }
 
 fn check(bundle: &Path, runtime: &Path) -> (Option<i32>, serde_json::Value) {
+    check_under(bundle, runtime, &["--posture", "development"])
+}
+
+fn check_under(
+    bundle: &Path,
+    runtime: &Path,
+    posture: &[&str],
+) -> (Option<i32>, serde_json::Value) {
     let output = registry_render()
         .args(["check", "--bundle"])
         .arg(bundle)
         .arg("--runtime-config")
         .arg(runtime)
         .args(["--format", "json"])
+        .args(posture)
         .output()
         .unwrap();
     let report = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
@@ -69,6 +80,7 @@ fn codes(report: &serde_json::Value) -> Vec<(String, String)> {
         .as_array()
         .unwrap()
         .iter()
+        .filter(|d| d["code"] != "render.posture.local-assurance")
         .map(|d| {
             (
                 d["severity"].as_str().unwrap().to_owned(),
@@ -101,6 +113,7 @@ fn check_resolves_bundle_seals_against_the_runtime_bindings() {
         .arg(&bundle)
         .arg("--runtime-config")
         .arg(&bound)
+        .args(["--posture", "development"])
         .output()
         .unwrap();
     assert_eq!(human.status.code(), Some(0));
@@ -136,12 +149,19 @@ fn check_resolves_bundle_seals_against_the_runtime_bindings() {
         ]
     );
     assert_eq!(report["errors"], 1);
-    assert_eq!(report["warnings"], 1);
+    assert_eq!(report["warnings"], 2);
     let file = other.display().to_string();
-    assert_eq!(report["diagnostics"][0]["source"]["file"], file);
+    assert_eq!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["code"] != "render.posture.local-assurance")
+            .unwrap()["source"]["file"],
+        file
+    );
 
-    // Without a signing block sealing is off: the package still checks, and
-    // a warning says the sealed document types render unsealed.
+    // Development can serve the package without binding its seals.
     let off = runtime(&home, "");
     let (exit, report) = check(&bundle, &off);
     assert_eq!(exit, Some(0), "{report}");
@@ -149,14 +169,30 @@ fn check_resolves_bundle_seals_against_the_runtime_bindings() {
         codes(&report),
         [(
             "warning".to_owned(),
-            "render.runtime.seals-not-served".to_owned()
+            "render.posture.seals-not-served".to_owned()
         )]
     );
     assert_eq!(
-        report["diagnostics"][0]["source"]["file"],
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["code"] != "render.posture.local-assurance")
+            .unwrap()["source"]["file"],
         off.display().to_string()
     );
     assert!(report.get("sealChains").is_none(), "{report}");
+    assert_eq!(report["diagnostics"][0]["path"], "/signing");
+
+    let (exit, report) = check_under(&bundle, &off, &[]);
+    assert_eq!(exit, Some(1), "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "render.posture.seals-not-served");
+    assert_eq!(diagnostic["path"], "/signing");
+    assert_eq!(diagnostic["severity"], "error");
+    let action = diagnostic["suggestedAction"].as_str().unwrap();
+    assert!(action.contains("Configure signing.seals"), "{action}");
+    assert!(action.contains("--posture development"), "{action}");
 }
 
 /// A seal certificate with an extension of `bytes` octets, to make a chain
@@ -183,7 +219,13 @@ fn check_chain(home: &Path, bundle: &Path, chain: &Path) -> (Option<i32>, serde_
         .arg(bundle)
         .arg("--runtime-config")
         .arg(&runtime)
-        .args(["--environment", "--format", "json"])
+        .args([
+            "--environment",
+            "--format",
+            "json",
+            "--posture",
+            "development",
+        ])
         .output()
         .unwrap();
     let report = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
@@ -276,8 +318,24 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
             [(severity.to_owned(), code.to_owned())],
             "{report}"
         );
-        assert_eq!(report["diagnostics"][0]["path"], pointer, "{report}");
-        let message = report["diagnostics"][0]["message"].as_str().unwrap();
+        assert_eq!(
+            report["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| d["code"] != "render.posture.local-assurance")
+                .unwrap()["path"],
+            pointer,
+            "{report}"
+        );
+        let message = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["code"] != "render.posture.local-assurance")
+            .unwrap()["message"]
+            .as_str()
+            .unwrap();
         for value in ["Registry Stack Test", &home.display().to_string()] {
             assert!(!message.contains(value), "value-free: {message}");
         }
@@ -306,7 +364,14 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
             "render.runtime.seal-chain-invalid".to_owned()
         )]
     );
-    let message = report["diagnostics"][0]["message"].as_str().unwrap();
+    let message = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] != "render.posture.local-assurance")
+        .unwrap()["message"]
+        .as_str()
+        .unwrap();
     assert!(message.contains("is a CA certificate"), "{message}");
     assert!(
         message.contains("taken as the seal certificate"),
@@ -316,7 +381,12 @@ fn check_with_the_environment_reads_each_seal_certificate_chain() {
     assert!(message.contains("CA:TRUE"), "{message}");
     assert!(message.contains("validators refuse"), "{message}");
     // The fix: a leaf for the seal key, issued by a (test) root.
-    let action = report["diagnostics"][0]["suggestedAction"]
+    let action = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] != "render.posture.local-assurance")
+        .unwrap()["suggestedAction"]
         .as_str()
         .unwrap();
     assert!(action.contains("CA:FALSE"), "{action}");
@@ -413,7 +483,12 @@ fn check_with_the_environment_refuses_a_seal_too_large_for_a_document_pdf_standa
         )],
         "{report}"
     );
-    let diagnostic = &report["diagnostics"][0];
+    let diagnostic = &report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] != "render.posture.local-assurance")
+        .unwrap();
     assert_eq!(diagnostic["path"], "/documents/0/seal", "{report}");
     assert!(
         diagnostic["source"]["file"]

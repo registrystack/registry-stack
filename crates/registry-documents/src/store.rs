@@ -15,6 +15,10 @@ use registry_platform_config::SecretResolver;
 use thiserror::Error;
 use tokio_postgres::Config as PgConfig;
 
+use registry_platform_config::{
+    DatabaseHost, DatabaseTransport, DatabaseTransportError, DevelopmentWitness, Posture,
+};
+
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const DOCUMENTS_MIGRATION: &str = include_str!("../migrations/0100_documents.sql");
@@ -61,6 +65,8 @@ pub enum StoreError {
     ActivationSchemaMismatch,
     #[error("the Document Store database configuration is invalid")]
     Configuration,
+    #[error("{code}: {0} {action}", code = .0.code(), action = .0.suggested_action())]
+    Transport(#[from] DatabaseTransportError),
     #[error("the Document Store database secret could not be resolved: {0}")]
     SecretConfiguration(String),
     #[error("the Document Store database schema is not the version this runtime expects; apply the schema with the migration connection")]
@@ -84,6 +90,7 @@ pub enum StoreError {
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: Pool,
+    pub(crate) posture: Posture,
     active_package: Option<(String, String)>,
 }
 
@@ -100,11 +107,22 @@ impl PostgresStore {
         config: &DatabaseConfig,
         secrets: &SecretResolver,
     ) -> Result<Self, StoreError> {
+        Self::connect_runtime_with_posture(config, secrets, Posture::Production, None)
+    }
+
+    pub(crate) fn connect_runtime_with_posture(
+        config: &DatabaseConfig,
+        secrets: &SecretResolver,
+        posture: Posture,
+        witness: Option<&DevelopmentWitness>,
+    ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
             "database.runtimeUrlRef",
             &config.runtime_url_ref,
+            posture,
+            witness,
         )
     }
 
@@ -112,11 +130,22 @@ impl PostgresStore {
         config: &DatabaseConfig,
         secrets: &SecretResolver,
     ) -> Result<Self, StoreError> {
+        Self::connect_migration_with_posture(config, secrets, Posture::Production, None)
+    }
+
+    pub(crate) fn connect_migration_with_posture(
+        config: &DatabaseConfig,
+        secrets: &SecretResolver,
+        posture: Posture,
+        witness: Option<&DevelopmentWitness>,
+    ) -> Result<Self, StoreError> {
         Self::connect_reference(
             config,
             secrets,
             "database.migrationUrlRef",
             &config.migration_url_ref,
+            posture,
+            witness,
         )
     }
 
@@ -125,6 +154,8 @@ impl PostgresStore {
         secrets: &SecretResolver,
         field: &'static str,
         reference: &str,
+        posture: Posture,
+        witness: Option<&DevelopmentWitness>,
     ) -> Result<Self, StoreError> {
         let protected = secrets.resolve(reference).map_err(|error| {
             StoreError::SecretConfiguration(describe_secret_failure(field, reference, &error))
@@ -138,20 +169,27 @@ impl PostgresStore {
         let manager_config = ManagerConfig {
             recycling_method: RecyclingMethod::Verified,
         };
-        #[cfg(feature = "postgres-test")]
-        let manager = if config.test_only_plaintext {
+        config.check(cfg!(feature = "postgres-test"))?;
+        let mut hosts: Vec<_> = postgres
+            .get_hosts()
+            .iter()
+            .map(|host| match host {
+                tokio_postgres::config::Host::Tcp(name) => DatabaseHost::Tcp(name.clone()),
+                #[cfg(unix)]
+                tokio_postgres::config::Host::Unix(_) => DatabaseHost::Unix,
+            })
+            .collect();
+        hosts.extend(
+            postgres
+                .get_hostaddrs()
+                .iter()
+                .map(|address| DatabaseHost::Tcp(address.to_string())),
+        );
+        let transport = config.plaintext_permitted(&hosts, witness)?;
+        let manager = if config.test_only_plaintext || transport != DatabaseTransport::VerifiedTls {
             postgres.ssl_mode(tokio_postgres::config::SslMode::Disable);
             Manager::from_config(postgres, tokio_postgres::NoTls, manager_config)
         } else {
-            postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
-            let connector = tls_connector(config, secrets)?;
-            Manager::from_config(postgres, connector, manager_config)
-        };
-        #[cfg(not(feature = "postgres-test"))]
-        let manager = {
-            if config.test_only_plaintext {
-                return Err(StoreError::Configuration);
-            }
             postgres.ssl_mode(tokio_postgres::config::SslMode::Require);
             let connector = tls_connector(config, secrets)?;
             Manager::from_config(postgres, connector, manager_config)
@@ -166,6 +204,7 @@ impl PostgresStore {
             .map_err(|_| StoreError::Configuration)?;
         Ok(Self {
             pool,
+            posture,
             active_package: None,
         })
     }

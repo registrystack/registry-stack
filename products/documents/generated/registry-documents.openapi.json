@@ -475,6 +475,43 @@
         ],
         "type": "object"
       },
+      "Readiness": {
+        "properties": {
+          "developmentSettings": {
+            "items": {
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "pointer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "pointer"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "posture": {
+            "enum": [
+              "production",
+              "development"
+            ]
+          },
+          "status": {
+            "const": "ready"
+          }
+        },
+        "required": [
+          "status",
+          "posture",
+          "developmentSettings"
+        ],
+        "type": "object"
+      },
       "ReservationView": {
         "additionalProperties": false,
         "description": "The answer to a reservation: the document, its version, and where to\nsend the content.",
@@ -603,7 +640,14 @@
         "operationId": "ready",
         "responses": {
           "200": {
-            "description": "The operation succeeded. The body is empty."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "The operation succeeded."
           },
           "405": {
             "content": {

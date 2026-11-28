@@ -174,21 +174,16 @@ fn scope_claim() -> String {
     "registry_scopes".into()
 }
 impl AccessConfig {
-    pub fn validate(&self, secrets: &SecretProvidersConfig, local: bool) -> Result<()> {
-        self.findings(secrets, local)
+    pub fn validate(&self, secrets: &SecretProvidersConfig) -> Result<()> {
+        self.findings(secrets)
             .into_iter()
             .next()
             .map_or(Ok(()), Err)
     }
-    pub(crate) fn findings(
-        &self,
-        secrets: &SecretProvidersConfig,
-        local: bool,
-    ) -> Vec<CoordinatorError> {
+    pub(crate) fn findings(&self, secrets: &SecretProvidersConfig) -> Vec<CoordinatorError> {
         let mut errors = Vec::new();
         for result in [
-            self.issuer
-                .check_without_posture("deployment.authentication", local),
+            self.issuer.check("deployment.authentication"),
             self.clients().check("deployment.authentication"),
         ] {
             if let Err(error) = result {
@@ -291,20 +286,8 @@ impl AccessConfig {
             assertion_issuers: self.assertion_issuers.clone(),
         }
     }
-    fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.issuer.allow_insecure_http.then_some(
-            "deployment.authentication.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-        )
-    }
-    pub async fn authenticator(
-        &self,
-        secrets: &SecretProvidersConfig,
-        local: bool,
-    ) -> Result<Authenticator> {
-        self.validate(secrets, local)?;
-        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
+    pub async fn authenticator(&self, secrets: &SecretProvidersConfig) -> Result<Authenticator> {
+        self.validate(secrets)?;
         let network =
             IssuerNetworkPolicy::new(self.issuer.issuer.as_str(), self.issuer.allow_insecure_http)
                 .map_err(|_| refused())?;
@@ -605,32 +588,9 @@ mod token_characterisation;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use registry_platform_config::JwksSource;
-    use registry_platform_yaml::Url;
 
     fn caller(actions: Vec<Action>, workflows: &[&str], operator: bool) -> Caller {
         synthetic_caller(actions, workflows, operator)
-    }
-
-    #[test]
-    fn http_issuer_opt_in_has_a_startup_diagnostic() {
-        let access = AccessConfig {
-            issuer: OidcIssuerConfig {
-                issuer: Url::new("http://identity.example.test").unwrap(),
-                audience: "urn:coordinator:test".into(),
-                jwks_source: JwksSource::default(),
-                allow_insecure_http: true,
-            },
-            assertion_issuers: BTreeMap::new(),
-            scope_claim: "scope".into(),
-            policies: BTreeMap::new(),
-        };
-        assert_eq!(
-            access.insecure_http_startup_diagnostic(),
-            Some(
-                "deployment.authentication.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-            )
-        );
     }
 
     #[test]

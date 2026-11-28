@@ -19,7 +19,7 @@ pub use registry_platform_config::{
     JwksSource as OidcJwksSource, ListenerNetworkExposure, MetricsListenerConfig, OidcIssuerConfig,
     OidcPackageClientsConfig, PackageClients, PackageClientsError,
     PackageConfig as RuntimePackageConfig, PrivateListenerConfig as ListenerConfig,
-    SecretProvidersConfig, TlsTermination,
+    SecretProvidersConfig,
     MAX_ASSERTION_ISSUERS_PER_CLIENT as MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
     MAX_ASSERTION_ISSUER_BYTES as MAXIMUM_ASSERTION_ISSUER_BYTES,
     MAX_ASSERTION_ISSUER_CLIENTS as MAXIMUM_ASSERTION_ISSUER_CLIENTS,
@@ -27,9 +27,10 @@ pub use registry_platform_config::{
     UNAVAILABLE_CODE as RUNTIME_CONFIG_UNAVAILABLE_CODE,
 };
 use registry_platform_config::{
-    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, MetricsBindError, RemovedKey,
-    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference, SecretResolver,
-    DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
+    AuditKeyConfig, ConfigBlockError, ConfigBlockErrorKind, DatabaseTransportError,
+    DeclaredPosture, DevelopmentWitness, MetricsBindError, Posture, PostureReport, PostureSource,
+    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretReference,
+    SecretResolver, DEFAULT_STAND_IN, REMOVED_OIDC_JWKS_SOURCE_KIND, REMOVED_OIDC_JWKS_URI,
 };
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, AccessTokenAlgorithm,
@@ -166,6 +167,12 @@ pub const MAXIMUM_AUDIT_ROTATE_BYTES: u64 = u32::MAX as u64;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeConfig {
+    #[serde(skip, default = "default_posture_report")]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    posture: PostureReport,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    development: Option<DevelopmentWitness>,
     pub api_version: String,
     pub kind: String,
     #[serde(default)]
@@ -465,13 +472,45 @@ const PACKAGE_RULES: &[PackageRule] = &[
     RuntimeConfig::check_providers,
 ];
 
+/// The declaration used when tests have no posture input.
+pub const DEFAULT_POSTURE: DeclaredPosture = DeclaredPosture {
+    posture: Posture::Production,
+    source: PostureSource::Default,
+};
+
+fn default_posture_report() -> PostureReport {
+    PostureReport::new(DEFAULT_POSTURE)
+}
+
 impl RuntimeConfig {
+    pub fn posture_report(&self) -> &PostureReport {
+        &self.posture
+    }
+
+    pub fn development_witness(&self) -> Option<&DevelopmentWitness> {
+        self.development.as_ref()
+    }
+
+    fn finish_load(
+        path: &Path,
+        loaded: registry_platform_config::LoadedRuntimeConfig<Self>,
+    ) -> Result<Self, RuntimeConfigError> {
+        loaded.posture.decide(path)?;
+        let mut config = loaded.config;
+        config.posture = loaded.posture;
+        config.development = loaded.development;
+        config.check()?;
+        Ok(config)
+    }
+
     /// Load and validate the operator document at an absolute path, reading
     /// `${VAR}` expressions from the process environment.
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
-        let loaded = Self::loader().load::<Self>(path.as_ref())?;
-        loaded.config.check()?;
-        Ok(loaded.config)
+    pub fn load(
+        path: impl AsRef<Path>,
+        declared: DeclaredPosture,
+    ) -> Result<Self, RuntimeConfigError> {
+        let path = path.as_ref();
+        Self::finish_load(path, Self::loader(declared).load(path)?)
     }
 
     /// Load and validate the operator document, reading `${VAR}` expressions
@@ -479,15 +518,15 @@ impl RuntimeConfig {
     pub fn load_with_environment(
         path: impl AsRef<Path>,
         lookup: &impl Fn(&str) -> Option<String>,
+        declared: DeclaredPosture,
     ) -> Result<Self, RuntimeConfigError> {
-        let loaded = Self::loader().load_with::<Self>(path.as_ref(), lookup)?;
-        loaded.config.check()?;
-        Ok(loaded.config)
+        let path = path.as_ref();
+        Self::finish_load(path, Self::loader(declared).load_with(path, lookup)?)
     }
 
     #[must_use]
-    pub const fn loader() -> RuntimeConfigLoader {
-        RuntimeConfigLoader::new_without_posture(MESSAGING_RUNTIME_ENVELOPE)
+    pub const fn loader(declared: DeclaredPosture) -> RuntimeConfigLoader {
+        RuntimeConfigLoader::new(MESSAGING_RUNTIME_ENVELOPE, declared)
             .removed_keys(MESSAGING_REMOVED_KEYS)
             .retired_api_versions(MESSAGING_RETIRED_API_VERSIONS)
             .require_trusted_ownership()
@@ -499,7 +538,9 @@ impl RuntimeConfig {
         text: &str,
         lookup: &impl Fn(&str) -> Option<String>,
     ) -> Result<Self, RuntimeConfigError> {
-        Ok(Self::loader().parse_str(text, lookup)?.config)
+        Ok(Self::loader(DEFAULT_POSTURE)
+            .parse_str(text, lookup)?
+            .config)
     }
 
     #[must_use]
@@ -677,10 +718,7 @@ impl RuntimeConfig {
 
     fn check_oidc(&self, findings: &mut Vec<RuntimeConfigError>) {
         let oidc = &self.authentication.oidc;
-        if let Err(error) = oidc.provider.check_without_posture(
-            "authentication.oidc",
-            self.listener.tls_termination == TlsTermination::DevelopmentLoopback,
-        ) {
+        if let Err(error) = oidc.provider.check("authentication.oidc") {
             findings.push(error.into());
         }
         if let Err(error) = oidc.clients.check("authentication.oidc") {
@@ -730,9 +768,8 @@ impl RuntimeConfig {
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             findings.push(RuntimeConfigError::InvalidDatabaseReference);
         }
-        #[cfg(not(feature = "postgres-test"))]
-        if self.database.test_only_plaintext {
-            findings.push(RuntimeConfigError::PlaintextDatabase);
+        if let Err(error) = self.database.check(cfg!(feature = "postgres-test")) {
+            findings.push(RuntimeConfigError::DatabaseTransport(error));
         }
     }
 
@@ -754,12 +791,10 @@ impl RuntimeConfig {
         if self.tls_trust_profiles.len() > MAXIMUM_TLS_TRUST_PROFILES {
             findings.push(RuntimeConfigError::TooManyTlsTrustProfiles);
         }
-        let development_listener =
-            self.listener.tls_termination == TlsTermination::DevelopmentLoopback;
         for (id, connection) in &self.providers {
             match connection {
                 ProviderConnection::Smtp { settings } => {
-                    if let Err(error) = settings.check(development_listener) {
+                    if let Err(error) = settings.check() {
                         findings.push(RuntimeConfigError::Connection {
                             pointer: provider_pointer(id, error.member()),
                             reason: error.to_string(),
@@ -899,9 +934,6 @@ impl RuntimeConfig {
         secrets: &SecretResolver,
     ) -> Result<std::sync::Arc<JwksFetcher>, RuntimeConfigError> {
         let provider = &self.authentication.oidc.provider;
-        if let Some(diagnostic) = self.insecure_http_startup_diagnostic() {
-            tracing::warn!("{diagnostic}");
-        }
         let network =
             IssuerNetworkPolicy::new(provider.issuer.as_str(), provider.allow_insecure_http)
                 .map_err(|_| RuntimeConfigError::Oidc)?;
@@ -958,16 +990,6 @@ impl RuntimeConfig {
             }
         };
         Ok(std::sync::Arc::new(fetcher))
-    }
-
-    fn insecure_http_startup_diagnostic(&self) -> Option<&'static str> {
-        self.authentication
-            .oidc
-            .provider
-            .allow_insecure_http
-            .then_some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration",
-            )
     }
 
     /// The access-token verifier profile this deployment's OIDC settings
@@ -1192,9 +1214,13 @@ pub fn check_runtime_file(
     path: &Path,
     against: CheckedAgainst<'_>,
     substitute: bool,
+    declared: DeclaredPosture,
 ) -> RuntimeCheck {
-    let check =
-        RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, substitute, stand_in_for);
+    let check = RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(
+        path,
+        substitute,
+        stand_in_for,
+    );
     let mut diagnostics = Vec::new();
     let mut unavailable = check.unavailable;
     let mut named = None;
@@ -1256,7 +1282,11 @@ pub fn check_runtime_file(
 /// breaks, each at its position. `None` for a refusal of a dependency, or of
 /// a package that could not be read, which its message alone describes.
 #[must_use]
-pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report> {
+pub fn startup_report(
+    path: &Path,
+    error: &RuntimeConfigError,
+    declared: DeclaredPosture,
+) -> Option<Report> {
     match error {
         RuntimeConfigError::Load(error) => {
             return Some(Report::new(error.diagnostics().to_vec()));
@@ -1267,7 +1297,8 @@ pub fn startup_report(path: &Path, error: &RuntimeConfigError) -> Option<Report>
     if !error.in_file() {
         return None;
     }
-    let check = RuntimeConfig::loader().check_offline::<RuntimeConfig>(path, true, stand_in_for);
+    let check =
+        RuntimeConfig::loader(declared).check_offline::<RuntimeConfig>(path, true, stand_in_for);
     let config = &check.loaded.as_ref()?.config;
     let package = load_runtime_package(&config.package).ok();
     let mut diagnostics: Vec<Diagnostic> = config
@@ -1348,7 +1379,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
     let segments: Vec<&str> = pointer.split('/').skip(1).collect();
     match segments.as_slice() {
         ["listener", "bind"] => DEFAULT_LISTENER_BIND,
-        ["listener", "tlsTermination"] => "development-loopback",
+        ["listener", "tlsTermination"] => "loopback-plaintext",
         ["listener", "networkExposure"] => "private-address",
         ["metricsListener", "bind"] => "127.0.0.1:9107",
         ["metricsListener", "networkExposure"] => "private-address",
@@ -1420,8 +1451,8 @@ pub enum RuntimeConfigError {
         "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
     )]
     InvalidDatabaseReference,
-    #[error("plaintext PostgreSQL is test-only")]
-    PlaintextDatabase,
+    #[error(transparent)]
+    DatabaseTransport(DatabaseTransportError),
     #[error("retention.recordRetentionDays must be at least retention.payloadRetentionDays")]
     RecordRetentionShorterThanPayload,
     #[error(
@@ -1510,7 +1541,10 @@ impl RuntimeConfigError {
                 "/authentication/oidc/allowedClients".to_owned()
             }
             Self::InvalidDatabaseReference => "/database".to_owned(),
-            Self::PlaintextDatabase => "/database/testOnlyPlaintext".to_owned(),
+            Self::DatabaseTransport(DatabaseTransportError::TestOnlyPlaintext) => {
+                "/database/testOnlyPlaintext".to_owned()
+            }
+            Self::DatabaseTransport(_) => "/database/transport".to_owned(),
             Self::RecordRetentionShorterThanPayload => "/retention/recordRetentionDays".to_owned(),
             Self::ReceiptRetentionLongerThanRecord => "/retention/receiptRetentionDays".to_owned(),
             Self::TooManyTlsTrustProfiles => "/tlsTrustProfiles".to_owned(),
@@ -1554,7 +1588,7 @@ impl RuntimeConfigError {
                 "messaging.runtime.assertion-issuer-client-not-allowed"
             }
             Self::InvalidDatabaseReference => "messaging.runtime.invalid-database-reference",
-            Self::PlaintextDatabase => "messaging.runtime.plaintext-database",
+            Self::DatabaseTransport(error) => error.code(),
             Self::RecordRetentionShorterThanPayload => {
                 "messaging.runtime.record-retention-shorter-than-payload"
             }
@@ -1603,7 +1637,7 @@ impl RuntimeConfigError {
                 "Make the directory secretProviders.file.root names readable, or enable only secretProviders.environment."
             }
             Self::InvalidListener => {
-                "Bind to a loopback address under development-loopback; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
+                "Bind to a loopback address under loopback-plaintext; under operator-controlled-upstream bind to a loopback or private address, or to the unspecified address only with networkExposure: container-private."
             }
             Self::InvalidMetricsListener(cause) | Self::MetricsListenerSharesSocket(cause) => {
                 return cause.remedy("metricsListener.networkExposure");
@@ -1623,9 +1657,7 @@ impl RuntimeConfigError {
             Self::InvalidDatabaseReference => {
                 "Write database.runtimeUrlRef and database.migrationUrlRef as secret references."
             }
-            Self::PlaintextDatabase => {
-                "Remove database.testOnlyPlaintext; a deployment reaches PostgreSQL over TLS."
-            }
+            Self::DatabaseTransport(error) => error.suggested_action(),
             Self::RecordRetentionShorterThanPayload => {
                 "Raise retention.recordRetentionDays to at least retention.payloadRetentionDays."
             }
@@ -1883,7 +1915,7 @@ pub(crate) mod tests {
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
-        RuntimeConfig::loader()
+        RuntimeConfig::loader(DEFAULT_POSTURE)
             .load::<serde_json::Value>(&path)
             .expect("an owner-writable runtime in a private directory loads");
     }
@@ -1896,7 +1928,7 @@ pub(crate) mod tests {
         let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
-        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        let result = RuntimeConfig::loader(DEFAULT_POSTURE).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
@@ -1912,7 +1944,7 @@ pub(crate) mod tests {
         std::fs::create_dir(&writable).unwrap();
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
         let path = write_ownership_test_runtime(&writable);
-        let result = RuntimeConfig::loader().load::<serde_json::Value>(&path);
+        let result = RuntimeConfig::loader(DEFAULT_POSTURE).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         assert_unsafe_runtime(
@@ -1937,7 +1969,7 @@ pub(crate) mod tests {
         runtime["authentication"]["oidc"]["jwksSource"] =
             json!({"type": "static", "documentRef": "secret:file/issuer-jwks"});
         let path = write_project(root.path(), &runtime, &package_value());
-        let config = RuntimeConfig::load_with_environment(path, &no_environment)?;
+        let config = RuntimeConfig::load_with_environment(path, &no_environment, DEFAULT_POSTURE)?;
         let resolver = config.secret_resolver()?;
         config.jwks_fetcher(&resolver).await.map(|_| ())
     }
@@ -2015,7 +2047,7 @@ pub(crate) mod tests {
         let mut runtime = runtime;
         rebase(&mut runtime, root.path());
         let path = write_project(root.path(), &runtime, &package_value());
-        RuntimeConfig::load_with_environment(path, &no_environment)
+        RuntimeConfig::load_with_environment(path, &no_environment, DEFAULT_POSTURE)
     }
 
     /// Tests build documents against a placeholder root; point every path
@@ -2035,6 +2067,73 @@ pub(crate) mod tests {
 
     fn base() -> Value {
         runtime_value(Path::new("/placeholder"))
+    }
+
+    #[test]
+    fn default_posture_refuses_all_selected_development_settings() {
+        let mut document = base();
+        document["database"]["transport"] = serde_json::json!("private-network-plaintext");
+        document["authentication"]["oidc"]["issuer"] =
+            serde_json::json!("http://identity.example.test");
+        document["authentication"]["oidc"]["allowInsecureHttp"] = serde_json::json!(true);
+        let text = serde_norway::to_string(&document).unwrap();
+        let error = RuntimeConfig::loader(DEFAULT_POSTURE)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect_err("default production must refuse development settings");
+        let codes: Vec<_> = error
+            .diagnostics()
+            .iter()
+            .map(|item| item.code.as_str())
+            .collect();
+        assert!(
+            codes.contains(&"platform.posture.database-private-plaintext"),
+            "{codes:?}"
+        );
+        assert!(
+            codes.contains(&"platform.posture.insecure-issuer-http"),
+            "{codes:?}"
+        );
+        for diagnostic in error.diagnostics() {
+            assert!(
+                diagnostic.suggested_action.contains("rstack dev"),
+                "{diagnostic:?}"
+            );
+            assert!(
+                diagnostic
+                    .suggested_action
+                    .contains("--posture development"),
+                "{diagnostic:?}"
+            );
+        }
+        let explicitly_production = DeclaredPosture {
+            source: PostureSource::Flag,
+            ..DEFAULT_POSTURE
+        };
+        assert!(RuntimeConfig::loader(explicitly_production)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .is_err());
+        let development = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let loaded = RuntimeConfig::loader(development)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect("development loads");
+        assert!(loaded.development.is_some());
+        assert_eq!(
+            loaded.posture.ready_member()["developmentSettings"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let captured = registry_platform_testing::CapturedDiagnosticLogs::default();
+        tracing::dispatcher::with_default(&captured.subscriber(), || loaded.posture.log_startup());
+        let startup = captured.text();
+        assert!(startup.contains("posture declared"), "{startup}");
+        for code in codes {
+            assert!(startup.contains(code), "{startup}");
+        }
     }
 
     #[test]
@@ -2081,18 +2180,32 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn loopback_http_issuer_needs_no_opt_in_in_production() {
+        let mut runtime = base();
+        runtime["authentication"]["oidc"]["issuer"] = json!("http://127.0.0.1:8082");
+        let config = load(runtime).expect("loopback HTTP issuer");
+        assert!(!config.authentication.oidc.provider.allow_insecure_http);
+    }
+
+    #[test]
     fn runtime_reads_the_explicit_http_issuer_opt_in() {
         let mut runtime = base();
         runtime["authentication"]["oidc"]["issuer"] = json!("http://identity.example.test");
         runtime["authentication"]["oidc"]["allowInsecureHttp"] = json!(true);
-        let config = load(runtime).expect("explicit HTTP issuer opt-in");
-        assert!(config.authentication.oidc.provider.allow_insecure_http);
+        let declared = DeclaredPosture {
+            posture: Posture::Development,
+            source: PostureSource::Flag,
+        };
+        let text = serde_norway::to_string(&runtime).unwrap();
+        let loaded = RuntimeConfig::loader(declared)
+            .parse_str::<RuntimeConfig>(&text, |_| None)
+            .expect("explicit HTTP issuer opt-in in development");
         assert_eq!(
-            config.insecure_http_startup_diagnostic(),
-            Some(
-                "authentication.oidc.allowInsecureHttp permits plain HTTP to the configured issuer and to a JWKS URI declared in configuration"
-            )
+            loaded.posture.ready_member()["developmentSettings"][0]["code"],
+            "platform.posture.insecure-issuer-http"
         );
+        let config = loaded.config;
+        assert!(config.authentication.oidc.provider.allow_insecure_http);
     }
 
     #[test]
@@ -2157,9 +2270,11 @@ pub(crate) mod tests {
         );
         let text = format!("x-spliced: &spliced ${{DATABASE_URL}}\n{text}");
         std::fs::write(&path, text).unwrap();
-        let error = RuntimeConfig::load_with_environment(&path, &|_| {
-            Some("postgres://user:hunter2@db".to_owned())
-        })
+        let error = RuntimeConfig::load_with_environment(
+            &path,
+            &|_| Some("postgres://user:hunter2@db".to_owned()),
+            DEFAULT_POSTURE,
+        )
         .unwrap_err();
         // Anchors and aliases are outside the shared YAML subset, so both are
         // refused before any substitution runs.
@@ -2184,9 +2299,11 @@ pub(crate) mod tests {
         let mut runtime = runtime_value(root.path());
         runtime["authentication"]["oidc"]["issuer"] = json!("https://${HOST}/");
         let path = write_project(root.path(), &runtime, &package_value());
-        let error = RuntimeConfig::load_with_environment(&path, &|_| {
-            Some("hunter2.example\nkind: Other".to_owned())
-        })
+        let error = RuntimeConfig::load_with_environment(
+            &path,
+            &|_| Some("hunter2.example\nkind: Other".to_owned()),
+            DEFAULT_POSTURE,
+        )
         .unwrap_err();
         assert!(!error.to_string().contains("hunter2"), "{error}");
         assert!(!format!("{error:?}").contains("hunter2"));
@@ -2199,9 +2316,11 @@ pub(crate) mod tests {
         runtime["listener"]["bind"] = json!("${MESSAGING_BIND}");
         runtime["authentication"]["oidc"]["issuer"] = json!("${ISSUER:-https://fallback.test}");
         let path = write_project(root.path(), &runtime, &package_value());
-        let config = RuntimeConfig::load_with_environment(&path, &|name| {
-            (name == "MESSAGING_BIND").then(|| "127.0.0.1:9107".to_owned())
-        })
+        let config = RuntimeConfig::load_with_environment(
+            &path,
+            &|name| (name == "MESSAGING_BIND").then(|| "127.0.0.1:9107".to_owned()),
+            DEFAULT_POSTURE,
+        )
         .unwrap();
         assert_eq!(
             config.listener.bind.socket_addr(),
@@ -2214,7 +2333,8 @@ pub(crate) mod tests {
 
         // Substitution runs over the parsed document, so an unset variable
         // is attributed to its member.
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+            .unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
         assert_eq!(error.pointer(), "/listener/bind");
         assert!(error.to_string().contains("MESSAGING_BIND"), "{error}");
@@ -2257,9 +2377,11 @@ pub(crate) mod tests {
         let mut runtime = runtime_value(root.path());
         runtime["kind"] = json!("${SNEAKY}");
         let path = write_project(root.path(), &runtime, &package_value());
-        let error = RuntimeConfig::load_with_environment(&path, &|_| {
-            Some(format!("x\nkind: {MESSAGING_RUNTIME_KIND}"))
-        })
+        let error = RuntimeConfig::load_with_environment(
+            &path,
+            &|_| Some(format!("x\nkind: {MESSAGING_RUNTIME_KIND}")),
+            DEFAULT_POSTURE,
+        )
         .unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
 
@@ -2271,8 +2393,12 @@ pub(crate) mod tests {
             "a.example, b.example",
             "a.example # c",
         ] {
-            let error = RuntimeConfig::load_with_environment(&path, &|_| Some(value.to_owned()))
-                .unwrap_err();
+            let error = RuntimeConfig::load_with_environment(
+                &path,
+                &|_| Some(value.to_owned()),
+                DEFAULT_POSTURE,
+            )
+            .unwrap_err();
             assert!(matches!(error, RuntimeConfigError::Load(_)), "{error}");
             assert_eq!(error.pointer(), "/authentication/oidc/issuer");
             assert!(
@@ -2881,17 +3007,19 @@ pub(crate) mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut runtime = runtime_value(root.path());
         let path = write_project(root.path(), &runtime, &package_value());
-        let config = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap();
+        let config =
+            RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE).unwrap();
         let digest = config.load_package().unwrap().package.digest().to_owned();
 
         runtime["package"]["expectedDigest"] = json!(digest);
         let path = write_project(root.path(), &runtime, &package_value());
-        RuntimeConfig::load_with_environment(&path, &no_environment).unwrap();
+        RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE).unwrap();
 
         let pinned = format!("sha256:{}", "a".repeat(64));
         runtime["package"]["expectedDigest"] = json!(pinned);
         let path = write_project(root.path(), &runtime, &package_value());
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+            .unwrap_err();
         assert!(matches!(&error, RuntimeConfigError::Package(_)), "{error}");
         assert_eq!(error.pointer(), "/package/expectedDigest");
         assert!(error.to_string().contains(&digest), "{error}");
@@ -2908,7 +3036,8 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(matches!(
-            RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err(),
+            RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+                .unwrap_err(),
             RuntimeConfigError::Package(_)
         ));
     }
@@ -2978,7 +3107,7 @@ pub(crate) mod tests {
         let error = load(value).unwrap_err();
         assert_eq!(error.pointer(), "/audit/path");
         assert!(matches!(
-            RuntimeConfig::load_with_environment("runtime.yaml", &no_environment),
+            RuntimeConfig::load_with_environment("runtime.yaml", &no_environment, DEFAULT_POSTURE),
             Err(RuntimeConfigError::Load(_))
         ));
     }
@@ -2990,7 +3119,7 @@ pub(crate) mod tests {
         value["database"]["testOnlyPlaintext"] = json!(true);
         assert!(matches!(
             load(value).unwrap_err(),
-            RuntimeConfigError::PlaintextDatabase
+            RuntimeConfigError::DatabaseTransport(DatabaseTransportError::TestOnlyPlaintext)
         ));
     }
 
@@ -3020,10 +3149,11 @@ pub(crate) mod tests {
         let profile = package["accessProfiles"]["case-notices"].take();
         package["accessProfiles"] = json!({ canary: profile });
         let path = write_project(root.path(), &runtime, &package);
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+            .unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
         assert!(!error.to_string().contains(canary), "{error}");
-        let report = startup_report(&path, &error).expect("a package report");
+        let report = startup_report(&path, &error, DEFAULT_POSTURE).expect("a package report");
         assert!(report.error_count() > 0);
         for diagnostic in report.diagnostics() {
             assert!(!diagnostic.message.contains(canary), "{diagnostic:?}");
@@ -3041,7 +3171,8 @@ pub(crate) mod tests {
         let mut package = package_value();
         package["accessProfiles"]["case-notices"]["templates"] = json!([]);
         let path = write_project(root.path(), &runtime, &package);
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+            .unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
         assert_eq!(error.pointer(), "/package/root");
         assert!(
@@ -3052,14 +3183,16 @@ pub(crate) mod tests {
         let mut package = package_value();
         package["accessProfiles"]["case-notices"]["providerUrl"] = json!("https://x.test");
         let path = write_project(root.path(), &runtime, &package);
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+            .unwrap_err();
         assert!(matches!(error, RuntimeConfigError::Package(_)), "{error}");
         assert!(error.to_string().contains("providerUrl"), "{error}");
 
         let mut package = package_value();
         package["providers"]["mail-relay"]["endpointRef"] = json!("${RELAY_URL}");
         let path = write_project(root.path(), &runtime, &package);
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+            .unwrap_err();
         assert!(!error.to_string().contains("RELAY_URL"), "{error}");
         let RuntimeConfigError::Package(error) = error else {
             panic!("{error}");
@@ -3344,7 +3477,7 @@ pub(crate) mod tests {
         });
         let path = write_project(root.path(), &runtime, &package_value());
         let text = std::fs::read_to_string(&path).unwrap();
-        let check = check_runtime_file(&path, CheckedAgainst::Nothing, true);
+        let check = check_runtime_file(&path, CheckedAgainst::Nothing, true, DEFAULT_POSTURE);
         let collisions = check
             .diagnostics
             .iter()
@@ -3397,10 +3530,12 @@ pub(crate) mod tests {
         independent["tlsTrustProfiles"] =
             json!({"shared_id": {"bundleRef": "secret:file/gateway-ca"}});
         let path = write_project(root.path(), &independent, &package_value());
-        assert!(check_runtime_file(&path, CheckedAgainst::Nothing, true)
-            .diagnostics
-            .iter()
-            .all(|diagnostic| !diagnostic.code.ends_with("-id-collision")));
+        assert!(
+            check_runtime_file(&path, CheckedAgainst::Nothing, true, DEFAULT_POSTURE)
+                .diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.code.ends_with("-id-collision"))
+        );
     }
 
     fn runtime_with_provider_collisions(root: &Path, pairs: usize) -> (Value, Value) {
@@ -3431,7 +3566,7 @@ pub(crate) mod tests {
         let (runtime, package) = runtime_with_provider_collisions(root.path(), pairs);
         let path = write_project(root.path(), &runtime, &package);
 
-        let checked = check_runtime_file(&path, CheckedAgainst::Nothing, true);
+        let checked = check_runtime_file(&path, CheckedAgainst::Nothing, true, DEFAULT_POSTURE);
         assert_eq!(checked.diagnostics.len(), MAXIMUM_DIAGNOSTICS_PER_FILE + 1);
         assert!(checked.diagnostics[..MAXIMUM_DIAGNOSTICS_PER_FILE]
             .iter()
@@ -3450,9 +3585,11 @@ pub(crate) mod tests {
         assert_eq!((source.line, source.column), (None, None));
         assert_eq!(checked.files_checked, 1);
 
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+            .unwrap_err();
         assert!(matches!(error, RuntimeConfigError::ProviderIdCollision));
-        let startup = startup_report(&path, &error).expect("a file-owned refusal has a report");
+        let startup = startup_report(&path, &error, DEFAULT_POSTURE)
+            .expect("a file-owned refusal has a report");
         assert_eq!(
             startup.diagnostics().len(),
             MAXIMUM_DIAGNOSTICS_PER_FILE + 1
@@ -3471,7 +3608,7 @@ pub(crate) mod tests {
         runtime["authentication"]["oidc"]["allowedClients"] = json!(["case-system"]);
         let path = write_project(root.path(), &runtime, &package_value());
 
-        let check = check_runtime_file(&path, CheckedAgainst::Nothing, true);
+        let check = check_runtime_file(&path, CheckedAgainst::Nothing, true, DEFAULT_POSTURE);
         assert!(!check.unavailable);
         assert_eq!(
             codes_and_pointers(&check.diagnostics),
@@ -3497,7 +3634,12 @@ pub(crate) mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         let config = RuntimeConfig::parse_with_environment(&text, &no_environment).unwrap();
         let package = load_runtime_package(&config.package).unwrap();
-        let check = check_runtime_file(&path, CheckedAgainst::Package(&package), true);
+        let check = check_runtime_file(
+            &path,
+            CheckedAgainst::Package(&package),
+            true,
+            DEFAULT_POSTURE,
+        );
         assert!(codes_and_pointers(&check.diagnostics).contains(&(
             "messaging.runtime.profile-client-not-allowed",
             "/authentication/oidc/allowedClients"
@@ -3505,7 +3647,7 @@ pub(crate) mod tests {
 
         // The package `package.root` names is the one the check reads by
         // default.
-        let check = check_runtime_file(&path, CheckedAgainst::NamedPackage, true);
+        let check = check_runtime_file(&path, CheckedAgainst::NamedPackage, true, DEFAULT_POSTURE);
         assert!(check.package.is_some());
         assert!(codes_and_pointers(&check.diagnostics).contains(&(
             "messaging.runtime.profile-client-not-allowed",
@@ -3513,8 +3655,9 @@ pub(crate) mod tests {
         )));
 
         // The startup refusal reports the same findings.
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
-        let report = startup_report(&path, &error).unwrap();
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+            .unwrap_err();
+        let report = startup_report(&path, &error, DEFAULT_POSTURE).unwrap();
         assert_eq!(report.diagnostics().len(), 3, "{error}");
     }
 
@@ -3526,10 +3669,10 @@ pub(crate) mod tests {
         runtime["authentication"]["oidc"]["issuer"] = json!("${MESSAGING_CHECK_UNSET_ISSUER}");
         let path = write_project(root.path(), &runtime, &package_value());
 
-        let check = check_runtime_file(&path, CheckedAgainst::Nothing, false);
+        let check = check_runtime_file(&path, CheckedAgainst::Nothing, false, DEFAULT_POSTURE);
         assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
 
-        let check = check_runtime_file(&path, CheckedAgainst::Nothing, true);
+        let check = check_runtime_file(&path, CheckedAgainst::Nothing, true, DEFAULT_POSTURE);
         assert_eq!(
             codes_and_pointers(&check.diagnostics),
             [
@@ -3547,7 +3690,7 @@ pub(crate) mod tests {
             runtime["listener"]["bind"] = json!("${MESSAGING_CHECK_UNSET_BIND}");
             runtime["metricsListener"] = json!({"bind": bind});
             let path = write_project(root.path(), &runtime, &package_value());
-            check_runtime_file(&path, CheckedAgainst::Nothing, false)
+            check_runtime_file(&path, CheckedAgainst::Nothing, false, DEFAULT_POSTURE)
                 .diagnostics
                 .iter()
                 .map(|diagnostic| (diagnostic.code.clone(), diagnostic.path.clone()))
@@ -3576,7 +3719,7 @@ pub(crate) mod tests {
         runtime["package"]["root"] = json!(absent.display().to_string());
         let path = write_project(root.path(), &runtime, &package_value());
 
-        let check = check_runtime_file(&path, CheckedAgainst::NamedPackage, true);
+        let check = check_runtime_file(&path, CheckedAgainst::NamedPackage, true, DEFAULT_POSTURE);
         assert!(check.unavailable);
         assert!(check.package.is_none());
         assert_eq!(
@@ -3602,7 +3745,7 @@ pub(crate) mod tests {
         // An expression the check leaves to the deployment is not read.
         runtime["package"]["root"] = json!("${MESSAGING_CHECK_UNSET_ROOT}");
         let path = write_project(root.path(), &runtime, &package_value());
-        let check = check_runtime_file(&path, CheckedAgainst::NamedPackage, false);
+        let check = check_runtime_file(&path, CheckedAgainst::NamedPackage, false, DEFAULT_POSTURE);
         assert!(!check.unavailable);
         assert!(check.diagnostics.is_empty(), "{:?}", check.diagnostics);
     }
@@ -3611,7 +3754,7 @@ pub(crate) mod tests {
     fn an_offline_check_of_an_unreadable_file_reports_it_unavailable() {
         let root = tempfile::tempdir().unwrap();
         let absent = root.path().canonicalize().unwrap().join("absent.yaml");
-        let check = check_runtime_file(&absent, CheckedAgainst::Nothing, true);
+        let check = check_runtime_file(&absent, CheckedAgainst::Nothing, true, DEFAULT_POSTURE);
         assert!(check.unavailable);
         assert_eq!(check.diagnostics.len(), 1);
     }
@@ -3624,8 +3767,9 @@ pub(crate) mod tests {
         let root = tempfile::tempdir().unwrap();
         rebase(&mut runtime, root.path());
         let path = write_project(root.path(), &runtime, &package_value());
-        let error = RuntimeConfig::load_with_environment(&path, &no_environment).unwrap_err();
-        let report = startup_report(&path, &error).unwrap();
+        let error = RuntimeConfig::load_with_environment(&path, &no_environment, DEFAULT_POSTURE)
+            .unwrap_err();
+        let report = startup_report(&path, &error, DEFAULT_POSTURE).unwrap();
         assert_eq!(
             codes_and_pointers(report.diagnostics()),
             [

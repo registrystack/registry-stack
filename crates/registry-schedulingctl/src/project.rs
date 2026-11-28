@@ -8,6 +8,7 @@
 //! pure core, and rendered as one JSON report per command. A refused project
 //! is the reader's own report, every diagnostic at its position.
 
+use registry_platform_config::DeclaredPosture;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -92,7 +93,11 @@ struct ProjectReading {
 /// be read at all is an error. The records and the fixtures are checked
 /// against the policy only once the policy passes its own checks, so a
 /// broken policy never shows up a second time as findings against them.
-fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
+fn read_project(
+    project: &Path,
+    fixtures: bool,
+    declared: DeclaredPosture,
+) -> Result<ProjectReading> {
     let mut report = Report::new(Vec::new());
     let mut files = 0;
 
@@ -176,7 +181,12 @@ fn read_project(project: &Path, fixtures: bool) -> Result<ProjectReading> {
         }
     }
     if fixtures {
-        files += read_runtime_example(project, checked.map(|policy| &policy.value), &mut report)?;
+        files += read_runtime_example(
+            project,
+            checked.map(|policy| &policy.value),
+            &mut report,
+            declared,
+        )?;
     }
     report.set_files_checked(files);
     Ok(ProjectReading {
@@ -198,6 +208,7 @@ fn read_runtime_example(
     project: &Path,
     policy: Option<&SchedulingPolicy>,
     report: &mut Report,
+    declared: DeclaredPosture,
 ) -> Result<usize> {
     let example = project.join(RUNTIME_EXAMPLE_FILE);
     // The loader refuses a path through a symbolic link, and a project may
@@ -209,7 +220,7 @@ fn read_runtime_example(
     };
     let resolved_name = resolved.display().to_string();
     let given = example.display().to_string();
-    let runtime = check_runtime(&resolved, policy, false);
+    let runtime = check_runtime(&resolved, policy, false, declared);
     report.extend(Report::new(
         runtime
             .diagnostics
@@ -276,13 +287,18 @@ struct CheckedProject {
 
 /// Read and check every file of `project`. A refusal is the report naming
 /// every error, or, under `deny_warnings`, every warning too.
-fn checked_project(project: &Path, fixtures: bool, deny_warnings: bool) -> Result<CheckedProject> {
+fn checked_project(
+    project: &Path,
+    fixtures: bool,
+    deny_warnings: bool,
+    declared: DeclaredPosture,
+) -> Result<CheckedProject> {
     let ProjectReading {
         policy,
         facts,
         fixtures,
         report,
-    } = read_project(project, fixtures)?;
+    } = read_project(project, fixtures, declared)?;
     match (policy, facts) {
         (Some(policy), Some(facts)) if !refuses(&report, deny_warnings) => Ok(CheckedProject {
             policy: policy.value,
@@ -300,8 +316,12 @@ fn refuses(report: &Report, deny_warnings: bool) -> bool {
     report.has_errors() || (deny_warnings && report.warning_count() > 0)
 }
 
-pub(super) fn check(project: &Path, deny_warnings: bool) -> Result<Value> {
-    let checked = checked_project(project, true, deny_warnings)?;
+pub(super) fn check(
+    project: &Path,
+    deny_warnings: bool,
+    declared: DeclaredPosture,
+) -> Result<Value> {
+    let checked = checked_project(project, true, deny_warnings, declared)?;
     Ok(json!({
         "ok": true,
         "command": "check",
@@ -314,8 +334,12 @@ pub(super) fn check(project: &Path, deny_warnings: bool) -> Result<Value> {
     }))
 }
 
-pub(super) fn check_with_acceptances(project: &Path, deny_warnings: bool) -> Result<Value> {
-    finish_check_with_acceptances(project, deny_warnings, check(project, false))
+pub(super) fn check_with_acceptances(
+    project: &Path,
+    deny_warnings: bool,
+    declared: DeclaredPosture,
+) -> Result<Value> {
+    finish_check_with_acceptances(project, deny_warnings, check(project, false, declared))
 }
 
 fn finish_check_with_acceptances(
@@ -354,7 +378,12 @@ fn finish_check_with_acceptances(
 }
 
 pub(super) fn test(project: &Path) -> Result<Value> {
-    let checked = checked_project(project, true, false)?;
+    let checked = checked_project(
+        project,
+        true,
+        false,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )?;
     if checked.fixtures.is_empty() {
         let mut diagnostic = Diagnostic::error(
             NO_FIXTURES_CODE,
@@ -392,7 +421,12 @@ pub(super) fn test(project: &Path) -> Result<Value> {
 }
 
 pub(super) fn explain(project: &Path) -> Result<Value> {
-    let CheckedProject { policy, facts, .. } = checked_project(project, false, false)?;
+    let CheckedProject { policy, facts, .. } = checked_project(
+        project,
+        false,
+        false,
+        registry_scheduling::config::DEFAULT_POSTURE,
+    )?;
     let offerings = policy
         .offerings
         .iter()
@@ -667,6 +701,7 @@ pub(super) fn check_runtime_config(
     environment: bool,
     deny_warnings: bool,
     checked: Result<Value>,
+    declared: DeclaredPosture,
 ) -> Result<Value> {
     let policy_path = project.join(AUTHORED_POLICY_FILE);
     let policy = fs::read(&policy_path)
@@ -676,7 +711,7 @@ pub(super) fn check_runtime_config(
     let given = runtime_config.display().to_string();
     let absolute = absolute_lexical(runtime_config)
         .context("resolving the --runtime-config path against the working directory")?;
-    let runtime = check_runtime(&absolute, policy.as_ref(), environment);
+    let runtime = check_runtime(&absolute, policy.as_ref(), environment, declared);
     let absolute = absolute.display().to_string();
     let named = |mut diagnostic: Diagnostic| {
         if let Some(source) = &mut diagnostic.source {
@@ -760,20 +795,24 @@ fn unreported(report: Report, reported: &[Diagnostic]) -> Report {
 /// Read the runtime file at `path` as `scheduling serve` does. A refusal of
 /// the file itself carries every rule it breaks, each at its position,
 /// exactly as the runtime prints them at startup.
-pub(crate) fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
-    RuntimeConfig::load(path).map_err(|error| runtime_refusal(path, error))
+pub(crate) fn load_runtime_config(path: &Path, declared: DeclaredPosture) -> Result<RuntimeConfig> {
+    RuntimeConfig::load(path, declared).map_err(|error| runtime_refusal(path, error, declared))
 }
 
 /// `error`, a refusal of the runtime file at `path` or of the policy it
 /// binds, as the report the runtime prints at startup. The runtime file
 /// that cannot be read at all keeps its message.
-pub(crate) fn runtime_refusal(path: &Path, error: RuntimeConfigError) -> anyhow::Error {
+pub(crate) fn runtime_refusal(
+    path: &Path,
+    error: RuntimeConfigError,
+    declared: DeclaredPosture,
+) -> anyhow::Error {
     let unavailable = matches!(
         &error,
         RuntimeConfigError::Load(load)
             if load.diagnostics().iter().any(|diagnostic| diagnostic.code == UNAVAILABLE_CODE)
     );
-    match startup_report(path, &error) {
+    match startup_report(path, &error, declared) {
         Some(report) => RuntimeConfigRefusal {
             report,
             unavailable,
@@ -939,7 +978,8 @@ mod tests {
             .replace(EXAMPLE_STATE_ROOT, base.to_str().expect("utf-8 root path"));
         let runtime = base.join("runtime.yaml");
         fs::write(&runtime, &text).unwrap();
-        let config = RuntimeConfig::load(&runtime).expect("the emitted example loads");
+        let config = RuntimeConfig::load(&runtime, registry_scheduling::config::DEFAULT_POSTURE)
+            .expect("the emitted example loads");
         assert_eq!(
             config.policy_path(),
             output.join(AUTHORED_POLICY_FILE),
@@ -952,7 +992,12 @@ mod tests {
     #[test]
     fn check_reads_every_project_file_and_reports_the_effective_policy() {
         let (_root, project) = initialized("standalone-exact-time");
-        let report = check(&project, false).unwrap();
+        let report = check(
+            &project,
+            false,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .unwrap();
         assert_eq!(report["ok"], true);
         assert_eq!(report["command"], "check");
         assert_eq!(report["diagnostics"], json!([]));
@@ -994,7 +1039,12 @@ mod tests {
             "resourceId: station_1",
         );
 
-        let error = check(&project, false).expect_err("records collisions refuse project check");
+        let error = check(
+            &project,
+            false,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .expect_err("records collisions refuse project check");
         let report = crate::configuration_report(&error).expect("structured records diagnostics");
         for (code, path, related) in [
             (
@@ -1046,7 +1096,12 @@ mod tests {
             "name: first_caller_takes_a_station",
         );
 
-        let error = check(&project, false).expect_err("fixture collisions refuse project check");
+        let error = check(
+            &project,
+            false,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .expect_err("fixture collisions refuse project check");
         let report = crate::configuration_report(&error).expect("structured fixture diagnostics");
         for (code, path, related, line, column, related_line, related_column) in [
             (
@@ -1110,7 +1165,12 @@ mod tests {
             "now: 2026-10-09T20:00:00Z",
             "now: 2026-10-09T20:00:00Z\nstray: true",
         );
-        let error = check(&project, false).unwrap_err();
+        let error = check(
+            &project,
+            false,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .unwrap_err();
         assert_eq!(
             refusals(&project, &error),
             [
@@ -1129,14 +1189,27 @@ mod tests {
     #[test]
     fn check_refuses_a_runtime_example_the_runtime_would_refuse() {
         let (_root, project) = initialized("standalone-exact-time");
-        assert_eq!(check(&project, false).unwrap()["filesChecked"], 5);
+        assert_eq!(
+            check(
+                &project,
+                false,
+                registry_scheduling::config::DEFAULT_POSTURE
+            )
+            .unwrap()["filesChecked"],
+            5
+        );
         edit(
             &project,
             "runtime.example.yaml",
             "retention:\n",
             "retention:\n  stray: 1\n",
         );
-        let error = check(&project, false).unwrap_err();
+        let error = check(
+            &project,
+            false,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .unwrap_err();
         let refused = refusals(&project, &error);
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(
@@ -1178,8 +1251,12 @@ mod tests {
             "  registry-update:\n    label: Registry record update\n",
             "  registry-update:\n    label: Registry record update\n  registry-copy:\n    label: registry record update\n",
         );
-        let report =
-            check_with_acceptances(&project, false).expect("warnings do not normally refuse check");
+        let report = check_with_acceptances(
+            &project,
+            false,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .expect("warnings do not normally refuse check");
         let warning = report["diagnostics"]
             .as_array()
             .unwrap()
@@ -1189,8 +1266,9 @@ mod tests {
         assert_eq!(warning["path"], "/services/registry-update/label");
         let files_without_acceptances = report["filesChecked"].as_u64().unwrap();
 
-        let error = check_with_acceptances(&project, true)
-            .expect_err("--deny-warnings refuses the warning");
+        let error =
+            check_with_acceptances(&project, true, registry_scheduling::config::DEFAULT_POSTURE)
+                .expect_err("--deny-warnings refuses the warning");
         let report = crate::configuration_report(&error).expect("a structured warning report");
         assert_eq!(report.error_count(), 0);
         assert_eq!(report.warning_count(), 1);
@@ -1211,8 +1289,9 @@ mod tests {
             ),
         )
         .unwrap();
-        let accepted = check_with_acceptances(&project, true)
-            .expect("an accepted warning does not make --deny-warnings fail");
+        let accepted =
+            check_with_acceptances(&project, true, registry_scheduling::config::DEFAULT_POSTURE)
+                .expect("an accepted warning does not make --deny-warnings fail");
         assert_eq!(
             accepted["filesChecked"],
             files_without_acceptances + 1,
@@ -1235,8 +1314,9 @@ mod tests {
             "kind: SchedulingRecords\n",
             "kind: SchedulingRecords\nstray: true\n",
         );
-        let error = check_with_acceptances(&project, true)
-            .expect_err("an unrelated records error still refuses the project");
+        let error =
+            check_with_acceptances(&project, true, registry_scheduling::config::DEFAULT_POSTURE)
+                .expect_err("an unrelated records error still refuses the project");
         let report = crate::configuration_report(&error).unwrap();
         assert_eq!(report.error_count(), 1);
         assert_eq!(report.warning_count(), 0);
@@ -1269,7 +1349,13 @@ mod tests {
             "window: household-morning-window",
             "window: missing-window",
         );
-        let report = read_project(&project, false).unwrap().report;
+        let report = read_project(
+            &project,
+            false,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .unwrap()
+        .report;
         assert_eq!(report.files_checked(), Some(2));
         let (policy_findings, record_findings): (Vec<_>, Vec<_>) =
             report.diagnostics().iter().partition(|diagnostic| {
@@ -1391,7 +1477,12 @@ mod tests {
         );
 
         // check() has no calendar to resolve, so it reports clean.
-        let checked = check(&project, false).unwrap();
+        let checked = check(
+            &project,
+            false,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .unwrap();
         assert_eq!(checked["diagnostics"], json!([]));
 
         // test() replays the calendar and must not let one fixture's
@@ -1503,7 +1594,15 @@ mod tests {
                 ["fixtures  scheduling.fixture.none"]
             );
             // A check has nothing to replay, so it passes.
-            assert_eq!(check(&project, false).unwrap()["filesChecked"], 3);
+            assert_eq!(
+                check(
+                    &project,
+                    false,
+                    registry_scheduling::config::DEFAULT_POSTURE
+                )
+                .unwrap()["filesChecked"],
+                3
+            );
             fs::remove_dir(&fixtures).unwrap_or(());
         }
     }
@@ -1511,7 +1610,12 @@ mod tests {
     #[test]
     fn a_missing_policy_is_a_reading_failure_naming_the_file() {
         let root = tempfile::tempdir().unwrap();
-        let error = check(&root.path().join("nowhere"), false).unwrap_err();
+        let error = check(
+            &root.path().join("nowhere"),
+            false,
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .unwrap_err();
         assert!(crate::configuration_report(&error).is_none());
         let message = format!("{error:#}");
         assert!(message.contains("nowhere"), "{message}");
@@ -1536,8 +1640,19 @@ mod tests {
             "retention:\n  stray: 1\n",
         );
         let example = project.join("runtime.example.yaml");
-        let error = check_runtime_config(&project, &example, false, false, check(&project, false))
-            .unwrap_err();
+        let error = check_runtime_config(
+            &project,
+            &example,
+            false,
+            false,
+            check(
+                &project,
+                false,
+                registry_scheduling::config::DEFAULT_POSTURE,
+            ),
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .unwrap_err();
         let refused = refusals(&project, &error);
         assert_eq!(refused.len(), 1, "{refused:?}");
     }
@@ -1553,8 +1668,19 @@ mod tests {
         let runtime = root.join("runtime.yaml");
         let example = fs::read_to_string(project.join("runtime.example.yaml")).unwrap();
         fs::write(&runtime, &example).unwrap();
-        let checked =
-            check_runtime_config(&project, &runtime, false, false, check(&project, false)).unwrap();
+        let checked = check_runtime_config(
+            &project,
+            &runtime,
+            false,
+            false,
+            check(
+                &project,
+                false,
+                registry_scheduling::config::DEFAULT_POSTURE,
+            ),
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .unwrap();
         assert_eq!(checked["runtimeConfig"], runtime.display().to_string());
         assert_eq!(checked["filesChecked"], 6);
 
@@ -1563,8 +1689,19 @@ mod tests {
             example.replacen("retention:\n", "retention:\n  stray: 1\n", 1),
         )
         .unwrap();
-        let error = check_runtime_config(&project, &runtime, false, false, check(&project, false))
-            .unwrap_err();
+        let error = check_runtime_config(
+            &project,
+            &runtime,
+            false,
+            false,
+            check(
+                &project,
+                false,
+                registry_scheduling::config::DEFAULT_POSTURE,
+            ),
+            registry_scheduling::config::DEFAULT_POSTURE,
+        )
+        .unwrap_err();
         let refused = refusals(&root, &error);
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(

@@ -17,6 +17,9 @@ pub struct Arguments {
     /// Runtime configuration file.
     #[arg(long = "runtime-config", value_name = "ABSOLUTE_FILE")]
     pub runtime_config: PathBuf,
+    /// Declared posture: development or production. Unset means production.
+    #[arg(long = "posture", value_name = "POSTURE")]
+    pub posture: Option<String>,
 }
 
 /// The clap command tree, for the generated CLI reference.

@@ -170,6 +170,8 @@ pub use crate::refusal::RefusalCode;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
+    #[error("the task-grant status authority declares the development posture")]
+    DevelopmentGrantPeer,
     /// The answer the caller sees, in its public projection, for every
     /// service failure, internal bound, and cursor verdict that is not a
     /// refusal of authority: the edge renders one problem shape. A code for
@@ -2508,6 +2510,7 @@ impl SchedulingService {
                     )
                 })
             }
+            GrantVerdict::DevelopmentPeer => Err(ServiceError::DevelopmentGrantPeer),
             GrantVerdict::Unavailable => {
                 tracing::warn!("the task-grant authority could not establish current status");
                 Err(ServiceError::Problem(ProblemCode::ServiceUnavailable))
@@ -3091,6 +3094,7 @@ enum GrantVerdict {
     /// `OFFLINE_TASK_GRANT_REMAINING_SECONDS` left.
     LifetimeTooLong,
     Unavailable,
+    DevelopmentPeer,
     Configuration,
 }
 
@@ -3099,9 +3103,8 @@ impl From<Result<(), TaskGrantError>> for GrantVerdict {
         match verdict {
             Ok(()) => Self::Current,
             Err(TaskGrantError::Refused) => Self::Refused,
-            // A development-posture status peer proves no grant state, so it is
-            // treated like an unreachable authority.
-            Err(TaskGrantError::Unavailable | TaskGrantError::DevelopmentPeer) => Self::Unavailable,
+            Err(TaskGrantError::Unavailable) => Self::Unavailable,
+            Err(TaskGrantError::DevelopmentPeer) => Self::DevelopmentPeer,
             Err(TaskGrantError::Configuration) => Self::Configuration,
         }
     }
@@ -4893,10 +4896,11 @@ mod tests {
             "statusResource": "urn:casework:test"
         }))
         .expect("the status authority configuration");
-        let registry = TaskGrantStatusRegistry::activate_without_peer_policy(
+        let registry = TaskGrantStatusRegistry::activate(
             &crate::config::task_grant_status_endpoints(&[status]),
             STATUS_RESOURCE,
             &secrets,
+            registry_platform_httputil::PeerPolicy::RefuseDevelopmentPeer,
         )
         .expect("activate the task-grant status registry");
         (server, registry)

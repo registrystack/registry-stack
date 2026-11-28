@@ -251,11 +251,12 @@ fn init_names_the_project_after_its_directory_and_writes_runtime_in_reading_orde
         ]
     );
     assert!(runtime.contains("# Offline check reads references"));
-    let parsed = registry_platform_config::RuntimeConfigLoader::new_without_posture(
+    let parsed = registry_platform_config::RuntimeConfigLoader::new(
         registry_platform_config::RuntimeEnvelope {
             api_version: registry_coordinator::runtime::API_VERSION,
             kind: registry_coordinator::runtime::KIND,
         },
+        registry_coordinator::runtime::DEFAULT_POSTURE,
     )
     .parse_str::<Value>(&runtime, |_| None)
     .unwrap()
@@ -683,11 +684,12 @@ fn check_locates_a_missing_binding_without_printing_configured_values() {
     let directory = path.to_str().unwrap();
     assert!(cli(&["init", "--directory", directory]).status.success());
     let runtime = path.join("runtime.yaml");
-    let mut document: Value = registry_platform_config::RuntimeConfigLoader::new_without_posture(
+    let mut document: Value = registry_platform_config::RuntimeConfigLoader::new(
         registry_platform_config::RuntimeEnvelope {
             api_version: registry_coordinator::runtime::API_VERSION,
             kind: registry_coordinator::runtime::KIND,
         },
+        registry_coordinator::runtime::DEFAULT_POSTURE,
     )
     .parse_str::<Value>(&fs::read_to_string(&runtime).unwrap(), |_| None)
     .unwrap()
