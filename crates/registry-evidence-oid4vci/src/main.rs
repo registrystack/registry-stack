@@ -251,7 +251,15 @@ fn check(
                 "filesChecked": usize::from(!unavailable),
                 "diagnostics": report.to_json_value(),
                 "explicitProductionSettings": explicit_settings.iter()
-                    .map(|found| found.report_line(path.to_str())).collect::<Vec<_>>(),
+                    .map(|found| registry_cli_report::ExplicitSettingLine {
+                        code: found.setting.code.to_owned(),
+                        file: path.to_str().map(ToOwned::to_owned),
+                        pointer: found.pointer.clone(),
+                        line: found.position.map(|position| position.line),
+                        column: found.position.map(|position| position.column),
+                        summary: found.setting.summary.to_owned(),
+                    })
+                    .collect::<Vec<_>>(),
             })
         ),
     }

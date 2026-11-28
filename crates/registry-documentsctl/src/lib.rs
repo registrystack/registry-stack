@@ -947,7 +947,16 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
             let file = path.display().to_string();
             match explicit
                 .iter()
-                .map(|found| serde_json::to_value(found.report_line(Some(&file))))
+                .map(|found| {
+                    serde_json::to_value(registry_cli_report::ExplicitSettingLine {
+                        code: found.setting.code.to_owned(),
+                        file: Some(file.clone()),
+                        pointer: found.pointer.clone(),
+                        line: found.position.map(|position| position.line),
+                        column: found.position.map(|position| position.column),
+                        summary: found.setting.summary.to_owned(),
+                    })
+                })
                 .collect::<Result<Vec<_>, _>>()
             {
                 Ok(lines) => settings = Some(lines),

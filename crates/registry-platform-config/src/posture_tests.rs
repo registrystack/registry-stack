@@ -684,32 +684,9 @@ fn stated_records_an_explicit_value_with_its_pointer_and_position_and_never_refu
     assert_eq!(found.setting.code, "platform.posture.example-lenient");
     assert_eq!(found.pointer.as_deref(), Some("/direct/format"));
     assert_eq!(found.position.map(|position| position.line), Some(4));
+    assert!(found.position.is_some());
     assert_eq!(found.origin, SettingOrigin::RuntimeFile);
     assert!(collected.development.is_empty());
-}
-
-#[test]
-fn an_explicit_setting_becomes_the_report_line_for_its_file() {
-    let (_, collected) = load_stated("direct:\n  format: lenient\n");
-    let found = &collected.explicit[0];
-    let line = found.report_line(Some("runtime.yaml"));
-    assert_eq!(line.code, "platform.posture.example-lenient");
-    assert_eq!(line.file.as_deref(), Some("runtime.yaml"));
-    assert_eq!(line.pointer.as_deref(), Some("/direct/format"));
-    assert_eq!(line.line, Some(4));
-    assert_eq!(line.column, found.position.map(|position| position.column));
-    assert!(line.column.is_some());
-    assert_eq!(line.summary, found.setting.summary);
-    let unplaced = FoundExplicitSetting {
-        pointer: None,
-        position: None,
-        ..found.clone()
-    };
-    let line = unplaced.report_line(None);
-    assert_eq!(
-        (line.file, line.pointer, line.line, line.column),
-        (None, None, None, None)
-    );
 }
 
 #[test]

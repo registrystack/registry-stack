@@ -103,7 +103,6 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::path::Path;
 
-use registry_cli_report::ExplicitSettingLine;
 use registry_platform_posture::POSTURE_FLAG;
 use registry_platform_yaml::{
     escape_pointer_segment, gated_site, Diagnostic, GatedSite, Position, Severity, Source,
@@ -450,23 +449,6 @@ pub struct FoundExplicitSetting {
     pub pointer: Option<String>,
     pub position: Option<Position>,
     pub origin: SettingOrigin,
-}
-
-impl FoundExplicitSetting {
-    /// The line a `check` report lists for this setting. `file` names the
-    /// document the pointer refers to: the runtime file, or the package for a
-    /// setting found there.
-    #[must_use]
-    pub fn report_line(&self, file: Option<&str>) -> ExplicitSettingLine {
-        ExplicitSettingLine {
-            code: self.setting.code.to_owned(),
-            file: file.map(ToOwned::to_owned),
-            pointer: self.pointer.clone(),
-            line: self.position.map(|position| position.line),
-            column: self.position.map(|position| position.column),
-            summary: self.setting.summary.to_owned(),
-        }
-    }
 }
 
 /// What one decode found: the development-only settings a [`Gated`] recorded

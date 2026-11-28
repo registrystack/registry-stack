@@ -34,6 +34,7 @@ jsonwebtoken.workspace = true
 # builtin filters and a shared layout are wanted, debug and macros are not.
 minijinja = { workspace = true, features = ["builtins", "multi_template", "serde"] }
 registry-breg-client.workspace = true
+registry-cli-report.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true

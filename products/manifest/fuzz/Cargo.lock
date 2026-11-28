@@ -564,7 +564,6 @@ dependencies = [
 name = "registry-platform-config"
 version = "0.49.0"
 dependencies = [
- "registry-cli-report",
  "registry-platform-canonical-json",
  "registry-platform-loopback",
  "registry-platform-posture",

@@ -1259,12 +1259,16 @@ fn check_runtime_file(
     outcome
         .explicit_settings
         .get_or_insert_with(Vec::new)
-        .extend(
-            check
-                .explicit_settings
-                .iter()
-                .map(|found| found.report_line(Some(&given))),
-        );
+        .extend(check.explicit_settings.iter().map(|found| {
+            registry_cli_report::ExplicitSettingLine {
+                code: found.setting.code.to_owned(),
+                file: Some(given.clone()),
+                pointer: found.pointer.clone(),
+                line: found.position.map(|position| position.line),
+                column: found.position.map(|position| position.column),
+                summary: found.setting.summary.to_owned(),
+            }
+        }));
     for mut diagnostic in check.diagnostics {
         if let Some(source) = &mut diagnostic.source {
             if source.file == absolute_text {
